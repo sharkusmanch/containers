@@ -72,5 +72,5 @@ USER appuser
 
 VOLUME ["/data"]
 
-ENTRYPOINT ["python", "-m", "autoshift"]
+ENTRYPOINT ["autoshift"]
 CMD ["--help"]
