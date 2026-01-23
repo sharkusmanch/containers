@@ -34,7 +34,7 @@ All images follow these security standards:
 - **Non-root user** - Explicit UID/GID (10000:10000)
 - **No shell where possible** - Reduces attack surface
 - **Health checks** - Built-in liveness probes
-- **OCI labels** - Source repo, commit SHA, build date
+- **OCI labels** - Source repo, commit SHA, build date (see below)
 
 ### Deployment (for your k8s manifests)
 
@@ -50,6 +50,27 @@ securityContext:
   capabilities:
     drop:
       - ALL
+```
+
+## OCI Labels
+
+All images include [OCI standard labels](https://github.com/opencontainers/image-spec/blob/main/annotations.md) for traceability. These are recognized by container registries (GHCR, Docker Hub, Quay), security scanners, and tooling.
+
+| Label | Purpose |
+|-------|---------|
+| `org.opencontainers.image.created` | Build timestamp |
+| `org.opencontainers.image.revision` | Git commit SHA of this repo |
+| `org.opencontainers.image.version` | Upstream version or commit |
+| `org.opencontainers.image.source` | URL to this repo |
+| `org.opencontainers.image.upstream` | URL to upstream source |
+| `org.opencontainers.image.title` | Image name |
+| `org.opencontainers.image.description` | Short description |
+
+Inspect labels with:
+
+```bash
+docker inspect ghcr.io/sharkusmanch/docker-images/redlib:latest \
+  --format '{{json .Config.Labels}}' | jq
 ```
 
 ## Versioning Strategy
