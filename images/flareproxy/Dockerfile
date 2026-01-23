@@ -45,20 +45,16 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="flareproxy" \
       org.opencontainers.image.description="HTTP proxy adapter for FlareSolverr"
 
-# Create non-root user
-RUN addgroup -g 10000 appgroup && \
-    adduser -u 10000 -G appgroup -s /bin/false -D -H appuser
-
 WORKDIR /app
 
 # Copy dependencies from builder
 COPY --from=builder /dependencies /usr/local/lib/python3.12/site-packages
 
 # Copy application
-COPY --from=builder --chown=appuser:appgroup /build/flareproxy.py ./
+COPY --from=builder /build/flareproxy.py ./
 
-# Switch to non-root user
-USER appuser
+# Run as nobody - app is stateless with no disk writes
+USER nobody
 
 EXPOSE 8080
 

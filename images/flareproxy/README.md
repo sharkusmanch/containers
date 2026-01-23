@@ -40,9 +40,8 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
-        runAsUser: 10000
-        runAsGroup: 10000
-        fsGroup: 10000
+        runAsUser: 65534
+        runAsGroup: 65534
       containers:
         - name: flareproxy
           image: ghcr.io/sharkusmanch/docker-images/flareproxy:latest
