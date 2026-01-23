@@ -9,7 +9,7 @@ ARG REDLIB_COMMIT=42fe41bc4c64690aa91cd1cfecec3bad3438354f
 ARG RUST_VERSION=1.83
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.22
+ARG ALPINE_VERSION=3.20
 
 # ============================================================================
 # Builder stage
@@ -20,10 +20,9 @@ ARG REDLIB_COMMIT
 
 # Install build dependencies
 # - musl-dev: C standard library for static linking
-# - openssl-dev: OpenSSL headers for hyper-tls build
-# - perl, make: Required for OpenSSL build
+# - perl, make: Required for OpenSSL build (vendored)
 # - git: Clone source and stamp commit info
-RUN apk add --no-cache musl-dev openssl-dev perl make git
+RUN apk add --no-cache musl-dev perl make git
 
 WORKDIR /build
 
