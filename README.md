@@ -16,6 +16,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | Image | Description | Upstream |
 |-------|-------------|----------|
 | [actual-mcp](./images/actual-mcp/) | MCP server for Actual Budget | [s-stefanov/actual-mcp](https://github.com/s-stefanov/actual-mcp) |
+| [autoshift](./images/autoshift/) | Automatic SHiFT code redemption for Borderlands | [Fabbi/autoshift](https://github.com/Fabbi/autoshift) |
 | [flareproxy](./images/flareproxy/) | HTTP proxy adapter for FlareSolverr | [mimnix/FlareProxy](https://github.com/mimnix/FlareProxy) |
 | [lgogdownloader](./images/lgogdownloader/) | Unofficial GOG.com downloader | [Sude-/lgogdownloader](https://github.com/Sude-/lgogdownloader) |
 | [redlib](./images/redlib/) | Private Reddit frontend | [redlib-org/redlib](https://github.com/redlib-org/redlib) (PR #509) |
