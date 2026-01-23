@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=github-releases depName=s-stefanov/actual-mcp
-ARG ACTUAL_MCP_VERSION=v0.2.0
+ARG ACTUAL_MCP_VERSION=v1.7.0
 
 # renovate: datasource=docker depName=node
 ARG NODE_VERSION=22
