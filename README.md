@@ -18,8 +18,10 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [actual-mcp](./images/actual-mcp/) | MCP server for Actual Budget | [s-stefanov/actual-mcp](https://github.com/s-stefanov/actual-mcp) |
 | [autoshift](./images/autoshift/) | Automatic SHiFT code redemption for Borderlands | [Fabbi/autoshift](https://github.com/Fabbi/autoshift) |
 | [flareproxy](./images/flareproxy/) | HTTP proxy adapter for FlareSolverr | [mimnix/FlareProxy](https://github.com/mimnix/FlareProxy) |
-| [hass-mcp](./images/hass-mcp/) | Home Assistant MCP server for Claude/LLMs | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
+| [hass-mcp](./images/hass-mcp/) | Home Assistant MCP server for Claude/LLMs (stdio) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
+| [hass-mcp-sse](./images/hass-mcp-sse/) | Home Assistant MCP server with SSE transport (k8s) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
 | [lgogdownloader](./images/lgogdownloader/) | Unofficial GOG.com downloader | [Sude-/lgogdownloader](https://github.com/Sude-/lgogdownloader) |
+| [mcp-proxy](./images/mcp-proxy/) | Bridge stdio MCP servers to SSE/HTTP transport | [sparfenyuk/mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) |
 | [redlib](./images/redlib/) | Private Reddit frontend | [redlib-org/redlib](https://github.com/redlib-org/redlib) (PR #509) |
 
 ## Security Practices
