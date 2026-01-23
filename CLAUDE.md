@@ -5,8 +5,9 @@ Guidelines for adding and maintaining Docker images in this repository.
 ## Adding a New Image
 
 1. Create `images/<name>/Dockerfile`
-2. Add entry to the images table in `README.md` (alphabetical order)
-3. Commit and push to main
+2. Create `images/<name>/README.md` (see README Requirements below)
+3. Add entry to the images table in `README.md` (alphabetical order)
+4. Commit and push to main
 
 ## Dockerfile Requirements
 
@@ -98,6 +99,46 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/var/cache/apk \
     apk add --no-cache package
 ```
+
+## README Requirements
+
+Each image must have a `README.md` with the following sections:
+
+```markdown
+# <image-name>
+
+Brief description of what the image does.
+
+## Upstream
+
+- **Repository**: [owner/repo](https://github.com/owner/repo)
+- **Version**: vX.Y.Z
+
+## Usage
+
+\`\`\`bash
+docker run [options] ghcr.io/sharkusmanch/<image-name>:<tag> [command]
+\`\`\`
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `VAR_NAME` | Yes/No | What it does |
+
+## Volumes
+
+| Path | Description |
+|------|-------------|
+| `/data` | Persistent storage |
+
+## Modifications from Upstream
+
+- List any changes from the upstream Dockerfile or build process
+- Or state "None - built directly from upstream source"
+```
+
+Omit sections that don't apply (e.g., no Volumes section if none are used).
 
 ## Commit Messages
 
