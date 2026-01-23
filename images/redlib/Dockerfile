@@ -20,9 +20,10 @@ ARG REDLIB_COMMIT
 
 # Install build dependencies
 # - musl-dev: C standard library for static linking
+# - openssl-dev: OpenSSL headers for hyper-tls build
 # - perl, make: Required for OpenSSL build
 # - git: Clone source and stamp commit info
-RUN apk add --no-cache musl-dev perl make git
+RUN apk add --no-cache musl-dev openssl-dev perl make git
 
 WORKDIR /build
 
