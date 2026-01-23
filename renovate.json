@@ -1,0 +1,37 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "Auto-merge all updates",
+      "matchPackagePatterns": ["*"],
+      "automerge": true,
+      "automergeType": "pr",
+      "automergeStrategy": "squash"
+    },
+    {
+      "description": "Group Dockerfile updates by image",
+      "matchPaths": ["images/actual-mcp/**"],
+      "groupName": "actual-mcp"
+    },
+    {
+      "description": "Group Dockerfile updates by image",
+      "matchPaths": ["images/redlib/**"],
+      "groupName": "redlib"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "fileMatch": ["images/.*/Dockerfile$"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?) depName=(?<depName>.*?)( branch=(?<currentBranch>.*?))?\\n(ARG|ENV)\\s+.*?_VERSION=(?<currentValue>.*?)\\n",
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?) depName=(?<depName>.*?)\\n(ARG|ENV)\\s+.*?_COMMIT=(?<currentDigest>.*?)\\n"
+      ],
+      "datasourceTemplate": "{{datasource}}",
+      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+    }
+  ]
+}
