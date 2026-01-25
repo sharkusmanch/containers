@@ -4,7 +4,7 @@
 ARG VERSION=v1.4.3
 
 # renovate: datasource=docker depName=golang
-ARG GO_VERSION=1.23
+ARG GO_VERSION=1.24
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.21
