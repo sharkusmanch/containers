@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=github-releases depName=a8m/envsubst
-ARG VERSION=v1.4.3
+ARG ENVSUBST_VERSION=v1.4.3
 
 # renovate: datasource=docker depName=golang
 ARG GO_VERSION=1.24
@@ -14,7 +14,7 @@ ARG ALPINE_VERSION=3.21
 # ============================================================================
 FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
 
-ARG VERSION
+ARG ENVSUBST_VERSION
 
 WORKDIR /build
 
@@ -22,7 +22,7 @@ WORKDIR /build
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     apk add --no-cache git && \
-    git clone --depth 1 --branch ${VERSION} https://github.com/a8m/envsubst.git . && \
+    git clone --depth 1 --branch ${ENVSUBST_VERSION} https://github.com/a8m/envsubst.git . && \
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /envsubst ./cmd/envsubst
 
 # ============================================================================
@@ -33,10 +33,10 @@ FROM alpine:${ALPINE_VERSION} AS runtime
 # Labels
 ARG BUILD_DATE
 ARG VCS_REF
-ARG VERSION
+ARG ENVSUBST_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.version="${ENVSUBST_VERSION}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
       org.opencontainers.image.upstream="https://github.com/a8m/envsubst" \
       org.opencontainers.image.title="envsubst" \
