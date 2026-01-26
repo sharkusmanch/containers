@@ -22,8 +22,9 @@ docker run --rm \
 | `TAILSCALE_CLIENT_SECRET` | Yes | - | OAuth client secret |
 | `OUTPUT_FILE` | No | `/output/hosts` | Path to write the hosts file |
 | `TAILNET` | No | `-` | Tailnet name (use `-` for default) |
-| `DOMAIN_SUFFIX` | No | `ts.net` | Domain suffix for hostnames |
+| `DOMAIN_SUFFIX` | No | auto-detect | Domain suffix (e.g., `tailnet-name.ts.net`). Auto-detected from API if not set. |
 | `STRIP_SUFFIX` | No | `true` | Strip numeric suffixes (-1, -2) from hostnames |
+| `USE_FQDN` | No | `true` | Use full MagicDNS name from API (recommended) |
 
 ## Volumes
 
@@ -56,18 +57,20 @@ Set `STRIP_SUFFIX=false` to disable this behavior.
 
 ## Output Format
 
-The generated hosts file follows standard `/etc/hosts` format:
+The generated hosts file follows standard `/etc/hosts` format with full MagicDNS FQDNs:
 
 ```
 # Tailscale hosts - Generated 2024-01-15T10:30:00Z
 # Source: Tailscale API (OAuth)
-#
+# Domain suffix: tailnet-name.ts.net
+# Strip numeric suffixes: True
+# Use FQDN from API: True
 # Devices: 5
 
-100.64.1.10 macbook.ts.net
-fd7a:115c:a1e0::1 macbook.ts.net
-100.64.1.20 homeserver.ts.net
-fd7a:115c:a1e0::2 homeserver.ts.net
+100.64.1.10 macbook.tailnet-name.ts.net
+fd7a:115c:a1e0::1 macbook.tailnet-name.ts.net
+100.64.1.20 homeserver.tailnet-name.ts.net
+fd7a:115c:a1e0::2 homeserver.tailnet-name.ts.net
 ```
 
 ## Kubernetes CronJob Example

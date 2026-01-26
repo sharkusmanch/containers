@@ -10,8 +10,10 @@ Environment Variables:
     TAILSCALE_CLIENT_SECRET: OAuth client secret (required)
     OUTPUT_FILE: Path to write hosts file (default: /output/hosts)
     TAILNET: Tailnet name (default: "-" for default tailnet)
-    DOMAIN_SUFFIX: Domain suffix for hostnames (default: "ts.net")
+    DOMAIN_SUFFIX: Domain suffix for hostnames (default: auto-detect from API)
+                   Set explicitly to override (e.g., "tailnet-name.ts.net")
     STRIP_SUFFIX: Strip numeric suffixes like -1, -2 (default: "true")
+    USE_FQDN: Use full MagicDNS name from API instead of hostname (default: "true")
 """
 
 import os
@@ -22,9 +24,9 @@ from datetime import datetime, timezone
 import requests
 
 
-def strip_numeric_suffix(hostname: str) -> str:
+def strip_numeric_suffix(name: str) -> str:
     """
-    Strip numeric suffixes like -1, -2 from hostnames.
+    Strip numeric suffixes like -1, -2 from names.
 
     Tailscale adds these when device names conflict (e.g., during pod upgrades).
     This allows consistent DNS resolution regardless of suffix.
@@ -34,7 +36,7 @@ def strip_numeric_suffix(hostname: str) -> str:
         nginx-proxy-2 -> nginx-proxy
         myserver -> myserver (unchanged)
     """
-    return re.sub(r'-\d+$', '', hostname)
+    return re.sub(r'-\d+$', '', name)
 
 
 def get_oauth_token(client_id: str, client_secret: str) -> str:
@@ -63,39 +65,78 @@ def get_devices(token: str, tailnet: str) -> list[dict]:
     return response.json().get("devices", [])
 
 
-def generate_hosts_content(devices: list[dict], domain_suffix: str, strip_suffix: bool) -> str:
+def extract_domain_suffix(devices: list[dict]) -> str:
+    """
+    Extract the tailnet domain suffix from device names.
+
+    Device names from API are like "hostname.tailnet-name.ts.net"
+    Returns "tailnet-name.ts.net" or "ts.net" as fallback.
+    """
+    for device in devices:
+        name = device.get("name", "")
+        if name and ".ts.net" in name:
+            # name format: "hostname.tailnet-name.ts.net"
+            parts = name.split(".", 1)
+            if len(parts) > 1:
+                return parts[1]  # "tailnet-name.ts.net"
+    return "ts.net"  # fallback
+
+
+def generate_hosts_content(
+    devices: list[dict],
+    domain_suffix: str,
+    strip_suffix: bool,
+    use_fqdn: bool,
+) -> str:
     """Generate hosts file content from device list."""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [
         f"# Tailscale hosts - Generated {timestamp}",
         "# Source: Tailscale API (OAuth)",
+        f"# Domain suffix: {domain_suffix}",
         f"# Strip numeric suffixes: {strip_suffix}",
+        f"# Use FQDN from API: {use_fqdn}",
         f"# Devices: {len(devices)}",
         "",
     ]
 
-    # Track hostnames to handle duplicates after stripping
+    # Track names to handle duplicates after stripping
     seen_entries: set[tuple[str, str]] = set()
 
     for device in devices:
-        hostname = device.get("hostname", "")
         addresses = device.get("addresses", [])
-
-        if not hostname or not addresses:
+        if not addresses:
             continue
 
-        # Optionally strip numeric suffix (e.g., blocky-1 -> blocky)
-        if strip_suffix:
-            hostname = strip_numeric_suffix(hostname)
+        if use_fqdn:
+            # Use the full MagicDNS name from API (e.g., "hostname.tailnet-name.ts.net")
+            fqdn = device.get("name", "")
+            if not fqdn:
+                continue
+
+            # Extract just the hostname part for suffix stripping
+            if strip_suffix and "." in fqdn:
+                hostname_part = fqdn.split(".", 1)[0]
+                hostname_part = strip_numeric_suffix(hostname_part)
+                # Reconstruct FQDN with stripped hostname
+                fqdn = f"{hostname_part}.{domain_suffix}"
+        else:
+            # Legacy mode: use hostname field + domain_suffix
+            hostname = device.get("hostname", "")
+            if not hostname:
+                continue
+            if strip_suffix:
+                hostname = strip_numeric_suffix(hostname)
+            fqdn = f"{hostname}.{domain_suffix}"
 
         # Add entry for each IP address (IPv4 and IPv6)
         for addr in addresses:
-            entry = (addr, hostname)
+            entry = (addr, fqdn)
             # Skip duplicates (can happen after stripping suffixes)
             if entry in seen_entries:
                 continue
             seen_entries.add(entry)
-            lines.append(f"{addr} {hostname}.{domain_suffix}")
+            lines.append(f"{addr} {fqdn}")
 
     return "\n".join(lines) + "\n"
 
@@ -112,8 +153,9 @@ def main():
     # Optional environment variables
     output_file = os.environ.get("OUTPUT_FILE", "/output/hosts")
     tailnet = os.environ.get("TAILNET", "-")
-    domain_suffix = os.environ.get("DOMAIN_SUFFIX", "ts.net")
+    domain_suffix_env = os.environ.get("DOMAIN_SUFFIX", "")  # Empty = auto-detect
     strip_suffix = os.environ.get("STRIP_SUFFIX", "true").lower() in ("true", "1", "yes")
+    use_fqdn = os.environ.get("USE_FQDN", "true").lower() in ("true", "1", "yes")
 
     print("Tailscale Hosts Sync")
     print("=" * 40)
@@ -136,12 +178,20 @@ def main():
         print(f"   FAILED - {e}")
         sys.exit(1)
 
-    # Step 3: Generate hosts file
-    print(f"3. Generating hosts file (strip_suffix={strip_suffix})...")
-    content = generate_hosts_content(devices, domain_suffix, strip_suffix)
+    # Step 3: Determine domain suffix
+    if domain_suffix_env:
+        domain_suffix = domain_suffix_env
+        print(f"3. Using configured domain suffix: {domain_suffix}")
+    else:
+        domain_suffix = extract_domain_suffix(devices)
+        print(f"3. Auto-detected domain suffix: {domain_suffix}")
 
-    # Step 4: Write to file
-    print(f"4. Writing to {output_file}...")
+    # Step 4: Generate hosts file
+    print(f"4. Generating hosts file (use_fqdn={use_fqdn}, strip_suffix={strip_suffix})...")
+    content = generate_hosts_content(devices, domain_suffix, strip_suffix, use_fqdn)
+
+    # Step 5: Write to file
+    print(f"5. Writing to {output_file}...")
     try:
         os.makedirs(os.path.dirname(output_file), exist_ok=True)
         with open(output_file, "w") as f:
