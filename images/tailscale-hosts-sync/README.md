@@ -23,6 +23,7 @@ docker run --rm \
 | `OUTPUT_FILE` | No | `/output/hosts` | Path to write the hosts file |
 | `TAILNET` | No | `-` | Tailnet name (use `-` for default) |
 | `DOMAIN_SUFFIX` | No | `ts.net` | Domain suffix for hostnames |
+| `STRIP_SUFFIX` | No | `true` | Strip numeric suffixes (-1, -2) from hostnames |
 
 ## Volumes
 
@@ -38,6 +39,20 @@ docker run --rm \
 4. Save the Client ID and Client Secret
 
 OAuth client credentials **never expire** - perfect for automated sync jobs.
+
+## Hostname Suffix Stripping
+
+By default, numeric suffixes like `-1`, `-2` are stripped from hostnames. This handles Tailscale's behavior of adding suffixes when device names conflict (e.g., during Kubernetes pod upgrades).
+
+| Original | Stripped |
+|----------|----------|
+| `blocky-1` | `blocky` |
+| `nginx-proxy-2` | `nginx-proxy` |
+| `myserver` | `myserver` |
+
+When multiple devices have the same base name, only the first IP for each hostname is kept (duplicates are skipped).
+
+Set `STRIP_SUFFIX=false` to disable this behavior.
 
 ## Output Format
 

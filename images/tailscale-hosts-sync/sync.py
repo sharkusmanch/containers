@@ -11,13 +11,30 @@ Environment Variables:
     OUTPUT_FILE: Path to write hosts file (default: /output/hosts)
     TAILNET: Tailnet name (default: "-" for default tailnet)
     DOMAIN_SUFFIX: Domain suffix for hostnames (default: "ts.net")
+    STRIP_SUFFIX: Strip numeric suffixes like -1, -2 (default: "true")
 """
 
 import os
+import re
 import sys
 from datetime import datetime, timezone
 
 import requests
+
+
+def strip_numeric_suffix(hostname: str) -> str:
+    """
+    Strip numeric suffixes like -1, -2 from hostnames.
+
+    Tailscale adds these when device names conflict (e.g., during pod upgrades).
+    This allows consistent DNS resolution regardless of suffix.
+
+    Examples:
+        blocky-1 -> blocky
+        nginx-proxy-2 -> nginx-proxy
+        myserver -> myserver (unchanged)
+    """
+    return re.sub(r'-\d+$', '', hostname)
 
 
 def get_oauth_token(client_id: str, client_secret: str) -> str:
@@ -46,16 +63,19 @@ def get_devices(token: str, tailnet: str) -> list[dict]:
     return response.json().get("devices", [])
 
 
-def generate_hosts_content(devices: list[dict], domain_suffix: str) -> str:
+def generate_hosts_content(devices: list[dict], domain_suffix: str, strip_suffix: bool) -> str:
     """Generate hosts file content from device list."""
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [
         f"# Tailscale hosts - Generated {timestamp}",
         "# Source: Tailscale API (OAuth)",
-        "#",
+        f"# Strip numeric suffixes: {strip_suffix}",
         f"# Devices: {len(devices)}",
         "",
     ]
+
+    # Track hostnames to handle duplicates after stripping
+    seen_entries: set[tuple[str, str]] = set()
 
     for device in devices:
         hostname = device.get("hostname", "")
@@ -64,8 +84,17 @@ def generate_hosts_content(devices: list[dict], domain_suffix: str) -> str:
         if not hostname or not addresses:
             continue
 
+        # Optionally strip numeric suffix (e.g., blocky-1 -> blocky)
+        if strip_suffix:
+            hostname = strip_numeric_suffix(hostname)
+
         # Add entry for each IP address (IPv4 and IPv6)
         for addr in addresses:
+            entry = (addr, hostname)
+            # Skip duplicates (can happen after stripping suffixes)
+            if entry in seen_entries:
+                continue
+            seen_entries.add(entry)
             lines.append(f"{addr} {hostname}.{domain_suffix}")
 
     return "\n".join(lines) + "\n"
@@ -84,6 +113,7 @@ def main():
     output_file = os.environ.get("OUTPUT_FILE", "/output/hosts")
     tailnet = os.environ.get("TAILNET", "-")
     domain_suffix = os.environ.get("DOMAIN_SUFFIX", "ts.net")
+    strip_suffix = os.environ.get("STRIP_SUFFIX", "true").lower() in ("true", "1", "yes")
 
     print("Tailscale Hosts Sync")
     print("=" * 40)
@@ -107,8 +137,8 @@ def main():
         sys.exit(1)
 
     # Step 3: Generate hosts file
-    print("3. Generating hosts file...")
-    content = generate_hosts_content(devices, domain_suffix)
+    print(f"3. Generating hosts file (strip_suffix={strip_suffix})...")
+    content = generate_hosts_content(devices, domain_suffix, strip_suffix)
 
     # Step 4: Write to file
     print(f"4. Writing to {output_file}...")
