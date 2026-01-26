@@ -3,7 +3,7 @@
   "extends": [
     "config:recommended"
   ],
-  "dependencyDashboard": true,
+  "mode": "full",
   "packageRules": [
     {
       "description": "Auto-merge all updates",
