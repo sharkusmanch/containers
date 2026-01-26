@@ -4,7 +4,7 @@
 ARG LGOGDOWNLOADER_VERSION=v3.18
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.23
 
 # ============================================================================
 # Builder stage
