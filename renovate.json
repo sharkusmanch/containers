@@ -27,8 +27,8 @@
       "customType": "regex",
       "fileMatch": ["images/.*/Dockerfile$"],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>.*?) depName=(?<depName>.*?)( branch=(?<currentBranch>.*?))?\\n(ARG|ENV)\\s+.*?_VERSION=(?<currentValue>.*?)\\n",
-        "#\\s*renovate:\\s*datasource=(?<datasource>.*?) depName=(?<depName>.*?)\\n(ARG|ENV)\\s+.*?_COMMIT=(?<currentDigest>.*?)\\n"
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(\\s+versioning=(?<versioning>\\S+))?(\\s+branch=(?<currentBranch>\\S+))?\\n(ARG|ENV)\\s+\\w+_VERSION=(?<currentValue>.+)\\n",
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(\\s+branch=(?<currentBranch>\\S+))?\\n(ARG|ENV)\\s+\\w+_COMMIT=(?<currentDigest>\\S+)\\n"
       ],
       "datasourceTemplate": "{{datasource}}",
       "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
