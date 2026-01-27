@@ -24,6 +24,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [hass-mcp-sse](./images/hass-mcp-sse/) | Home Assistant MCP server with SSE transport (k8s) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
 | [lgogdownloader](./images/lgogdownloader/) | Unofficial GOG.com downloader | [Sude-/lgogdownloader](https://github.com/Sude-/lgogdownloader) |
 | [mcp-proxy](./images/mcp-proxy/) | Bridge stdio MCP servers to SSE/HTTP transport | [sparfenyuk/mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) |
+| [pod-reaper](./images/pod-reaper/) | Rule-based Kubernetes pod cleanup controller | [target/pod-reaper](https://github.com/target/pod-reaper) |
 | [redlib](./images/redlib/) | Private Reddit frontend | [redlib-org/redlib](https://github.com/redlib-org/redlib) (PR #509) |
 | [tailscale-hosts-sync](./images/tailscale-hosts-sync/) | Sync Tailscale devices to hosts file for DNS | Original |
 
