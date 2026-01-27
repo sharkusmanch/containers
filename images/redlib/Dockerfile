@@ -6,10 +6,10 @@
 ARG REDLIB_COMMIT=42fe41bc4c64690aa91cd1cfecec3bad3438354f
 
 # renovate: datasource=docker depName=rust versioning=docker
-ARG RUST_VERSION=1.83
+ARG RUST_VERSION=1.93
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.20
+ARG ALPINE_VERSION=3.23
 
 # ============================================================================
 # Builder stage
