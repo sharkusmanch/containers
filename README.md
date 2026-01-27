@@ -8,6 +8,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 
 - **Auditable** - You can inspect the Dockerfile and see exactly what's included
 - **Reproducible** - Pinned versions and build args tracked in git
+- **Signed** - Cryptographically signed with build provenance attestations
 - **Secure** - Follows security best practices (see below)
 - **Current** - Renovate auto-merges upstream updates
 
@@ -29,6 +30,27 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 ## Security Practices
 
 All images follow these security standards:
+
+### Image Signing
+
+All container images are signed using GitHub's [attest-build-provenance](https://github.com/actions/attest-build-provenance) action. This provides cryptographic proof that images were built by this repository's CI pipeline.
+
+**Verify with GitHub CLI:**
+
+```bash
+gh attestation verify --repo sharkusmanch/docker-images \
+  oci://ghcr.io/sharkusmanch/docker-images/redlib:latest
+```
+
+**Verify with cosign:**
+
+```bash
+cosign verify-attestation \
+  --type https://slsa.dev/provenance/v1 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity-regexp "^https://github.com/sharkusmanch/docker-images/.github/workflows/build.yml@refs/heads/main$" \
+  ghcr.io/sharkusmanch/docker-images/redlib:latest
+```
 
 ### Build-time
 
