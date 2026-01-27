@@ -4,7 +4,7 @@
 ARG ACTUAL_MCP_VERSION=v1.7.0
 
 # renovate: datasource=docker depName=node
-ARG NODE_VERSION=22
+ARG NODE_VERSION=24
 
 # ============================================================================
 # Builder stage
