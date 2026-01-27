@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# renovate: datasource=github-releases depName=target/pod-reaper
-ARG POD_REAPER_VERSION=v2.14.0
+# renovate: datasource=github-tags depName=target/pod-reaper
+ARG POD_REAPER_VERSION=2.14.0
 
 # renovate: datasource=docker depName=golang
 ARG GO_VERSION=1.24
