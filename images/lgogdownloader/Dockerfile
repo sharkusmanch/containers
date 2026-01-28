@@ -54,7 +54,7 @@ ARG LGOGDOWNLOADER_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${LGOGDOWNLOADER_VERSION}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/Sude-/lgogdownloader" \
       org.opencontainers.image.title="lgogdownloader" \
       org.opencontainers.image.description="Unofficial GOG.com downloader for Linux"

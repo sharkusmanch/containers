@@ -38,7 +38,7 @@ First, authenticate with your GOG.com account:
 ```bash
 docker run -it --rm \
   -v lgog-config:/home/appuser/.config/lgogdownloader \
-  ghcr.io/sharkusmanch/docker-images/lgogdownloader:latest \
+  ghcr.io/sharkusmanch/containers/lgogdownloader:latest \
   --login
 ```
 
@@ -47,7 +47,7 @@ docker run -it --rm \
 ```bash
 docker run --rm \
   -v lgog-config:/home/appuser/.config/lgogdownloader \
-  ghcr.io/sharkusmanch/docker-images/lgogdownloader:latest \
+  ghcr.io/sharkusmanch/containers/lgogdownloader:latest \
   --list
 ```
 
@@ -57,7 +57,7 @@ docker run --rm \
 docker run --rm \
   -v lgog-config:/home/appuser/.config/lgogdownloader \
   -v /path/to/games:/games \
-  ghcr.io/sharkusmanch/docker-images/lgogdownloader:latest \
+  ghcr.io/sharkusmanch/containers/lgogdownloader:latest \
   --download --game "game_name" --directory /games
 ```
 
@@ -66,7 +66,7 @@ docker run --rm \
 ```yaml
 services:
   lgogdownloader:
-    image: ghcr.io/sharkusmanch/docker-images/lgogdownloader:latest
+    image: ghcr.io/sharkusmanch/containers/lgogdownloader:latest
     volumes:
       - lgog-config:/home/appuser/.config/lgogdownloader
       - ./games:/games
@@ -93,7 +93,7 @@ spec:
         runAsGroup: 10000
       containers:
         - name: lgogdownloader
-          image: ghcr.io/sharkusmanch/docker-images/lgogdownloader:latest
+          image: ghcr.io/sharkusmanch/containers/lgogdownloader:latest
           args: ["--list"]
           securityContext:
             readOnlyRootFilesystem: true

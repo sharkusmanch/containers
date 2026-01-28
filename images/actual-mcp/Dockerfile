@@ -43,7 +43,7 @@ ARG ACTUAL_MCP_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${ACTUAL_MCP_VERSION}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/s-stefanov/actual-mcp" \
       org.opencontainers.image.title="actual-mcp" \
       org.opencontainers.image.description="MCP server for Actual Budget"

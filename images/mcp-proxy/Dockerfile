@@ -43,7 +43,7 @@ ARG MCP_PROXY_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${MCP_PROXY_VERSION}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/sparfenyuk/mcp-proxy" \
       org.opencontainers.image.title="mcp-proxy" \
       org.opencontainers.image.description="Bridge between stdio and SSE/HTTP MCP transports"

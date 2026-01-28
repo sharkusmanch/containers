@@ -46,7 +46,7 @@ ARG AUTOSHIFT_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${AUTOSHIFT_VERSION}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/Fabbi/autoshift" \
       org.opencontainers.image.title="autoshift" \
       org.opencontainers.image.description="Automatic SHiFT code redemption for Borderlands games"

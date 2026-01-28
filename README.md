@@ -1,4 +1,4 @@
-# docker-images
+# containers
 
 Self-built Docker images from source. Trust but verify.
 
@@ -39,8 +39,8 @@ All container images are signed using GitHub's [attest-build-provenance](https:/
 **Verify with GitHub CLI:**
 
 ```bash
-gh attestation verify --repo sharkusmanch/docker-images \
-  oci://ghcr.io/sharkusmanch/docker-images/redlib:latest
+gh attestation verify --repo sharkusmanch/containers \
+  oci://ghcr.io/sharkusmanch/containers/redlib:latest
 ```
 
 **Verify with cosign:**
@@ -49,8 +49,8 @@ gh attestation verify --repo sharkusmanch/docker-images \
 cosign verify-attestation \
   --type https://slsa.dev/provenance/v1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp "^https://github.com/sharkusmanch/docker-images/.github/workflows/build.yml@refs/heads/main$" \
-  ghcr.io/sharkusmanch/docker-images/redlib:latest
+  --certificate-identity-regexp "^https://github.com/sharkusmanch/containers/.github/workflows/build.yml@refs/heads/main$" \
+  ghcr.io/sharkusmanch/containers/redlib:latest
 ```
 
 ### Build-time
@@ -100,7 +100,7 @@ All images include [OCI standard labels](https://github.com/opencontainers/image
 Inspect labels with:
 
 ```bash
-docker inspect ghcr.io/sharkusmanch/docker-images/redlib:latest \
+docker inspect ghcr.io/sharkusmanch/containers/redlib:latest \
   --format '{{json .Config.Labels}}' | jq
 ```
 
@@ -108,7 +108,7 @@ docker inspect ghcr.io/sharkusmanch/docker-images/redlib:latest \
 
 **This repo:**
 - Renovate auto-merges base image updates and upstream version bumps
-- Images pushed to `ghcr.io/sharkusmanch/docker-images/<name>:<tag>`
+- Images pushed to `ghcr.io/sharkusmanch/containers/<name>:<tag>`
 - Tags mirror upstream versions where possible, or use commit SHA for unmerged PRs
 
 **Your deployment:**

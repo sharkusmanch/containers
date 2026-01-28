@@ -43,7 +43,7 @@ spec:
         fsGroup: 10000
       containers:
         - name: actual-mcp
-          image: ghcr.io/sharkusmanch/docker-images/actual-mcp:latest
+          image: ghcr.io/sharkusmanch/containers/actual-mcp:latest
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

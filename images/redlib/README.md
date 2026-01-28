@@ -57,7 +57,7 @@ spec:
         runAsGroup: 10000
       containers:
         - name: redlib
-          image: ghcr.io/sharkusmanch/docker-images/redlib:latest
+          image: ghcr.io/sharkusmanch/containers/redlib:latest
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

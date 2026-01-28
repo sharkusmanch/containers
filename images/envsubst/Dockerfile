@@ -37,7 +37,7 @@ ARG ENVSUBST_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${ENVSUBST_VERSION}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/a8m/envsubst" \
       org.opencontainers.image.title="envsubst" \
       org.opencontainers.image.description="Environment variable substitution with default values and strict mode"

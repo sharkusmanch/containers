@@ -48,7 +48,7 @@ ARG REDLIB_COMMIT
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${REDLIB_COMMIT}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/redlib-org/redlib" \
       org.opencontainers.image.upstream-ref="https://github.com/redlib-org/redlib/pull/509" \
       org.opencontainers.image.title="redlib" \

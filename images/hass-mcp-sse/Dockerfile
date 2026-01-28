@@ -55,7 +55,7 @@ ARG MCP_PROXY_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${HASS_MCP_VERSION}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/voska/hass-mcp" \
       org.opencontainers.image.title="hass-mcp-sse" \
       org.opencontainers.image.description="Home Assistant MCP server with SSE transport for Kubernetes"

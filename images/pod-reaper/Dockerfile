@@ -37,7 +37,7 @@ ARG POD_REAPER_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${POD_REAPER_VERSION}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/target/pod-reaper" \
       org.opencontainers.image.title="pod-reaper" \
       org.opencontainers.image.description="Rule-based Kubernetes pod cleanup controller for reaping zombie pods"

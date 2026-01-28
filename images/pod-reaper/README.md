@@ -11,7 +11,7 @@ Rule-based Kubernetes pod cleanup controller. Automatically deletes pods matchin
 
 ```bash
 docker run -e POD_PHASE_STATUSES=Unknown -e SCHEDULE="@every 5m" \
-  ghcr.io/sharkusmanch/docker-images/pod-reaper:v2.14.0
+  ghcr.io/sharkusmanch/containers/pod-reaper:v2.14.0
 ```
 
 ### Kubernetes Deployment
@@ -34,7 +34,7 @@ spec:
       serviceAccountName: pod-reaper
       containers:
         - name: pod-reaper
-          image: ghcr.io/sharkusmanch/docker-images/pod-reaper:v2.14.0
+          image: ghcr.io/sharkusmanch/containers/pod-reaper:v2.14.0
           env:
             - name: POD_PHASE_STATUSES
               value: "Unknown"

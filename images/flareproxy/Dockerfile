@@ -40,7 +40,7 @@ ARG FLAREPROXY_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${FLAREPROXY_VERSION}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/mimnix/FlareProxy" \
       org.opencontainers.image.title="flareproxy" \
       org.opencontainers.image.description="HTTP proxy adapter for FlareSolverr"

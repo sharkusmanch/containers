@@ -44,7 +44,7 @@ spec:
         runAsGroup: 65534
       containers:
         - name: flareproxy
-          image: ghcr.io/sharkusmanch/docker-images/flareproxy:latest
+          image: ghcr.io/sharkusmanch/containers/flareproxy:latest
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -68,7 +68,7 @@ services:
       - "8191:8191"
 
   flareproxy:
-    image: ghcr.io/sharkusmanch/docker-images/flareproxy:latest
+    image: ghcr.io/sharkusmanch/containers/flareproxy:latest
     environment:
       - FLARESOLVERR_URL=http://flaresolverr:8191/v1
     ports:

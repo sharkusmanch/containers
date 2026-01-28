@@ -11,7 +11,7 @@ docker run --rm \
   -e TAILSCALE_CLIENT_ID=your-client-id \
   -e TAILSCALE_CLIENT_SECRET=your-client-secret \
   -v /path/to/output:/output \
-  ghcr.io/sharkusmanch/docker-images/tailscale-hosts-sync:1.0.0
+  ghcr.io/sharkusmanch/containers/tailscale-hosts-sync:1.0.0
 ```
 
 ## Environment Variables
@@ -88,7 +88,7 @@ spec:
         spec:
           containers:
             - name: sync
-              image: ghcr.io/sharkusmanch/docker-images/tailscale-hosts-sync:1.0.0
+              image: ghcr.io/sharkusmanch/containers/tailscale-hosts-sync:1.0.0
               envFrom:
                 - secretRef:
                     name: tailscale-oauth
