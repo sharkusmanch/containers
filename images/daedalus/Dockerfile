@@ -7,15 +7,15 @@ ARG COMPANION_VERSION=0.58.2
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_CODE_VERSION=2.1.50
 # renovate: datasource=docker depName=alpine versioning=docker
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.23
 # renovate: datasource=docker depName=oven/bun versioning=docker
-ARG BUN_VERSION=1.2
+ARG BUN_VERSION=1.3
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 ARG KUBECTL_VERSION=1.35.1
 # renovate: datasource=github-releases depName=helm/helm
 ARG HELM_VERSION=4.1.1
 # renovate: datasource=docker depName=golang versioning=docker
-ARG GO_VERSION=1.24
+ARG GO_VERSION=1.26
 
 # ── Go SDK (used as COPY source) ─────────────────────────────────────────────
 FROM golang:${GO_VERSION}-alpine AS golang-sdk
