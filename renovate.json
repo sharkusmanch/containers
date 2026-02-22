@@ -23,6 +23,13 @@
       "groupName": "daedalus"
     },
     {
+      "description": "Disable built-in dockerfile manager for ARG-substituted FROM lines with suffixes",
+      "matchManagers": ["dockerfile"],
+      "matchPaths": ["images/daedalus/**"],
+      "matchDepNames": ["golang", "oven/bun"],
+      "enabled": false
+    },
+    {
       "description": "Group Dockerfile updates by image",
       "matchPaths": ["images/redlib/**"],
       "groupName": "redlib"
