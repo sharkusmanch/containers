@@ -7,37 +7,48 @@
   "packageRules": [
     {
       "description": "Auto-merge all updates",
-      "matchPackagePatterns": ["*"],
+      "matchPackagePatterns": [
+        "*"
+      ],
       "automerge": true,
       "automergeType": "pr",
       "automergeStrategy": "squash"
     },
     {
       "description": "Group Dockerfile updates by image",
-      "matchPaths": ["images/actual-mcp/**"],
+      "matchPaths": [
+        "images/actual-mcp/**"
+      ],
       "groupName": "actual-mcp"
     },
     {
-      "description": "Group Dockerfile updates by image",
-      "matchPaths": ["images/daedalus/**"],
-      "groupName": "daedalus"
-    },
-    {
       "description": "Disable built-in dockerfile manager for FROM lines with ARG-suffixed tags (custom regex handles these)",
-      "matchManagers": ["dockerfile"],
-      "matchDepNames": ["golang", "oven/bun", "python", "node", "rust"],
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchDepNames": [
+        "golang",
+        "oven/bun",
+        "python",
+        "node",
+        "rust"
+      ],
       "enabled": false
     },
     {
       "description": "Group Dockerfile updates by image",
-      "matchPaths": ["images/redlib/**"],
+      "matchPaths": [
+        "images/redlib/**"
+      ],
       "groupName": "redlib"
     }
   ],
   "customManagers": [
     {
       "customType": "regex",
-      "fileMatch": ["images/.*/Dockerfile$"],
+      "fileMatch": [
+        "images/.*/Dockerfile$"
+      ],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(\\s+versioning=(?<versioning>\\S+))?(\\s+branch=(?<currentBranch>\\S+))?\\n(ARG|ENV)\\s+\\w+_VERSION=(?<currentValue>.+)\\n",
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(\\s+branch=(?<currentBranch>\\S+))?\\n(ARG|ENV)\\s+\\w+_COMMIT=(?<currentDigest>\\S+)\\n"

@@ -18,7 +18,6 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 |-------|-------------|----------|
 | [actual-mcp](./images/actual-mcp/) | MCP server for Actual Budget | [s-stefanov/actual-mcp](https://github.com/s-stefanov/actual-mcp) |
 | [autoshift](./images/autoshift/) | Automatic SHiFT code redemption for Borderlands | [Fabbi/autoshift](https://github.com/Fabbi/autoshift) |
-| [daedalus](./images/daedalus/) | SSH dev container with Claude Code and The Companion web UI | [The-Vibe-Company/companion](https://github.com/The-Vibe-Company/companion) |
 | [envsubst](./images/envsubst/) | Environment variable substitution with defaults | [a8m/envsubst](https://github.com/a8m/envsubst) |
 | [flareproxy](./images/flareproxy/) | HTTP proxy adapter for FlareSolverr | [mimnix/FlareProxy](https://github.com/mimnix/FlareProxy) |
 | [hass-mcp](./images/hass-mcp/) | Home Assistant MCP server for Claude/LLMs (stdio) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
