@@ -3,7 +3,7 @@
 # Tailscale Hosts Sync - Syncs Tailscale device hostnames to a hosts file
 # for use with Blocky, Pi-hole, or other DNS servers
 
-# renovate: datasource=docker depName=python
+# renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.13
 
 # renovate: datasource=docker depName=alpine

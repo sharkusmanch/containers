@@ -23,10 +23,9 @@
       "groupName": "daedalus"
     },
     {
-      "description": "Disable built-in dockerfile manager for ARG-substituted FROM lines with suffixes",
+      "description": "Disable built-in dockerfile manager for FROM lines with ARG-suffixed tags (custom regex handles these)",
       "matchManagers": ["dockerfile"],
-      "matchPaths": ["images/daedalus/**"],
-      "matchDepNames": ["golang", "oven/bun"],
+      "matchDepNames": ["golang", "oven/bun", "python", "node", "rust"],
       "enabled": false
     },
     {

@@ -3,7 +3,7 @@
 # renovate: datasource=github-releases depName=a8m/envsubst
 ARG ENVSUBST_VERSION=v1.4.3
 
-# renovate: datasource=docker depName=golang
+# renovate: datasource=docker depName=golang versioning=docker
 ARG GO_VERSION=1.24
 
 # renovate: datasource=docker depName=alpine

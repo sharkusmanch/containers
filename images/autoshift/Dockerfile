@@ -3,7 +3,7 @@
 # renovate: datasource=github-releases depName=Fabbi/autoshift
 ARG AUTOSHIFT_VERSION=v2.1.4
 
-# renovate: datasource=docker depName=python
+# renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.12
 
 # renovate: datasource=docker depName=alpine

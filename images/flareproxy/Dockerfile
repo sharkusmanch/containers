@@ -3,7 +3,7 @@
 # renovate: datasource=github-tags depName=mimnix/FlareProxy
 ARG FLAREPROXY_VERSION=v1.0.0
 
-# renovate: datasource=docker depName=python
+# renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.12
 
 # renovate: datasource=docker depName=alpine

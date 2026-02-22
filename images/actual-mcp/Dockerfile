@@ -3,7 +3,7 @@
 # renovate: datasource=github-releases depName=s-stefanov/actual-mcp
 ARG ACTUAL_MCP_VERSION=v1.7.0
 
-# renovate: datasource=docker depName=node
+# renovate: datasource=docker depName=node versioning=docker
 ARG NODE_VERSION=24
 
 # ============================================================================

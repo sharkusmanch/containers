@@ -3,7 +3,7 @@
 # renovate: datasource=github-tags depName=target/pod-reaper
 ARG POD_REAPER_VERSION=2.14.0
 
-# renovate: datasource=docker depName=golang
+# renovate: datasource=docker depName=golang versioning=docker
 ARG GO_VERSION=1.24
 
 # renovate: datasource=docker depName=alpine

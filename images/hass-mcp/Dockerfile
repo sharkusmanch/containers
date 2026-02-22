@@ -3,7 +3,7 @@
 # renovate: datasource=github-releases depName=voska/hass-mcp
 ARG HASS_MCP_VERSION=v0.1.1
 
-# renovate: datasource=docker depName=python
+# renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.13
 
 # renovate: datasource=docker depName=alpine
