@@ -19,6 +19,11 @@
     },
     {
       "description": "Group Dockerfile updates by image",
+      "matchPaths": ["images/daedalus/**"],
+      "groupName": "daedalus"
+    },
+    {
+      "description": "Group Dockerfile updates by image",
       "matchPaths": ["images/redlib/**"],
       "groupName": "redlib"
     }
