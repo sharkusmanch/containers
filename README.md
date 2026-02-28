@@ -26,6 +26,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [mcp-proxy](./images/mcp-proxy/) | Bridge stdio MCP servers to SSE/HTTP transport | [sparfenyuk/mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) |
 | [pod-reaper](./images/pod-reaper/) | Rule-based Kubernetes pod cleanup controller | [target/pod-reaper](https://github.com/target/pod-reaper) |
 | [redlib](./images/redlib/) | Private Reddit frontend | [redlib-org/redlib](https://github.com/redlib-org/redlib) (PR #509) |
+| [rss-youtube-downloader](./images/rss-youtube-downloader/) | RSS feed YouTube video downloader with series routing | Original |
 | [tailscale-hosts-sync](./images/tailscale-hosts-sync/) | Sync Tailscale devices to hosts file for DNS | Original |
 
 ## Security Practices
