@@ -3,12 +3,13 @@
 
 Reads RSS feeds (e.g. Patreon podcast feeds), extracts YouTube URLs from
 entry descriptions, and downloads them via yt-dlp. Videos are organized
-into series folders based on regex pattern matching against entry titles.
+into Plex TV Shows-compatible folder structure with NFO metadata.
 
 Designed to run as a Kubernetes CronJob every 6 hours.
 """
 
 import calendar
+import html
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from xml.etree.ElementTree import Element, SubElement, tostring
 
 import feedparser
 import yaml
@@ -44,7 +46,8 @@ YOUTUBE_URL_RE = re.compile(
     r"([\w-]{11})"
 )
 
-OUTPUT_TEMPLATE = "%(title)s [%(id)s].%(ext)s"
+HTML_TAG_RE = re.compile(r"<[^>]+>")
+
 DOWNLOAD_TIMEOUT = 1800  # 30 minutes per video
 
 
@@ -73,7 +76,6 @@ def save_state(state: dict, state_path: Path) -> None:
         tmp_path.replace(state_path)
     except OSError as exc:
         log.error("Failed to save state file %s: %s", state_path, exc)
-        # Clean up temp file on failure
         tmp_path.unlink(missing_ok=True)
         raise
 
@@ -98,11 +100,9 @@ def load_config(config_path: Path) -> dict:
                     f"Feed #{i} ({feed.get('name', 'unnamed')}) "
                     f"missing required key: {required}"
                 )
-        # Default retention_days to 0 (no pruning) if not set
         feed.setdefault("retention_days", 0)
         feed.setdefault("series", [])
 
-        # Pre-compile series patterns
         for series in feed["series"]:
             if "pattern" not in series or "path" not in series:
                 raise ValueError(
@@ -120,34 +120,25 @@ def load_config(config_path: Path) -> dict:
 
 
 def extract_youtube_ids(entry) -> list[str]:
-    """Extract unique YouTube video IDs from a feed entry.
-
-    Searches the entry summary, content blocks, and link fields.
-    Returns a deduplicated list of 11-character video IDs.
-    """
+    """Extract unique YouTube video IDs from a feed entry."""
     texts = []
 
-    # Summary / description
     if hasattr(entry, "summary"):
         texts.append(entry.summary)
 
-    # Content blocks (Atom feeds)
     if hasattr(entry, "content"):
         for content_block in entry.content:
             texts.append(content_block.get("value", ""))
 
-    # Direct links
     if hasattr(entry, "links"):
         for link in entry.links:
             texts.append(link.get("href", ""))
 
-    # Entry link
     if hasattr(entry, "link"):
         texts.append(entry.link)
 
     combined = " ".join(texts)
     ids = YOUTUBE_URL_RE.findall(combined)
-    # Deduplicate while preserving order
     seen = set()
     unique = []
     for vid in ids:
@@ -155,6 +146,28 @@ def extract_youtube_ids(entry) -> list[str]:
             seen.add(vid)
             unique.append(vid)
     return unique
+
+
+# ---------------------------------------------------------------------------
+# HTML / text helpers
+# ---------------------------------------------------------------------------
+
+
+def strip_html(text: str) -> str:
+    """Strip HTML tags and decode entities."""
+    text = HTML_TAG_RE.sub("", text)
+    return html.unescape(text).strip()
+
+
+def get_entry_description(entry) -> str:
+    """Extract plain-text description from a feed entry."""
+    raw = ""
+    if hasattr(entry, "content"):
+        for block in entry.content:
+            raw += block.get("value", "")
+    if not raw and hasattr(entry, "summary"):
+        raw = entry.summary
+    return strip_html(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -175,23 +188,98 @@ def match_series(title: str, feed_config: dict) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Plex naming and metadata
+# ---------------------------------------------------------------------------
+
+
+def plex_episode_id(pub_date: datetime | None, series_name: str,
+                    state: dict, feed_name: str) -> tuple[int, int]:
+    """Generate Plex season/episode numbers from publish date.
+
+    Season = year, Episode = day-of-year * 10 + index for same-day dupes.
+    """
+    if not pub_date:
+        pub_date = datetime.now(timezone.utc)
+
+    season = pub_date.year
+    day_of_year = pub_date.timetuple().tm_yday
+
+    # Find existing episodes on same day in same series
+    existing = 0
+    for entry in state.values():
+        if entry.get("feed") != feed_name or entry.get("series") != series_name:
+            continue
+        if entry.get("season") == season and entry.get("episode", 0) // 10 == day_of_year:
+            existing += 1
+
+    episode = day_of_year * 10 + existing
+    return season, episode
+
+
+def plex_filename(series_name: str, season: int, episode: int,
+                  title: str, video_id: str) -> str:
+    """Generate Plex-compatible filename (without extension).
+
+    Format: Series Name - S2026E0580 - Episode Title [video_id]
+    """
+    # Clean title for filesystem safety
+    clean_title = re.sub(r'[<>:"/\\|?*]', '', title)
+    clean_title = clean_title.strip('. ')
+    # Truncate to avoid filesystem path length limits
+    if len(clean_title) > 150:
+        clean_title = clean_title[:150].strip()
+
+    return f"{series_name} - S{season:04d}E{episode:04d} - {clean_title} [{video_id}]"
+
+
+def write_episode_nfo(nfo_path: Path, title: str, series_name: str,
+                      plot: str, aired: str, season: int, episode: int) -> None:
+    """Write a Kodi/Plex-compatible episode NFO file."""
+    root = Element("episodedetails")
+    SubElement(root, "title").text = title
+    SubElement(root, "showtitle").text = series_name
+    SubElement(root, "plot").text = plot
+    SubElement(root, "aired").text = aired
+    SubElement(root, "season").text = str(season)
+    SubElement(root, "episode").text = str(episode)
+
+    xml_bytes = tostring(root, encoding="unicode", xml_declaration=False)
+    nfo_path.write_text(f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_bytes}\n')
+    log.info("Wrote NFO: %s", nfo_path)
+
+
+def write_tvshow_nfo(series_dir: Path, series_name: str) -> None:
+    """Write a tvshow.nfo in the series root if it doesn't exist."""
+    nfo_path = series_dir / "tvshow.nfo"
+    if nfo_path.exists():
+        return
+
+    root = Element("tvshow")
+    SubElement(root, "title").text = series_name
+    SubElement(root, "plot").text = f"{series_name} - downloaded from RSS feed"
+
+    xml_bytes = tostring(root, encoding="unicode", xml_declaration=False)
+    nfo_path.write_text(f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_bytes}\n')
+    log.info("Wrote tvshow.nfo: %s", nfo_path)
+
+
+# ---------------------------------------------------------------------------
 # Downloading
 # ---------------------------------------------------------------------------
 
 
-def download_video(video_id: str, output_dir: str,
-                    ytdlp_opts: dict | None = None) -> str | None:
+def download_video(video_id: str, output_dir: str, filename_base: str,
+                   ytdlp_opts: dict | None = None) -> str | None:
     """Download a YouTube video using yt-dlp.
 
-    Returns the output filename on success, or None on failure.
+    Returns the output filepath on success, or None on failure.
     """
     opts = ytdlp_opts or {}
     fmt = opts.get("format", "bestvideo+bestaudio/best")
     merge_format = opts.get("merge_output_format", "mkv")
-    output_template = opts.get("output_template", OUTPUT_TEMPLATE)
     extra_args = opts.get("extra_args", [])
 
-    output_path = os.path.join(output_dir, output_template)
+    output_template = os.path.join(output_dir, f"{filename_base}.%(ext)s")
     url = f"https://www.youtube.com/watch?v={video_id}"
 
     cmd = [
@@ -200,7 +288,10 @@ def download_video(video_id: str, output_dir: str,
         "--merge-output-format", merge_format,
         "--embed-metadata",
         "--embed-thumbnail",
-        "--output", output_path,
+        "--write-thumbnail",
+        "--convert-thumbnails", "jpg",
+        "--output", output_template,
+        "--output", f"thumbnail:{os.path.join(output_dir, filename_base)}.%(ext)s",
         "--no-progress",
         "--print", "after_move:filepath",
         *extra_args,
@@ -229,13 +320,11 @@ def download_video(video_id: str, output_dir: str,
         )
         return None
 
-    # Extract the final filepath from yt-dlp --print output
     filepath = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else None
     if filepath:
         log.info("Downloaded: %s", filepath)
         return filepath
 
-    # Fallback: construct expected filename
     log.warning("Could not determine output filename for %s", video_id)
     return None
 
@@ -247,7 +336,7 @@ def download_video(video_id: str, output_dir: str,
 
 def prune_old_entries(state: dict, feed_name: str, retention_days: int,
                       state_path: Path) -> None:
-    """Remove entries older than retention_days and delete their files."""
+    """Remove entries older than retention_days and delete their files + metadata."""
     if retention_days <= 0:
         return
 
@@ -286,15 +375,24 @@ def prune_old_entries(state: dict, feed_name: str, retention_days: int,
         filepath = entry.get("file")
 
         if filepath:
+            p = Path(filepath)
+            # Delete video file
             try:
-                p = Path(filepath)
                 if p.exists():
                     p.unlink()
                     log.info("Deleted file: %s", filepath)
-                else:
-                    log.debug("File already gone: %s", filepath)
             except OSError as exc:
                 log.warning("Failed to delete %s: %s", filepath, exc)
+
+            # Delete sidecar files (nfo, jpg thumbnail)
+            stem = p.with_suffix("")
+            for sidecar in [stem.with_suffix(".nfo"), stem.with_suffix(".jpg")]:
+                try:
+                    if sidecar.exists():
+                        sidecar.unlink()
+                        log.info("Deleted sidecar: %s", sidecar)
+                except OSError as exc:
+                    log.warning("Failed to delete %s: %s", sidecar, exc)
 
         del state[video_id]
         log.info("Pruned video %s (%s)", video_id, entry.get("title", "unknown"))
@@ -366,9 +464,9 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
     for entry in parsed.entries:
         title = entry.get("title", "Untitled")
 
-        # Skip entries older than retention_days (avoid downloading then pruning)
+        # Skip entries older than retention_days
+        pub_date = entry_published_date(entry)
         if age_cutoff:
-            pub_date = entry_published_date(entry)
             if pub_date and pub_date < age_cutoff:
                 old_count += 1
                 continue
@@ -383,31 +481,47 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
                 skip_count += 1
                 continue
 
-            series_name, download_path = match_series(title, feed_config)
+            series_name, base_path = match_series(title, feed_config)
             log.info(
                 "New video: %s (ID: %s) -> %s [%s]",
                 title,
                 video_id,
                 series_name,
-                download_path,
+                base_path,
             )
 
-            # Ensure output directory exists
-            Path(download_path).mkdir(parents=True, exist_ok=True)
+            # Build Plex-compatible path: Series/Season YYYY/
+            season, episode = plex_episode_id(pub_date, series_name, state, feed_name)
+            season_dir = os.path.join(base_path, f"Season {season}")
+            Path(season_dir).mkdir(parents=True, exist_ok=True)
+
+            # Write tvshow.nfo in series root
+            write_tvshow_nfo(Path(base_path), series_name)
+
+            # Generate Plex filename
+            fname = plex_filename(series_name, season, episode, title, video_id)
 
             filepath = download_video(
-                video_id, download_path, feed_config.get("ytdlp")
+                video_id, season_dir, fname, feed_config.get("ytdlp")
             )
 
-            # Record in state regardless of download success to avoid retrying
-            # permanently broken videos. The file field will be None on failure.
+            # Write episode NFO
+            if filepath:
+                aired = pub_date.strftime("%Y-%m-%d") if pub_date else ""
+                description = get_entry_description(entry)
+                nfo_path = Path(filepath).with_suffix(".nfo")
+                write_episode_nfo(nfo_path, title, series_name,
+                                  description, aired, season, episode)
+
             state[video_id] = {
                 "title": title,
                 "downloaded_at": datetime.now(timezone.utc).isoformat(),
                 "series": series_name,
-                "path": download_path,
+                "path": season_dir,
                 "file": filepath,
                 "feed": feed_name,
+                "season": season,
+                "episode": episode,
             }
 
             save_state(state, state_path)
@@ -454,7 +568,6 @@ def main() -> int:
             process_feed(feed_config, state, state_path)
         except Exception:
             log.exception("Error processing feed '%s'", feed_config["name"])
-            # Continue with remaining feeds
 
     log.info("Finished. Tracking %d video(s) total.", len(state))
     return 0
