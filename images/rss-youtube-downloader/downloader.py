@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -175,20 +176,21 @@ def get_entry_description(entry) -> str:
 # ---------------------------------------------------------------------------
 
 
-def match_series(title: str, feed_config: dict) -> tuple[str, str] | None:
+def match_series(title: str, feed_config: dict) -> tuple[str, str, str | None] | None:
     """Match an entry title against series patterns.
 
-    Returns (series_name, download_path) or None if no pattern matches
-    and skip_unmatched is true.
+    Returns (series_name, download_path, poster_url) or None if no
+    pattern matches and skip_unmatched is true.
     """
     for series in feed_config["series"]:
         if series["_compiled"].search(title):
-            return series.get("name", "Unknown"), series["path"]
+            return (series.get("name", "Unknown"), series["path"],
+                    series.get("poster_url"))
 
     if feed_config.get("skip_unmatched", False):
         return None
 
-    return "Unsorted", feed_config["default_path"]
+    return "Unsorted", feed_config["default_path"], None
 
 
 # ---------------------------------------------------------------------------
@@ -252,19 +254,31 @@ def write_episode_nfo(nfo_path: Path, title: str, series_name: str,
     log.info("Wrote NFO: %s", nfo_path)
 
 
-def write_tvshow_nfo(series_dir: Path, series_name: str) -> None:
+def write_tvshow_nfo(series_dir: Path, series_name: str,
+                     poster_url: str | None = None) -> None:
     """Write a tvshow.nfo in the series root if it doesn't exist."""
     nfo_path = series_dir / "tvshow.nfo"
-    if nfo_path.exists():
-        return
+    if not nfo_path.exists():
+        root = Element("tvshow")
+        SubElement(root, "title").text = series_name
+        SubElement(root, "plot").text = f"{series_name} - downloaded from RSS feed"
+        if poster_url:
+            SubElement(root, "thumb", aspect="poster").text = poster_url
 
-    root = Element("tvshow")
-    SubElement(root, "title").text = series_name
-    SubElement(root, "plot").text = f"{series_name} - downloaded from RSS feed"
+        xml_bytes = tostring(root, encoding="unicode", xml_declaration=False)
+        nfo_path.write_text(f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_bytes}\n')
+        log.info("Wrote tvshow.nfo: %s", nfo_path)
 
-    xml_bytes = tostring(root, encoding="unicode", xml_declaration=False)
-    nfo_path.write_text(f'<?xml version="1.0" encoding="UTF-8"?>\n{xml_bytes}\n')
-    log.info("Wrote tvshow.nfo: %s", nfo_path)
+    # Download poster if configured and not already present
+    if poster_url:
+        poster_path = series_dir / "poster.jpg"
+        if not poster_path.exists():
+            try:
+                urllib.request.urlretrieve(poster_url, poster_path)
+                log.info("Downloaded poster: %s", poster_path)
+            except Exception as exc:
+                log.warning("Failed to download poster for %s: %s",
+                            series_name, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +519,7 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
             if match is None:
                 log.debug("Skipping unmatched video: %s (ID: %s)", title, video_id)
                 continue
-            series_name, base_path = match
+            series_name, base_path, poster_url = match
             log.info(
                 "New video: %s (ID: %s) -> %s [%s]",
                 title,
@@ -520,7 +534,7 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
             Path(season_dir).mkdir(parents=True, exist_ok=True)
 
             # Write tvshow.nfo in series root
-            write_tvshow_nfo(Path(base_path), series_name)
+            write_tvshow_nfo(Path(base_path), series_name, poster_url)
 
             # Generate Plex filename
             fname = plex_filename(series_name, season, episode, title, video_id)
