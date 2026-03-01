@@ -175,15 +175,19 @@ def get_entry_description(entry) -> str:
 # ---------------------------------------------------------------------------
 
 
-def match_series(title: str, feed_config: dict) -> tuple[str, str]:
+def match_series(title: str, feed_config: dict) -> tuple[str, str] | None:
     """Match an entry title against series patterns.
 
-    Returns (series_name, download_path). Falls back to
-    ("Unsorted", default_path) if no pattern matches.
+    Returns (series_name, download_path) or None if no pattern matches
+    and skip_unmatched is true.
     """
     for series in feed_config["series"]:
         if series["_compiled"].search(title):
             return series.get("name", "Unknown"), series["path"]
+
+    if feed_config.get("skip_unmatched", False):
+        return None
+
     return "Unsorted", feed_config["default_path"]
 
 
@@ -497,7 +501,11 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
                 skip_count += 1
                 continue
 
-            series_name, base_path = match_series(title, feed_config)
+            match = match_series(title, feed_config)
+            if match is None:
+                log.debug("Skipping unmatched video: %s (ID: %s)", title, video_id)
+                continue
+            series_name, base_path = match
             log.info(
                 "New video: %s (ID: %s) -> %s [%s]",
                 title,
