@@ -334,11 +334,21 @@ def download_video(video_id: str, output_dir: str, filename_base: str,
 # ---------------------------------------------------------------------------
 
 
-def prune_old_entries(state: dict, feed_name: str, retention_days: int,
+def prune_old_entries(state: dict, feed_name: str, feed_config: dict,
                       state_path: Path) -> None:
-    """Remove entries older than retention_days and delete their files + metadata."""
-    if retention_days <= 0:
+    """Remove entries older than retention_days based on RSS publish date.
+
+    Per-series retention_days overrides the feed-level default.
+    """
+    feed_retention = feed_config.get("retention_days", 0)
+    if feed_retention <= 0:
         return
+
+    # Build series -> retention_days lookup
+    series_retention = {}
+    for series in feed_config.get("series", []):
+        if "retention_days" in series:
+            series_retention[series.get("name", "")] = series["retention_days"]
 
     now = datetime.now(timezone.utc)
     to_remove = []
@@ -347,16 +357,23 @@ def prune_old_entries(state: dict, feed_name: str, retention_days: int,
         if entry.get("feed") != feed_name:
             continue
 
-        downloaded_at = entry.get("downloaded_at")
-        if not downloaded_at:
+        # Use RSS publish date; fall back to downloaded_at for old state entries
+        pub_date_str = entry.get("published_at") or entry.get("downloaded_at")
+        if not pub_date_str:
             continue
 
         try:
-            dl_time = datetime.fromisoformat(downloaded_at)
+            pub_time = datetime.fromisoformat(pub_date_str)
         except (ValueError, TypeError):
             continue
 
-        age_days = (now - dl_time).total_seconds() / 86400
+        # Per-series retention overrides feed default
+        series_name = entry.get("series", "")
+        retention_days = series_retention.get(series_name, feed_retention)
+        if retention_days <= 0:
+            continue
+
+        age_days = (now - pub_time).total_seconds() / 86400
         if age_days > retention_days:
             to_remove.append(video_id)
 
@@ -364,9 +381,8 @@ def prune_old_entries(state: dict, feed_name: str, retention_days: int,
         return
 
     log.info(
-        "Pruning %d video(s) older than %d days from feed '%s'",
+        "Pruning %d video(s) from feed '%s'",
         len(to_remove),
-        retention_days,
         feed_name,
     )
 
@@ -515,6 +531,7 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
 
             state[video_id] = {
                 "title": title,
+                "published_at": pub_date.isoformat() if pub_date else None,
                 "downloaded_at": datetime.now(timezone.utc).isoformat(),
                 "series": series_name,
                 "path": season_dir,
@@ -537,7 +554,7 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
     )
 
     # Prune old entries
-    prune_old_entries(state, feed_name, feed_config["retention_days"], state_path)
+    prune_old_entries(state, feed_name, feed_config, state_path)
 
 
 # ---------------------------------------------------------------------------
