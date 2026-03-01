@@ -223,19 +223,20 @@ def plex_episode_id(pub_date: datetime | None, series_name: str,
 
 
 def plex_filename(series_name: str, season: int, episode: int,
-                  title: str, video_id: str) -> str:
+                  title: str) -> str:
     """Generate Plex-compatible filename (without extension).
 
-    Format: Series Name - S2026E0580 - Episode Title [video_id]
+    Format: Series Name - S2026E0580 - Episode Title
+    Note: no brackets — Plex strips bracket content when matching NFO files.
     """
     # Clean title for filesystem safety
-    clean_title = re.sub(r'[<>:"/\\|?*]', '', title)
+    clean_title = re.sub(r'[<>:"/\\|?*\[\]]', '', title)
     clean_title = clean_title.strip('. ')
     # Truncate to avoid filesystem path length limits
     if len(clean_title) > 150:
         clean_title = clean_title[:150].strip()
 
-    return f"{series_name} - S{season:04d}E{episode:04d} - {clean_title} [{video_id}]"
+    return f"{series_name} - S{season:04d}E{episode:04d} - {clean_title}"
 
 
 def write_episode_nfo(nfo_path: Path, title: str, series_name: str,
@@ -537,7 +538,7 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
             write_tvshow_nfo(Path(base_path), series_name, poster_url)
 
             # Generate Plex filename
-            fname = plex_filename(series_name, season, episode, title, video_id)
+            fname = plex_filename(series_name, season, episode, title)
 
             filepath = download_video(
                 video_id, season_dir, fname, feed_config.get("ytdlp")
