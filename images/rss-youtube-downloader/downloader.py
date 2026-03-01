@@ -295,7 +295,7 @@ def download_video(video_id: str, output_dir: str, filename_base: str,
     """
     opts = ytdlp_opts or {}
     fmt = opts.get("format", "bestvideo+bestaudio/best")
-    merge_format = opts.get("merge_output_format", "mkv")
+    merge_format = opts.get("merge_output_format", "mp4")
     extra_args = opts.get("extra_args", [])
 
     output_template = os.path.join(output_dir, f"{filename_base}.%(ext)s")
