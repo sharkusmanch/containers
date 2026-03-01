@@ -51,9 +51,19 @@ def _apply_overrides(channel, overrides):
     if "title" in overrides:
         for el in channel.findall("title"):
             el.text = overrides["title"]
-        itunes_name = channel.find(f"{{{ITUNES_NS}}}author")
-        if itunes_name is not None:
-            itunes_name.text = overrides["title"]
+        itunes_author = channel.find(f"{{{ITUNES_NS}}}author")
+        if itunes_author is not None:
+            itunes_author.text = overrides["title"]
+        itunes_owner = channel.find(f"{{{ITUNES_NS}}}owner")
+        if itunes_owner is not None:
+            itunes_name = itunes_owner.find(f"{{{ITUNES_NS}}}name")
+            if itunes_name is not None:
+                itunes_name.text = overrides["title"]
+        plain_img = channel.find("image")
+        if plain_img is not None:
+            img_title = plain_img.find("title")
+            if img_title is not None:
+                img_title.text = overrides["title"]
     if "description" in overrides:
         for el in channel.findall("description"):
             el.text = overrides["description"]
