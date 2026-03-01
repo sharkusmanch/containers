@@ -40,9 +40,9 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="rss-youtube-downloader" \
       org.opencontainers.image.description="RSS feed monitor that downloads YouTube videos via yt-dlp"
 
-# Install runtime dependencies: ffmpeg and yt-dlp
+# Install runtime dependencies: ffmpeg, deno (yt-dlp JS runtime), and yt-dlp
 RUN --mount=type=cache,target=/var/cache/apk \
-    apk add --no-cache ffmpeg
+    apk add --no-cache ffmpeg deno
 
 RUN pip install --no-cache-dir yt-dlp==${YTDLP_VERSION}
 
