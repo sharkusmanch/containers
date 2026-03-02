@@ -19,6 +19,7 @@ import sys
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.error import URLError
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 import feedparser
@@ -450,12 +451,44 @@ def entry_published_date(entry) -> datetime | None:
 
 
 # ---------------------------------------------------------------------------
+# Plex library scan
+# ---------------------------------------------------------------------------
+
+
+def trigger_plex_scan() -> None:
+    """Trigger a Plex library scan via the API.
+
+    Requires PLEX_URL, PLEX_TOKEN, and PLEX_SECTION_ID environment variables.
+    Silently skips if not configured.
+    """
+    plex_url = os.environ.get("PLEX_URL")
+    plex_token = os.environ.get("PLEX_TOKEN")
+    section_id = os.environ.get("PLEX_SECTION_ID")
+
+    if not all([plex_url, plex_token, section_id]):
+        return
+
+    scan_url = f"{plex_url.rstrip('/')}/library/sections/{section_id}/refresh?X-Plex-Token={plex_token}"
+    log.info("Triggering Plex library scan for section %s", section_id)
+
+    try:
+        req = urllib.request.Request(scan_url, method="GET")
+        urllib.request.urlopen(req, timeout=10)
+        log.info("Plex library scan triggered successfully")
+    except (URLError, OSError) as exc:
+        log.warning("Failed to trigger Plex scan: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Feed processing
 # ---------------------------------------------------------------------------
 
 
-def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
-    """Process a single RSS feed: download new videos and prune old ones."""
+def process_feed(feed_config: dict, state: dict, state_path: Path) -> int:
+    """Process a single RSS feed: download new videos and prune old ones.
+
+    Returns the number of newly downloaded videos.
+    """
     feed_name = feed_config["name"]
     url_env = feed_config["url_env"]
     feed_url = os.environ.get(url_env)
@@ -466,7 +499,7 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
             feed_name,
             url_env,
         )
-        return
+        return 0
 
     log.info("Processing feed: %s", feed_name)
 
@@ -477,7 +510,7 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
             feed_name,
             parsed.bozo_exception,
         )
-        return
+        return 0
 
     if parsed.bozo:
         log.warning(
@@ -493,7 +526,7 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
     if retention_days > 0:
         age_cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
 
-    new_count = 0
+    downloaded = 0
     skip_count = 0
     old_count = 0
 
@@ -566,12 +599,12 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
             }
 
             save_state(state, state_path)
-            new_count += 1
+            downloaded += 1
 
     log.info(
         "Feed '%s': %d new, %d already downloaded, %d skipped (older than %d days)",
         feed_name,
-        new_count,
+        downloaded,
         skip_count,
         old_count,
         retention_days,
@@ -579,6 +612,8 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> None:
 
     # Prune old entries
     prune_old_entries(state, feed_name, feed_config, state_path)
+
+    return downloaded
 
 
 # ---------------------------------------------------------------------------
@@ -604,11 +639,15 @@ def main() -> int:
     state = load_state(state_path)
     log.info("Loaded state with %d tracked video(s)", len(state))
 
+    total_new = 0
     for feed_config in config["feeds"]:
         try:
-            process_feed(feed_config, state, state_path)
+            total_new += process_feed(feed_config, state, state_path)
         except Exception:
             log.exception("Error processing feed '%s'", feed_config["name"])
+
+    if total_new > 0:
+        trigger_plex_scan()
 
     log.info("Finished. Tracking %d video(s) total.", len(state))
     return 0
