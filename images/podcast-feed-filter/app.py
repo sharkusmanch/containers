@@ -1,5 +1,7 @@
+import logging
 import os
 import re
+import threading
 import time
 
 import requests
@@ -8,10 +10,14 @@ from flask import Flask, Response, abort, jsonify
 from lxml import etree
 
 app = Flask(__name__)
+log = logging.getLogger(__name__)
 
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/config/config.yaml")
+DEFAULT_REFRESH = 300
 
-_cache = {}
+# Pre-computed filtered feeds: {name: {"data": bytes, "time": float}}
+_feed_cache = {}
+_cache_lock = threading.Lock()
 
 
 def load_config():
@@ -19,15 +25,70 @@ def load_config():
         return yaml.safe_load(f)
 
 
-def get_feed(url, ttl):
-    now = time.time()
-    cached = _cache.get(url)
-    if cached and now - cached["time"] < ttl:
-        return cached["data"]
+def _fetch_upstream(url):
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
-    _cache[url] = {"data": resp.content, "time": now}
     return resp.content
+
+
+def _stale_feeds(config):
+    """Return feed names that are due for refresh."""
+    now = time.time()
+    default_ttl = config.get("refresh_interval", DEFAULT_REFRESH)
+    stale = []
+    for name, fc in config.get("feeds", {}).items():
+        ttl = fc.get("refresh_interval", default_ttl)
+        with _cache_lock:
+            entry = _feed_cache.get(name)
+        if not entry or now - entry["time"] >= ttl:
+            stale.append(name)
+    return stale
+
+
+def refresh_feeds(force=False):
+    """Fetch upstream and pre-compute stale (or all if force) filtered feeds."""
+    config = load_config()
+    feeds = config.get("feeds", {})
+    to_refresh = list(feeds.keys()) if force else _stale_feeds(config)
+    if not to_refresh:
+        return
+
+    # Group by source URL to fetch once per upstream
+    by_source = {}
+    for name in to_refresh:
+        fc = feeds[name]
+        source = os.path.expandvars(fc["source"])
+        by_source.setdefault(source, []).append((name, fc))
+
+    now = time.time()
+    refreshed = 0
+    for source, feed_list in by_source.items():
+        try:
+            xml_bytes = _fetch_upstream(source)
+        except Exception:
+            log.exception("Failed to fetch %s", source)
+            continue
+        for name, fc in feed_list:
+            try:
+                overrides = {k: fc[k] for k in ("title", "description", "image") if k in fc}
+                data = filter_feed(xml_bytes, fc["match"], overrides or None)
+                with _cache_lock:
+                    _feed_cache[name] = {"data": data, "time": now}
+                refreshed += 1
+            except Exception:
+                log.exception("Failed to filter feed %s", name)
+
+    log.info("Refreshed %d/%d feeds", refreshed, len(to_refresh))
+
+
+def _background_refresh():
+    """Check for stale feeds every 30s."""
+    while True:
+        time.sleep(30)
+        try:
+            refresh_feeds()
+        except Exception:
+            log.exception("Background refresh failed")
 
 
 def filter_feed(xml_bytes, pattern, overrides=None):
@@ -81,18 +142,18 @@ def _apply_overrides(channel, overrides):
 @app.route("/feeds/<feed_name>")
 def feed(feed_name):
     config = load_config()
-    feed_config = config.get("feeds", {}).get(feed_name)
-    if not feed_config:
+    if feed_name not in config.get("feeds", {}):
         abort(404)
-    ttl = config.get("cache_ttl", 300)
-    source = os.path.expandvars(feed_config["source"])
-    xml_bytes = get_feed(source, ttl)
-    overrides = {}
-    for key in ("title", "description", "image"):
-        if key in feed_config:
-            overrides[key] = feed_config[key]
-    filtered = filter_feed(xml_bytes, feed_config["match"], overrides or None)
-    return Response(filtered, mimetype="application/rss+xml")
+    with _cache_lock:
+        entry = _feed_cache.get(feed_name)
+    if entry:
+        return Response(entry["data"], mimetype="application/rss+xml")
+    # Cache miss on first request before background refresh completes
+    fc = config["feeds"][feed_name]
+    source = os.path.expandvars(fc["source"])
+    xml_bytes = _fetch_upstream(source)
+    overrides = {k: fc[k] for k in ("title", "description", "image") if k in fc}
+    return Response(filter_feed(xml_bytes, fc["match"], overrides or None), mimetype="application/rss+xml")
 
 
 @app.route("/health")
@@ -105,3 +166,14 @@ def index():
     config = load_config()
     feeds = list(config.get("feeds", {}).keys())
     return jsonify({"feeds": feeds})
+
+
+# Eager load on startup + start background thread
+with app.app_context():
+    try:
+        refresh_feeds(force=True)
+    except Exception:
+        log.exception("Initial feed refresh failed")
+
+_refresh_thread = threading.Thread(target=_background_refresh, daemon=True)
+_refresh_thread.start()
