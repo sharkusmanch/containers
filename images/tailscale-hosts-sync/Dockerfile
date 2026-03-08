@@ -4,7 +4,7 @@
 # for use with Blocky, Pi-hole, or other DNS servers
 
 # renovate: datasource=docker depName=python versioning=docker
-ARG PYTHON_VERSION=3.13
+ARG PYTHON_VERSION=3.14
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.21

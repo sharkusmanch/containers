@@ -4,7 +4,7 @@
 ARG SWC_COMMIT=da6dc6624cf289e53c4ffe070fdbe04f9b3901eb
 
 # renovate: datasource=docker depName=python versioning=docker
-ARG PYTHON_VERSION=3.12
+ARG PYTHON_VERSION=3.14
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.21
