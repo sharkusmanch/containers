@@ -36,6 +36,18 @@
       "enabled": false
     },
     {
+      "description": "Pin Python version for images with upstream compatibility constraints",
+      "matchDepNames": [
+        "python"
+      ],
+      "matchPaths": [
+        "images/autoshift/**",
+        "images/hass-mcp/**",
+        "images/hass-mcp-sse/**"
+      ],
+      "enabled": false
+    },
+    {
       "description": "Group Dockerfile updates by image",
       "matchPaths": [
         "images/redlib/**"
