@@ -4,7 +4,7 @@
 ARG MCP_PROXY_VERSION=v0.11.0
 
 # renovate: datasource=docker depName=python versioning=docker
-ARG PYTHON_VERSION=3.13
+ARG PYTHON_VERSION=3.14
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.21
