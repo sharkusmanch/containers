@@ -22,7 +22,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 WORKDIR /build
 
 # Build dependencies for compiling packages from source (arm64 lacks pre-built wheels)
-RUN apk add --no-cache gcc g++ musl-dev freetype-dev libpng-dev pkg-config
+RUN apk add --no-cache gcc g++ musl-dev freetype-dev libpng-dev pkgconf
 
 # Download and extract source
 RUN wget -qO- "https://github.com/icue/SteamWishlistCalendar/archive/${SWC_COMMIT}.tar.gz" \
