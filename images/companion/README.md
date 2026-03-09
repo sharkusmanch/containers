@@ -1,6 +1,6 @@
 # companion
 
-Web UI for managing Claude Code sessions — run multiple agents, inspect tool calls, and gate risky actions from a browser.
+Web UI for managing Claude Code sessions — run multiple agents, inspect tool calls, and gate risky actions from a browser. Includes the Claude Code CLI so it can spawn sessions directly without external dependencies.
 
 ## Upstream
 
@@ -11,6 +11,12 @@ Web UI for managing Claude Code sessions — run multiple agents, inspect tool c
 
 ```bash
 docker run -p 3456:3456 ghcr.io/sharkusmanch/containers/companion:0.72.0
+```
+
+Claude Code is available inside the container:
+
+```bash
+docker run --rm --entrypoint claude ghcr.io/sharkusmanch/containers/companion:0.72.0 --version
 ```
 
 ## Environment Variables
@@ -31,3 +37,5 @@ docker run -p 3456:3456 ghcr.io/sharkusmanch/containers/companion:0.72.0
 - Alpine + Bun instead of Ubuntu (upstream image is ~900MB, this is ~200MB)
 - Runs as non-root user (UID 10000)
 - Multi-stage build — only ships node_modules, not build tooling
+- Claude Code CLI baked into the image for self-contained session management
+- Runtime dependencies added: bash, curl, git, openssh-client
