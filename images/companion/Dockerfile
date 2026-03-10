@@ -39,7 +39,8 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.description="Web UI for managing Claude Code sessions with Claude Code CLI"
 
 # Install runtime dependencies for Claude Code
-RUN apk add --no-cache bash curl git openssh-client
+RUN apk add --no-cache bash curl git openssh-client && \
+    ln -s /app/node_modules/.bin/claude /usr/local/bin/claude
 
 # Create non-root user with bash shell (needed for Claude Code)
 RUN addgroup -g 10000 appgroup && \
