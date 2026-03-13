@@ -632,7 +632,8 @@ def trigger_plex_scan() -> None:
 # ---------------------------------------------------------------------------
 
 
-def process_feed(feed_config: dict, state: dict, state_path: Path) -> int:
+def process_feed(feed_config: dict, state: dict, state_path: Path,
+                 remaining_budget: int = 0) -> int:
     """Process a single RSS feed: download new videos and prune old ones.
 
     Returns the number of newly downloaded videos.
@@ -698,6 +699,12 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> int:
                 skip_count += 1
                 continue
 
+            # Check download budget
+            if remaining_budget > 0 and downloaded >= remaining_budget:
+                log.info("Download budget exhausted (%d), skipping remaining",
+                         remaining_budget)
+                break
+
             match = match_series(title, feed_config)
             if match is None:
                 log.debug("Skipping unmatched video: %s (ID: %s)", title, video_id)
@@ -722,32 +729,40 @@ def process_feed(feed_config: dict, state: dict, state_path: Path) -> int:
             # Generate Plex filename
             fname = plex_filename(series_name, season, episode, title)
 
-            filepath = download_video(
-                video_id, season_dir, fname, feed_config.get("ytdlp")
+            ytdlp_opts = feed_config.get("ytdlp") or {}
+            filepath = download_with_retry(
+                video_id, season_dir, fname,
+                ytdlp_opts,
+                max_retries=ytdlp_opts.get("max_retries", 3),
+                retry_delay=ytdlp_opts.get("retry_delay", 10),
             )
 
-            # Write episode NFO
             if filepath:
+                # Write episode NFO
                 aired = pub_date.strftime("%Y-%m-%d") if pub_date else ""
                 description = get_entry_description(entry)
                 nfo_path = Path(filepath).with_suffix(".nfo")
                 write_episode_nfo(nfo_path, title, series_name,
                                   description, aired, season, episode)
 
-            state[video_id] = {
-                "title": title,
-                "published_at": pub_date.isoformat() if pub_date else None,
-                "downloaded_at": datetime.now(timezone.utc).isoformat(),
-                "series": series_name,
-                "path": season_dir,
-                "file": filepath,
-                "feed": feed_name,
-                "season": season,
-                "episode": episode,
-            }
+                state[video_id] = {
+                    "title": title,
+                    "published_at": pub_date.isoformat() if pub_date else None,
+                    "downloaded_at": datetime.now(timezone.utc).isoformat(),
+                    "series": series_name,
+                    "path": season_dir,
+                    "file": filepath,
+                    "feed": feed_name,
+                    "season": season,
+                    "episode": episode,
+                }
 
-            save_state(state, state_path)
-            downloaded += 1
+                save_state(state, state_path)
+                downloaded += 1
+
+        # Break outer loop if budget exhausted
+        if remaining_budget > 0 and downloaded >= remaining_budget:
+            break
 
     log.info(
         "Feed '%s': %d new, %d already downloaded, %d skipped (older than %d days)",
