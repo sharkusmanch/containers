@@ -99,6 +99,10 @@ def load_config(config_path: Path) -> dict:
     if not config or "feeds" not in config:
         raise ValueError(f"Config file {config_path} must contain a 'feeds' key")
 
+    max_dl = config.get("max_downloads_per_run", 0)
+    if not isinstance(max_dl, int) or max_dl < 0:
+        raise ValueError("'max_downloads_per_run' must be a non-negative integer")
+
     for i, feed in enumerate(config["feeds"]):
         for required in ("name", "url_env", "default_path"):
             if required not in feed:
@@ -108,6 +112,23 @@ def load_config(config_path: Path) -> dict:
                 )
         feed.setdefault("retention_days", 0)
         feed.setdefault("series", [])
+
+        # Validate ytdlp retry options
+        ytdlp = feed.get("ytdlp") or {}
+        max_retries = ytdlp.get("max_retries")
+        if max_retries is not None:
+            if not isinstance(max_retries, int) or max_retries < 1:
+                raise ValueError(
+                    f"Feed '{feed['name']}': ytdlp.max_retries must be "
+                    f"a positive integer"
+                )
+        retry_delay = ytdlp.get("retry_delay")
+        if retry_delay is not None:
+            if not isinstance(retry_delay, (int, float)) or retry_delay < 0:
+                raise ValueError(
+                    f"Feed '{feed['name']}': ytdlp.retry_delay must be "
+                    f"a non-negative number"
+                )
 
         for series in feed["series"]:
             if "pattern" not in series or "path" not in series:
