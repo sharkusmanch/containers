@@ -24,6 +24,7 @@ Validates a downloaded file using ffprobe:
   - If `format_string` contains `"video"` (e.g. `bestvideo+bestaudio/best`): require both video and audio streams.
   - Otherwise: require at least an audio stream.
 - **ffprobe invocation:** `ffprobe -v error -show_entries stream=codec_type -of json <filepath>`. Parse JSON output, count stream types.
+- **ffprobe failure handling:** If ffprobe returns a non-zero exit code (binary not found, corrupt file, etc.), treat as validation failure with reason `"ffprobe failed: <stderr>"`.
 - Returns `(True, None)` on success, `(False, reason)` on failure.
 
 ffprobe is already available in the container (installed via the ffmpeg Alpine package).
@@ -33,29 +34,31 @@ ffprobe is already available in the container (installed via the ffmpeg Alpine p
 Removes leftover yt-dlp artifacts scoped to a specific episode:
 
 - Globs `{output_dir}/{filename_base}.*` to find candidates.
-- Deletes files matching any of:
+- For each candidate, extracts the suffix after `{filename_base}` (e.g. `.f251.webm`, `.part`, `.temp.m4a`). Deletes the file if the suffix matches any of:
   - `.part` suffix (incomplete downloads)
-  - `.temp.` in filename (temporary processing files)
-  - `.f\d+.` pattern in filename (unmerged stream fragments like `.f251.webm`, `.f399.mp4`)
+  - `.temp.` at start of suffix (temporary processing files)
+  - `.f\d+.` at start of suffix (unmerged stream fragments like `.f251.webm`, `.f399.mp4`)
 - Logs each deletion.
-- Silently ignores missing files (race-safe).
+- Silently ignores missing files and permission errors (defensive, race-safe).
 
-Scoped to the filename base to avoid touching other episodes in the same directory.
+Scoped to the filename base to avoid touching other episodes in the same directory. The suffix-based matching prevents false positives from episode titles containing patterns like `f50` or `temp`.
 
 ### New function: `download_with_retry(video_id, output_dir, filename_base, ytdlp_opts, max_retries, retry_delay) -> str | None`
 
 Orchestrates download, validation, cleanup, and retry:
 
-1. For each attempt (1 to `max_retries`):
+1. Extract `format_string` from `ytdlp_opts.get("format", "bestvideo+bestaudio/best")` for passing to `validate_download()`.
+2. For each attempt (1 to `max_retries`):
    a. `cleanup_fragments(output_dir, filename_base)` — clear debris from prior attempt.
    b. `download_video(video_id, output_dir, filename_base, ytdlp_opts)` — existing function.
-   c. If `download_video()` returns `None` (yt-dlp error or timeout): log, sleep, continue to next attempt.
-   d. If it returns a filepath: `validate_download(filepath, format_string)`.
-   e. If validation passes: return filepath (success).
-   f. If validation fails: log the reason, delete the invalid output file, sleep, continue.
-2. After all retries exhausted: `cleanup_fragments()` one final time, return `None`.
+   c. Log the attempt number (e.g. "Attempt 2/3 for video_id").
+   d. If `download_video()` returns `None` (yt-dlp error or timeout): log, sleep, continue to next attempt.
+   e. If it returns a filepath: `validate_download(filepath, format_string)`.
+   f. If validation passes: return filepath (success).
+   g. If validation fails: log the reason, delete the invalid output file, sleep, continue.
+3. After all retries exhausted: `cleanup_fragments()` one final time, return `None`.
 
-**Backoff:** Linear — `retry_delay * attempt` seconds (e.g. 10s, 20s, 30s with defaults).
+**Backoff:** Linear — `retry_delay * attempt` seconds (e.g. 10s, 20s, 30s with defaults). Skip sleep after the last failed attempt.
 
 Parameters `max_retries` and `retry_delay` come from the per-feed `ytdlp` config, with defaults.
 
@@ -68,13 +71,16 @@ None. It remains a single-attempt yt-dlp wrapper returning filepath or `None`.
 **Call `download_with_retry()` instead of `download_video()`:**
 
 ```python
+ytdlp_opts = feed_config.get("ytdlp") or {}
 filepath = download_with_retry(
     video_id, season_dir, fname,
-    feed_config.get("ytdlp"),
+    ytdlp_opts,
     max_retries=ytdlp_opts.get("max_retries", 3),
     retry_delay=ytdlp_opts.get("retry_delay", 10),
 )
 ```
+
+Extract `ytdlp_opts` once at the top of the entry loop (with `or {}` to handle `None`) so both the call and the kwarg lookups are safe.
 
 **Only record successful downloads in state:**
 
@@ -102,7 +108,9 @@ if filepath:
 
 **Respect `max_downloads_per_run` budget:**
 
-`process_feed()` gains a `remaining_budget` parameter (int, 0 = unlimited). When budget is exhausted, skip remaining entries without recording them in state. Return the count of successful downloads.
+`process_feed()` gains a `remaining_budget` parameter (int, 0 = unlimited). When budget is exhausted, skip remaining download entries without recording them in state. Return the count of successful downloads.
+
+The budget only gates downloads. Pruning (`prune_old_entries`) always runs regardless of budget, since it is not a download operation.
 
 ### Changes to `main()`
 
@@ -153,5 +161,6 @@ No Dockerfile changes required.
 
 ## What this does NOT cover
 
-- Alerting on repeated failures (could be added later via Prometheus metrics or log-based alerts).
-- Retrying the two already-broken episodes (E0690, E0700) — these need manual cleanup: delete their entries from `state.json` and remove the fragment files, then the next run will re-download them.
+- **Permanent failure tracking.** Videos that are permanently broken (geo-blocked, deleted, private) will be retried every CronJob run indefinitely. A future enhancement could record failures with an attempt counter or TTL to cap retries and avoid starving the download budget. Not needed now — the `max_downloads_per_run` budget limits the blast radius.
+- **Alerting on repeated failures** (could be added later via Prometheus metrics or log-based alerts).
+- **Retrying the two already-broken episodes** (E0690, E0700) — these need manual cleanup: delete their entries from `state.json` and remove the fragment files, then the next run will re-download them.
