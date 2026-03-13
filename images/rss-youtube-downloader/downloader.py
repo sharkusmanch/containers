@@ -100,7 +100,7 @@ def load_config(config_path: Path) -> dict:
         raise ValueError(f"Config file {config_path} must contain a 'feeds' key")
 
     max_dl = config.get("max_downloads_per_run", 0)
-    if not isinstance(max_dl, int) or max_dl < 0:
+    if isinstance(max_dl, bool) or not isinstance(max_dl, int) or max_dl < 0:
         raise ValueError("'max_downloads_per_run' must be a non-negative integer")
 
     for i, feed in enumerate(config["feeds"]):
@@ -117,14 +117,14 @@ def load_config(config_path: Path) -> dict:
         ytdlp = feed.get("ytdlp") or {}
         max_retries = ytdlp.get("max_retries")
         if max_retries is not None:
-            if not isinstance(max_retries, int) or max_retries < 1:
+            if isinstance(max_retries, bool) or not isinstance(max_retries, int) or max_retries < 1:
                 raise ValueError(
                     f"Feed '{feed['name']}': ytdlp.max_retries must be "
                     f"a positive integer"
                 )
         retry_delay = ytdlp.get("retry_delay")
         if retry_delay is not None:
-            if not isinstance(retry_delay, (int, float)) or retry_delay < 0:
+            if isinstance(retry_delay, bool) or not isinstance(retry_delay, (int, float)) or retry_delay < 0:
                 raise ValueError(
                     f"Feed '{feed['name']}': ytdlp.retry_delay must be "
                     f"a non-negative number"
