@@ -9,6 +9,7 @@ Designed to run as a Kubernetes CronJob every 6 hours.
 """
 
 import calendar
+import glob
 import html
 import json
 import logging
@@ -16,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -51,6 +53,8 @@ YOUTUBE_URL_RE = re.compile(
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 DOWNLOAD_TIMEOUT = 1800  # 30 minutes per video
+
+FRAGMENT_SUFFIX_RE = re.compile(r"\.(part|temp\..+|f\d+\..+)$")
 
 
 # ---------------------------------------------------------------------------
