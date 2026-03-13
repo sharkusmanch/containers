@@ -802,10 +802,21 @@ def main() -> int:
     state = load_state(state_path)
     log.info("Loaded state with %d tracked video(s)", len(state))
 
+    max_downloads = config.get("max_downloads_per_run", 0)
+    if max_downloads > 0:
+        log.info("Download budget: %d per run", max_downloads)
+
     total_new = 0
     for feed_config in config["feeds"]:
+        if max_downloads > 0 and total_new >= max_downloads:
+            log.info("Global download budget exhausted (%d), skipping remaining feeds",
+                     max_downloads)
+            break
+
+        remaining = (max_downloads - total_new) if max_downloads > 0 else 0
         try:
-            total_new += process_feed(feed_config, state, state_path)
+            total_new += process_feed(feed_config, state, state_path,
+                                      remaining_budget=remaining)
         except Exception:
             log.exception("Error processing feed '%s'", feed_config["name"])
 
