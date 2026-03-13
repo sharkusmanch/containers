@@ -425,6 +425,58 @@ def cleanup_fragments(output_dir: str, filename_base: str) -> None:
                 pass  # Silently ignore missing/permission errors
 
 
+def download_with_retry(video_id: str, output_dir: str, filename_base: str,
+                        ytdlp_opts: dict | None = None,
+                        max_retries: int = 3,
+                        retry_delay: int = 10) -> str | None:
+    """Download a video with retry, validation, and fragment cleanup.
+
+    Orchestrates download_video(), validate_download(), and
+    cleanup_fragments() with configurable retries and linear backoff.
+
+    Returns the validated output filepath on success, or None if all
+    retries are exhausted.
+    """
+    opts = ytdlp_opts or {}
+    format_string = opts.get("format", "bestvideo+bestaudio/best")
+
+    for attempt in range(1, max_retries + 1):
+        log.info("Attempt %d/%d: downloading %s", attempt, max_retries, video_id)
+
+        cleanup_fragments(output_dir, filename_base)
+
+        filepath = download_video(video_id, output_dir, filename_base, ytdlp_opts)
+
+        if filepath is None:
+            log.warning("Attempt %d/%d failed for %s: download returned no file",
+                        attempt, max_retries, video_id)
+            if attempt < max_retries:
+                delay = retry_delay * attempt
+                log.info("Sleeping %ds before retry", delay)
+                time.sleep(delay)
+            continue
+
+        valid, reason = validate_download(filepath, format_string)
+        if valid:
+            return filepath
+
+        log.warning("Attempt %d/%d failed for %s: validation failed: %s",
+                    attempt, max_retries, video_id, reason)
+        try:
+            os.remove(filepath)
+        except OSError:
+            pass
+
+        if attempt < max_retries:
+            delay = retry_delay * attempt
+            log.info("Sleeping %ds before retry", delay)
+            time.sleep(delay)
+
+    log.error("All %d attempts failed for %s", max_retries, video_id)
+    cleanup_fragments(output_dir, filename_base)
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Pruning
 # ---------------------------------------------------------------------------
