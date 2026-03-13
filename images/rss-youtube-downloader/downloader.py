@@ -671,9 +671,16 @@ def process_feed(feed_config: dict, state: dict, state_path: Path,
     log.info("Feed '%s': found %d entries", feed_name, len(parsed.entries))
 
     retention_days = feed_config["retention_days"]
+    now = datetime.now(timezone.utc)
     age_cutoff = None
     if retention_days > 0:
-        age_cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+        age_cutoff = now - timedelta(days=retention_days)
+
+    # Build series -> retention_days lookup for pre-download filtering
+    series_retention = {}
+    for series in feed_config.get("series", []):
+        if "retention_days" in series:
+            series_retention[series.get("name", "")] = series["retention_days"]
 
     downloaded = 0
     skip_count = 0
@@ -710,6 +717,15 @@ def process_feed(feed_config: dict, state: dict, state_path: Path,
                 log.debug("Skipping unmatched video: %s (ID: %s)", title, video_id)
                 continue
             series_name, base_path, poster_url = match
+
+            # Check series-level retention before downloading
+            effective_retention = series_retention.get(series_name, retention_days)
+            if effective_retention > 0 and pub_date:
+                series_cutoff = now - timedelta(days=effective_retention)
+                if pub_date < series_cutoff:
+                    old_count += 1
+                    continue
+
             log.info(
                 "New video: %s (ID: %s) -> %s [%s]",
                 title,
@@ -765,12 +781,11 @@ def process_feed(feed_config: dict, state: dict, state_path: Path,
             break
 
     log.info(
-        "Feed '%s': %d new, %d already downloaded, %d skipped (older than %d days)",
+        "Feed '%s': %d new, %d already downloaded, %d skipped (past retention)",
         feed_name,
         downloaded,
         skip_count,
         old_count,
-        retention_days,
     )
 
     # Prune old entries
