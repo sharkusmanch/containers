@@ -354,6 +354,57 @@ def download_video(video_id: str, output_dir: str, filename_base: str,
     return None
 
 
+def validate_download(filepath: str, format_string: str) -> tuple[bool, str | None]:
+    """Validate a downloaded file has the expected streams.
+
+    Checks file exists, is non-zero, and uses ffprobe to verify audio/video
+    streams match what the format string requested.
+
+    Returns (True, None) on success or (False, reason) on failure.
+    """
+    p = Path(filepath)
+    if not p.exists() or p.stat().st_size == 0:
+        return False, "file missing or empty"
+
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-show_entries", "stream=codec_type",
+        "-of", "json",
+        filepath,
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return False, "ffprobe timed out"
+    except OSError as exc:
+        return False, f"ffprobe error: {exc}"
+
+    if result.returncode != 0:
+        return False, f"ffprobe failed: {result.stderr.strip()}"
+
+    try:
+        probe_data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False, "ffprobe returned invalid JSON"
+
+    stream_types = [s.get("codec_type") for s in probe_data.get("streams", [])]
+
+    expects_video = "video" in format_string
+    has_video = "video" in stream_types
+    has_audio = "audio" in stream_types
+
+    if expects_video and not has_video:
+        return False, f"missing video stream (got: {stream_types})"
+    if expects_video and not has_audio:
+        return False, f"missing audio stream (got: {stream_types})"
+    if not expects_video and not has_audio:
+        return False, f"missing audio stream (got: {stream_types})"
+
+    return True, None
+
+
 # ---------------------------------------------------------------------------
 # Pruning
 # ---------------------------------------------------------------------------
