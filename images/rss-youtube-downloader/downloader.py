@@ -405,6 +405,26 @@ def validate_download(filepath: str, format_string: str) -> tuple[bool, str | No
     return True, None
 
 
+def cleanup_fragments(output_dir: str, filename_base: str) -> None:
+    """Remove leftover yt-dlp artifacts for a specific episode.
+
+    Deletes .part files, .temp.* files, and unmerged stream fragments
+    (.f<digits>.*) scoped to the given filename base.
+    """
+    pattern = os.path.join(output_dir, f"{filename_base}.*")
+    base_prefix = os.path.join(output_dir, filename_base)
+
+    for candidate in glob.glob(pattern):
+        # Extract suffix after the filename base
+        suffix = candidate[len(base_prefix):]
+        if FRAGMENT_SUFFIX_RE.match(suffix):
+            try:
+                os.remove(candidate)
+                log.info("Cleaned up fragment: %s", candidate)
+            except OSError:
+                pass  # Silently ignore missing/permission errors
+
+
 # ---------------------------------------------------------------------------
 # Pruning
 # ---------------------------------------------------------------------------
