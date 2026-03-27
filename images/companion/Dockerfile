@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=npm depName=the-companion
-ARG COMPANION_VERSION=0.92.5
+ARG COMPANION_VERSION=0.93.0
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_CODE_VERSION=2.1.85
