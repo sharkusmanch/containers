@@ -4,7 +4,7 @@
 ARG COMPANION_VERSION=0.93.0
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_CODE_VERSION=2.1.85
+ARG CLAUDE_CODE_VERSION=2.1.86
 
 # renovate: datasource=docker depName=oven/bun versioning=docker
 ARG BUN_VERSION=1.3
