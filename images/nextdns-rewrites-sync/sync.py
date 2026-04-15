@@ -107,27 +107,54 @@ def safe_log_response(headers: dict, status: int, body: str) -> None:
 class NextDNSClient:
     api_key: str
     session: requests.Session
-    rate_limit_delay: float = 0.2
+    rate_limit_delay: float = 0.5
+    max_retries: int = 5
     base: str = "https://api.nextdns.io"
 
     @classmethod
-    def new(cls, api_key: str, rate_limit_delay: float) -> "NextDNSClient":
+    def new(cls, api_key: str, rate_limit_delay: float, max_retries: int = 5) -> "NextDNSClient":
         s = requests.Session()
         s.headers.update({"X-Api-Key": api_key, "Content-Type": "application/json"})
-        return cls(api_key=api_key, session=s, rate_limit_delay=rate_limit_delay)
+        return cls(
+            api_key=api_key,
+            session=s,
+            rate_limit_delay=rate_limit_delay,
+            max_retries=max_retries,
+        )
+
+    def _request_with_retry(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Issue a request; on HTTP 429, back off exponentially and retry."""
+        attempt = 0
+        while True:
+            r = self.session.request(method, url, timeout=30, **kwargs)
+            if r.status_code == 429 and attempt < self.max_retries:
+                # Respect Retry-After if the server sets it; otherwise exponential backoff
+                retry_after_hdr = r.headers.get("Retry-After")
+                try:
+                    wait = float(retry_after_hdr) if retry_after_hdr else 0.0
+                except ValueError:
+                    wait = 0.0
+                if wait <= 0:
+                    wait = min(60.0, 2 ** attempt)
+                log.warning("429 rate-limited on %s %s; sleeping %.1fs (attempt %d)",
+                            method, url, wait, attempt + 1)
+                time.sleep(wait)
+                attempt += 1
+                continue
+            return r
 
     def list_rewrites(self, profile_id: str) -> list[dict]:
-        r = self.session.get(f"{self.base}/profiles/{profile_id}/rewrites", timeout=30)
+        r = self._request_with_retry("GET", f"{self.base}/profiles/{profile_id}/rewrites")
         if not r.ok:
             safe_log_response(dict(r.request.headers), r.status_code, r.text)
             r.raise_for_status()
         return r.json().get("data", [])
 
     def post_rewrite(self, profile_id: str, name: str, content: str) -> str:
-        r = self.session.post(
+        r = self._request_with_retry(
+            "POST",
             f"{self.base}/profiles/{profile_id}/rewrites",
             json={"name": name, "content": content},
-            timeout=30,
         )
         if not r.ok:
             safe_log_response(dict(r.request.headers), r.status_code, r.text)
@@ -136,9 +163,9 @@ class NextDNSClient:
         return r.json().get("data", {}).get("id", "")
 
     def delete_rewrite(self, profile_id: str, rewrite_id: str) -> None:
-        r = self.session.delete(
+        r = self._request_with_retry(
+            "DELETE",
             f"{self.base}/profiles/{profile_id}/rewrites/{rewrite_id}",
-            timeout=30,
         )
         if not r.ok:
             safe_log_response(dict(r.request.headers), r.status_code, r.text)
@@ -212,7 +239,8 @@ def main() -> int:
     static_path = os.environ.get("STATIC_REWRITES_PATH", "/etc/static/rewrites.yaml")
     tailnet = os.environ.get("TAILNET", "-")
     threshold = float(os.environ.get("CIRCUIT_BREAKER_THRESHOLD", "0.20"))
-    rate_delay = float(os.environ.get("RATE_LIMIT_DELAY", "0.2"))
+    rate_delay = float(os.environ.get("RATE_LIMIT_DELAY", "0.5"))
+    max_retries = int(os.environ.get("API_MAX_RETRIES", "5"))
     dry_run = bool(os.environ.get("DRY_RUN"))
 
     if not profile_ids:
@@ -230,7 +258,7 @@ def main() -> int:
     desired = compute_desired_rewrites(devices, static)
     log.info("desired %d rewrites", len(desired))
 
-    client = NextDNSClient.new(api_key, rate_delay)
+    client = NextDNSClient.new(api_key, rate_delay, max_retries=max_retries)
     failures: list[str] = []
 
     for profile_id in profile_ids:

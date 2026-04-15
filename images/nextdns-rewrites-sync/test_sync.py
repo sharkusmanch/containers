@@ -139,3 +139,78 @@ def test_safe_log_response_redacts_authorization_header(caplog):
     caplog.set_level(logging.DEBUG, logger="nextdns-sync")
     safe_log_response({"Authorization": "Bearer xyz"}, 403, "forbidden")
     assert "xyz" not in caplog.text
+
+
+def test_request_with_retry_backs_off_on_429(monkeypatch):
+    """On HTTP 429, the client retries with exponential backoff up to max_retries."""
+    from unittest.mock import MagicMock
+
+    import requests as _requests
+
+    client = NextDNSClient.new("fake-key", rate_limit_delay=0.0, max_retries=3)
+
+    # First two calls return 429, third returns 200
+    r429 = MagicMock()
+    r429.status_code = 429
+    r429.headers = {}
+
+    r_ok = MagicMock()
+    r_ok.status_code = 200
+    r_ok.ok = True
+    r_ok.headers = {}
+
+    call_count = {"n": 0}
+
+    def fake_request(*args, **kwargs):
+        call_count["n"] += 1
+        return r429 if call_count["n"] < 3 else r_ok
+
+    monkeypatch.setattr(client.session, "request", fake_request)
+    monkeypatch.setattr("sync.time.sleep", lambda _s: None)  # skip real sleeps
+
+    resp = client._request_with_retry("GET", "https://api.nextdns.io/x")
+    assert call_count["n"] == 3
+    assert resp.status_code == 200
+
+
+def test_request_with_retry_honors_retry_after_header(monkeypatch):
+    """If the server sets Retry-After, the client should sleep for that duration."""
+    from unittest.mock import MagicMock
+
+    client = NextDNSClient.new("fake-key", rate_limit_delay=0.0, max_retries=2)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr("sync.time.sleep", lambda s: sleeps.append(s))
+
+    r429 = MagicMock()
+    r429.status_code = 429
+    r429.headers = {"Retry-After": "3"}
+
+    r_ok = MagicMock()
+    r_ok.status_code = 200
+    r_ok.ok = True
+    r_ok.headers = {}
+
+    responses = [r429, r_ok]
+    monkeypatch.setattr(client.session, "request", lambda *a, **k: responses.pop(0))
+
+    client._request_with_retry("GET", "https://api.nextdns.io/x")
+    assert 3.0 in sleeps
+
+
+def test_request_with_retry_gives_up_after_max(monkeypatch):
+    """After max_retries, client returns the final 429 response rather than looping forever."""
+    from unittest.mock import MagicMock
+
+    client = NextDNSClient.new("fake-key", rate_limit_delay=0.0, max_retries=2)
+
+    r429 = MagicMock()
+    r429.status_code = 429
+    r429.ok = False
+    r429.headers = {}
+
+    monkeypatch.setattr(client.session, "request", lambda *a, **k: r429)
+    monkeypatch.setattr("sync.time.sleep", lambda _s: None)
+
+    resp = client._request_with_retry("GET", "https://api.nextdns.io/x")
+    assert resp.status_code == 429
