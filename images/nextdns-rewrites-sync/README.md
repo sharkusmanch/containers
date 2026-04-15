@@ -24,7 +24,7 @@ docker run --rm \
   -e TAILSCALE_CLIENT_ID=... \
   -e TAILSCALE_CLIENT_SECRET=... \
   -v /path/to/rewrites.yaml:/etc/static/rewrites.yaml:ro \
-  ghcr.io/sharkusmanch/docker-images/nextdns-rewrites-sync:latest
+  ghcr.io/sharkusmanch/containers/nextdns-rewrites-sync:latest
 ```
 
 ## Environment Variables

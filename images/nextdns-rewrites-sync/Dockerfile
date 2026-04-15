@@ -18,7 +18,7 @@ ARG VERSION=1.0.0
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.source="https://github.com/sharkusmanch/docker-images" \
+      org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.title="nextdns-rewrites-sync" \
       org.opencontainers.image.description="Reconcile Tailscale device FQDNs and static entries to NextDNS rewrites API"
 
