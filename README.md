@@ -18,12 +18,10 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 |-------|-------------|----------|
 | [actual-mcp](./images/actual-mcp/) | MCP server for Actual Budget | [s-stefanov/actual-mcp](https://github.com/s-stefanov/actual-mcp) |
 | [autoshift](./images/autoshift/) | Automatic SHiFT code redemption for Borderlands | [Fabbi/autoshift](https://github.com/Fabbi/autoshift) |
-| [companion](./images/companion/) | Web UI for managing Claude Code sessions | [The-Vibe-Company/companion](https://github.com/The-Vibe-Company/companion) |
 | [envsubst](./images/envsubst/) | Environment variable substitution with defaults | [a8m/envsubst](https://github.com/a8m/envsubst) |
 | [flareproxy](./images/flareproxy/) | HTTP proxy adapter for FlareSolverr | [mimnix/FlareProxy](https://github.com/mimnix/FlareProxy) |
 | [hass-mcp](./images/hass-mcp/) | Home Assistant MCP server for Claude/LLMs (stdio) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
 | [hass-mcp-sse](./images/hass-mcp-sse/) | Home Assistant MCP server with SSE transport (k8s) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
-| [lgogdownloader](./images/lgogdownloader/) | Unofficial GOG.com downloader | [Sude-/lgogdownloader](https://github.com/Sude-/lgogdownloader) |
 | [mcp-proxy](./images/mcp-proxy/) | Bridge stdio MCP servers to SSE/HTTP transport | [sparfenyuk/mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) |
 | [nextdns-rewrites-sync](./images/nextdns-rewrites-sync/) | Sync Tailscale devices + static entries to NextDNS rewrites API | Original |
 | [pod-reaper](./images/pod-reaper/) | Rule-based Kubernetes pod cleanup controller | [target/pod-reaper](https://github.com/target/pod-reaper) |
