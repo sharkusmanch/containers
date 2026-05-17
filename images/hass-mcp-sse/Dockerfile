@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=github-releases depName=voska/hass-mcp
-ARG HASS_MCP_VERSION=v0.1.1
+ARG HASS_MCP_VERSION=v0.4.1
 
 # renovate: datasource=github-releases depName=sparfenyuk/mcp-proxy
 ARG MCP_PROXY_VERSION=v0.12.0
