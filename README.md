@@ -23,6 +23,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [hass-mcp](./images/hass-mcp/) | Home Assistant MCP server for Claude/LLMs (stdio) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
 | [hass-mcp-sse](./images/hass-mcp-sse/) | Home Assistant MCP server with SSE transport (k8s) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
 | [mcp-proxy](./images/mcp-proxy/) | Bridge stdio MCP servers to SSE/HTTP transport | [sparfenyuk/mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) |
+| [miniflux-mcp-sse](./images/miniflux-mcp-sse/) | Miniflux MCP server with SSE transport (k8s) | [tssujt/miniflux-mcp](https://github.com/tssujt/miniflux-mcp) |
 | [nextdns-rewrites-sync](./images/nextdns-rewrites-sync/) | Sync Tailscale devices + static entries to NextDNS rewrites API | Original |
 | [pod-reaper](./images/pod-reaper/) | Rule-based Kubernetes pod cleanup controller | [target/pod-reaper](https://github.com/target/pod-reaper) |
 | [podcast-feed-filter](./images/podcast-feed-filter/) | Podcast RSS feed filter preserving enclosures | Original |
