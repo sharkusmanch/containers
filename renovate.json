@@ -42,6 +42,7 @@
       ],
       "matchPaths": [
         "images/autoshift/**",
+        "images/changedetection-mcp-sse/**",
         "images/hass-mcp/**",
         "images/hass-mcp-sse/**"
       ],
