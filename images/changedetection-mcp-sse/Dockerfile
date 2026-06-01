@@ -24,7 +24,8 @@ ARG MCP_PROXY_VERSION
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 # git needed to fetch the pinned upstream source
-RUN apk add --no-cache git
+RUN --mount=type=cache,target=/var/cache/apk \
+    apk add git
 
 WORKDIR /build
 
