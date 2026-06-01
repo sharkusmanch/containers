@@ -31,8 +31,10 @@ ENV UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=never \
     UV_PROJECT_ENVIRONMENT=/app/.venv
 
+# hass-mcp derives its version from git via hatch-vcs/setuptools-scm, but the
+# release tarball has no .git directory. Provide the version explicitly.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --no-dev
+    SETUPTOOLS_SCM_PRETEND_VERSION="${HASS_MCP_VERSION#v}" uv sync --no-dev
 
 # ============================================================================
 # Runtime stage
