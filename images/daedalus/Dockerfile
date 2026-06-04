@@ -12,6 +12,9 @@ ARG HELM_VERSION=v4.2.0
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_VERSION=2.1.162
 
+# renovate: datasource=github-releases depName=sigstore/cosign
+ARG COSIGN_VERSION=v3.0.6
+
 # ============================================================================
 # Builder stage — fetch pinned binaries (amd64 only; see images/daedalus/.platforms)
 # ============================================================================
@@ -20,6 +23,7 @@ FROM alpine:${ALPINE_VERSION} AS builder
 ARG KUBECTL_VERSION
 ARG HELM_VERSION
 ARG CLAUDE_VERSION
+ARG COSIGN_VERSION
 
 RUN apk add --no-cache curl bash tar
 
@@ -34,6 +38,11 @@ RUN curl -fsSL -o /out/kubectl \
 RUN curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
       | tar -xz -C /tmp \
     && install -m 0755 /tmp/linux-amd64/helm /out/helm
+
+# cosign (single binary) — verify image signatures/attestations from the dev box
+RUN curl -fsSL -o /out/cosign \
+      "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" \
+    && chmod +x /out/cosign
 
 # Claude Code — native musl binary. Install into a fixed HOME and bake the whole
 # tree so the launcher symlink (bin/claude -> share/claude/versions/<v>) resolves
@@ -58,7 +67,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://www.openssh.com/" \
       org.opencontainers.image.title="daedalus" \
-      org.opencontainers.image.description="Minimal self-owned SSH dev box (sshd + baked kubectl/helm/claude toolchain)"
+      org.opencontainers.image.description="Minimal self-owned SSH dev box (sshd + baked kubectl/helm/cosign/claude toolchain)"
 
 # openssh (server+client; client needed for git-over-ssh), the dev toolchain, and
 # the runtime libs the Claude/node binaries need (libstdc++/libgcc).
@@ -78,6 +87,7 @@ RUN apk add --no-cache \
 # Baked toolchain
 COPY --from=builder /out/kubectl /usr/local/bin/kubectl
 COPY --from=builder /out/helm    /usr/local/bin/helm
+COPY --from=builder /out/cosign  /usr/local/bin/cosign
 COPY --from=builder /opt/claude  /opt/claude
 RUN ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude
 
