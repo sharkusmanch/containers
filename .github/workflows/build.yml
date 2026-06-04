@@ -87,6 +87,20 @@ jobs:
             echo "tag=latest" >> $GITHUB_OUTPUT
           fi
 
+      - name: Determine platforms
+        id: platforms
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          # Per-image override via images/<image>/.platforms (one value, e.g. linux/amd64);
+          # defaults to multi-arch when the file is absent.
+          if [ -f "images/${IMAGE}/.platforms" ]; then
+            PLATFORMS=$(tr -d '[:space:]' < "images/${IMAGE}/.platforms")
+          else
+            PLATFORMS="linux/amd64,linux/arm64"
+          fi
+          echo "platforms=$PLATFORMS" >> "$GITHUB_OUTPUT"
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v6
@@ -102,7 +116,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: images/${{ matrix.image }}
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ steps.platforms.outputs.platforms }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

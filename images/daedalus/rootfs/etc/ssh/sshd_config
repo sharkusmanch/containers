@@ -1,0 +1,34 @@
+# daedalus sshd — pubkey-only dev box on :2222 (Tailscale-exposed).
+# Mirrors the previous LSIO config. StrictModes MUST be off: HOME (/config) is a
+# Longhorn volume with setgid dirs, which sshd would otherwise reject.
+
+Port 2222
+
+# Host keys persist on the /config PVC so clients don't see "host key changed"
+# across pod recreates. The entrypoint generates any that are missing.
+# (ecdsa intentionally omitted; ed25519 preferred, rsa for legacy clients.)
+HostKey /config/ssh_host_keys/ssh_host_ed25519_key
+HostKey /config/ssh_host_keys/ssh_host_rsa_key
+
+StrictModes no
+PubkeyAuthentication yes
+PasswordAuthentication no
+AuthorizedKeysFile .ssh/authorized_keys
+
+AllowUsers abc
+
+# Claude Code is baked at a pinned version in a root-owned tree; disable its
+# in-place autoupdater for ALL sessions (interactive + `ssh host "claude ..."`),
+# which /etc/profile.d alone would miss for non-login shells.
+SetEnv DISABLE_AUTOUPDATER=1
+
+AllowTcpForwarding no
+GatewayPorts no
+X11Forwarding no
+PrintMotd no
+
+# PidFile on ephemeral /tmp (not the shared RWX PVC) so concurrent pods during a
+# RollingUpdate don't clobber each other's pidfile.
+PidFile /tmp/sshd.pid
+
+Subsystem sftp internal-sftp
