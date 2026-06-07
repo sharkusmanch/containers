@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# Pinned to last code change (not Renovate-tracked — repo has frequent automated output commits)
-ARG SWC_COMMIT=da6dc6624cf289e53c4ffe070fdbe04f9b3901eb
+# Pinned to a commit of the steam-wishlist-tools source (pure-Python; no output-commit churn)
+ARG SWC_COMMIT=9a4f28b9b36eb5072ce0b4d631b4c68fced73423
 
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.14
@@ -21,11 +21,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 WORKDIR /build
 
-# Build dependencies for compiling packages from source (arm64 lacks pre-built wheels)
-RUN apk add --no-cache gcc g++ musl-dev freetype-dev libpng-dev pkgconf
+# Pure-Python dependencies (ics + requests) — no compiler/build deps needed.
 
 # Download and extract source
-RUN wget -qO- "https://github.com/icue/SteamWishlistCalendar/archive/${SWC_COMMIT}.tar.gz" \
+RUN wget -qO- "https://github.com/sharkusmanch/steam-wishlist-tools/archive/${SWC_COMMIT}.tar.gz" \
     | tar xz --strip-components=1
 
 # Install dependencies with caching
@@ -49,9 +48,9 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${SWC_COMMIT}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
-      org.opencontainers.image.upstream="https://github.com/icue/SteamWishlistCalendar" \
+      org.opencontainers.image.upstream="https://github.com/sharkusmanch/steam-wishlist-tools" \
       org.opencontainers.image.title="steam-wishlist-calendar" \
-      org.opencontainers.image.description="Generate an ICS calendar from your Steam wishlist release dates"
+      org.opencontainers.image.description="Steam wishlist release-date artifacts (wishlist.json + successful.txt + ICS)"
 
 # Create non-root user
 RUN addgroup -g 10000 appgroup && \

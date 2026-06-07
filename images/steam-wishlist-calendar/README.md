@@ -4,8 +4,9 @@ Generate an ICS calendar file from a Steam wishlist's unreleased game release da
 
 ## Upstream
 
-- **Repository**: [icue/SteamWishlistCalendar](https://github.com/icue/SteamWishlistCalendar)
-- **Version**: Commit-tracked (main branch)
+- **Repository**: [sharkusmanch/steam-wishlist-tools](https://github.com/sharkusmanch/steam-wishlist-tools)
+  (rewritten from [icue/SteamWishlistCalendar](https://github.com/icue/SteamWishlistCalendar), BSD-3-Clause)
+- **Version**: Pinned by commit (`SWC_COMMIT`)
 
 ## Usage
 
@@ -25,16 +26,17 @@ docker run --rm \
 | Argument | Required | Description |
 |----------|----------|-------------|
 | `-i`, `--id` | Yes | Steam ID (numeric) |
-| `-d`, `--include-dlc` | No | Include DLC in calendar |
+| `-d`, `--include-dlc` | No | Include DLC in the ICS calendar |
+| `-f`, `--from-date` | No | Only include games releasing on/after `YYYY-MM-DD` (or `now`) |
 
 ## Volumes
 
 | Path | Description |
 |------|-------------|
-| `/output` | Generated files: `wishlist.ics`, `history.json`, charts |
+| `/output` | Generated files: `wishlist.json`, `successful.txt`, `concrete.txt`, `wishlist.ics` |
 
 ## Modifications from Upstream
 
-- Containerized with multi-stage Alpine build
+- Containerized with multi-stage Alpine build (pure-Python deps; no build toolchain)
 - Runs as non-root user (UID 10000)
 - Output directory at `/output` via WORKDIR placement
