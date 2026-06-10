@@ -13,7 +13,7 @@ ARG HELM_VERSION=v4.2.0
 ARG CLAUDE_VERSION=2.1.170
 
 # renovate: datasource=github-releases depName=sigstore/cosign
-ARG COSIGN_VERSION=v3.0.6
+ARG COSIGN_VERSION=v3.1.1
 
 # ============================================================================
 # Builder stage — fetch pinned binaries (amd64 only; see images/daedalus/.platforms)
