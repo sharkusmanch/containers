@@ -7,7 +7,7 @@ ARG ENVSUBST_VERSION=v1.4.3
 ARG GO_VERSION=1.26
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.23
+ARG ALPINE_VERSION=3.24
 
 # ============================================================================
 # Builder stage
