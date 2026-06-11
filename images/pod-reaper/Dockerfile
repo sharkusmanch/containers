@@ -7,7 +7,7 @@ ARG POD_REAPER_VERSION=2.14.0
 ARG GO_VERSION=1.26
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.23
+ARG ALPINE_VERSION=3.24
 
 # ============================================================================
 # Builder stage
