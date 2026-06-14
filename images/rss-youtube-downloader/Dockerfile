@@ -7,7 +7,7 @@ ARG PYTHON_VERSION=3.12
 ARG ALPINE_VERSION=3.21
 
 # renovate: datasource=pypi depName=yt-dlp versioning=loose
-ARG YTDLP_VERSION=2026.6.12.235626.dev0
+ARG YTDLP_VERSION=2026.6.13.234541.dev0
 
 # ============================================================================
 # Builder stage
