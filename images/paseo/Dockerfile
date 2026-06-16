@@ -78,9 +78,12 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 # libuv: node-pty runtime lib. libstdc++/libgcc: node + claude native binaries.
 # tini: PID-1 init so claude subprocesses (spawned via node-pty) are reaped, not zombied.
 # nodejs/npm: paseo runs on node, and launched agents build node projects at runtime.
+# openssh-client: repos use git@ SSH remotes — without `ssh`, every git fetch/push fails
+#   ("cannot run ssh: No such file or directory"). github-cli (`gh`): paseo's GitHub PR
+#   self-heal poll + agent `gh` usage.
 RUN apk add --no-cache \
       nodejs npm coreutils libuv libstdc++ libgcc tini \
-      git ca-certificates bash curl tzdata \
+      git openssh-client github-cli ca-certificates bash curl tzdata \
     # Non-root dev user; HOME is the persistent /config PVC (mounted at runtime).
     && adduser -D -u 1000 -h /config paseo
 
