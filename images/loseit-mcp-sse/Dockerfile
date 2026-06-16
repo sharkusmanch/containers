@@ -7,7 +7,7 @@ ARG LOSEIT_MCP_COMMIT=f302e8fb7d0011043c2dae37c7131842b6d9d067
 ARG MCP_PROXY_VERSION=v0.12.0
 
 # renovate: datasource=docker depName=node versioning=docker
-ARG NODE_VERSION=20
+ARG NODE_VERSION=24
 
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.13
