@@ -81,9 +81,12 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 # openssh-client: repos use git@ SSH remotes — without `ssh`, every git fetch/push fails
 #   ("cannot run ssh: No such file or directory"). github-cli (`gh`): paseo's GitHub PR
 #   self-heal poll + agent `gh` usage.
+# python3/py3-pip/py3-virtualenv/uv: agents build & run Python projects (dev parity with
+#   daedalus). jq + yq-go (`yq` binary): JSON/YAML processing for agents and kubectl output.
 RUN apk add --no-cache \
       nodejs npm coreutils libuv libstdc++ libgcc tini \
       git openssh-client github-cli ca-certificates bash curl tzdata \
+      python3 py3-pip py3-virtualenv uv jq yq-go \
     # Non-root dev user; HOME is the persistent /config PVC (mounted at runtime).
     && adduser -D -u 1000 -h /config paseo
 

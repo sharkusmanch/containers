@@ -75,6 +75,7 @@ RUN apk add --no-cache \
       openssh openssh-server openssh-sftp-server openssh-keygen \
       bash curl ca-certificates su-exec tzdata \
       git nodejs npm go make python3 py3-pip py3-virtualenv uv tmux \
+      jq yq-go \
       libstdc++ libgcc \
     # Interactive dev user; HOME is the persistent /config PVC (mounted at runtime).
     && adduser -D -u 1000 -s /bin/bash -h /config abc \

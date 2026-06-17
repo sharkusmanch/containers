@@ -3,8 +3,8 @@
 Headless [Paseo](https://github.com/getpaseo/paseo) daemon — orchestrates coding
 agents (Claude Code et al.) on cluster hardware, reachable from a phone/laptop/CLI.
 Minimal Alpine image with the paseo daemon (node-pty compiled from source for musl),
-Claude Code, kubectl, helm, and git baked in. Single foreground process
-(`paseo daemon start --foreground`) under `tini`.
+Claude Code, kubectl, helm, git, and a Python/jq/yq toolchain baked in. Single
+foreground process (`paseo daemon start --foreground`) under `tini`.
 
 ## Upstream
 

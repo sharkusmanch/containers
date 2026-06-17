@@ -2,7 +2,7 @@
 
 Minimal self-owned SSH dev box: a single-process `sshd` on Alpine with a baked
 development toolchain (kubectl, helm, Claude Code, Go, Node, Python, git, tmux,
-uv). Used as a remote/mobile admin entry point into a Kubernetes cluster, exposed
+uv, jq, yq). Used as a remote/mobile admin entry point into a Kubernetes cluster, exposed
 over Tailscale. Replaces a previous LinuxServer.io `openssh-server`-based image
 whose runtime package install (before sshd started) caused startup crashloops.
 
@@ -44,7 +44,7 @@ ssh -p 2222 abc@<host>
   `entrypoint.sh` does fast config-only setup (host keys, `authorized_keys`
   fetch, gitconfig, MCP venv) then `exec`s `sshd -D`.
 - **Baked toolchain**: kubectl, helm, and Claude Code are installed at pinned
-  versions at build time (not at runtime); Go/Node/Python/git/tmux/uv from Alpine.
+  versions at build time (not at runtime); Go/Node/Python/git/tmux/uv/jq/yq from Alpine.
 - **Host keys persist** under `/config/ssh_host_keys` to avoid client
   "host key changed" warnings across container recreates.
 
