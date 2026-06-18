@@ -13,7 +13,7 @@ ARG CLAUDE_VERSION=2.1.179
 ARG KUBECTL_VERSION=v1.36.2
 
 # renovate: datasource=github-releases depName=helm/helm
-ARG HELM_VERSION=v4.2.1
+ARG HELM_VERSION=v4.2.2
 
 # ============================================================================
 # Builder — install paseo, compile node-pty from source (musl), fetch toolchain
