@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=github-releases depName=voska/hass-mcp
-ARG HASS_MCP_VERSION=v0.4.1
+ARG HASS_MCP_VERSION=v0.5.0
 
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.13
