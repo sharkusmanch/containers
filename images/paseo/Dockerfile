@@ -7,7 +7,7 @@ ARG PASEO_VERSION=0.1.103
 ARG ALPINE_VERSION=3.24
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_VERSION=2.1.197
+ARG CLAUDE_VERSION=2.1.198
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 ARG KUBECTL_VERSION=v1.36.2
