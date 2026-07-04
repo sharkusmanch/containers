@@ -15,6 +15,15 @@ ARG KUBECTL_VERSION=v1.36.2
 # renovate: datasource=github-releases depName=helm/helm
 ARG HELM_VERSION=v4.2.2
 
+# renovate: datasource=github-releases depName=sigstore/cosign
+ARG COSIGN_VERSION=v3.1.1
+
+# renovate: datasource=github-releases depName=fluxcd/flux2
+ARG FLUX_VERSION=v2.9.0
+
+# renovate: datasource=github-releases depName=yannh/kubeconform
+ARG KUBECONFORM_VERSION=v0.8.0
+
 # ============================================================================
 # Builder — install paseo, compile node-pty from source (musl), fetch toolchain
 # ============================================================================
@@ -24,6 +33,9 @@ ARG PASEO_VERSION
 ARG CLAUDE_VERSION
 ARG KUBECTL_VERSION
 ARG HELM_VERSION
+ARG COSIGN_VERSION
+ARG FLUX_VERSION
+ARG KUBECONFORM_VERSION
 
 # g++/make/python3/libuv-dev are node-gyp's toolchain for compiling node-pty.
 RUN apk add --no-cache nodejs npm python3 make g++ libuv-dev curl bash tar
@@ -51,6 +63,23 @@ RUN curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz" \
       | tar -xz -C /tmp \
     && install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
 
+# cosign — verify image signatures/attestations (single static binary; baked on the real
+# PATH, matching daedalus — replaces the off-PATH mise copy the /new-app security scan used).
+RUN curl -fsSL -o /usr/local/bin/cosign \
+      "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64" \
+    && chmod +x /usr/local/bin/cosign
+
+# flux CLI — real `flux reconcile/build/diff` for the GitOps flow. The release tag is
+# vX.Y.Z but the asset filename drops the leading v (${FLUX_VERSION#v}); extract just `flux`.
+RUN curl -fsSL "https://github.com/fluxcd/flux2/releases/download/${FLUX_VERSION}/flux_${FLUX_VERSION#v}_linux_amd64.tar.gz" \
+      | tar -xz -C /tmp flux \
+    && install -m 0755 /tmp/flux /usr/local/bin/flux
+
+# kubeconform — CRD-schema validation of rendered manifests before commit.
+RUN curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz" \
+      | tar -xz -C /tmp kubeconform \
+    && install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
+
 # Claude Code — native musl binary into a fixed HOME; bake the whole tree so the
 # launcher symlink resolves. The installer has a history of not creating the bin
 # symlink — assert it resolves to a real executable.
@@ -72,7 +101,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/getpaseo/paseo" \
       org.opencontainers.image.title="paseo" \
-      org.opencontainers.image.description="Headless Paseo agent-orchestration daemon (claude/kubectl/helm/git baked)"
+      org.opencontainers.image.description="Headless Paseo agent-orchestration daemon (claude + kubectl/helm/flux/kustomize/kubeconform/cosign GitOps toolchain baked)"
 
 # coreutils: paseo launcher shebang uses `env -S` (busybox env can't parse it).
 # libuv: node-pty runtime lib. libstdc++/libgcc: node + claude native binaries.
@@ -83,18 +112,26 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 #   self-heal poll + agent `gh` usage.
 # python3/py3-pip/py3-virtualenv/uv: agents build & run Python projects (dev parity with
 #   daedalus). jq + yq-go (`yq` binary): JSON/YAML processing for agents and kubectl output.
+# GitOps/secrets/image CLIs for the /new-app deploy flow (all Alpine community, on real
+#   PATH): openbao(->`bao`)/sops/age read+seed OpenBao KV & SOPS secrets; crane/skopeo
+#   inspect candidate image manifests (amd64) + config (user/ports); kustomize renders
+#   overlays for kubeconform; grype/syft do image CVE scan + SBOM.
 RUN apk add --no-cache \
       nodejs npm coreutils libuv libstdc++ libgcc tini \
       git openssh-client github-cli ca-certificates bash curl tzdata \
       python3 py3-pip py3-virtualenv uv jq yq-go \
+      openbao crane skopeo kustomize sops age grype syft \
     # Non-root dev user; HOME is the persistent /config PVC (mounted at runtime).
     && adduser -D -u 1000 -h /config paseo
 
 # Baked paseo (global node_modules) and toolchain.
 COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
-COPY --from=builder /usr/local/bin/kubectl /usr/local/bin/kubectl
-COPY --from=builder /usr/local/bin/helm    /usr/local/bin/helm
-COPY --from=builder /opt/claude            /opt/claude
+COPY --from=builder /usr/local/bin/kubectl     /usr/local/bin/kubectl
+COPY --from=builder /usr/local/bin/helm        /usr/local/bin/helm
+COPY --from=builder /usr/local/bin/cosign      /usr/local/bin/cosign
+COPY --from=builder /usr/local/bin/flux        /usr/local/bin/flux
+COPY --from=builder /usr/local/bin/kubeconform /usr/local/bin/kubeconform
+COPY --from=builder /opt/claude                /opt/claude
 # Recreate the launcher symlinks (do NOT COPY the npm bin symlink — COPY dereferences
 # it into a plain file, breaking the launcher's `import '../dist/index.js'` relative
 # resolution; Node must follow the symlink to the package's real bin/ to find dist/).
@@ -106,8 +143,13 @@ COPY rootfs/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # claude is root-owned in /opt/claude and runs as uid 1000 → cannot self-update.
+# PATH: append the mise shims dir so mise-managed tools (installed at runtime under the
+# /config PVC) are reachable in NON-interactive shells too (Claude/agents don't source
+# ~/.bashrc, so `mise activate` never runs). APPENDED so baked /usr/local/bin wins over any
+# stale mise `latest` shim; the dir is created lazily by mise and may not exist at build.
 ENV DISABLE_AUTOUPDATER=1 \
-    HOME=/config
+    HOME=/config \
+    PATH="${PATH}:/config/.local/share/mise/shims"
 
 USER 1000
 

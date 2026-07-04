@@ -1,15 +1,16 @@
 # daedalus
 
 Minimal self-owned SSH dev box: a single-process `sshd` on Alpine with a baked
-development toolchain (kubectl, helm, Claude Code, Go, Node, Python, git, tmux,
-uv, jq, yq). Used as a remote/mobile admin entry point into a Kubernetes cluster, exposed
+development toolchain (kubectl, helm, flux, kustomize, kubeconform, cosign, skopeo, crane,
+openbao `bao`, sops, age, grype, syft, Claude Code, Go, Node, Python, git, tmux, uv, jq, yq).
+Used as a remote/mobile admin entry point into a Kubernetes cluster, exposed
 over Tailscale. Replaces a previous LinuxServer.io `openssh-server`-based image
 whose runtime package install (before sshd started) caused startup crashloops.
 
 ## Upstream
 
 - **Repository**: [OpenSSH](https://www.openssh.com/) (Alpine `openssh-server`)
-- **Version**: tracks the Alpine base (currently 3.23); kubectl/helm/Claude pinned (see Dockerfile)
+- **Version**: tracks the Alpine base (currently 3.24); kubectl/helm/cosign/flux/kubeconform/Claude pinned (see Dockerfile)
 
 ## Usage
 
@@ -43,8 +44,9 @@ ssh -p 2222 abc@<host>
 - **Single process**: `sshd` is the entrypoint (no s6/init system). A small
   `entrypoint.sh` does fast config-only setup (host keys, `authorized_keys`
   fetch, gitconfig, MCP venv) then `exec`s `sshd -D`.
-- **Baked toolchain**: kubectl, helm, and Claude Code are installed at pinned
-  versions at build time (not at runtime); Go/Node/Python/git/tmux/uv/jq/yq from Alpine.
+- **Baked toolchain**: kubectl, helm, cosign, flux, and kubeconform are installed at
+  pinned versions at build time (not at runtime); openbao (`bao`), skopeo, crane, kustomize,
+  sops, age, grype, syft, plus Go/Node/Python/git/tmux/uv/jq/yq from Alpine.
 - **Host keys persist** under `/config/ssh_host_keys` to avoid client
   "host key changed" warnings across container recreates.
 
