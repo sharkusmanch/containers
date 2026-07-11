@@ -6,7 +6,12 @@ Minimal Alpine image with the paseo daemon (node-pty compiled from source for mu
 Claude Code, a Kubernetes/GitOps toolchain (kubectl, helm, flux, kustomize, kubeconform),
 image/secrets CLIs (cosign, skopeo, crane, openbao `bao`, sops, age, grype, syft), git, and a
 Python/jq/yq toolchain baked in. Single
-foreground process (`paseo daemon start --foreground`) under `tini`.
+foreground process (`paseo daemon start --foreground --relay-use-tls`) under `tini`.
+
+Paseo's E2EE relay (NaCl box, blind-forwarded via `relay.paseo.sh` over wss) is
+**enabled** as the fallback transport for clients on lossy networks (phone on
+cellular/CGNAT, where the direct WebSocket dies in 1006 reconnect loops); direct
+connections remain the primary path.
 
 ## Upstream
 
