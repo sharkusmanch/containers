@@ -25,7 +25,9 @@ ARG UPSTREAM_VERSION=v1.2.4
 # cookies.jar is pickled with Python 3.14's http.cookies, which added the `partitioned`
 # cookie attribute — a 3.13 runtime raises CookieError loading it and silently drops the
 # saved Twitch session (forces a device-code re-login). Keep >= 3.14.
-# renovate: datasource=docker depName=python
+# INTENTIONALLY NOT Renovate-tracked — do NOT add a `# renovate: ... depName=python`
+# comment above this ARG. The custom manager only tracks ARGs that carry that comment, so
+# its absence is what pins Python here. Bump manually + rebuild after checking the app.
 ARG PYTHON_VERSION=3.14
 
 # ============================================================================
