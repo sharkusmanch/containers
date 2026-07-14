@@ -35,7 +35,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [rss-youtube-downloader](./images/rss-youtube-downloader/) | RSS feed YouTube video downloader with series routing | Original |
 | [steam-wishlist-calendar](./images/steam-wishlist-calendar/) | ICS calendar from Steam wishlist release dates | [icue/SteamWishlistCalendar](https://github.com/icue/SteamWishlistCalendar) |
 | [tailscale-hosts-sync](./images/tailscale-hosts-sync/) | Sync Tailscale devices to hosts file for DNS | Original |
-| [twitch-drops-miner](./images/twitch-drops-miner/) | Twitch drops miner web UI (temp fork: 1.2.4 + drop-progress fix) | [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) (PR #70) |
+| [twitch-drops-miner](./images/twitch-drops-miner/) | Twitch drops miner web UI (self-maintained: upstream release + PR#70/#62 patches) | [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) |
 | [vikunja-mcp-sse](./images/vikunja-mcp-sse/) | Vikunja task-manager MCP server with SSE transport (k8s) | [democratize-technology/vikunja-mcp](https://github.com/democratize-technology/vikunja-mcp) |
 
 ## Security Practices
