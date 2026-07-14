@@ -2,15 +2,22 @@
 
 Automated Twitch drops mining application with a web-based interface.
 
-**Temporary fork build.** This image is upstream `rangermix/TwitchDropsMiner` **1.2.4**
-plus the still-unmerged **PR #70** (`capkz:fix/drops-spade-post-endpoint`). Twitch removed
-the `sendSpadeEvents` GraphQL mutation during the 2026 Summer Drops event, which silently
-froze all drop progress (the miner "watches" a channel but earns nothing — upstream
-[issue #69](https://github.com/rangermix/TwitchDropsMiner/issues/69)). PR #70 reverts
-watch-event reporting to a direct POST against the Spade endpoint.
+**Self-maintained image.** We build our own TwitchDropsMiner image permanently — attested,
+digest-pinned, and independent of the under-maintained upstream (which repeatedly breaks
+against Twitch API changes). It currently tracks upstream `rangermix/TwitchDropsMiner`
+**1.2.4** plus two backported fixes: **PR #70** (`capkz:fix/drops-spade-post-endpoint` —
+Twitch removed the `sendSpadeEvents` GraphQL mutation during the 2026 Summer Drops event,
+freezing all drop progress, upstream
+[issue #69](https://github.com/rangermix/TwitchDropsMiner/issues/69); PR #70 reverts to a
+direct Spade POST) and **PR #62** (per-game GQL crash-resilience).
 
-> **Retire this image** and repin consumers to the official upstream image once PR #70 is
-> merged and rangermix cuts a release newer than 1.2.4.
+> **Maintenance model:** when a backported fix lands in an upstream *release*, bump the
+> source to that release and drop the now-redundant local patch — but keep building this
+> image. The `patches/` backports exist only until upstream ships an equivalent.
+
+> **Runtime note:** drop crediting requires `beacon.twitch.tv` (Twitch's watch-event
+> endpoint) to resolve — it is blocked by default on tracker-blocking DNS (e.g. NextDNS)
+> and must be allowlisted, or drops silently never progress.
 
 ## Upstream
 

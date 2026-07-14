@@ -1,13 +1,15 @@
 # syntax=docker/dockerfile:1
 
-# TEMPORARY fork build: upstream rangermix/TwitchDropsMiner 1.2.4 + the still-unmerged
-# PR #70 (capkz:fix/drops-spade-post-endpoint). Twitch removed the `sendSpadeEvents`
-# GraphQL mutation during the 2026 Summer Drops event, which silently froze all drop
-# progress (the miner "watches" but earns nothing — upstream issue #69). PR #70 reverts
-# watch-event reporting to a direct POST against the Spade endpoint.
-#   >>> REMOVE this image and repin the HelmReleases to the official upstream image once
-#   >>> PR #70 merges and rangermix cuts a release > 1.2.4. Tracking:
-#   >>> https://github.com/rangermix/TwitchDropsMiner/issues/69  (+ PR #70)
+# Self-maintained TwitchDropsMiner image (we build our own permanently — attested,
+# digest-pinned, and independent of the under-maintained upstream that repeatedly breaks
+# against Twitch API changes). Currently: upstream rangermix/TwitchDropsMiner 1.2.4 +
+# PR #70 (Spade-POST drop-progress fix; Twitch removed the `sendSpadeEvents` GraphQL
+# mutation during the 2026 Summer Drops event, upstream issue #69) + PR #62 (per-game GQL
+# crash-resilience).
+#   Maintenance model: when a fix lands in an upstream RELEASE, bump SOURCE_COMMIT/version
+#   to that release and DROP the now-redundant local patch — but keep building this image.
+#   The patches/ backports exist only until upstream ships an equivalent.
+#   Refs: https://github.com/rangermix/TwitchDropsMiner (issue #69, PRs #70/#62)
 
 # NOTE: APP_VERSION is intentionally the FIRST `*_VERSION` ARG so build.yml tags the
 # image `1.2.4-pr70-pr62` (its version-extraction greps the first `^ARG.*_VERSION=`).
