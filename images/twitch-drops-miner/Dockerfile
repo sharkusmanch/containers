@@ -10,8 +10,10 @@
 #   >>> https://github.com/rangermix/TwitchDropsMiner/issues/69  (+ PR #70)
 
 # NOTE: APP_VERSION is intentionally the FIRST `*_VERSION` ARG so build.yml tags the
-# image `1.2.4-pr70` (its version-extraction greps the first `^ARG.*_VERSION=`).
-ARG APP_VERSION=1.2.4-pr70
+# image `1.2.4-pr70-pr62` (its version-extraction greps the first `^ARG.*_VERSION=`).
+# = upstream 1.2.4 + PR#70 (Spade-POST drop fix, via source) + PR#62 (per-game GQL
+#   crash-resilience, via patches/).
+ARG APP_VERSION=1.2.4-pr70-pr62
 
 # Pin to 3.14 to MATCH UPSTREAM (python:3-alpine → 3.14). This is load-bearing: the app's
 # aiohttp cookies.jar is pickled with Python 3.14's http.cookies, which added the
@@ -36,11 +38,17 @@ ARG SOURCE_COMMIT
 # Build toolchain for any dep that falls back to an sdist (C extensions). Stays in the
 # builder stage only — never shipped to runtime.
 RUN --mount=type=cache,target=/var/cache/apk \
-    apk add --no-cache gcc musl-dev libffi-dev
+    apk add --no-cache gcc musl-dev libffi-dev patch
 
 WORKDIR /build
 ADD https://github.com/${SOURCE_REPO}/archive/${SOURCE_COMMIT}.tar.gz /build/src.tar.gz
 RUN tar xzf src.tar.gz --strip-components=1 && rm src.tar.gz
+
+# Local backport patches applied on top of the source (see patches/*.patch headers).
+# Currently: PR #62 — per-game GQL crash-resilience (stops CrashLoopBackOff on
+# intermittent PersistedQueryNotFound). Drop when upstream ships an equivalent.
+COPY patches/ /build/patches/
+RUN for p in /build/patches/*.patch; do echo "== applying $p =="; patch -p1 < "$p"; done
 
 # Install the package + its runtime dependencies into /install (copied to runtime).
 RUN --mount=type=cache,target=/root/.cache/pip \

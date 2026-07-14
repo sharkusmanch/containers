@@ -20,7 +20,7 @@ watch-event reporting to a direct POST against the Spade endpoint.
 ## Usage
 
 ```bash
-docker run -p 8080:8080 -v tdm-data:/app/data ghcr.io/sharkusmanch/containers/twitch-drops-miner:1.2.4-pr70
+docker run -p 8080:8080 -v tdm-data:/app/data ghcr.io/sharkusmanch/containers/twitch-drops-miner:1.2.4-pr70-pr62
 ```
 
 The web UI is served on port 8080; complete the Twitch device-code login once via the UI.
@@ -36,6 +36,9 @@ The web UI is served on port 8080; complete the Twitch device-code login once vi
 
 - Built from PR #70's head commit instead of a release tag (the drop-progress fix is not
   yet in any upstream release).
+- Also backports PR #62 (per-game GQL crash-resilience) via `patches/` — upstream 1.2.4
+  fatally crashes on an intermittent `PersistedQueryNotFound`; this skips the affected
+  game for the cycle instead. Drop when upstream ships an equivalent.
 - Multi-stage build (deps installed into an isolated prefix; build toolchain kept out of
   the runtime image) and a non-root `appuser` (UID/GID 10000), per this repo's standards.
   Otherwise functionally identical to the upstream Dockerfile (same `python main.py`

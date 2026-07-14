@@ -1,0 +1,23 @@
+Backport of upstream PR #62 (rangermix/TwitchDropsMiner#62, closed-unmerged):
+"fix: catch GQL exceptions per-game instead of crashing the miner".
+
+Twitch intermittently returns PersistedQueryNotFound for the directory
+(get_live_streams) query on a per-game/per-edge basis. Upstream 1.2.4 lets that
+exception propagate out of the run loop and FATALLY exits the miner (exit 1 →
+CrashLoopBackOff). This wraps the per-game fetch so a failure skips that game for
+the cycle and the miner keeps running. Drop this patch once upstream ships an
+equivalent fix.
+--- a/src/core/client.py
++++ b/src/core/client.py
+@@ -356,7 +356,10 @@ async def _run(self) -> None:
+                 for game in no_acl:
+                     # for every campaign without an ACL, for it's game,
+                     # add a list of live channels with drops enabled
+-                    new_channels.update(await self.get_live_streams(game, drops_enabled=True))
++                    try:
++                        new_channels.update(await self.get_live_streams(game, drops_enabled=True))
++                    except Exception as exc:
++                        logger.warning(f"Failed to fetch channels for {game.name}: {exc} — skipping")
+                 # sort them descending by viewers, by priority and by game priority
+                 # NOTE: Viewers sort also ensures ONLINE channels are sorted to the top
+                 # NOTE: We can drop using the set now, because there's no more channels being added
