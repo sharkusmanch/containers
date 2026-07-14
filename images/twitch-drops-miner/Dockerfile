@@ -13,8 +13,12 @@
 # image `1.2.4-pr70` (its version-extraction greps the first `^ARG.*_VERSION=`).
 ARG APP_VERSION=1.2.4-pr70
 
+# Pin to 3.14 to MATCH UPSTREAM (python:3-alpine → 3.14). This is load-bearing: the app's
+# aiohttp cookies.jar is pickled with Python 3.14's http.cookies, which added the
+# `partitioned` cookie attribute — a 3.13 runtime raises CookieError loading it and silently
+# drops the saved Twitch session (forces a device-code re-login). Keep >= 3.14.
 # renovate: datasource=docker depName=python
-ARG PYTHON_VERSION=3.13
+ARG PYTHON_VERSION=3.14
 
 # PR #70 head (capkz fork). Pinned by commit — do NOT let Renovate float this; the whole
 # image is a stopgap that gets deleted on upstream merge.
