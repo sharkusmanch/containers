@@ -44,7 +44,8 @@
         "images/autoshift/**",
         "images/changedetection-mcp-sse/**",
         "images/hass-mcp/**",
-        "images/hass-mcp-sse/**"
+        "images/hass-mcp-sse/**",
+        "images/twitch-drops-miner/**"
       ],
       "enabled": false
     },
