@@ -3,12 +3,6 @@
 # renovate: datasource=github-releases depName=s-stefanov/actual-mcp
 ARG ACTUAL_MCP_VERSION=v1.11.3
 
-# @actual-app/api MUST match the Actual server major/minor or downloadBudget fails
-# with "out-of-sync-migrations" (the budget file's schema is ahead of the api).
-# Keep this pinned to the deployed actual-server version.
-# renovate: datasource=npm depName=@actual-app/api
-ARG ACTUAL_API_VERSION=26.7.0
-
 # renovate: datasource=docker depName=node versioning=docker
 ARG NODE_VERSION=24
 
@@ -18,7 +12,6 @@ ARG NODE_VERSION=24
 FROM node:${NODE_VERSION}-alpine AS builder
 
 ARG ACTUAL_MCP_VERSION
-ARG ACTUAL_API_VERSION
 
 WORKDIR /build
 
@@ -28,11 +21,6 @@ RUN apk add --no-cache git
 # Clone specific version from upstream
 RUN git clone --branch ${ACTUAL_MCP_VERSION} --depth 1 \
     https://github.com/s-stefanov/actual-mcp.git .
-
-# Pin @actual-app/api to the deployed actual-server version (updates package.json +
-# lockfile) so the schema matches — otherwise downloadBudget → out-of-sync-migrations.
-RUN --mount=type=cache,target=/root/.npm \
-    npm install --package-lock-only @actual-app/api@${ACTUAL_API_VERSION}
 
 # Install dependencies and build
 RUN --mount=type=cache,target=/root/.npm \
