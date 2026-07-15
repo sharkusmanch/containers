@@ -123,6 +123,11 @@ RUN chmod +x /entrypoint.sh
 
 EXPOSE 2222
 
-# Runs as root: sshd needs privsep (user "sshd" + /var/empty, created by apk).
-# The entrypoint drops to "abc" (su-exec) for all user-scoped config steps.
+# Runs entirely as the unprivileged "abc" (uid 1000). sshd is single-user
+# (AllowUsers abc) and the daemon runs as that SAME uid, so OpenSSH skips
+# privsep-setuid — no root, no SYS_CHROOT/SETUID/SETGID/CHOWN. Host keys, ~/.ssh
+# and all config live on the abc-owned /config PVC (fsGroup 1000). The entrypoint
+# runs natively as abc (no su-exec drop). Verified: sshd binds :2222 + pubkey
+# login as abc succeeds with zero added capabilities.
+USER abc
 ENTRYPOINT ["/entrypoint.sh"]
