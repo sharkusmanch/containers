@@ -13,7 +13,7 @@ ARG HELM_VERSION=v4.2.3
 ARG CLAUDE_VERSION=2.1.212
 
 # renovate: datasource=github-releases depName=sigstore/cosign
-ARG COSIGN_VERSION=v3.1.1
+ARG COSIGN_VERSION=v3.1.2
 
 # renovate: datasource=github-releases depName=fluxcd/flux2
 ARG FLUX_VERSION=v2.9.2
