@@ -19,7 +19,7 @@
 # FIRST `*_VERSION` ARG → build.yml tags the image with the upstream release (e.g. v1.2.4)
 # and it drives the source tarball. Renovate bumps this on each new upstream release.
 # renovate: datasource=github-releases depName=rangermix/TwitchDropsMiner
-ARG UPSTREAM_VERSION=v1.2.4
+ARG UPSTREAM_VERSION=v1.2.5
 
 # Pin to 3.14 to MATCH UPSTREAM (python:3-alpine → 3.14). Load-bearing: the app's aiohttp
 # cookies.jar is pickled with Python 3.14's http.cookies, which added the `partitioned`
