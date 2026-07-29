@@ -5,13 +5,14 @@
 # Twitch API changes). Built from the upstream RELEASE tarball (Renovate tracks
 # github-releases and opens a bump PR on each new rangermix release) with local backport
 # patches applied on top:
-#   patches/pr70-... — PR #70: Spade-POST drop-progress fix (Twitch removed the
-#                      sendSpadeEvents GraphQL mutation, upstream issue #69)
 #   patches/pr62-... — PR #62: per-game GQL crash-resilience (intermittent
 #                      PersistedQueryNotFound no longer crashes the miner)
 # Maintenance model: on a Renovate bump PR, CI rebuilds from the new release + patches. When
 # upstream ships one of these fixes IN A RELEASE, its patch stops applying → the build fails
 # loudly → drop that patch. We keep building our own image throughout.
+#   PR #70 (Spade-POST drop-progress fix, upstream issue #69) shipped upstream in v1.2.5 —
+#   its patch stopped applying on the v1.2.5 bump and was removed 2026-07-29, exactly as the
+#   maintenance model predicts.
 #   Refs: https://github.com/rangermix/TwitchDropsMiner (issue #69, PRs #70/#62)
 # RUNTIME NOTE: drop crediting needs beacon.twitch.tv to resolve — blocked by default on
 # tracker-blocking DNS (NextDNS); must be allowlisted or the watch-event POST hits 0.0.0.0.
@@ -70,7 +71,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/rangermix/TwitchDropsMiner" \
       org.opencontainers.image.title="twitch-drops-miner" \
-      org.opencontainers.image.description="Self-maintained Twitch Drops Miner (upstream release + PR#70/#62 backport patches)"
+      org.opencontainers.image.description="Self-maintained Twitch Drops Miner (upstream release + PR#62 backport patch)"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
