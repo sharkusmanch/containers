@@ -41,23 +41,39 @@ USER root
 # Fail the build if upstream changes what this overlay patches. `sed` exits 0 on a
 # missed pattern, so without this a stale overlay would silently produce an image
 # that only breaks at runtime -- or keep patching something upstream already fixed.
-RUN grep -q 'usermod -o -u' /entrypoint.sh \
-      || { echo "STALE OVERLAY: upstream entrypoint no longer does the PUID/PGID remap"; exit 1; } \
-    && grep -q '^user=root' /etc/supervisord.conf \
-      || { echo "STALE OVERLAY: supervisord.conf no longer pins user=root"; exit 1; } \
-    && grep -q '^user abc;' /etc/nginx/nginx.conf \
-      || { echo "STALE OVERLAY: nginx.conf no longer sets 'user abc;'"; exit 1; }
+RUN set -e; \
+    grep -q 'usermod -o -u' /entrypoint.sh \
+      || { echo "STALE OVERLAY: upstream entrypoint no longer does the PUID/PGID remap"; exit 1; }; \
+    grep -q '^user=root' /etc/supervisord.conf \
+      || { echo "STALE OVERLAY: supervisord.conf no longer pins user=root"; exit 1; }; \
+    grep -q '^user abc;' /etc/nginx/nginx.conf \
+      || { echo "STALE OVERLAY: nginx.conf no longer sets 'user abc;'"; exit 1; }; \
+    ! grep -q '^logfile=\|^pidfile=' /etc/supervisord.conf \
+      || { echo "STALE OVERLAY: supervisord.conf now sets logfile/pidfile; injecting would duplicate the key"; exit 1; }
 
 RUN groupmod -o -g 10000 abc \
     && usermod -o -u 10000 abc \
     && sed -i '/^user abc;/d' /etc/nginx/nginx.conf /etc/nginx/nginx.ipv6.conf \
     && sed -i '/^user=/d' /etc/supervisord.conf \
+    # supervisord defaults logfile/pidfile to $CWD (= /yamtrack, on the root fs) and
+    # aborts at startup if it cannot write them -- which breaks
+    # readOnlyRootFilesystem: true. Upstream never hit this: it runs as root on a
+    # writable rootfs. Point both somewhere valid instead.
+    && sed -i 's|^\[supervisord\]|[supervisord]\nlogfile=/dev/stdout\nlogfile_maxbytes=0\npidfile=/tmp/supervisord.pid|' /etc/supervisord.conf \
     && mkdir -p /yamtrack/db \
-    && chown -R 10000:10000 /yamtrack /var/log/nginx /var/lib/nginx
+    && chown -R 10000:10000 /yamtrack /var/log/nginx /var/lib/nginx \
+    # `shadow` is only needed for the build-time remap above; drop the usermod/chage
+    # toolkit from the shipped image.
+    && apk del shadow
 
 # Entrypoint without the PUID/PGID remap + chown chain.
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
+# Nothing should write .pyc at runtime under a read-only root filesystem. CPython
+# swallows the failed write silently, so this only makes the existing behaviour
+# explicit (site-packages and app code are already compiled at build time).
+ENV PYTHONDONTWRITEBYTECODE=1
 
 USER 10000:10000
 

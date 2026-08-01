@@ -53,6 +53,13 @@ Config-only overlay — the application itself is not rebuilt.
   `/var/log/nginx`, `/var/lib/nginx`; pre-created `/yamtrack/db`.
 - **Stripped `user=` from `/etc/supervisord.conf`**, which pinned supervisord and the nginx
   program to root.
+- **Set supervisord's `logfile`/`pidfile`.** Upstream sets neither, so supervisord falls back
+  to `$CWD/supervisord.log` and `$CWD/supervisord.pid` — and `WORKDIR` is `/yamtrack`, on the
+  root filesystem. It aborts at startup if it cannot write them, which breaks
+  `readOnlyRootFilesystem: true`. Now `logfile=/dev/stdout`, `logfile_maxbytes=0`,
+  `pidfile=/tmp/supervisord.pid`.
+- **`apk del shadow`** — `usermod`/`groupmod` are only needed for the build-time remap.
+- **`PYTHONDONTWRITEBYTECODE=1`** — makes the already-true no-runtime-`.pyc` case explicit.
 - **Removed the `user abc;` directive** from `nginx.conf` and `nginx.ipv6.conf` — only
   meaningful when the nginx master runs as root, and a warning otherwise.
 - **`USER 10000:10000`**.
