@@ -16,7 +16,6 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 
 | Image | Description | Upstream |
 |-------|-------------|----------|
-| [actual-mcp](./images/actual-mcp/) | MCP server for Actual Budget | [s-stefanov/actual-mcp](https://github.com/s-stefanov/actual-mcp) |
 | [autoshift](./images/autoshift/) | Automatic SHiFT code redemption for Borderlands | [Fabbi/autoshift](https://github.com/Fabbi/autoshift) |
 | [changedetection-mcp-sse](./images/changedetection-mcp-sse/) | ChangeDetection.io MCP server with SSE transport (k8s) | [rusty4444/changedetection-mcp](https://github.com/rusty4444/changedetection-mcp) |
 | [daedalus](./images/daedalus/) | Minimal self-owned SSH dev box (sshd + baked kubectl/helm/Claude toolchain) | [OpenSSH](https://www.openssh.com/) |
@@ -138,8 +137,8 @@ docker inspect ghcr.io/sharkusmanch/containers/redlib:latest \
 
 ```bash
 # Build a specific image
-docker build -t myimage images/actual-mcp/
+docker build -t myimage images/autoshift/
 
 # Build with specific version
-docker build --build-arg VERSION=v1.2.3 -t myimage images/actual-mcp/
+docker build --build-arg VERSION=v1.2.3 -t myimage images/autoshift/
 ```

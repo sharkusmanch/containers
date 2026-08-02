@@ -15,13 +15,6 @@
       "automergeStrategy": "squash"
     },
     {
-      "description": "Group Dockerfile updates by image",
-      "matchPaths": [
-        "images/actual-mcp/**"
-      ],
-      "groupName": "actual-mcp"
-    },
-    {
       "description": "Disable built-in dockerfile manager for FROM lines with ARG-suffixed tags (custom regex handles these)",
       "matchManagers": [
         "dockerfile"
