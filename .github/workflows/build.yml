@@ -39,7 +39,11 @@ jobs:
             echo "images=[\"${{ inputs.image }}\"]"
             echo "images=[\"${{ inputs.image }}\"]" >> $GITHUB_OUTPUT
           else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD -- images/ | cut -d/ -f2 | sort -u | jq -R -s -c 'split("\n") | map(select(length > 0))')
+            # Keep only images that still exist — a removed image shows up in the
+            # diff but has no build context, which would fail the matrix job.
+            CHANGED=$(git diff --name-only HEAD~1 HEAD -- images/ | cut -d/ -f2 | sort -u \
+              | while read -r i; do [ -d "images/$i" ] && echo "$i"; done \
+              | jq -R -s -c 'split("\n") | map(select(length > 0))')
             echo "images=$CHANGED"
             echo "images=$CHANGED" >> $GITHUB_OUTPUT
           fi
