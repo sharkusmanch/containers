@@ -89,10 +89,21 @@ COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 # Recreate the launcher symlinks rather than COPYing them from the builder: COPY
 # dereferences a symlink into a plain file, which breaks each launcher's relative
 # `import '../dist/...'` resolution. Node must follow the link into the real package dir.
+#
+# claude MUST point at bin/claude.exe — the package's own `bin` mapping. Despite the .exe
+# suffix that file is a ~289MB Linux ELF binary placed by the package's postinstall; there
+# is no cli.js. The Claude Agent SDK resolves the bare string 'claude' off PATH and rejects
+# anything that is not the native binary ("Claude Code native binary not found at claude").
 RUN ln -sf ../lib/node_modules/@cloudcli-ai/cloudcli/dist-server/server/modules/cli/cli.js \
            /usr/local/bin/cloudcli \
-    && ln -sf ../lib/node_modules/@anthropic-ai/claude-code/cli.js /usr/local/bin/claude \
+    && ln -sf ../lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /usr/local/bin/claude \
     && chmod -R a+rX /usr/local/lib/node_modules
+
+# Assert `claude` actually resolves and runs. Without this the image builds fine and the
+# app starts healthy, then every agent run fails at request time with the SDK's
+# "native binary not found" error — a runtime-only failure that probes cannot detect.
+RUN test -x "$(readlink -f /usr/local/bin/claude)" \
+    && claude --version
 
 # claude is root-owned and the container runs as uid 1000, so it cannot self-update.
 ENV HOME=/config \
