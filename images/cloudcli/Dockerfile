@@ -21,13 +21,14 @@ ARG NODE_VERSION=22-trixie-slim
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_VERSION=2.1.222
 
-# Powers cloudcli's TaskMaster tab. Its check is a plain PATH lookup —
-# spawn('which', ['task-master']) then spawn('task-master', ['--version']) — so the
-# binary simply has to be on PATH. (Separately, taskmaster.service.js can also detect a
-# `task-master-ai` MCP server declared in ~/.claude.json; that is config on the PVC,
-# not an image concern.)
-# renovate: datasource=npm depName=task-master-ai
-ARG TASKMASTER_VERSION=0.43.1
+# NOTE: task-master-ai (which powers cloudcli's TaskMaster tab) is deliberately NOT baked
+# here. It resolves to 685 packages / ~1.3 GB, and depends on @anthropic-ai/claude-code —
+# so installing it would pull a SECOND copy of that ~289 MB native binary into an image
+# that already ships one. It is installed instead into the shared PVC prefix
+# (/config/.npmrc sets prefix=/config/.npm-global, already used for paseo/pnpm), which is
+# writable at runtime and shared with daedalus and paseo. That prefix's bin dir is on PATH
+# below. cloudcli's check is a plain PATH lookup — spawn('which', ['task-master']) then
+# spawn('task-master', ['--version']) — so a PVC install satisfies it.
 
 # ============================================================================
 # Builder — global npm installs + loud assertions that no native binding is missing
@@ -36,7 +37,6 @@ FROM node:${NODE_VERSION} AS builder
 
 ARG CLOUDCLI_VERSION
 ARG CLAUDE_VERSION
-ARG TASKMASTER_VERSION
 
 # ca-certificates + git: @vscode/ripgrep's postinstall downloads the `rg` binary from
 # GitHub Releases over TLS. Do NOT add --ignore-scripts to the install below to "harden"
@@ -48,7 +48,6 @@ RUN apt-get update \
 
 RUN npm install -g "@cloudcli-ai/cloudcli@${CLOUDCLI_VERSION}" \
     && npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
-    && npm install -g "task-master-ai@${TASKMASTER_VERSION}" \
     && npm cache clean --force
 
 # Assert the glibc prebuilds actually landed. Without this the image builds fine and then
@@ -107,7 +106,6 @@ COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 RUN ln -sf ../lib/node_modules/@cloudcli-ai/cloudcli/dist-server/server/modules/cli/cli.js \
            /usr/local/bin/cloudcli \
     && ln -sf ../lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /usr/local/bin/claude \
-    && ln -sf ../lib/node_modules/task-master-ai/dist/task-master.js /usr/local/bin/task-master \
     && chmod -R a+rX /usr/local/lib/node_modules
 
 # Assert every recreated launcher actually resolves and runs. Without this the image
@@ -115,9 +113,7 @@ RUN ln -sf ../lib/node_modules/@cloudcli-ai/cloudcli/dist-server/server/modules/
 # symlink was wrong once already and no probe could see it, because /health never
 # exercises either binary.
 RUN test -x "$(readlink -f /usr/local/bin/claude)" \
-    && claude --version \
-    && test -x "$(readlink -f /usr/local/bin/task-master)" \
-    && task-master --version
+    && claude --version
 
 # claude is root-owned and the container runs as uid 1000, so it cannot self-update.
 # PATH appends the mise shims dir so mise-managed tools installed at runtime under the
@@ -127,7 +123,7 @@ RUN test -x "$(readlink -f /usr/local/bin/claude)" \
 # is created lazily by mise and may not exist at build time. Mirrors the paseo image.
 ENV HOME=/config \
     DISABLE_AUTOUPDATER=1 \
-    PATH="${PATH}:/config/.local/share/mise/shims"
+    PATH="${PATH}:/config/.npm-global/bin:/config/.local/share/mise/shims"
 
 USER 1000
 
