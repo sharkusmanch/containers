@@ -46,7 +46,7 @@ ARG SOPS_VERSION=v3.13.3
 # renovate: datasource=github-releases depName=anchore/grype
 ARG GRYPE_VERSION=v0.117.0
 # renovate: datasource=github-releases depName=anchore/syft
-ARG SYFT_VERSION=v1.50.0
+ARG SYFT_VERSION=v1.51.0
 # renovate: datasource=github-releases depName=mikefarah/yq
 ARG YQ_VERSION=v4.53.3
 # renovate: datasource=github-releases depName=cli/cli
