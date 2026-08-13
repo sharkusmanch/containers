@@ -30,7 +30,7 @@ ARG CLAUDE_VERSION=2.1.231
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 ARG KUBECTL_VERSION=v1.36.3
 # renovate: datasource=github-releases depName=helm/helm
-ARG HELM_VERSION=v4.2.3
+ARG HELM_VERSION=v4.2.4
 # renovate: datasource=github-releases depName=fluxcd/flux2
 ARG FLUX_VERSION=v2.9.4
 # renovate: datasource=github-releases depName=sigstore/cosign
