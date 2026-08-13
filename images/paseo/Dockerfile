@@ -13,7 +13,7 @@ ARG CLAUDE_VERSION=2.1.231
 ARG KUBECTL_VERSION=v1.36.3
 
 # renovate: datasource=github-releases depName=helm/helm
-ARG HELM_VERSION=v4.2.3
+ARG HELM_VERSION=v4.2.4
 
 # renovate: datasource=github-releases depName=sigstore/cosign
 ARG COSIGN_VERSION=v3.1.3
