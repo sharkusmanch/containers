@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=npm depName=@getpaseo/cli
-ARG PASEO_VERSION=0.3.1
+ARG PASEO_VERSION=0.4.0
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
