@@ -64,6 +64,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Optional per-image pre-build gate: if images/<image>/.ci-test exists it
+      # is executed (from the image dir) and must pass before anything is built
+      # or pushed. Keeps security-sensitive logic (e.g. emailctl-puller's mail
+      # classification) from ever producing a signed+attested image while broken.
+      - name: Run image test gate
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          if [ -f "images/${IMAGE}/.ci-test" ]; then
+            echo "::group::test gate for ${IMAGE}"
+            ( cd "images/${IMAGE}" && bash .ci-test )
+            echo "::endgroup::"
+          else
+            echo "no .ci-test for ${IMAGE}, skipping"
+          fi
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 

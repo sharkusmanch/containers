@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Pre-build test gate (invoked by .github/workflows/build.yml). Runs the puller
+# classification-matrix + idempotency suite with fakes — no AWS, no network.
+# Broken mail-classification logic must never produce a signed+attested image.
+set -euo pipefail
+PY=$(command -v python || command -v python3)
+"$PY" -m pip install --quiet boto3 prometheus-client pytest
+PYTHONPATH=app "$PY" -m pytest tests/ -q
