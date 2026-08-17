@@ -75,10 +75,16 @@ class FakeSQS:
 
 class FakeSMTP:
     injected = []
+    # test hook: {rcpt: code} to refuse; codes >=500 = permanent
+    refuse = {}
     def __enter__(self): return self
     def __exit__(self, *a): pass
     def ehlo(self, *a): pass
     def sendmail(self, sender, rcpts, raw):
+        import smtplib
+        if FakeSMTP.refuse:
+            raise smtplib.SMTPRecipientsRefused(
+                {r: (FakeSMTP.refuse.get(r, 250), b"") for r in rcpts})
         FakeSMTP.injected.append((sender, rcpts, raw))
         return {}
 
@@ -122,6 +128,7 @@ def meta(key, source="alias@addy.io", recipients=("gate3@mx.sharkus.xyz",),
 @pytest.fixture(autouse=True)
 def reset():
     FakeSMTP.injected = []
+    FakeSMTP.refuse = {}
 
 
 # --- classification matrix -------------------------------------------------
@@ -278,6 +285,51 @@ def test_notification_parse_prefers_receipt_verdicts():
     assert m.verdicts_pass is True
     assert m.source == "alias@addy.io"
     assert m.recipients == ["a@mx.sharkus.xyz"]
+
+
+def test_permanent_smtp_refusal_quarantines_not_loops():
+    # [R5-2] 5xx (unknown mailbox) -> quarantine/undeliverable, no poison loop.
+    s3 = FakeS3(); s3.put("inbound/k11", ENCRYPTED_RAW)
+    FakeSMTP.refuse = {"user@mail.local": 550}
+    p = make_puller(s3, FakeSQS(), FakeGpg(INNER_PLAINTEXT, sig_ok=True))
+    p.process(meta("inbound/k11"))
+    assert FakeSMTP.injected == []
+    assert any("quarantine/undeliverable/" in k for k in s3.objects)
+
+
+def test_transient_smtp_refusal_raises_for_redelivery():
+    # 4xx -> raise (SQS redelivers), object untouched.
+    s3 = FakeS3(); s3.put("inbound/k12", ENCRYPTED_RAW)
+    FakeSMTP.refuse = {"user@mail.local": 451}
+    p = make_puller(s3, FakeSQS(), FakeGpg(INNER_PLAINTEXT, sig_ok=True))
+    with pytest.raises(Exception):
+        p.process(meta("inbound/k12"))
+    assert "inbound/k12" not in s3.deleted
+    assert not any("quarantine/" in k for k in s3.objects)
+
+
+def test_malformed_encrypted_payload_quarantines_not_crashes():
+    # multipart/encrypted whose body is a string, not parts [R5].
+    raw = (b"Content-Type: multipart/encrypted; boundary=b\r\n\r\nnot-a-real-mime-body\r\n")
+    s3 = FakeS3(); s3.put("inbound/k13", raw)
+    p = make_puller(s3, FakeSQS(), FakeGpg())
+    p.process(meta("inbound/k13"))
+    assert FakeSMTP.injected == []
+    assert any("quarantine/" in k for k in s3.objects)
+
+
+def test_reconstruct_drops_authentication_results():
+    # [R5] forgeable outer Authentication-Results must not be copied onto the
+    # delivered message.
+    import email, email.policy
+    outer = email.message_from_bytes(
+        b"Authentication-Results: spoofed; dmarc=pass\r\n"
+        b"X-AnonAddy-Original-To: a@mx.sharkus.xyz\r\n"
+        b"Content-Type: multipart/encrypted; boundary=b\r\n\r\nx\r\n",
+        policy=email.policy.SMTP)
+    out = P.reconstruct(outer, INNER_PLAINTEXT, "inbound/x", "puller.test")
+    assert b"Authentication-Results" not in out
+    assert b"X-AnonAddy-Original-To" in out   # Sieve still needs this
 
 
 def test_source_is_addy_matches_subdomains_only():

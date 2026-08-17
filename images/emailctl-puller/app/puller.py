@@ -134,14 +134,29 @@ class Gpg:
 # ---------------------------------------------------------------------------
 # Classification / processing
 
+# Outer headers copied onto the reconstructed (decrypted) message. These sit
+# OUTSIDE Addy's signature and are only as trustworthy as the IP allowlist that
+# gates the spool — so we copy exactly what Sieve leak-detection needs
+# (X-AnonAddy-Original-*) plus SES verdicts as informational X-SES-*, and we do
+# NOT copy Authentication-Results [R5]: it is forgeable here and would render a
+# misleading auth result in the MUA. Stalwart re-evaluates anyway.
 OUTER_HEADERS_TO_COPY = [
     "X-AnonAddy-Original-Sender",
     "X-AnonAddy-Original-To",
-    "Authentication-Results",
     "X-SES-Spam-Verdict",
     "X-SES-Virus-Verdict",
     "Received",
 ]
+
+
+class PermanentInjectionError(Exception):
+    """Stalwart refused the message with a 5xx — retrying will never succeed, so
+    the message is quarantined rather than looped [R5-2]."""
+
+
+class MalformedMessageError(Exception):
+    """A message we can't structurally process (e.g. multipart/encrypted whose
+    payload isn't a list) — quarantine as unparseable, never poison-loop [R5]."""
 
 ADDY_SOURCE_DOMAINS = ("addy.io",)
 
@@ -296,11 +311,26 @@ class Puller:
 
     def _inject(self, raw: bytes, envelope_from: str | None, rcpts: list[str]) -> None:
         sender = envelope_from if envelope_from else "<>"  # null reverse-path [R4-6]
-        with self.smtp_factory() as smtp:
-            smtp.ehlo("emailctl-puller")
-            refused = smtp.sendmail(sender, rcpts, raw)
-            if refused:
-                raise RuntimeError(f"recipients refused: {refused}")
+        try:
+            with self.smtp_factory() as smtp:
+                smtp.ehlo("emailctl-puller")
+                refused = smtp.sendmail(sender, rcpts, raw)
+        except smtplib.SMTPRecipientsRefused as e:
+            # Distinguish permanent (5xx) from transient (4xx) per-recipient
+            # [R5-2]. Any 5xx = undeliverable → quarantine, never poison-loop.
+            if any(code >= 500 for code, _ in e.recipients.values()):
+                raise PermanentInjectionError(f"5xx recipient refusal: {e.recipients}")
+            raise  # 4xx: transient, let SQS redeliver
+        except (smtplib.SMTPSenderRefused, smtplib.SMTPDataError) as e:
+            if getattr(e, "smtp_code", 0) >= 500:
+                raise PermanentInjectionError(str(e))
+            raise
+        # sendmail() returns a dict of PARTIALLY refused recipients (some
+        # accepted, some not). A partial 5xx here is still permanent for those.
+        if refused:
+            if any(code >= 500 for code, _ in refused.values()):
+                raise PermanentInjectionError(f"5xx partial refusal: {refused}")
+            raise RuntimeError(f"transient recipient refusal: {refused}")
 
     def _map_recipients(self, meta: Meta, outer: Message) -> tuple[list[str], list[str]]:
         """[R4-8] Map SES receipt recipients through the domain map. Returns
@@ -360,10 +390,18 @@ class Puller:
             self._quarantine(key, raw, "unknown-rcpt")
             return
 
-        if outer.get_content_type() == "multipart/encrypted":
-            self._process_encrypted(key, raw, outer, meta, mapped)
-        else:
-            self._process_plaintext(key, raw, outer, meta, mapped)
+        try:
+            if outer.get_content_type() == "multipart/encrypted":
+                self._process_encrypted(key, raw, outer, meta, mapped)
+            else:
+                self._process_plaintext(key, raw, outer, meta, mapped)
+        except PermanentInjectionError as e:
+            # Undeliverable (5xx from Stalwart, e.g. unknown mailbox) — quarantine
+            # rather than loop forever [R5-2].
+            log.error("permanent injection failure for %s: %s", key, e)
+            self._quarantine(key, raw, "undeliverable")
+        except MalformedMessageError:
+            self._quarantine(key, raw, "unparseable")
 
     def _quarantine_oversize(self, key: str) -> None:
         # Copy server-side (no memory), then delete.
@@ -375,9 +413,13 @@ class Puller:
         PROCESSED.labels(outcome="quarantined_oversize").inc()
 
     def _process_encrypted(self, key, raw, outer, meta, rcpts) -> None:
+        payload = outer.get_payload()
+        if not isinstance(payload, list):
+            # multipart/encrypted with a non-multipart body: malformed [R5].
+            raise MalformedMessageError("multipart/encrypted payload is not a list")
         armor = None
-        for part in outer.get_payload():
-            if part.get_content_type() == "application/octet-stream":
+        for part in payload:
+            if hasattr(part, "get_content_type") and part.get_content_type() == "application/octet-stream":
                 armor = part.get_payload(decode=True)
         if armor is None:
             self._quarantine(key, raw, "unparseable")
@@ -429,7 +471,7 @@ class Puller:
     # -- SQS loop -----------------------------------------------------------
 
     def poll_once(self) -> None:
-        HEARTBEAT.set(time.time())
+        HEARTBEAT.set(time.time())  # also beats on empty polls (idle liveness)
         try:
             resp = self.sqs.receive_message(
                 QueueUrl=self.cfg.queue_url,
@@ -446,6 +488,8 @@ class Puller:
         self._report_depth()
 
     def _handle_sqs_message(self, msg: dict) -> None:
+        HEARTBEAT.set(time.time())  # per-message [R5]: a slow batch must not
+        # let the liveness heartbeat go stale mid-inject.
         stop_beat = self._start_visibility_heartbeat(msg["ReceiptHandle"])
         try:
             meta = parse_notification(msg["Body"])
