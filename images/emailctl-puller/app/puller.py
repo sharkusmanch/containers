@@ -313,7 +313,12 @@ class Puller:
         sender = envelope_from if envelope_from else "<>"  # null reverse-path [R4-6]
         try:
             with self.smtp_factory() as smtp:
-                smtp.ehlo("emailctl-puller")
+                # EHLO arg must be FQDN-shaped — Stalwart 5xx's a bare hostname,
+                # and smtplib records a failed ehlo() without raising, so the
+                # later MAIL gets "EHLO first" [R5 live finding]. Check the code.
+                code, _ = smtp.ehlo("emailctl-puller.mail.svc.cluster.local")
+                if code != 250:
+                    raise RuntimeError(f"EHLO rejected with {code}")  # transient
                 refused = smtp.sendmail(sender, rcpts, raw)
         except smtplib.SMTPRecipientsRefused as e:
             # Distinguish permanent (5xx) from transient (4xx) per-recipient

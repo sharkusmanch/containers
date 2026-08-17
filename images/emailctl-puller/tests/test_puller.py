@@ -79,7 +79,7 @@ class FakeSMTP:
     refuse = {}
     def __enter__(self): return self
     def __exit__(self, *a): pass
-    def ehlo(self, *a): pass
+    def ehlo(self, *a): return (250, b"ok")
     def sendmail(self, sender, rcpts, raw):
         import smtplib
         if FakeSMTP.refuse:
