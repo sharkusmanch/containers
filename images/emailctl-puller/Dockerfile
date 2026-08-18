@@ -15,7 +15,7 @@ FROM python:${PYTHON_VERSION}
 # renovate: datasource=pypi depName=boto3
 ARG BOTO3_VERSION=1.43.73
 # renovate: datasource=pypi depName=prometheus-client
-ARG PROMETHEUS_CLIENT_VERSION=0.23.1
+ARG PROMETHEUS_CLIENT_VERSION=0.26.0
 # renovate: datasource=pypi depName=dnspython
 ARG DNSPYTHON_VERSION=2.8.0
 
