@@ -13,7 +13,7 @@ FROM python:${PYTHON_VERSION}
 # so the code that runs must be the code that was attested.
 
 # renovate: datasource=pypi depName=boto3
-ARG BOTO3_VERSION=1.43.72
+ARG BOTO3_VERSION=1.43.73
 # renovate: datasource=pypi depName=prometheus-client
 ARG PROMETHEUS_CLIENT_VERSION=0.23.1
 # renovate: datasource=pypi depName=dnspython
