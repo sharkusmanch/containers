@@ -7,6 +7,11 @@
 # patches applied on top:
 #   patches/pr62-... — PR #62: per-game GQL crash-resilience (intermittent
 #                      PersistedQueryNotFound no longer crashes the miner)
+#   patches/gql-transient-retry-budget... — local (no upstream PR): upstream retries a
+#                      transient PersistedQueryNotFound/"service error" exactly ONCE, and
+#                      the unguarded fetch_inventory() startup path turns a second one into
+#                      exit 1 -> CrashLoopBackOff -> ingress 503. Gives those errors a
+#                      5-retry budget in the GQL client, covering every call site at once.
 # Maintenance model: on a Renovate bump PR, CI rebuilds from the new release + patches. When
 # upstream ships one of these fixes IN A RELEASE, its patch stops applying → the build fails
 # loudly → drop that patch. We keep building our own image throughout.
@@ -71,7 +76,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/rangermix/TwitchDropsMiner" \
       org.opencontainers.image.title="twitch-drops-miner" \
-      org.opencontainers.image.description="Self-maintained Twitch Drops Miner (upstream release + PR#62 backport patch)"
+      org.opencontainers.image.description="Self-maintained Twitch Drops Miner (upstream release + local GQL-resilience patches)"
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

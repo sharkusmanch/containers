@@ -6,9 +6,10 @@ Automated Twitch drops mining application with a web-based interface.
 digest-pinned, and independent of the under-maintained upstream (which repeatedly breaks
 against Twitch API changes). It builds from the upstream `rangermix/TwitchDropsMiner`
 **release tarball** (Renovate tracks `github-releases` and opens a bump PR on each new
-release) with one backported fix applied as a local patch: **PR #62** (per-game GQL
-crash-resilience). The **PR #70** drop-progress fix (Twitch removed the `sendSpadeEvents`
-GraphQL mutation during the 2026 Summer Drops event, freezing all drop progress, upstream
+release) with two local patches applied: **PR #62** (per-game GQL crash-resilience) and
+**gql-transient-retry-budget** (a local fix, no upstream PR — see below). The **PR #70**
+drop-progress fix (Twitch removed the `sendSpadeEvents` GraphQL mutation during the 2026
+Summer Drops event, freezing all drop progress, upstream
 [issue #69](https://github.com/rangermix/TwitchDropsMiner/issues/69)) shipped upstream in
 **v1.2.5**, so that patch was dropped.
 
@@ -25,15 +26,15 @@ GraphQL mutation during the 2026 Summer Drops event, freezing all drop progress,
 ## Upstream
 
 - **Repository**: [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner)
-- **Version**: upstream release `v1.2.5` (Renovate-tracked) + patch [PR #62](https://github.com/rangermix/TwitchDropsMiner/pull/62)
+- **Version**: upstream release `v1.2.6` (Renovate-tracked) + patch [PR #62](https://github.com/rangermix/TwitchDropsMiner/pull/62) + a local GQL retry-budget patch
 
 ## Usage
 
 ```bash
-docker run -p 8080:8080 -v tdm-data:/app/data ghcr.io/sharkusmanch/containers/twitch-drops-miner:v1.2.5
+docker run -p 8080:8080 -v tdm-data:/app/data ghcr.io/sharkusmanch/containers/twitch-drops-miner:v1.2.6
 ```
 
-(The image tag is the upstream release version; the backport patches are applied on top.)
+(The image tag is the upstream release version; the local patches are applied on top.)
 
 The web UI is served on port 8080; complete the Twitch device-code login once via the UI.
 
@@ -46,9 +47,15 @@ The web UI is served on port 8080; complete the Twitch device-code login once vi
 
 ## Modifications from Upstream
 
-- Built from the upstream release tarball with one backport patch in `patches/`:
+- Built from the upstream release tarball with two patches in `patches/`:
   - `pr62-...` — PR #62 (per-game GQL crash-resilience; upstream fatally crashes on an
     intermittent `PersistedQueryNotFound`, this skips the affected game for the cycle).
+  - `gql-transient-retry-budget...` — local, no upstream PR. Upstream retries a transient
+    `PersistedQueryNotFound` / `service error` exactly **once**; a cold Twitch edge routinely
+    returns it twice in a row, and the unguarded `fetch_inventory()` startup path turns the
+    second one into `exit 1` → CrashLoopBackOff → ingress 503 (observed 2026-08-18). This
+    replaces the one-shot flag with a 5-retry budget in the GQL client, which covers every
+    call site — inventory, directory and drop-claim — not just the per-game one PR #62 wraps.
   Each patch is removed once upstream ships it in a release (its build then fails to apply).
   `pr70-...` was removed on the v1.2.5 bump for exactly that reason.
 - Multi-stage build (deps installed into an isolated prefix; build toolchain kept out of

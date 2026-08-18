@@ -1,0 +1,62 @@
+Local fix (no upstream PR): give transient GQL errors a retry BUDGET instead of a
+single retry.
+
+Twitch's GQL edges intermittently lose the persisted-query registration and answer
+`PersistedQueryNotFound`. Upstream's `GQLClient.request()` already knows this error is
+transient, but retries it exactly ONCE (`single_retry: bool = True`, cleared on first
+use). Two consecutive occurrences — routine when an edge node is cold — exhaust the flag
+and raise GQLException.
+
+That is fatal on the startup path: `client._run()` -> `fetch_inventory()`
+(src/core/client.py:231) does not guard the call, so the exception escapes the run loop
+and `__main__` exits 1. In Kubernetes that means CrashLoopBackOff, the Service loses its
+only endpoint, and the ingress serves 503 until Twitch's edge recovers. Observed
+2026-08-18: both miner instances crashlooped for ~8 minutes on the "Campaigns" operation.
+
+Note this is a DIFFERENT call site from pr62-gql-per-game-resilience.patch, which wraps
+the per-game `get_live_streams()` call (src/core/client.py:356). Fixing it here in the
+GQL client covers every call site — inventory, directory and drop-claim alike — rather
+than adding a try/except at each one.
+
+The retry budget rides the existing ExponentialBackoff (base=2, maximum=60, floored at
+5s for these errors), so 5 retries span roughly 40s worst case. The web server binds
+before the client run loop starts, so the readiness/startup probes stay green while the
+retries happen. `ExponentialBackoff.__next__` never raises StopIteration, so the budget —
+not the iterator — is what bounds the loop.
+
+Drop this patch if upstream ever makes these retries count-based.
+--- a/src/api/gql_client.py
++++ b/src/api/gql_client.py
+@@ -91,8 +91,10 @@
+         """
+         gql_logger.debug(f"GQL Request: {ops}")
+         backoff = ExponentialBackoff(maximum=60)
+-        # Flag to retry the request once for specific errors
+-        single_retry: bool = True
++        # Retry budget for transient, edge-local errors. Must be > 1: a cold Twitch edge
++        # routinely answers PersistedQueryNotFound twice in a row, and running out here is
++        # fatal on the unguarded fetch_inventory() startup path.
++        transient_retries: int = 5
+ 
+         for delay in backoff:
+             async with self._qgl_limiter:
+@@ -117,15 +119,16 @@
+                 if "errors" in response_json:
+                     for error_dict in response_json["errors"]:
+                         if "message" in error_dict:
+-                            if single_retry and error_dict["message"] in (
++                            if transient_retries > 0 and error_dict["message"] in (
+                                 "service error",
+                                 "PersistedQueryNotFound",
+                             ):
++                                transient_retries -= 1
+                                 logger.error(
+                                     f"Retrying a {error_dict['message']} for "
+-                                    f"{response_json['extensions']['operationName']}"
++                                    f"{response_json['extensions']['operationName']} "
++                                    f"({transient_retries} retries left)"
+                                 )
+-                                single_retry = False
+                                 if delay < 5:
+                                     # Overwrite delay if too short
+                                     delay = 5
