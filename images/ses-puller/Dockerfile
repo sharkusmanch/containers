@@ -5,7 +5,7 @@ ARG PYTHON_VERSION=3.13-slim
 
 FROM python:${PYTHON_VERSION}
 
-# emailctl-puller: SES/S3 spool -> Stalwart injection daemon.
+# ses-puller: SES/S3 spool -> Stalwart injection daemon.
 # Design: Outline doc En1hODwyWH (emailctl v3 Puller Design v1.1).
 # Unlike readsync, the application code is BAKED IN (not ConfigMap-mounted):
 # this is security-sensitive mail-authentication logic behind a signed +

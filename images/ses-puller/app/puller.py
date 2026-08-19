@@ -1,4 +1,4 @@
-"""emailctl-puller: SES/S3 spool -> Stalwart injection daemon.
+"""ses-puller: SES/S3 spool -> Stalwart injection daemon.
 
 Design: Outline "emailctl v3 — Puller Design (v1.1)" (doc En1hODwyWH).
 Every non-obvious behavior below traces to a red-team finding ([R4-n], [R3-n],
@@ -316,7 +316,7 @@ class Puller:
                 # EHLO arg must be FQDN-shaped — Stalwart 5xx's a bare hostname,
                 # and smtplib records a failed ehlo() without raising, so the
                 # later MAIL gets "EHLO first" [R5 live finding]. Check the code.
-                code, _ = smtp.ehlo("emailctl-puller.mail.svc.cluster.local")
+                code, _ = smtp.ehlo("ses-puller.mail.svc.cluster.local")
                 if code != 250:
                     raise RuntimeError(f"EHLO rejected with {code}")  # transient
                 refused = smtp.sendmail(sender, rcpts, raw)

@@ -1,4 +1,4 @@
-# emailctl-puller
+# ses-puller
 
 SES/S3 spool → Stalwart injection daemon for the emailctl v3.2 mail architecture.
 Fetches Addy.io-forwarded mail from an SQS-notified S3 spool, decrypts + verifies
