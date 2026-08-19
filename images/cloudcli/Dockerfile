@@ -5,7 +5,7 @@
 #   grep -E '^ARG.*_VERSION=' Dockerfile | head -1 | cut -d= -f2
 # so reordering these ARGs silently tags the image with another tool's version instead.
 # renovate: datasource=npm depName=@cloudcli-ai/cloudcli
-ARG CLOUDCLI_VERSION=1.37.1
+ARG CLOUDCLI_VERSION=1.37.2
 
 # Debian 13 (trixie) slim, NOT Alpine — deliberate departure from the paseo image.
 # cloudcli pulls three native modules (better-sqlite3, node-pty, bcrypt) and all three
