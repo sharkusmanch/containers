@@ -28,7 +28,7 @@ ARG CLAUDE_VERSION=2.1.237
 # binaries below. amd64 only — images/cloudcli/.platforms pins linux/amd64.
 # ---------------------------------------------------------------------------
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-ARG KUBECTL_VERSION=v1.36.3
+ARG KUBECTL_VERSION=v1.36.4
 # renovate: datasource=github-releases depName=helm/helm
 ARG HELM_VERSION=v4.2.4
 # renovate: datasource=github-releases depName=fluxcd/flux2
