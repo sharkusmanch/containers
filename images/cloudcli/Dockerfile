@@ -48,7 +48,7 @@ ARG GRYPE_VERSION=v0.117.0
 # renovate: datasource=github-releases depName=anchore/syft
 ARG SYFT_VERSION=v1.51.0
 # renovate: datasource=github-releases depName=mikefarah/yq
-ARG YQ_VERSION=v4.53.4
+ARG YQ_VERSION=v4.53.6
 # renovate: datasource=github-releases depName=cli/cli
 ARG GH_VERSION=v2.97.0
 # renovate: datasource=github-releases depName=openbao/openbao
