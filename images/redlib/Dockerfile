@@ -6,7 +6,7 @@
 ARG REDLIB_COMMIT=42fe41bc4c64690aa91cd1cfecec3bad3438354f
 
 # renovate: datasource=docker depName=rust versioning=docker
-ARG RUST_VERSION=1.97
+ARG RUST_VERSION=1.98
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
