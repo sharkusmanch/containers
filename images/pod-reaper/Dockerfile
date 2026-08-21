@@ -4,7 +4,7 @@
 ARG POD_REAPER_VERSION=2.14.0
 
 # renovate: datasource=docker depName=golang versioning=docker
-ARG GO_VERSION=1.26
+ARG GO_VERSION=1.27
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
