@@ -214,32 +214,3 @@ def test_request_with_retry_gives_up_after_max(monkeypatch):
 
     resp = client._request_with_retry("GET", "https://api.nextdns.io/x")
     assert resp.status_code == 429
-
-
-def test_compute_desired_excludes_devices_by_tag():
-    """Devices carrying an excluded tag must not get a rewrite.
-
-    A Tailscale Funnel node publishes a PUBLIC record for its own name; writing
-    the tailnet CGNAT address over it makes the funnel unreachable from every
-    NextDNS client (the profiles roam, so this bites off-LAN too, which is
-    exactly where the funnel is supposed to help).
-    """
-    devices = [
-        {"name": "nas.tailnet.ts.net", "addresses": ["100.64.0.5"], "tags": ["tag:k8s"]},
-        {
-            "name": "hermes.tailnet.ts.net",
-            "addresses": ["100.64.0.9", "fd7a::9"],
-            "tags": ["tag:k8s-funnel"],
-        },
-        {"name": "untagged.tailnet.ts.net", "addresses": ["100.64.0.11"]},
-    ]
-    result = compute_desired_rewrites(devices, [], excluded_tags={"tag:k8s-funnel"})
-    names = {r["name"] for r in result}
-    assert "hermes.tailnet.ts.net" not in names
-    assert names == {"nas.tailnet.ts.net", "untagged.tailnet.ts.net"}
-
-
-def test_compute_desired_excluded_tags_defaults_to_none():
-    """Omitting excluded_tags keeps the previous behaviour (nothing filtered)."""
-    devices = [{"name": "a.tailnet.ts.net", "addresses": ["100.64.0.1"], "tags": ["tag:k8s-funnel"]}]
-    assert len(compute_desired_rewrites(devices, [])) == 1

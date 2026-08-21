@@ -16,9 +16,6 @@ Optional:
   CIRCUIT_BREAKER_THRESHOLD    Deletion ratio that aborts the run (default 0.20)
   RATE_LIMIT_DELAY             Seconds between API writes (default 0.2)
   DRY_RUN                      If set, compute but do not apply
-  EXCLUDE_DEVICE_TAGS          Comma-separated Tailscale tags whose devices get NO
-                               rewrite (e.g. tag:k8s-funnel -- a Funnel node must
-                               keep its public ts.net record)
 """
 
 from __future__ import annotations
@@ -41,26 +38,13 @@ log = logging.getLogger("nextdns-sync")
 def compute_desired_rewrites(
     tailscale_devices: list[dict],
     static_rewrites: list[dict],
-    excluded_tags: set[str] | None = None,
 ) -> list[dict]:
-    """Merge Tailscale device FQDNs (one rewrite per address) and static entries.
-
-    Devices carrying any tag in `excluded_tags` are skipped. That matters for
-    Tailscale Funnel nodes: a funnel node's `<name>.<tailnet>.ts.net` has a
-    PUBLIC record pointing at Tailscale's ingress, and rewriting it to the
-    device's CGNAT address makes the funnel unreachable from every NextDNS
-    client -- including off-LAN ones, since the profiles roam, which is exactly
-    where a funnel is supposed to help.
-    """
-    excluded = excluded_tags or set()
+    """Merge Tailscale device FQDNs (one rewrite per address) and static entries."""
     result: list[dict] = []
     for device in tailscale_devices:
         name = device.get("name") or ""
         addresses = device.get("addresses") or []
         if not name or not addresses:
-            continue
-        if excluded and excluded.intersection(device.get("tags") or []):
-            log.info("skipping %s (excluded tag)", name)
             continue
         for addr in addresses:
             result.append({"name": name, "content": addr})
@@ -258,11 +242,6 @@ def main() -> int:
     rate_delay = float(os.environ.get("RATE_LIMIT_DELAY", "0.5"))
     max_retries = int(os.environ.get("API_MAX_RETRIES", "5"))
     dry_run = bool(os.environ.get("DRY_RUN"))
-    # Devices with any of these tags get NO rewrite. Funnel nodes must keep
-    # their public ts.net record (see compute_desired_rewrites).
-    excluded_tags = {
-        t.strip() for t in os.environ.get("EXCLUDE_DEVICE_TAGS", "").split(",") if t.strip()
-    }
 
     if not profile_ids:
         log.error("NEXTDNS_PROFILE_IDS is empty")
@@ -276,9 +255,7 @@ def main() -> int:
     static = load_static_rewrites(static_path)
     log.info("loaded %d static rewrites", len(static))
 
-    if excluded_tags:
-        log.info("excluding devices tagged: %s", ",".join(sorted(excluded_tags)))
-    desired = compute_desired_rewrites(devices, static, excluded_tags=excluded_tags)
+    desired = compute_desired_rewrites(devices, static)
     log.info("desired %d rewrites", len(desired))
 
     client = NextDNSClient.new(api_key, rate_delay, max_retries=max_retries)
