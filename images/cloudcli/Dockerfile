@@ -16,7 +16,7 @@ ARG CLOUDCLI_VERSION=1.37.2
 # trixie over bookworm: same glibc and prebuild compatibility, current Debian stable,
 # materially smaller backlog of unfixed OS CVEs.
 # renovate: datasource=docker depName=node
-ARG NODE_VERSION=22-trixie-slim
+ARG NODE_VERSION=24-trixie-slim
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_VERSION=2.1.239
