@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=github-releases depName=tssujt/miniflux-mcp
-ARG MINIFLUX_MCP_VERSION=v0.1.0
+ARG MINIFLUX_MCP_VERSION=v0.4.0
 
 # renovate: datasource=github-releases depName=sparfenyuk/mcp-proxy
 ARG MCP_PROXY_VERSION=v0.12.0
