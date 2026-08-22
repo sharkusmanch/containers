@@ -12,6 +12,7 @@ Environment variables (required):
 
 Optional:
   STATIC_REWRITES_PATH         Path to YAML file with static entries (default /etc/static/rewrites.yaml)
+  DENYLIST_DIRS                Colon-separated dirs of per-profile denylist YAML (default /etc/denylist)
   TAILNET                      Tailscale tailnet (default "-")
   CIRCUIT_BREAKER_THRESHOLD    Deletion ratio that aborts the run (default 0.20)
   RATE_LIMIT_DELAY             Seconds between API writes (default 0.2)
@@ -104,6 +105,48 @@ def circuit_breaker_ok(
     return (len(to_delete_ids) / len(current)) <= threshold
 
 
+def diff_denylist(
+    current: list[dict],
+    desired: list[str],
+) -> tuple[list[str], list[str]]:
+    """Diff a profile's denylist. Returns (hostnames_to_add, hostnames_to_delete).
+
+    NextDNS denylist entries are keyed by the hostname itself (the API's "id"),
+    unlike rewrites which carry a generated id.
+    """
+    current_ids = {c["id"] for c in current}
+    desired_ids = set(desired)
+    return sorted(desired_ids - current_ids), sorted(current_ids - desired_ids)
+
+
+def merge_denylists(sources: list[tuple[str, object]]) -> dict[str, list[str]]:
+    """Merge parsed denylist documents into {profile_name: [hostname, ...]}.
+
+    Each document is a mapping of NextDNS profile NAME to a list of hostnames.
+    Keyed by name, not profile id, because a profile id doubles as that
+    profile's DoH endpoint path (https://dns.nextdns.io/<id>) — anyone holding
+    one can use the profile as a resolver — so ids must not be committed to a
+    git repository. Names are not secret.
+
+    Multiple sources are unioned per profile so that a second, private config
+    can contribute entries without its hostnames appearing alongside the first.
+    """
+    merged: dict[str, set[str]] = {}
+    for origin, data in sources:
+        if data is None:
+            continue
+        if not isinstance(data, dict):
+            raise ValueError(f"{origin}: expected a mapping of profile name -> [hostname]")
+        for profile_name, hosts in data.items():
+            if hosts is None:
+                hosts = []
+            if not isinstance(hosts, list):
+                raise ValueError(f"{origin}: '{profile_name}' must be a list of hostnames")
+            cleaned = {str(h).strip().lower() for h in hosts if str(h).strip()}
+            merged.setdefault(str(profile_name), set()).update(cleaned)
+    return {name: sorted(hosts) for name, hosts in merged.items()}
+
+
 _SENSITIVE_HEADERS = {"x-api-key", "authorization"}
 
 
@@ -178,6 +221,41 @@ class NextDNSClient:
         time.sleep(self.rate_limit_delay)
         return r.json().get("data", {}).get("id", "")
 
+    def get_profile_name(self, profile_id: str) -> str:
+        r = self._request_with_retry("GET", f"{self.base}/profiles/{profile_id}")
+        if not r.ok:
+            safe_log_response(dict(r.request.headers), r.status_code, r.text)
+            r.raise_for_status()
+        return r.json().get("data", {}).get("name", "")
+
+    def list_denylist(self, profile_id: str) -> list[dict]:
+        r = self._request_with_retry("GET", f"{self.base}/profiles/{profile_id}/denylist")
+        if not r.ok:
+            safe_log_response(dict(r.request.headers), r.status_code, r.text)
+            r.raise_for_status()
+        return r.json().get("data", [])
+
+    def post_denylist(self, profile_id: str, hostname: str) -> None:
+        r = self._request_with_retry(
+            "POST",
+            f"{self.base}/profiles/{profile_id}/denylist",
+            json={"id": hostname, "active": True},
+        )
+        if not r.ok:
+            safe_log_response(dict(r.request.headers), r.status_code, r.text)
+            r.raise_for_status()
+        time.sleep(self.rate_limit_delay)
+
+    def delete_denylist(self, profile_id: str, hostname: str) -> None:
+        r = self._request_with_retry(
+            "DELETE",
+            f"{self.base}/profiles/{profile_id}/denylist/{hostname}",
+        )
+        if not r.ok:
+            safe_log_response(dict(r.request.headers), r.status_code, r.text)
+            r.raise_for_status()
+        time.sleep(self.rate_limit_delay)
+
     def delete_rewrite(self, profile_id: str, rewrite_id: str) -> None:
         r = self._request_with_retry(
             "DELETE",
@@ -229,6 +307,29 @@ def tailscale_devices(token: str, tailnet: str) -> list[dict]:
     return r.json().get("devices", [])
 
 
+def load_denylists(dirs: str) -> dict[str, list[str]]:
+    """Load and merge every *.yaml in each colon-separated directory in `dirs`.
+
+    Colon-separated rather than one directory because each source is a separate
+    ConfigMap mount, and two ConfigMaps cannot share a mount path. A missing
+    directory is not an error: the private source is mounted optional, so its
+    absence must be indistinguishable from it being empty.
+    """
+    sources: list[tuple[str, object]] = []
+    for dir_path in [d for d in dirs.split(":") if d]:
+        if not os.path.isdir(dir_path):
+            log.info("no denylist directory at %s, skipping", dir_path)
+            continue
+        for fname in sorted(os.listdir(dir_path)):
+            # ConfigMap volumes also expose ..data / ..2026_.. symlink dirs.
+            if not fname.endswith((".yaml", ".yml")):
+                continue
+            full = os.path.join(dir_path, fname)
+            with open(full) as f:
+                sources.append((full, yaml.safe_load(f)))
+    return merge_denylists(sources)
+
+
 def load_static_rewrites(path: str) -> list[dict]:
     if not os.path.exists(path):
         log.info("no static rewrites file at %s, skipping", path)
@@ -253,6 +354,7 @@ def main() -> int:
     ts_id = os.environ["TAILSCALE_CLIENT_ID"]
     ts_secret = os.environ["TAILSCALE_CLIENT_SECRET"]
     static_path = os.environ.get("STATIC_REWRITES_PATH", "/etc/static/rewrites.yaml")
+    denylist_dirs = os.environ.get("DENYLIST_DIRS", "/etc/denylist")
     tailnet = os.environ.get("TAILNET", "-")
     threshold = float(os.environ.get("CIRCUIT_BREAKER_THRESHOLD", "0.20"))
     rate_delay = float(os.environ.get("RATE_LIMIT_DELAY", "0.5"))
@@ -275,6 +377,13 @@ def main() -> int:
 
     static = load_static_rewrites(static_path)
     log.info("loaded %d static rewrites", len(static))
+
+    denylists = load_denylists(denylist_dirs)
+    if denylists:
+        log.info("loaded denylists for %d profile(s): %s",
+                 len(denylists), ", ".join(sorted(denylists)))
+    else:
+        log.info("no denylist config found; denylists will not be touched")
 
     if excluded_tags:
         log.info("excluding devices tagged: %s", ",".join(sorted(excluded_tags)))
@@ -310,6 +419,38 @@ def main() -> int:
 
             apply_staged(client, profile_id, to_add, to_delete_ids)
             log.info("reconcile complete for %s", profile_id)
+
+            # --- denylist ---
+            # Only profiles NAMED in the config are managed. A profile with no
+            # entry is skipped entirely rather than reconciled to empty: these
+            # denylists are also edited by hand in the NextDNS UI, and treating
+            # "absent from config" as "delete everything" would silently wipe
+            # that on first run.
+            if denylists:
+                name = client.get_profile_name(profile_id)
+                if name not in denylists:
+                    log.info("profile %s (%s) has no denylist config, leaving it alone",
+                             profile_id, name or "?")
+                else:
+                    want = denylists[name]
+                    have = client.list_denylist(profile_id)
+                    dl_add, dl_del = diff_denylist(have, want)
+                    log.info("denylist %s (%s): current %d, plan +%d -%d",
+                             profile_id, name, len(have), len(dl_add), len(dl_del))
+                    if not circuit_breaker_ok(have, dl_del, threshold):
+                        log.error(
+                            "denylist circuit breaker tripped for %s (%s): would delete %d of %d (>%.0f%%)",
+                            profile_id, name, len(dl_del), len(have), threshold * 100,
+                        )
+                        failures.append(profile_id)
+                    elif dry_run:
+                        log.info("DRY_RUN set, skipping denylist apply for %s", profile_id)
+                    else:
+                        for host in dl_add:
+                            client.post_denylist(profile_id, host)
+                        for host in dl_del:
+                            client.delete_denylist(profile_id, host)
+                        log.info("denylist reconcile complete for %s (%s)", profile_id, name)
         except Exception as e:  # noqa: BLE001 - surface all per-profile failures
             log.exception("profile %s failed: %s", profile_id, e)
             failures.append(profile_id)
