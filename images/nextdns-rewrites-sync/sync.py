@@ -1,25 +1,28 @@
 #!/usr/bin/env python3
 """NextDNS Rewrites Sync.
 
-Reconciles Tailscale device FQDNs + static ConfigMap entries into NextDNS
-profile rewrites via the NextDNS REST API.
+Reconciles static ConfigMap entries into NextDNS profile rewrites, and
+per-profile denylists, via the NextDNS REST API.
+
+Tailscale device sync was REMOVED 2026-08-22. It walked the Tailscale API and
+wrote one rewrite per device address, but after the headscale migration the only
+remaining SaaS devices are two Funnel nodes -- and Funnel nodes were already
+excluded, because overwriting their public record with a CGNAT address breaks
+them. So it enumerated two devices and discarded both results on every run,
+while requiring an OAuth credential and an egress allowlist entry to do it.
+(Same reasoning that retired the tailscale-hosts job: an API consumer whose
+output nobody used.)
 
 Environment variables (required):
   NEXTDNS_API_KEY              NextDNS account API key
   NEXTDNS_PROFILE_IDS          Comma-separated profile IDs (reconciles to all)
-  TAILSCALE_CLIENT_ID          Tailscale OAuth client id
-  TAILSCALE_CLIENT_SECRET      Tailscale OAuth client secret
 
 Optional:
   STATIC_REWRITES_PATH         Path to YAML file with static entries (default /etc/static/rewrites.yaml)
   DENYLIST_DIRS                Colon-separated dirs of per-profile denylist YAML (default /etc/denylist)
-  TAILNET                      Tailscale tailnet (default "-")
   CIRCUIT_BREAKER_THRESHOLD    Deletion ratio that aborts the run (default 0.20)
   RATE_LIMIT_DELAY             Seconds between API writes (default 0.2)
   DRY_RUN                      If set, compute but do not apply
-  EXCLUDE_DEVICE_TAGS          Comma-separated Tailscale tags whose devices get NO
-                               rewrite (e.g. tag:k8s-funnel -- a Funnel node must
-                               keep its public ts.net record)
 """
 
 from __future__ import annotations
@@ -39,38 +42,13 @@ log = logging.getLogger("nextdns-sync")
 # ---------- Pure helpers (unit-tested) ----------
 
 
-def compute_desired_rewrites(
-    tailscale_devices: list[dict],
-    static_rewrites: list[dict],
-    excluded_tags: set[str] | None = None,
-) -> list[dict]:
-    """Merge Tailscale device FQDNs (one rewrite per address) and static entries.
-
-    Devices carrying any tag in `excluded_tags` are skipped. That matters for
-    Tailscale Funnel nodes: a funnel node's `<name>.<tailnet>.ts.net` has a
-    PUBLIC record pointing at Tailscale's ingress, and rewriting it to the
-    device's CGNAT address makes the funnel unreachable from every NextDNS
-    client -- including off-LAN ones, since the profiles roam, which is exactly
-    where a funnel is supposed to help.
-    """
-    excluded = excluded_tags or set()
-    result: list[dict] = []
-    for device in tailscale_devices:
-        name = device.get("name") or ""
-        addresses = device.get("addresses") or []
-        if not name or not addresses:
-            continue
-        if excluded and excluded.intersection(device.get("tags") or []):
-            log.info("skipping %s (excluded tag)", name)
-            continue
-        for addr in addresses:
-            result.append({"name": name, "content": addr})
-    for entry in static_rewrites:
-        name = entry.get("name")
-        content = entry.get("content")
-        if name and content:
-            result.append({"name": name, "content": content})
-    return result
+def compute_desired_rewrites(static_rewrites: list[dict]) -> list[dict]:
+    """Desired rewrite set. Static entries only since Tailscale sync was removed."""
+    return [
+        {"name": e["name"], "content": e["content"]}
+        for e in static_rewrites
+        if e.get("name") and e.get("content")
+    ]
 
 
 def diff_rewrites(
@@ -280,33 +258,6 @@ def apply_staged(
         client.delete_rewrite(profile_id, rewrite_id)
 
 
-# ---------- Tailscale helpers ----------
-
-
-def tailscale_token(client_id: str, client_secret: str) -> str:
-    r = requests.post(
-        "https://api.tailscale.com/api/v2/oauth/token",
-        data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "grant_type": "client_credentials",
-        },
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()["access_token"]
-
-
-def tailscale_devices(token: str, tailnet: str) -> list[dict]:
-    r = requests.get(
-        f"https://api.tailscale.com/api/v2/tailnet/{tailnet}/devices",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json().get("devices", [])
-
-
 def load_denylists(dirs: str) -> dict[str, list[str]]:
     """Load and merge every *.yaml in each colon-separated directory in `dirs`.
 
@@ -351,29 +302,18 @@ def main() -> int:
     profile_ids = [
         p.strip() for p in os.environ["NEXTDNS_PROFILE_IDS"].split(",") if p.strip()
     ]
-    ts_id = os.environ["TAILSCALE_CLIENT_ID"]
-    ts_secret = os.environ["TAILSCALE_CLIENT_SECRET"]
     static_path = os.environ.get("STATIC_REWRITES_PATH", "/etc/static/rewrites.yaml")
     denylist_dirs = os.environ.get("DENYLIST_DIRS", "/etc/denylist")
-    tailnet = os.environ.get("TAILNET", "-")
     threshold = float(os.environ.get("CIRCUIT_BREAKER_THRESHOLD", "0.20"))
     rate_delay = float(os.environ.get("RATE_LIMIT_DELAY", "0.5"))
     max_retries = int(os.environ.get("API_MAX_RETRIES", "5"))
     dry_run = bool(os.environ.get("DRY_RUN"))
     # Devices with any of these tags get NO rewrite. Funnel nodes must keep
     # their public ts.net record (see compute_desired_rewrites).
-    excluded_tags = {
-        t.strip() for t in os.environ.get("EXCLUDE_DEVICE_TAGS", "").split(",") if t.strip()
-    }
 
     if not profile_ids:
         log.error("NEXTDNS_PROFILE_IDS is empty")
         return 1
-
-    log.info("fetching Tailscale devices")
-    token = tailscale_token(ts_id, ts_secret)
-    devices = tailscale_devices(token, tailnet)
-    log.info("got %d devices", len(devices))
 
     static = load_static_rewrites(static_path)
     log.info("loaded %d static rewrites", len(static))
@@ -385,9 +325,7 @@ def main() -> int:
     else:
         log.info("no denylist config found; denylists will not be touched")
 
-    if excluded_tags:
-        log.info("excluding devices tagged: %s", ",".join(sorted(excluded_tags)))
-    desired = compute_desired_rewrites(devices, static, excluded_tags=excluded_tags)
+    desired = compute_desired_rewrites(static)
     log.info("desired %d rewrites", len(desired))
 
     client = NextDNSClient.new(api_key, rate_delay, max_retries=max_retries)

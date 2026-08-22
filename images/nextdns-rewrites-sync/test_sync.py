@@ -17,30 +17,15 @@ from sync import (
 )
 
 
-def test_compute_desired_merges_tailscale_and_static():
-    tailscale_devices = [
-        {"name": "nas.tailnet.ts.net", "addresses": ["100.64.0.5"]},
-        {"name": "prom.tailnet.ts.net", "addresses": ["100.64.0.7", "fd7a::7"]},
-    ]
+def test_compute_desired_returns_static_entries():
+    """Tailscale device sync was removed; statics are the whole desired set now."""
     static = [
         {"name": "bedrockconnect.example.com", "content": "192.168.11.210"},
+        {"name": "nas.example.com", "content": "100.64.0.9"},
     ]
-    result = compute_desired_rewrites(tailscale_devices, static)
-    assert {"name": "nas.tailnet.ts.net", "content": "100.64.0.5"} in result
-    assert {"name": "prom.tailnet.ts.net", "content": "100.64.0.7"} in result
-    assert {"name": "prom.tailnet.ts.net", "content": "fd7a::7"} in result
-    assert {"name": "bedrockconnect.example.com", "content": "192.168.11.210"} in result
+    result = compute_desired_rewrites(static)
+    assert result == static
 
-
-def test_compute_desired_skips_devices_without_name_or_addresses():
-    devices = [
-        {"name": "", "addresses": ["100.64.0.1"]},
-        {"name": "foo.tailnet.ts.net", "addresses": []},
-        {"name": "bar.tailnet.ts.net", "addresses": ["100.64.0.2"]},
-    ]
-    result = compute_desired_rewrites(devices, [])
-    assert len(result) == 1
-    assert result[0]["name"] == "bar.tailnet.ts.net"
 
 
 def test_compute_desired_tolerates_missing_static_fields():
@@ -49,7 +34,7 @@ def test_compute_desired_tolerates_missing_static_fields():
         {"name": "no-content.example.com"},  # missing content
         {"content": "10.0.0.2"},  # missing name
     ]
-    result = compute_desired_rewrites([], static)
+    result = compute_desired_rewrites(static)
     assert result == [{"name": "good.example.com", "content": "10.0.0.1"}]
 
 
@@ -219,34 +204,6 @@ def test_request_with_retry_gives_up_after_max(monkeypatch):
     assert resp.status_code == 429
 
 
-def test_compute_desired_excludes_devices_by_tag():
-    """Devices carrying an excluded tag must not get a rewrite.
-
-    A Tailscale Funnel node publishes a PUBLIC record for its own name; writing
-    the tailnet CGNAT address over it makes the funnel unreachable from every
-    NextDNS client (the profiles roam, so this bites off-LAN too, which is
-    exactly where the funnel is supposed to help).
-    """
-    devices = [
-        {"name": "nas.tailnet.ts.net", "addresses": ["100.64.0.5"], "tags": ["tag:k8s"]},
-        {
-            "name": "hermes.tailnet.ts.net",
-            "addresses": ["100.64.0.9", "fd7a::9"],
-            "tags": ["tag:k8s-funnel"],
-        },
-        {"name": "untagged.tailnet.ts.net", "addresses": ["100.64.0.11"]},
-    ]
-    result = compute_desired_rewrites(devices, [], excluded_tags={"tag:k8s-funnel"})
-    names = {r["name"] for r in result}
-    assert "hermes.tailnet.ts.net" not in names
-    assert names == {"nas.tailnet.ts.net", "untagged.tailnet.ts.net"}
-
-
-def test_compute_desired_excluded_tags_defaults_to_none():
-    """Omitting excluded_tags keeps the previous behaviour (nothing filtered)."""
-    devices = [{"name": "a.tailnet.ts.net", "addresses": ["100.64.0.1"], "tags": ["tag:k8s-funnel"]}]
-    assert len(compute_desired_rewrites(devices, [])) == 1
-# ---------- denylist ----------
 
 
 def test_diff_denylist_adds_and_removes():
