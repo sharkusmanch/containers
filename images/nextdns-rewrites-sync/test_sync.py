@@ -9,7 +9,10 @@ from sync import (
     apply_staged,
     circuit_breaker_ok,
     compute_desired_rewrites,
+    diff_denylist,
     diff_rewrites,
+    load_denylists,
+    merge_denylists,
     safe_log_response,
 )
 
@@ -243,3 +246,61 @@ def test_compute_desired_excluded_tags_defaults_to_none():
     """Omitting excluded_tags keeps the previous behaviour (nothing filtered)."""
     devices = [{"name": "a.tailnet.ts.net", "addresses": ["100.64.0.1"], "tags": ["tag:k8s-funnel"]}]
     assert len(compute_desired_rewrites(devices, [])) == 1
+# ---------- denylist ----------
+
+
+def test_diff_denylist_adds_and_removes():
+    """Denylist entries are keyed by hostname (the API's "id"), not a generated id."""
+    current = [{"id": "a.example.com", "active": True}, {"id": "stale.example.com", "active": True}]
+    to_add, to_delete = diff_denylist(current, ["a.example.com", "b.example.com"])
+    assert to_add == ["b.example.com"]
+    assert to_delete == ["stale.example.com"]
+
+
+def test_diff_denylist_noop_when_matching():
+    current = [{"id": "a.example.com", "active": True}]
+    assert diff_denylist(current, ["a.example.com"]) == ([], [])
+
+
+def test_merge_denylists_unions_sources_per_profile():
+    """Two sources (public + private) contribute to the same profile without clobbering."""
+    merged = merge_denylists([
+        ("public.yaml", {"Kids": ["reddit.example.com", "b.example.com"]}),
+        ("private.yaml", {"Kids": ["secret.example.com"], "Strict": ["x.example.com"]}),
+    ])
+    assert merged["Kids"] == ["b.example.com", "reddit.example.com", "secret.example.com"]
+    assert merged["Strict"] == ["x.example.com"]
+
+
+def test_merge_denylists_normalises_and_drops_blanks():
+    merged = merge_denylists([("f.yaml", {"Kids": ["  A.Example.COM  ", "", "  "]})])
+    assert merged["Kids"] == ["a.example.com"]
+
+
+def test_merge_denylists_tolerates_empty_and_null():
+    assert merge_denylists([("f.yaml", None)]) == {}
+    assert merge_denylists([("f.yaml", {"Kids": None})]) == {"Kids": []}
+
+
+def test_merge_denylists_rejects_bad_shapes():
+    import pytest
+    with pytest.raises(ValueError):
+        merge_denylists([("f.yaml", ["not", "a", "mapping"])])
+    with pytest.raises(ValueError):
+        merge_denylists([("f.yaml", {"Kids": "a-string-not-a-list"})])
+
+
+def test_load_denylists_missing_dir_is_not_an_error(tmp_path):
+    """The private source is mounted optional; absent must equal empty, not crash."""
+    assert load_denylists(str(tmp_path / "does-not-exist")) == {}
+
+
+def test_load_denylists_reads_and_merges_dirs(tmp_path):
+    d1 = tmp_path / "pub"; d1.mkdir()
+    d2 = tmp_path / "priv"; d2.mkdir()
+    (d1 / "a.yaml").write_text("Kids:\n  - one.example.com\n")
+    (d2 / "b.yaml").write_text("Kids:\n  - two.example.com\n")
+    (d1 / "..data").write_text("ignored")          # ConfigMap symlink dir artefact
+    (d1 / "notes.txt").write_text("ignored")
+    merged = load_denylists(f"{d1}:{d2}")
+    assert merged == {"Kids": ["one.example.com", "two.example.com"]}
