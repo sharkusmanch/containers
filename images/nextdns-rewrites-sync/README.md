@@ -21,8 +21,6 @@ Reconciles Tailscale device FQDNs + static ConfigMap entries into NextDNS profil
 docker run --rm \
   -e NEXTDNS_API_KEY=... \
   -e NEXTDNS_PROFILE_IDS=abcdef,123456 \
-  -e TAILSCALE_CLIENT_ID=... \
-  -e TAILSCALE_CLIENT_SECRET=... \
   -v /path/to/rewrites.yaml:/etc/static/rewrites.yaml:ro \
   ghcr.io/sharkusmanch/containers/nextdns-rewrites-sync:latest
 ```
@@ -33,10 +31,7 @@ docker run --rm \
 |----------|----------|-------------|
 | `NEXTDNS_API_KEY` | Yes | NextDNS account API key (`https://my.nextdns.io/account`) |
 | `NEXTDNS_PROFILE_IDS` | Yes | Comma-separated profile IDs to reconcile (e.g. `abcdef,123456`) |
-| `TAILSCALE_CLIENT_ID` | Yes | Tailscale OAuth client id |
-| `TAILSCALE_CLIENT_SECRET` | Yes | Tailscale OAuth client secret |
 | `STATIC_REWRITES_PATH` | No | YAML file of `{name, content}` entries (default `/etc/static/rewrites.yaml`) |
-| `TAILNET` | No | Tailscale tailnet (default `-` = default tailnet) |
 | `CIRCUIT_BREAKER_THRESHOLD` | No | Max delete ratio per run (default `0.20`) |
 | `RATE_LIMIT_DELAY` | No | Seconds between API writes (default `0.2`) |
 | `DRY_RUN` | No | Compute plan but skip all writes (default unset) |
