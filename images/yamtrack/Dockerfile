@@ -18,7 +18,7 @@
 # dependencies are introduced that would need stripping in a runtime stage.
 
 # renovate: datasource=docker depName=ghcr.io/fuzzygrim/yamtrack
-ARG YAMTRACK_VERSION=0.26.1
+ARG YAMTRACK_VERSION=0.26.2
 
 FROM ghcr.io/fuzzygrim/yamtrack:${YAMTRACK_VERSION} AS runtime
 
