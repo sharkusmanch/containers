@@ -94,7 +94,12 @@ COPY --from=vendor /opt/KFX_Input.zip /opt/KFX_Input.zip
 
 # calibre needs a writable config dir, and the plugin must be installed for the
 # runtime UID -- installing as root would leave it unreadable at 10000.
+# calibre links Qt even for its CLI tools, so a headless image must select the
+# offscreen platform plugin or calibre-customize aborts with "could not connect
+# to display". CALIBRE_TEMP_DIR keeps scratch off the read-only paths.
 ENV CALIBRE_CONFIG_DIRECTORY=/home/app/.config/calibre \
+    CALIBRE_TEMP_DIR=/tmp \
+    QT_QPA_PLATFORM=offscreen \
     HOME=/home/app \
     VENDOR_DIR=/opt/vendor \
     PYTHONUNBUFFERED=1
@@ -108,8 +113,12 @@ COPY --chown=10000:10000 app/ /app/app/
 COPY --chown=10000:10000 tests/ /app/tests/
 
 USER 10000:10000
-RUN calibre-customize -a /opt/KFX_Input.zip \
-    && calibre-customize --list-plugins | grep -q "KFX Input"
+# Install the plugin for the RUNTIME uid: installing as root would leave it
+# unreadable at 10000. Output is echoed so a failure here is legible in CI.
+RUN set -eux; \
+    calibre-customize --add-plugin /opt/KFX_Input.zip; \
+    calibre-customize --list-plugins | tee /tmp/plugins.txt; \
+    grep -qi "kfx" /tmp/plugins.txt
 
 # Fail the BUILD, not the library: a vendored module whose API moved, or a KFX
 # Input that cannot read a real book, must not reach production.
