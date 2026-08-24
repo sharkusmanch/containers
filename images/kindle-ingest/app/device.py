@@ -5,6 +5,7 @@ SOCKS5 proxy. The device is asleep most of the time; unreachable is a normal
 state and must never surface as an error.
 """
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -16,6 +17,22 @@ from .identity import asin_of
 ITEMS = "/mnt/us/documents/Downloads/Items01"
 TOOL = "/mnt/us/extensions/kfxdedrm"
 KEYFILE = "/mnt/us/dedrm/keyfile.txt"
+
+# Deliberately permissive about punctuation real book titles carry
+# (apostrophes, commas, #, parentheses, &) and strict about shell
+# metacharacters that have no business in a filename.
+_UNSAFE = frozenset(["`", "$", "\\", '"', "\n", "\r", "\x00"])
+
+
+def _unsafe_name(name: str) -> bool:
+    """True if a device filename carries characters we refuse to shell out.
+
+    Deliberately permissive about punctuation real Amazon titles carry --
+    apostrophes, commas, '#', parentheses, '&' -- because rejecting those would
+    reject books the user owns. Strict about characters that have no business
+    in a filename and would be dangerous even quoted.
+    """
+    return any(c in _UNSAFE for c in name) or not name.strip()
 
 # One round trip: asin|basename|kfx_size|asset_count
 LIST_CMD = (
@@ -30,6 +47,15 @@ LIST_CMD = (
 
 class DeviceUnreachable(Exception):
     """Not an error condition -- the device is simply asleep."""
+
+
+class UnsafeName(Exception):
+    """A device filename contained characters we will not pass to a shell.
+
+    Names come from Amazon titles, so apostrophes, commas, hashes and brackets
+    are all normal and must be handled -- but a newline, backtick, dollar or
+    quote is not, and is refused rather than escaped.
+    """
 
 
 class TruncatedPull(Exception):
@@ -194,14 +220,20 @@ class Device:
         not be confused with incomplete Amazon assets, whose remedy is the
         opposite (purge the ASIN and re-download).
         """
+        if _unsafe_name(book.basename):
+            raise UnsafeName(f"refusing to fetch {book.asin}: unexpected characters in {book.basename!r}")
         shutil.rmtree(dest_dir, ignore_errors=True)
         os.makedirs(dest_dir, exist_ok=True)
         kfx = os.path.basename(book.kfx_path)
+        # tar takes the assets directory directly. An earlier version built the
+        # file list with find piped through sed, interpolating a quoted basename
+        # INSIDE a hand-written single-quoted sed expression -- which breaks on
+        # any title containing an apostrophe, and this library has several
+        # ("The Butcher's Masquerade", "Discount Dan's Backroom Bargains").
+        # Every interpolation here is a single shlex.quote'd argument.
         remote = (
             f"cd {shlex.quote(ITEMS)} && "
-            f"tar cf - {shlex.quote(kfx)} "
-            f"$(cd {shlex.quote(book.sdr_path)} 2>/dev/null && "
-            f"  find assets -type f 2>/dev/null | sed 's|^|{shlex.quote(book.basename)}.sdr/|') "
+            f"tar cf - {shlex.quote(kfx)} {shlex.quote(book.basename + '.sdr/assets')} "
             f"2>/dev/null"
         )
         argv = self._ssh_base() + [remote]

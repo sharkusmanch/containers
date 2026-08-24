@@ -69,3 +69,32 @@ def test_delete_targets_never_include_the_sdr_itself():
     targets = [b.kfx_path, b.assets_path]
     assert not any(t.endswith(".sdr") for t in targets)   # .sdr is reading history
     assert any(t.endswith(".sdr/assets") for t in targets)
+
+
+# --- regressions for the shell-injection finding ---------------------------
+
+def test_real_apostrophe_titles_are_accepted():
+    """Rejecting these would reject books the user actually owns."""
+    from app.device import _unsafe_name
+    for n in ["The Butcher's Masquerade_ DCC Book 5_B09R6C5X88",
+              "Cul-de-sac Carnage _ (Discount Dan's Backroom Bargains Book 2)_B0DZXSB9L3",
+              "The Walking Dead #151_B01B1YHS9Y",
+              "A Parade of Horribles_ DCC, Book 8_B0GJJDXG4L",
+              "Exodus_ The Helium Sea (Book 2)_B0FRFPWXMF"]:
+        assert not _unsafe_name(n), n
+
+
+def test_shell_metacharacters_are_refused_not_escaped():
+    from app.device import _unsafe_name
+    for n in ["evil`whoami`", "x$(id)", 'a"b', "line\nbreak", "back\\slash", "", "   "]:
+        assert _unsafe_name(n), n
+
+
+def test_fetch_book_refuses_an_unsafe_basename(tmp_path):
+    from app.device import Device, DeviceBook, UnsafeName
+    class Cfg:
+        kindle_host="h"; kindle_port=2222; ssh_key_path="/k"; socks_proxy="p:1"
+        ssh_connect_timeout=5; rclone_timeout=5
+    b = DeviceBook("B0TEST1234", "evil`whoami`_B0TEST1234", 10, 2)
+    with pytest.raises(UnsafeName):
+        Device(Cfg()).fetch_book(b, str(tmp_path / "d"))
