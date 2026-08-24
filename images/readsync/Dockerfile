@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=docker depName=python versioning=docker
-ARG PYTHON_VERSION=3.13-slim
+ARG PYTHON_VERSION=3.14-slim
 
 FROM python:${PYTHON_VERSION}
 
