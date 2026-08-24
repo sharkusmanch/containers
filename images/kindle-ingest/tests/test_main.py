@@ -406,3 +406,48 @@ def test_health_stall_window_outlives_one_slow_book(cfg, monkeypatch):
     monkeypatch.setattr(m.Config, "from_env", staticmethod(lambda: cfg))
     m.main()
     assert seen.get("stale_after", 0) > cfg.pull_timeout + cfg.convert_timeout
+
+
+# --- key emission is best-effort -------------------------------------------
+# emit_keys walks every book on the device under cycle_deadline (540s at the
+# default poll interval). An unguarded timeout there propagated out of
+# run_cycle and killed the whole cycle, throwing away the partial keyfile that
+# would have let the already-keyed books through. Books whose key is missing
+# are already handled: KeyUnavailable -> RETRYABLE.
+
+class _EmitFailsDevice(FakeDevice):
+    def __init__(self, exc, **kw):
+        super().__init__(**kw)
+        self._exc = exc
+
+    def emit_keys(self):
+        self.keys_emitted += 1
+        raise self._exc
+
+
+def test_a_timed_out_key_emission_does_not_kill_the_cycle(cfg):
+    import subprocess
+    b = _book("B0KEYS00001")
+    dev = _EmitFailsDevice(subprocess.TimeoutExpired("ssh", 540),
+                           books={b.asin: b})
+    ctx = _ctx(cfg, dev)
+    r = M.run_cycle(ctx)                     # must not raise
+    assert dev.keys_emitted == 1
+    assert ctx.ledger.get(b.asin) is not None    # the book was still attempted
+
+
+def test_the_partial_keyfile_is_still_used_after_a_failed_emission(cfg, monkeypatch):
+    import subprocess
+    b = _book("B0KEYS00002")
+    dev = _EmitFailsDevice(subprocess.TimeoutExpired("ssh", 540),
+                           books={b.asin: b})
+    api = FakeApi()
+    # this book's key WAS already in the keyfile, so decryption succeeds
+    monkeypatch.setattr(M, "decrypt_archive",
+                        lambda enc, kf, out: open(out, "wb").write(b"d") and 1)
+    monkeypatch.setattr(M, "to_epub", lambda a, o, t: open(o, "wb").write(b"e") and "")
+    monkeypatch.setattr(M, "classify", lambda p: type(
+        "C", (), {"is_comic": False, "confidence": "confident", "reasons": []})())
+    monkeypatch.setattr(M, "verify_artifact", lambda *a, **k: None)
+    M.run_cycle(_ctx(cfg, dev, api))
+    assert api.upload_calls == 1

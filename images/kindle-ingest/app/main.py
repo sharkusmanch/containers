@@ -291,8 +291,19 @@ def run_cycle(ctx: Ctx) -> CycleResult:
             todo.remove(b)
 
     if todo:
+        # Best-effort. emit_keys walks every book on the device under
+        # cycle_deadline; an unguarded failure there took the whole cycle down
+        # and discarded a keyfile that may already cover most books. A book
+        # whose key is genuinely absent is handled downstream as KeyUnavailable
+        # -> RETRYABLE, so carrying on with a partial keyfile is strictly
+        # better than processing nothing.
         with metrics.STAGE.labels(stage="keys").time():
-            ctx.device.emit_keys()
+            try:
+                ctx.device.emit_keys()
+            except Exception as e:
+                log.warning("key emission incomplete (%s: %s); "
+                            "continuing with whatever the keyfile holds",
+                            type(e).__name__, str(e)[:120])
         keyfile = ctx.device.fetch_keyfile(os.path.join(ctx.cfg.work_dir, "keys.txt"))
         uploaded_titles = []
         for b in todo:
