@@ -24,7 +24,8 @@ FROM python:${PYTHON_VERSION} AS vendor
 ARG DEDRM_VERSION=v10.0.30
 ARG DEDRM_SHA256=980bfc17715b998afc5995d6a308e5998681a3ad1a59fa6dd97ab6c414d8f0d6
 # renovate: datasource=github-commits depName=kluyg/calibre-kfx-input branch=main
-ARG KFX_INPUT_COMMIT=44db6b6ee8c0
+ARG KFX_INPUT_COMMIT=44db6b6ee8c0094a98c33770575a9070ddb90fda
+ARG KFX_INPUT_SHA256=59dabc9cbac690bbdadc402bfe51d4cee58ce3a062d2ed9cc5258a8149eaa3fb
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip zip \
@@ -41,6 +42,7 @@ RUN curl -fsSL -o dedrm.zip \
 
 RUN curl -fsSL -o kfx.tar.gz \
       "https://github.com/kluyg/calibre-kfx-input/archive/${KFX_INPUT_COMMIT}.tar.gz" \
+    && echo "${KFX_INPUT_SHA256}  kfx.tar.gz" | sha256sum -c - \
     && mkdir -p kfx && tar xzf kfx.tar.gz -C kfx --strip-components=1 \
     && (cd kfx && zip -qr /opt/KFX_Input.zip .) \
     && test -s /opt/KFX_Input.zip
@@ -50,6 +52,8 @@ FROM python:${PYTHON_VERSION}
 
 # renovate: datasource=github-releases depName=rclone/rclone
 ARG RCLONE_VERSION=v1.75.0
+ARG RCLONE_SHA256_AMD64=aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa
+ARG RCLONE_SHA256_ARM64=d0ad88ba4c8e285b7c9efa591e0ab643280a91741e13c27f3a9c0957ccfa5203
 # renovate: datasource=pypi depName=prometheus-client
 ARG PROMETHEUS_CLIENT_VERSION=0.26.0
 # renovate: datasource=pypi depName=requests
@@ -69,9 +73,14 @@ RUN apt-get update \
          calibre openssh-client netcat-openbsd ca-certificates curl unzip xz-utils \
     && rm -rf /var/lib/apt/lists/* \
     && ARCH="$(dpkg --print-architecture)" \
-    && case "$ARCH" in amd64) R=amd64 ;; arm64) R=arm64 ;; *) echo "unsupported $ARCH" >&2; exit 1 ;; esac \
+    && case "$ARCH" in \
+         amd64) R=amd64; SUM="${RCLONE_SHA256_AMD64}" ;; \
+         arm64) R=arm64; SUM="${RCLONE_SHA256_ARM64}" ;; \
+         *) echo "unsupported $ARCH" >&2; exit 1 ;; \
+       esac \
     && curl -fsSL -o /tmp/rclone.zip \
          "https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-${R}.zip" \
+    && echo "${SUM}  /tmp/rclone.zip" | sha256sum -c - \
     && unzip -qj /tmp/rclone.zip "*/rclone" -d /usr/local/bin \
     && chmod +x /usr/local/bin/rclone && rm -f /tmp/rclone.zip
 
