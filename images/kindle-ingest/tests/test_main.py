@@ -318,3 +318,59 @@ def test_main_waits_for_the_device_before_the_first_cycle(monkeypatch):
 
     assert m.main() == 0
     assert calls == [ctx.device]
+
+
+# --- an unexpected exception must not wedge the whole cycle -----------------
+# The vendored DeDRM code raises whatever it likes (observed in the cluster:
+# ValueError("Incorrect AES key length (0 bytes)") when the keyfile carried no
+# record for a book). Without a catch-all that escaped _process, aborted the
+# cycle mid-loop, and -- because no ledger record was written -- attempts never
+# incremented, so the same book crashed every cycle forever and no other book
+# could be processed.
+
+def test_unexpected_exception_does_not_abort_the_cycle(cfg, monkeypatch):
+    bad, good = _book("B0POISON01"), _book("B0FINE0001")
+
+    def boom(enc, keyfile, out):
+        raise ValueError("Incorrect AES key length (0 bytes)")
+    monkeypatch.setattr(M, "decrypt_archive", boom)
+
+    ctx = _ctx(cfg, FakeDevice({bad.asin: bad, good.asin: good}))
+    r = M.run_cycle(ctx)                    # must not raise
+    assert ctx.ledger.get(bad.asin) is not None
+    assert ctx.ledger.get(good.asin) is not None   # the cycle kept going
+
+
+def test_unexpected_exception_increments_attempts_so_it_can_give_up(cfg, monkeypatch):
+    b = _book("B0POISON01")
+    monkeypatch.setattr(M, "decrypt_archive",
+                        lambda *a: (_ for _ in ()).throw(ValueError("boom")))
+    ctx = _ctx(cfg, FakeDevice({b.asin: b}))
+
+    for _ in range(M.MAX_ATTEMPTS + 1):
+        M.run_cycle(ctx)
+    rec = ctx.ledger.get(b.asin)
+    assert rec["attempts"] >= M.MAX_ATTEMPTS
+    assert rec["outcome"] == FAILED         # bounded, not an infinite retry
+
+
+def test_unexpected_exception_never_uploads(cfg, monkeypatch):
+    b = _book("B0POISON01")
+    monkeypatch.setattr(M, "decrypt_archive",
+                        lambda *a: (_ for _ in ()).throw(ValueError("boom")))
+    api = FakeApi()
+    M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), api))
+    assert api.upload_calls == 0
+
+
+def test_stopping_is_not_misread_as_a_book_failure(cfg, monkeypatch):
+    # The catch-all must not swallow SIGTERM: run_cycle abandons the book and
+    # breaks cleanly, and the book must NOT be blamed for the shutdown.
+    b = _book("B0STOP0001")
+    monkeypatch.setattr(M, "decrypt_archive",
+                        lambda *a: (_ for _ in ()).throw(M.Stopping()))
+    ctx = _ctx(cfg, FakeDevice({b.asin: b}))
+    M.run_cycle(ctx)
+    rec = ctx.ledger.get(b.asin) or {}
+    assert rec.get("outcome") != FAILED
+    assert "Stopping" not in str(rec.get("error", ""))

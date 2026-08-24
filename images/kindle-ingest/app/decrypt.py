@@ -26,9 +26,18 @@ def _kfx_zip_book():
 def decrypt_archive(encrypted_path: str, keyfile_path: str, out_path: str) -> int:
     """Decrypt an encrypted .kfx-zip. Returns the number of decrypted entries."""
     KFXZipBook = _kfx_zip_book()
-    book = KFXZipBook(encrypted_path, keyfile_path)
-    book.processBook([])                 # no PIDs -- the skeylist carries the key
-    n = len(getattr(book, "decrypted", {}) or {})
+    try:
+        book = KFXZipBook(encrypted_path, keyfile_path)
+        book.processBook([])             # no PIDs -- the skeylist carries the key
+        n = len(getattr(book, "decrypted", {}) or {})
+    except DecryptFailed:
+        raise
+    except Exception as e:
+        # The vendored DeDRM code raises whatever it likes. Seen in the cluster:
+        # ValueError("Incorrect AES key length (0 bytes)") when the keyfile held
+        # no record for this book. Callers classify DecryptFailed; anything else
+        # escapes and takes the whole cycle down with it.
+        raise DecryptFailed(f"{type(e).__name__}: {e}") from e
     if n == 0:
         raise DecryptFailed(f"no DRMION entries decrypted from {encrypted_path}")
     tmp = out_path + ".part"

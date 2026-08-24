@@ -46,3 +46,33 @@ def test_real_book_decrypts_identically_to_the_device(tmp_path, monkeypatch):
     assert len(common) == 8
     for name in common:
         assert hashlib.sha256(a.read(name)).hexdigest() == hashlib.sha256(b.read(name)).hexdigest()
+
+
+# --- the vendored decoder's exceptions must be contained --------------------
+
+def test_arbitrary_vendor_exception_becomes_decrypt_failed(tmp_path, monkeypatch):
+    # Observed in the cluster: the keyfile held no record for this book, so the
+    # vendored code reached AES with a zero-length key and raised ValueError.
+    # _process only classifies DecryptFailed; anything else escaped the cycle.
+    import app.decrypt as D
+
+    class Boom:
+        def __init__(self, *a): pass
+        def processBook(self, pids):
+            raise ValueError("Incorrect AES key length (0 bytes)")
+
+    monkeypatch.setattr(D, "_kfx_zip_book", lambda: Boom)
+    with pytest.raises(D.DecryptFailed) as e:
+        D.decrypt_archive(str(tmp_path / "in.kfx-zip"), "k.txt", str(tmp_path / "o"))
+    assert "AES key length" in str(e.value)   # the cause survives for the ledger
+
+
+def test_keyerror_from_the_vendor_also_becomes_decrypt_failed(tmp_path, monkeypatch):
+    import app.decrypt as D
+
+    class Boom:
+        def __init__(self, *a): raise KeyError("voucher")
+
+    monkeypatch.setattr(D, "_kfx_zip_book", lambda: Boom)
+    with pytest.raises(D.DecryptFailed):
+        D.decrypt_archive(str(tmp_path / "in.kfx-zip"), "k.txt", str(tmp_path / "o"))

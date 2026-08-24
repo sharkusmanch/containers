@@ -207,6 +207,16 @@ def _process(ctx: Ctx, book, keyfile: str, res: CycleResult) -> None:
     except (DeviceUnreachable, TruncatedPull) as e:
         ctx.ledger.record(asin, RETRYABLE, attempts=attempts, error=f"transfer: {e}")
         res.errors.append((asin, "device"))
+    except Exception as e:
+        # Nothing a single book does may take the cycle down. Without this an
+        # unexpected exception escaped, aborted the loop before the remaining
+        # books, and -- writing no ledger record -- left attempts unchanged, so
+        # the same book crashed every cycle forever. RETRYABLE (not FAILED) so a
+        # transient cause still recovers; MAX_ATTEMPTS ends it either way.
+        log.exception("unexpected error processing %s", asin)
+        ctx.ledger.record(asin, RETRYABLE, attempts=attempts, title=book.basename,
+                          error=f"unexpected {type(e).__name__}: {str(e)[:200]}")
+        res.errors.append((asin, type(e).__name__))
     finally:
         _cleanup_partials(p)
 
