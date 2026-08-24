@@ -1,5 +1,6 @@
 import dataclasses
 import os
+import types
 import zipfile
 import pytest
 
@@ -224,35 +225,96 @@ def test_failures_notify_once_not_every_cycle(cfg):
     assert ctx.notifier.failures == ["B0FAIL1234"]
 
 
-# --- startup: wait for the Tailscale sidecar's SOCKS port -------------------
-# The sidecar registers with Headscale a few seconds after the pod starts. A
-# first cycle that runs before then reports "device unreachable" and then sleeps
-# a full poll_interval, so every restart cost up to 10 idle minutes.
+# --- startup: wait for the device before cycle one -------------------------
+# The userspace tailscaled sidecar opens its SOCKS listener immediately but
+# registers with Headscale seconds later, so probing the proxy port proves
+# nothing. await_device probes end to end instead.
 
-def test_await_proxy_returns_true_once_the_port_accepts():
-    import socket
-    from app.main import await_proxy
+class _FakeClock:
+    """Deterministic monotonic + sleep, so the deadline is actually pinned."""
 
-    srv = socket.socket()
-    srv.bind(("127.0.0.1", 0))
-    srv.listen(1)
-    host, port = srv.getsockname()
-    try:
-        assert await_proxy(f"{host}:{port}", timeout=5.0) is True
-    finally:
-        srv.close()
+    def __init__(self):
+        self.now = 1000.0
+        self.sleeps = []
 
+    def monotonic(self):
+        return self.now
 
-def test_await_proxy_gives_up_and_returns_false(monkeypatch):
-    # Nothing is listening: it must give up at the deadline rather than block
-    # the loop forever -- an unreachable device is a normal state, not fatal.
-    from app.main import await_proxy
-
-    slept = []
-    monkeypatch.setattr("app.main.time.sleep", lambda s: slept.append(s))
-    assert await_proxy("127.0.0.1:9", timeout=0.0) is False
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.now += s
 
 
-def test_await_proxy_tolerates_a_malformed_address():
-    from app.main import await_proxy
-    assert await_proxy("not-a-host-port", timeout=0.0) is False
+class _FakeDevice:
+    """Unreachable for the first `succeed_after` probes, then reachable."""
+
+    def __init__(self, succeed_after):
+        self.succeed_after = succeed_after
+        self.probes = 0
+
+    def reachable(self):
+        self.probes += 1
+        return self.probes > self.succeed_after
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = _FakeClock()
+    monkeypatch.setattr("app.main.time.monotonic", c.monotonic)
+    monkeypatch.setattr("app.main.time.sleep", c.sleep)
+    return c
+
+
+def test_await_device_returns_immediately_when_already_up(clock):
+    from app.main import await_device
+    dev = _FakeDevice(succeed_after=0)
+    assert await_device(dev, timeout=60.0) is True
+    assert dev.probes == 1
+    assert clock.sleeps == []          # no reason to wait
+
+
+def test_await_device_keeps_probing_until_the_sidecar_registers(clock):
+    # The bug this exists for: the sidecar comes up a few seconds in. A single
+    # probe would return False here and cost a full poll_interval.
+    from app.main import await_device
+    dev = _FakeDevice(succeed_after=3)
+    assert await_device(dev, timeout=60.0) is True
+    assert dev.probes == 4
+    assert clock.sleeps == [5.0, 5.0, 5.0]
+
+
+def test_await_device_gives_up_at_the_deadline_after_many_probes(clock):
+    # A sleeping Kindle is normal, so giving up must not be fatal -- but it must
+    # actually have retried, and must not run past the deadline.
+    from app.main import await_device
+    dev = _FakeDevice(succeed_after=10**6)
+    assert await_device(dev, timeout=60.0) is False
+    assert dev.probes == 13            # 12 gaps * 5s = 60s, then one last probe
+    assert clock.now == 1060.0
+
+
+def test_await_device_probes_once_when_the_budget_is_zero(clock):
+    from app.main import await_device
+    dev = _FakeDevice(succeed_after=10**6)
+    assert await_device(dev, timeout=0.0) is False
+    assert dev.probes == 1
+    assert clock.sleeps == []
+
+
+def test_main_waits_for_the_device_before_the_first_cycle(monkeypatch):
+    # Guards against the call being dropped from main(): without it the fix is
+    # inert and nothing else in the suite would notice.
+    import app.main as m
+    calls = []
+    monkeypatch.setattr(m, "await_device", lambda dev, **kw: calls.append(dev) or True)
+    monkeypatch.setattr(m.metrics, "rebuild_from_ledger", lambda *a: None)
+    monkeypatch.setattr(m.metrics, "serve", lambda *a: None)
+
+    ctx = types.SimpleNamespace(device=object(), ledger=object(),
+                                stop={"now": True})   # exit after one check
+    cfg = types.SimpleNamespace(metrics_port=0, poll_interval=1)
+    monkeypatch.setattr(m.Ctx, "build", staticmethod(lambda c: ctx))
+    monkeypatch.setattr(m.Config, "from_env", staticmethod(lambda: cfg))
+
+    assert m.main() == 0
+    assert calls == [ctx.device]

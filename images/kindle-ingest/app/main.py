@@ -8,7 +8,6 @@ import logging
 import os
 import shutil
 import signal
-import socket
 import sys
 import time
 from dataclasses import dataclass, field
@@ -25,6 +24,7 @@ from .verify import ArtifactInvalid, archive_intact, sha256_file, verify_artifac
 
 log = logging.getLogger("kindle-ingest")
 MAX_ATTEMPTS = 5
+_PROBE_GAP = 5.0   # between startup reachability probes
 
 
 class Stopping(Exception):
@@ -321,33 +321,32 @@ def _dir_bytes(path: str) -> int:
     return total
 
 
-def await_proxy(addr: str, timeout: float = 45.0) -> bool:
-    """Block until the Tailscale sidecar's SOCKS port accepts, or give up.
+def await_device(device: Device, timeout: float = 60.0) -> bool:
+    """Poll the device until it answers, or give up.
 
-    The sidecar needs a few seconds to register with Headscale. Without this the
-    first cycle after every restart reports "device unreachable" and then sleeps
-    a full poll_interval, so a rollout cost up to ten idle minutes. Giving up is
-    not fatal: an unreachable device is a normal state and the loop retries.
+    The userspace tailscaled sidecar opens its SOCKS listener during process
+    init but only registers with Headscale seconds later, so a TCP probe of the
+    proxy port proves nothing -- it accepts while the proxy still answers
+    "General SOCKS server failure". Only an end-to-end probe distinguishes the
+    two, so this asks the real question: can we ssh to the Kindle?
+
+    Without this the first cycle after every restart lost the race, logged
+    "device unreachable", and then slept a full poll_interval -- so a rollout
+    cost up to ten idle minutes. Giving up is not fatal: a sleeping Kindle is
+    the normal state, and the loop already retries.
     """
-    try:
-        host, _, port_s = addr.rpartition(":")
-        port = int(port_s)
-        if not host:
-            raise ValueError(addr)
-    except ValueError:
-        log.warning("SOCKS_PROXY %r is not host:port; not waiting for it", addr)
-        return False
     deadline = time.monotonic() + timeout
+    attempts = 0
     while True:
-        try:
-            with socket.create_connection((host, port), timeout=2.0):
-                return True
-        except OSError:
-            pass
+        attempts += 1
+        if device.reachable():
+            log.info("device reachable after %d probe(s); starting", attempts)
+            return True
         if time.monotonic() >= deadline:
-            log.info("SOCKS proxy %s not up after %.0fs; starting anyway", addr, timeout)
+            log.info("device still unreachable after %.0fs (%d probes); "
+                     "starting anyway", timeout, attempts)
             return False
-        time.sleep(1)
+        time.sleep(_PROBE_GAP)
 
 
 def main() -> int:
@@ -357,7 +356,7 @@ def main() -> int:
     ctx = Ctx.build(cfg)
     metrics.rebuild_from_ledger(ctx.ledger)     # before serving, so a restart
     metrics.serve(cfg.metrics_port)             # does not reset the stall window
-    await_proxy(cfg.socks_proxy)                # else cycle 1 always misses
+    await_device(ctx.device)                    # else cycle 1 loses the race
 
     def _stop(signum, _frame):
         log.info("signal %s: finishing the current book then exiting", signum)
