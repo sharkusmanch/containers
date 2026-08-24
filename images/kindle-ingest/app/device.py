@@ -182,29 +182,55 @@ class Device:
         return dest
 
     def fetch_book(self, book: DeviceBook, dest_dir: str) -> str:
-        """Pull a book's encrypted parts, verifying the transfer completed.
+        """Pull a book's encrypted parts over ssh, verifying the transfer.
+
+        Uses ssh + tar rather than rclone: rclone's SFTP backend dials TCP
+        directly and ignores ALL_PROXY, so it cannot traverse the Tailscale
+        sidecar's SOCKS proxy at all, and --sftp-ssh mangles a ProxyCommand
+        containing spaces. ssh honours ProxyCommand natively, and one tar
+        stream moves the whole book in a single round trip.
 
         A truncated pull is a TRANSPORT fault -- re-pull immediately. It must
         not be confused with incomplete Amazon assets, whose remedy is the
-        opposite (wait, or purge and re-download).
+        opposite (purge the ASIN and re-download).
         """
         shutil.rmtree(dest_dir, ignore_errors=True)
         os.makedirs(dest_dir, exist_ok=True)
-        env = dict(os.environ, ALL_PROXY=f"socks5://{self.cfg.socks_proxy}")
-        kfx_local = os.path.join(dest_dir, os.path.basename(book.kfx_path))
-        for args in (
-            self._rclone_base() + ["copyto", f":sftp:{book.kfx_path}", kfx_local],
-            self._rclone_base() + ["copy", f":sftp:{book.assets_path}", dest_dir,
-                                   "--include", "metadata.kfx", "--include", "voucher",
-                                   "--include", "attachables/**"],
-        ):
-            r = subprocess.run(args, capture_output=True, text=True, env=env,
-                               timeout=self.cfg.rclone_timeout + 60)
-            if r.returncode != 0:
-                raise DeviceUnreachable(f"rclone: {r.stderr.strip()[:200]}")
-        got = os.path.getsize(kfx_local) if os.path.exists(kfx_local) else 0
+        kfx = os.path.basename(book.kfx_path)
+        remote = (
+            f"cd {shlex.quote(ITEMS)} && "
+            f"tar cf - {shlex.quote(kfx)} "
+            f"$(cd {shlex.quote(book.sdr_path)} 2>/dev/null && "
+            f"  find assets -type f 2>/dev/null | sed 's|^|{shlex.quote(book.basename)}.sdr/|') "
+            f"2>/dev/null"
+        )
+        argv = self._ssh_base() + [remote]
+        with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
+            tar = subprocess.run(["tar", "xf", "-", "-C", dest_dir],
+                                 stdin=p.stdout, capture_output=True,
+                                 timeout=self.cfg.rclone_timeout + 120)
+            p.stdout.close()
+            err = (p.stderr.read() or b"").decode(errors="replace")
+            rc = p.wait()
+        if rc != 0 and not os.listdir(dest_dir):
+            raise DeviceUnreachable(f"fetch {book.asin}: ssh rc={rc} {err.strip()[:160]}")
+        if tar.returncode != 0 and not os.listdir(dest_dir):
+            raise TruncatedPull(f"{book.asin}: tar failed {tar.stderr[:160]!r}")
+
+        # Flatten: the archive the decryptor expects has every part at the root.
+        for root, _, files in os.walk(dest_dir):
+            if root == dest_dir:
+                continue
+            for fn in files:
+                src = os.path.join(root, fn)
+                dst = os.path.join(dest_dir, fn)
+                if not os.path.exists(dst):
+                    shutil.move(src, dst)
+        local_kfx = os.path.join(dest_dir, kfx)
+        got = os.path.getsize(local_kfx) if os.path.exists(local_kfx) else 0
         if got != book.kfx_size:
-            raise TruncatedPull(f"{book.asin}: pulled {got} of {book.kfx_size} bytes")
+            raise TruncatedPull(
+                f"{book.asin}: pulled {got} of {book.kfx_size} bytes")
         return dest_dir
 
     def build_archive(self, src_dir: str, dest: str) -> str:
