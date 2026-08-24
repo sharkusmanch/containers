@@ -5,6 +5,7 @@ import zipfile
 import pytest
 
 from app import main as M
+from app.bookorbit import Transport
 from app.device import DeviceBook
 from app.ledger import Ledger, OK, RETRYABLE, FAILED, NEEDS_DECISION, UPLOADING
 
@@ -496,3 +497,45 @@ def test_a_book_that_always_hard_crashes_is_eventually_given_up_on(cfg, monkeypa
             pass                        # the "process" died; next cycle restarts
     rec = led.get(b.asin) or {}
     assert rec.get("attempts", 0) >= M.MAX_ATTEMPTS
+
+
+# --- uploaded books get a readable title ------------------------------------
+
+class _MetaApi(FakeApi):
+    def __init__(self, fail=False, **kw):
+        super().__init__(**kw)
+        self.meta = []
+        self._fail = fail
+    def set_metadata(self, book_id, title=None, asin=None):
+        if self._fail:
+            raise Transport("metadata service down")
+        self.meta.append((book_id, title, asin))
+
+
+def _stub_pipeline(monkeypatch):
+    monkeypatch.setattr(M, "decrypt_archive",
+                        lambda enc, kf, out: open(out, "wb").write(b"d") and 1)
+    monkeypatch.setattr(M, "to_epub", lambda a, o, t: open(o, "wb").write(b"e") and "")
+    monkeypatch.setattr(M, "classify", lambda p: type(
+        "C", (), {"is_comic": False, "confidence": "confident", "reasons": []})())
+    monkeypatch.setattr(M, "verify_artifact", lambda *a, **k: None)
+
+
+def test_an_uploaded_book_is_given_its_real_title(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    b = DeviceBook("B0TITLE001", "Halo_ Rise of Atriox #1_B0TITLE001", 100, 2)
+    api = _MetaApi()
+    M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), api))
+    assert api.meta == [(99, "Halo: Rise of Atriox #1", "B0TITLE001")]
+
+
+def test_a_failed_title_update_does_not_fail_the_upload(cfg, monkeypatch):
+    # The book IS uploaded and verified; a cosmetic metadata call must not
+    # undo that or send it back through the whole pipeline next cycle.
+    _stub_pipeline(monkeypatch)
+    b = DeviceBook("B0TITLE002", "Some Book_B0TITLE002", 100, 2)
+    api = _MetaApi(fail=True)
+    ctx = _ctx(cfg, FakeDevice({b.asin: b}), api)
+    r = M.run_cycle(ctx)
+    assert r.uploaded == 1
+    assert ctx.ledger.get(b.asin)["outcome"] == OK

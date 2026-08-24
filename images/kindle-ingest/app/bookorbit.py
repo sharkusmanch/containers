@@ -111,6 +111,30 @@ class BookOrbit:
                 return out
             page += 1
 
+    @staticmethod
+    def asin_tag(asin: str) -> str:
+        return f"asin:{asin}"
+
+    def set_metadata(self, book_id: int, title: str | None = None,
+                     asin: str | None = None) -> None:
+        """Give the book a readable title and a durable ASIN tag.
+
+        BookOrbit derives a title from the uploaded filename, so `<ASIN>.<ext>`
+        made every book display its ASIN. The tag is what reconciliation then
+        matches on: it rides in the LIST response, so lookup stays one request
+        per page, and unlike the title it survives metadata enrichment.
+        """
+        body: dict = {}
+        if title:
+            body["title"] = title
+        if asin:
+            body["tags"] = [self.asin_tag(asin)]
+        if not body:
+            return
+        r = self.s.patch(f"{self.base}/api/v1/books/{book_id}/metadata",
+                         headers=self._headers(), json=body, timeout=60)
+        self._raise_for(r.status_code, r.text)
+
     def find_by_asin(self, asin: str) -> dict | None:
         """Has this ASIN already been uploaded?
 
@@ -131,7 +155,11 @@ class BookOrbit:
         """
         if not asin:
             return None
+        tag = self.asin_tag(asin)
         for b in self.iter_books():
+            if tag in (b.get("tags") or []):
+                return b
+            # Books uploaded before tagging are titled with the bare ASIN.
             if str(b.get("title") or "").strip() == asin:
                 return b
             if asin in str(b.get("asin") or ""):

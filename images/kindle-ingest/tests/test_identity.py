@@ -44,3 +44,47 @@ def test_matches_real_on_device_variants():
     assert asin_of("Warbreaker_B002KYHZHA (1).kfx") == "B002KYHZHA"
     assert asin_of("B002KYHZHA.kfx") == "B002KYHZHA"
     assert asin_of("Title_B002KYHZHA-v2.kfx") == "B002KYHZHA"
+
+
+# --- a readable title, not the ASIN -----------------------------------------
+# We upload <ASIN>.<ext> and BookOrbit derives the title from the filename, so
+# the library showed "B074TH9GL3" instead of the book's name. The device
+# basename carries the real title; Amazon mangles ':' to '_' in it.
+
+def test_title_strips_the_asin_suffix():
+    from app.identity import title_from_basename
+    assert title_from_basename(
+        "Invincible Compendium Vol. 1_B07MJHX8R3", "B07MJHX8R3"
+    ) == "Invincible Compendium Vol. 1"
+
+
+def test_title_restores_colons_amazon_mangled():
+    from app.identity import title_from_basename
+    assert title_from_basename(
+        "Halo_ Rise of Atriox #1 (Halo Rise of Atriox)_B074TH9GL3", "B074TH9GL3"
+    ) == "Halo: Rise of Atriox #1 (Halo Rise of Atriox)"
+
+
+def test_title_handles_several_mangled_colons():
+    from app.identity import title_from_basename
+    got = title_from_basename(
+        "Babel_ Or the Necessity of Violence_ An Arcane History_B09MD95S5V",
+        "B09MD95S5V")
+    assert got == "Babel: Or the Necessity of Violence: An Arcane History"
+
+
+def test_title_keeps_underscores_that_are_not_separators():
+    # "Vol. 17_ Something" is a mangled colon; a bare underscore inside a word
+    # is not, and must survive.
+    from app.identity import title_from_basename
+    assert title_from_basename("Some_Title_B01B1YHS9Y", "B01B1YHS9Y") == "Some_Title"
+
+
+def test_title_falls_back_when_the_asin_is_absent():
+    from app.identity import title_from_basename
+    assert title_from_basename("No Asin Here", "B0MISSING1") == "No Asin Here"
+
+
+def test_title_never_returns_empty():
+    from app.identity import title_from_basename
+    assert title_from_basename("B074TH9GL3", "B074TH9GL3") == "B074TH9GL3"

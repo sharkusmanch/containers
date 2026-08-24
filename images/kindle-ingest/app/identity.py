@@ -36,3 +36,23 @@ def asin_of(name: str) -> str | None:
         if _plausible(c):
             return c
     return None
+
+
+def title_from_basename(basename: str, asin: str) -> str:
+    """Recover a human-readable title from the device filename.
+
+    We upload `<ASIN>.<ext>` and BookOrbit derives the title from the filename,
+    so the library showed bare ASINs. The device basename carries the real
+    title with the ASIN appended, and Amazon mangles ':' into '_' when it
+    builds that filename ("Halo_ Rise of Atriox" was "Halo: Rise of Atriox").
+
+    Only "_ " is treated as a mangled colon. A bare underscore inside a word is
+    left alone, since it is not a separator. Never returns empty: a title is
+    cosmetic and must not be able to fail an upload.
+    """
+    name = basename
+    suffix = f"_{asin}"
+    if asin and name.endswith(suffix):
+        name = name[: -len(suffix)]
+    name = name.replace("_ ", ": ").strip()
+    return name or basename

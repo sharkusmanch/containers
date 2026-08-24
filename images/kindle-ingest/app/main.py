@@ -18,6 +18,7 @@ from .config import Config
 from .convert import ConvertFailed, classify, epub_to_cbz, to_epub
 from .decrypt import DecryptFailed, KeyUnavailable, decrypt_archive
 from .device import Device, DeviceUnreachable, TruncatedPull
+from .identity import title_from_basename
 from .ledger import (FAILED, Ledger, NEEDS_DECISION, OK, RETRYABLE, UPLOADING)
 from .notify import Notifier
 from .verify import ArtifactInvalid, archive_intact, sha256_file, verify_artifact
@@ -191,6 +192,17 @@ def _process(ctx: Ctx, book, keyfile: str, res: CycleResult) -> None:
                               error="post-upload verification failed")
             res.errors.append((asin, "verification"))
             return
+        # Cosmetic, and deliberately after the conjunction: BookOrbit titles a
+        # book from its filename, so <ASIN>.<ext> displayed a bare ASIN. The
+        # tag it also writes is what reconciliation matches on afterwards.
+        # A failure here must not undo a verified upload.
+        try:
+            ctx.api.set_metadata(book_id,
+                                 title=title_from_basename(book.basename, asin),
+                                 asin=asin)
+        except Exception as e:
+            log.warning("could not set metadata for %s (#%s): %s",
+                        asin, book_id, str(e)[:120])
         ctx.ledger.record(asin, OK, attempts=attempts, bookorbit_id=book_id,
                           artifact=artifact, kind=kind, title=book.basename)
         metrics.BOOKS.labels(stage="upload", outcome=OK).inc()

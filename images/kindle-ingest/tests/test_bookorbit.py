@@ -170,3 +170,55 @@ def test_pagination_stops_when_a_server_overstates_total(cfg):
     assert BookOrbit(cfg).find_by_asin("B0MISSING1") is None
     calls = len([c for c in responses.calls if c.request.url == QUERY])
     assert calls == 2, f"stopped on the empty page, not on total; made {calls}"
+
+
+# --- readable titles, and an ASIN tag that survives them ---------------------
+# Uploading <ASIN>.<ext> made BookOrbit title every book with its ASIN. Setting
+# a real title breaks title-equality reconciliation, so the ASIN moves to a tag
+# -- which the LIST response carries, so matching stays one request per page
+# and survives BookOrbit rewriting the title during metadata enrichment.
+
+def _tagged_item(book_id, title, tags):
+    return {"id": book_id, "title": title, "tags": tags,
+            "files": [{"id": book_id, "format": "cbz", "role": "primary",
+                       "sizeBytes": 10}]}
+
+
+@responses.activate
+def test_set_metadata_sends_title_and_asin_tag(cfg):
+    import json
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.patch(f"{BASE}/api/v1/books/42/metadata", json={"id": 42})
+    BookOrbit(cfg).set_metadata(42, title="Real Title", asin="B06XRCBRX8")
+    body = json.loads(responses.calls[-1].request.body)
+    assert body["title"] == "Real Title"
+    assert "asin:B06XRCBRX8" in body["tags"]
+
+
+@responses.activate
+def test_find_by_asin_matches_the_tag_despite_a_renamed_title(cfg):
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.post(QUERY, json={"total": 2, "items": [
+        _tagged_item(5, "Some Other Book", []),
+        _tagged_item(7, "Halo: Rise of Atriox #1", ["asin:B06XRCBRX8"]),
+    ]})
+    assert BookOrbit(cfg).find_by_asin("B06XRCBRX8")["id"] == 7
+
+
+@responses.activate
+def test_find_by_asin_still_matches_books_uploaded_before_tagging(cfg):
+    # Backwards compatibility: earlier uploads are titled with the bare ASIN.
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.post(QUERY, json={"total": 1, "items": [
+        _tagged_item(9, "B06XRCBRX8", []),
+    ]})
+    assert BookOrbit(cfg).find_by_asin("B06XRCBRX8")["id"] == 9
+
+
+@responses.activate
+def test_an_unrelated_tag_is_not_a_match(cfg):
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.post(QUERY, json={"total": 1, "items": [
+        _tagged_item(5, "Book", ["asin:B0OTHER1234", "comic"]),
+    ]})
+    assert BookOrbit(cfg).find_by_asin("B06XRCBRX8") is None
