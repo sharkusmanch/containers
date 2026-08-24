@@ -20,6 +20,7 @@ log = logging.getLogger("kindle-ingest")
 ITEMS = "/mnt/us/documents/Downloads/Items01"
 TOOL = "/mnt/us/extensions/kfxdedrm"
 KEYFILE = "/mnt/us/dedrm/keyfile.txt"
+DEDRM_OUT = "/mnt/us/dedrm"
 
 # Deliberately permissive about punctuation real book titles carry
 # (apostrophes, commas, #, parentheses, &) and strict about shell
@@ -200,6 +201,37 @@ class Device:
         """
         self._ssh(f"cd {shlex.quote(TOOL)} && bash bin/run_cmd.sh keyfile",
                   timeout=timeout or self.cfg.cycle_deadline)
+
+    def stale_archives(self, books: dict) -> list[str]:
+        """Books the device tool will SKIP, emitting no key for them.
+
+        The on-device tool refuses to reprocess a book that already has a
+        decrypted archive: "already exists, skipping... Delete it if you want
+        to rerun." Leftovers from manual KUAL runs left 19 of 25 books without
+        keys, and the only symptom was "Incorrect AES key length (0 bytes)"
+        raised much later, in the decryptor. Report the real cause here.
+
+        Only archives whose original is still on the device count -- the rest
+        are finished work and none of our concern.
+        """
+        try:
+            listing = self._ssh(f"ls {shlex.quote(DEDRM_OUT)}/*.kfx-zip 2>/dev/null")
+        except Exception as e:
+            log.debug("could not list %s: %s", DEDRM_OUT, e)
+            return []
+        have = {b.basename for b in books.values()}
+        stale = []
+        for line in listing.splitlines():
+            name = os.path.basename(line.strip())
+            if name.endswith(".kfx-zip") and name[:-len(".kfx-zip")] in have:
+                stale.append(name[:-len(".kfx-zip")])
+        if stale:
+            log.warning(
+                "%d book(s) will be skipped by key emission because a decrypted "
+                "archive already exists under %s -- delete those to let keys be "
+                "emitted: %s", len(stale), DEDRM_OUT, ", ".join(sorted(stale)[:5])
+                + (" ..." if len(stale) > 5 else ""))
+        return stale
 
     def clear_keyfile(self) -> None:
         self._ssh(f"rm -f {shlex.quote(KEYFILE)}")

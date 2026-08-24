@@ -265,3 +265,41 @@ def test_a_complete_pull_passes_asset_verification(monkeypatch, tmp_path):
     dest = _fake_pull(tmp_path, monkeypatch, "Title_B0TEST1234", 10, n_assets=5)
     b = DeviceBook("B0TEST1234", "Title_B0TEST1234", 10, 5)
     assert Device(_Cfg()).fetch_book(b, dest) == dest
+
+
+# --- stale on-device archives silently starve key emission ------------------
+# The device tool skips any book that already has a decrypted .kfx-zip in
+# /mnt/us/dedrm ("already exists, skipping... Delete it if you want to rerun"),
+# and emits no key for it. Leftovers from manual KUAL runs left 19 of 25 books
+# keyless, which surfaced only as "Incorrect AES key length (0 bytes)" much
+# later, in a different component. Name the cause instead.
+
+def test_stale_archives_shadowing_current_books_are_reported(monkeypatch, caplog):
+    import logging
+    from app.device import Device
+
+    listing = ("Alpha_B000000001.kfx-zip\n"
+               "Beta_B000000002.kfx-zip\n"
+               "Gone_B000000009.kfx-zip\n")
+    dev = Device(_Cfg())
+    monkeypatch.setattr(dev, "_ssh", lambda *a, **k: listing)
+    books = {
+        "B000000001": type("B", (), {"basename": "Alpha_B000000001"})(),
+        "B000000002": type("B", (), {"basename": "Beta_B000000002"})(),
+    }
+    with caplog.at_level(logging.WARNING, logger="kindle-ingest"):
+        stale = dev.stale_archives(books)
+    assert set(stale) == {"Alpha_B000000001", "Beta_B000000002"}
+    assert "Gone_B000000009" not in stale      # no original: not our business
+    assert "key emission" in caplog.text.lower()
+
+
+def test_no_stale_archives_is_silent(monkeypatch, caplog):
+    import logging
+    from app.device import Device
+    dev = Device(_Cfg())
+    monkeypatch.setattr(dev, "_ssh", lambda *a, **k: "")
+    with caplog.at_level(logging.WARNING, logger="kindle-ingest"):
+        assert dev.stale_archives({"B000000001": type("B", (), {
+            "basename": "Alpha_B000000001"})()}) == []
+    assert caplog.text == ""

@@ -308,6 +308,7 @@ def run_cycle(ctx: Ctx) -> CycleResult:
         # better than processing nothing.
         with metrics.STAGE.labels(stage="keys").time():
             try:
+                ctx.device.stale_archives(books)   # warns; never fatal
                 ctx.device.emit_keys()
             except Exception as e:
                 log.warning("key emission incomplete (%s: %s); "

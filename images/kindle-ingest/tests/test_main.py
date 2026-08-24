@@ -19,6 +19,7 @@ class FakeDevice:
     def reachable(self): return self._reachable
     def list_books(self): return dict(self._books)
     def emit_keys(self): self.keys_emitted += 1
+    def stale_archives(self, books): return []
     def fetch_keyfile(self, dest):
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         open(dest, "w").write("v$secret_key:00\n"); return dest
