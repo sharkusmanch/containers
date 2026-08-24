@@ -76,3 +76,44 @@ def test_keyerror_from_the_vendor_also_becomes_decrypt_failed(tmp_path, monkeypa
     monkeypatch.setattr(D, "_kfx_zip_book", lambda: Boom)
     with pytest.raises(D.DecryptFailed):
         D.decrypt_archive(str(tmp_path / "in.kfx-zip"), "k.txt", str(tmp_path / "o"))
+
+
+# --- a missing key is transient, not a defective book -----------------------
+# emit_keys can return a partial keyfile: the Kindle sleeps aggressively and the
+# on-device pass is cut short. A book whose key was not emitted reaches AES with
+# a zero-length key. That is a device-timing problem -- the next cycle emits the
+# key -- so it must not be recorded as a permanent failure.
+
+def test_missing_key_is_reported_as_key_unavailable(tmp_path, monkeypatch):
+    import app.decrypt as D
+
+    class NoKey:
+        def __init__(self, *a): pass
+        def processBook(self, pids):
+            raise ValueError("Incorrect AES key length (0 bytes)")
+
+    monkeypatch.setattr(D, "_kfx_zip_book", lambda: NoKey)
+    with pytest.raises(D.KeyUnavailable):
+        D.decrypt_archive(str(tmp_path / "in"), "k.txt", str(tmp_path / "o"))
+
+
+def test_key_unavailable_is_still_a_decrypt_failure(tmp_path, monkeypatch):
+    # Callers that only know DecryptFailed must still catch it.
+    import app.decrypt as D
+    assert issubclass(D.KeyUnavailable, D.DecryptFailed)
+
+
+def test_a_real_decryption_error_is_not_mistaken_for_a_missing_key(tmp_path, monkeypatch):
+    # A wrong (but present) key must stay terminal, or a genuinely broken book
+    # would retry forever.
+    import app.decrypt as D
+
+    class WrongKey:
+        def __init__(self, *a): pass
+        def processBook(self, pids):
+            raise Exception("Incorrect padding - Wrong key")
+
+    monkeypatch.setattr(D, "_kfx_zip_book", lambda: WrongKey)
+    with pytest.raises(D.DecryptFailed) as e:
+        D.decrypt_archive(str(tmp_path / "in"), "k.txt", str(tmp_path / "o"))
+    assert not isinstance(e.value, D.KeyUnavailable)

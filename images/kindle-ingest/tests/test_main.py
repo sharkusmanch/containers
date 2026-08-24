@@ -374,3 +374,15 @@ def test_stopping_is_not_misread_as_a_book_failure(cfg, monkeypatch):
     rec = ctx.ledger.get(b.asin) or {}
     assert rec.get("outcome") != FAILED
     assert "Stopping" not in str(rec.get("error", ""))
+
+
+def test_a_book_missing_its_key_is_retryable_not_failed(cfg, monkeypatch):
+    # The device emits keys each cycle; a key absent this time will be there
+    # next time. Marking it FAILED would strand the book permanently.
+    from app.decrypt import KeyUnavailable
+    b = _book("B0NOKEY001")
+    monkeypatch.setattr(M, "decrypt_archive",
+                        lambda *a: (_ for _ in ()).throw(KeyUnavailable("no key")))
+    ctx = _ctx(cfg, FakeDevice({b.asin: b}))
+    M.run_cycle(ctx)
+    assert ctx.ledger.get(b.asin)["outcome"] == RETRYABLE

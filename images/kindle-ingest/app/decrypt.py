@@ -15,12 +15,33 @@ class DecryptFailed(Exception):
     """The archive yielded no decrypted content."""
 
 
+class KeyUnavailable(DecryptFailed):
+    """The keyfile carried no record for this book.
+
+    Distinct from a failed decryption because the cause is on the device, not
+    in the book: emit_keys can return a partial keyfile when the Kindle sleeps
+    mid-pass. The next cycle emits the key, so this is retryable -- whereas a
+    key that is present but wrong means the book really cannot be decrypted.
+    """
+
+
 def _kfx_zip_book():
     """Import lazily so tests can run without the vendored modules present."""
     if VENDOR_DIR not in sys.path:
         sys.path.insert(0, VENDOR_DIR)
     from kfxdedrm import KFXZipBook
     return KFXZipBook
+
+
+def _is_missing_key(e: Exception) -> bool:
+    """A zero-length key means no key was found, not that decryption failed.
+
+    The vendored code falls through every voucher candidate, then hands AES an
+    empty key from the (empty) skeylist. "Incorrect padding - Wrong key" is the
+    different, terminal case: a key was found and it did not work.
+    """
+    t = str(e)
+    return "key length (0 bytes)" in t or "no key candidate available" in t
 
 
 def decrypt_archive(encrypted_path: str, keyfile_path: str, out_path: str) -> int:
@@ -33,11 +54,12 @@ def decrypt_archive(encrypted_path: str, keyfile_path: str, out_path: str) -> in
     except DecryptFailed:
         raise
     except Exception as e:
-        # The vendored DeDRM code raises whatever it likes. Seen in the cluster:
-        # ValueError("Incorrect AES key length (0 bytes)") when the keyfile held
-        # no record for this book. Callers classify DecryptFailed; anything else
-        # escapes and takes the whole cycle down with it.
-        raise DecryptFailed(f"{type(e).__name__}: {e}") from e
+        # The vendored DeDRM code raises whatever it likes. Callers classify
+        # DecryptFailed; anything else escapes and takes the whole cycle down.
+        msg = f"{type(e).__name__}: {e}"
+        if _is_missing_key(e):
+            raise KeyUnavailable(msg) from e
+        raise DecryptFailed(msg) from e
     if n == 0:
         raise DecryptFailed(f"no DRMION entries decrypted from {encrypted_path}")
     tmp = out_path + ".part"

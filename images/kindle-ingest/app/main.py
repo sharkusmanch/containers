@@ -16,7 +16,7 @@ from . import metrics
 from .bookorbit import AuthExpired, BookOrbit, Duplicate, Transport, UploadRejected
 from .config import Config
 from .convert import ConvertFailed, classify, epub_to_cbz, to_epub
-from .decrypt import DecryptFailed, decrypt_archive
+from .decrypt import DecryptFailed, KeyUnavailable, decrypt_archive
 from .device import Device, DeviceUnreachable, TruncatedPull
 from .ledger import (FAILED, Ledger, NEEDS_DECISION, OK, RETRYABLE, UPLOADING)
 from .notify import Notifier
@@ -199,6 +199,12 @@ def _process(ctx: Ctx, book, keyfile: str, res: CycleResult) -> None:
         ctx.api._token = None
         ctx.ledger.record(asin, RETRYABLE, attempts=attempts, error=str(e)[:200])
         res.errors.append((asin, str(e)[:80]))
+    except KeyUnavailable as e:
+        # The device emits keys every cycle; a key absent now will be there
+        # next time. FAILED would strand the book permanently.
+        ctx.ledger.record(asin, RETRYABLE, attempts=attempts, title=book.basename,
+                          error=f"key not yet emitted: {str(e)[:160]}")
+        res.errors.append((asin, "key"))
     except (DecryptFailed, ConvertFailed, ArtifactInvalid, UploadRejected) as e:
         ctx.ledger.record(asin, FAILED, attempts=attempts, title=book.basename,
                           error=f"{type(e).__name__}: {str(e)[:200]}")
