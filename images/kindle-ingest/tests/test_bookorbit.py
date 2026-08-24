@@ -222,3 +222,32 @@ def test_an_unrelated_tag_is_not_a_match(cfg):
         _tagged_item(5, "Book", ["asin:B0OTHER1234", "comic"]),
     ]})
     assert BookOrbit(cfg).find_by_asin("B06XRCBRX8") is None
+
+
+# --- enrichment needs a nudge after upload ----------------------------------
+# Provider lookup keys off the title, so books uploaded as <ASIN>.<ext> matched
+# nothing. With a real title set, a refresh populates author/series/description,
+# but the cover still has to be extracted from the file explicitly.
+
+@responses.activate
+def test_enrich_refreshes_metadata_and_extracts_the_cover(cfg):
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.post(f"{BASE}/api/v1/books/42/refresh-metadata", json={"id": 42})
+    responses.post(f"{BASE}/api/v1/books/42/re-extract-cover",
+                   json={"processed": 1, "updated": 1})
+    BookOrbit(cfg).enrich(42)
+    hit = [c.request.url for c in responses.calls]
+    assert any(u.endswith("/refresh-metadata") for u in hit)
+    assert any(u.endswith("/re-extract-cover") for u in hit)
+
+
+@responses.activate
+def test_enrich_still_extracts_the_cover_when_the_refresh_fails(cfg):
+    # A provider being down must not also cost us the cover, which comes from
+    # the file we just uploaded and needs no external service.
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.post(f"{BASE}/api/v1/books/42/refresh-metadata", status=502, json={})
+    responses.post(f"{BASE}/api/v1/books/42/re-extract-cover",
+                   json={"processed": 1, "updated": 1})
+    BookOrbit(cfg).enrich(42)
+    assert any(c.request.url.endswith("/re-extract-cover") for c in responses.calls)

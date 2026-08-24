@@ -200,6 +200,10 @@ def _process(ctx: Ctx, book, keyfile: str, res: CycleResult) -> None:
             ctx.api.set_metadata(book_id,
                                  title=title_from_basename(book.basename, asin),
                                  asin=asin)
+            # Enrich only AFTER the real title exists: provider lookup keys off
+            # the title, so doing this first would search for the bare ASIN and
+            # find nothing -- which is exactly why these looked unfetched.
+            ctx.api.enrich(book_id)
         except Exception as e:
             log.warning("could not set metadata for %s (#%s): %s",
                         asin, book_id, str(e)[:120])

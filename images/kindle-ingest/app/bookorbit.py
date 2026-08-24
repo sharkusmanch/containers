@@ -9,8 +9,11 @@ ledger after the POST means an interrupted upload re-uploads, and an
 additive-only pipeline cannot self-heal from a duplicate. So callers must
 reconcile (find_by_asin) before every POST.
 """
+import logging
 import os
 import requests
+
+log = logging.getLogger("kindle-ingest")
 
 
 class BookOrbitError(Exception):
@@ -134,6 +137,26 @@ class BookOrbit:
         r = self.s.patch(f"{self.base}/api/v1/books/{book_id}/metadata",
                          headers=self._headers(), json=body, timeout=60)
         self._raise_for(r.status_code, r.text)
+
+    def enrich(self, book_id: int) -> None:
+        """Populate author/series/description and pull a cover off the file.
+
+        Provider lookup keys off the title, so a book uploaded as <ASIN>.<ext>
+        matched nothing and looked unfetched. Once set_metadata has given it a
+        real title, a refresh finds it. The cover is separate: it is extracted
+        from the file we just uploaded and needs no external service, so it is
+        attempted even when the refresh fails.
+
+        Both steps are cosmetic and independently best-effort: the book is
+        already uploaded and verified before this runs.
+        """
+        for step in ("refresh-metadata", "re-extract-cover"):
+            try:
+                r = self.s.post(f"{self.base}/api/v1/books/{book_id}/{step}",
+                                headers=self._headers(), json={}, timeout=180)
+                self._raise_for(r.status_code, r.text)
+            except Exception as e:
+                log.warning("%s failed for #%s: %s", step, book_id, str(e)[:120])
 
     def find_by_asin(self, asin: str) -> dict | None:
         """Has this ASIN already been uploaded?

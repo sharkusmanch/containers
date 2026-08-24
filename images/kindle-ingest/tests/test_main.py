@@ -539,3 +539,34 @@ def test_a_failed_title_update_does_not_fail_the_upload(cfg, monkeypatch):
     r = M.run_cycle(ctx)
     assert r.uploaded == 1
     assert ctx.ledger.get(b.asin)["outcome"] == OK
+
+
+def test_an_uploaded_book_is_enriched(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    b = DeviceBook("B0ENRICH01", "Some Comic_B0ENRICH01", 100, 2)
+
+    class Api(_MetaApi):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.enriched = []
+        def enrich(self, book_id):
+            self.enriched.append(book_id)
+
+    api = Api()
+    M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), api))
+    assert api.enriched == [99]
+
+
+def test_enrichment_failure_does_not_fail_the_upload(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    b = DeviceBook("B0ENRICH02", "Some Comic_B0ENRICH02", 100, 2)
+
+    class Api(_MetaApi):
+        def enrich(self, book_id):
+            raise Transport("enrichment down")
+
+    api = Api()
+    ctx = _ctx(cfg, FakeDevice({b.asin: b}), api)
+    r = M.run_cycle(ctx)
+    assert r.uploaded == 1
+    assert ctx.ledger.get(b.asin)["outcome"] == OK
