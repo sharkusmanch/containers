@@ -11,8 +11,11 @@ FROM python:${PYTHON_VERSION} AS vendor
 # Two third-party sources are fetched here rather than committed, so this
 # public repo does not redistribute them:
 #
-#   DeDRM (ion.py + kfxdedrm.py) -- decrypts a KFX archive given the per-book
-#   key the Kindle emits. GPL v3. Pinned release, checksum verified.
+#   DeDRM (kfxdedrm + ion + kfxtables) -- decrypts a KFX archive given the
+#   per-book key the Kindle emits. GPL v3. Pinned release, checksum verified.
+#   That module list is the import closure computed with ast, not eyeballed:
+#   ion imports kfxtables from inside a try block, so a line-anchored grep
+#   misses it and the image builds fine right up until it decrypts nothing.
 #
 #   KFX Input -- the only thing that can read KFX; ebook-convert cannot without
 #   it. Distributed as a MobileRead forum attachment upstream, so this uses
@@ -37,8 +40,8 @@ RUN curl -fsSL -o dedrm.zip \
     && echo "${DEDRM_SHA256}  dedrm.zip" | sha256sum -c - \
     && unzip -q dedrm.zip DeDRM_plugin.zip \
     && mkdir -p /opt/vendor \
-    && unzip -q -j DeDRM_plugin.zip "ion.py" "kfxdedrm.py" -d /opt/vendor \
-    && test -s /opt/vendor/ion.py && test -s /opt/vendor/kfxdedrm.py
+    && unzip -q -j DeDRM_plugin.zip "ion.py" "kfxdedrm.py" "kfxtables.py" -d /opt/vendor \
+    && for f in ion kfxdedrm kfxtables; do test -s "/opt/vendor/$f.py"; done
 
 RUN curl -fsSL -o kfx.tar.gz \
       "https://github.com/kluyg/calibre-kfx-input/archive/${KFX_INPUT_COMMIT}.tar.gz" \
