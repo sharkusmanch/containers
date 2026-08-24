@@ -125,3 +125,61 @@ def test_upload_sends_multipart_with_basename(cfg, tmp_path):
     responses.post(UPLOAD, json={"bookId": 1}, status=201)
     assert BookOrbit(cfg).upload(str(p))["bookId"] == 1
     assert b"A Parade of Horribles, Book 8.epub" in responses.calls[-1].request.body
+
+
+# --- reconciliation against the SHAPE the server actually returns ------------
+# Verified against the live API: the list endpoint returns files as
+# {id, format, role, sizeBytes} -- no filename -- and has no asin field at all.
+# The old tests invented a filename key, so they passed while find_by_asin
+# could never match anything in production.
+
+def _list_item(book_id, title, size=10):
+    """A list item exactly as /books/query returns one."""
+    return {"id": book_id, "title": title,
+            "files": [{"id": book_id, "format": "cbz", "role": "primary",
+                       "sizeBytes": size}]}
+
+
+@responses.activate
+def test_find_by_asin_matches_our_own_upload_by_title(cfg):
+    # We upload <ASIN>.<ext>, and BookOrbit derives the title from the
+    # filename, so a book this pipeline uploaded is titled with the bare ASIN.
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.post(QUERY, json={"total": 2, "items": [
+        _list_item(5, "A Clash of Kings"),
+        _list_item(7, "B06XRCBRX8"),
+    ]})
+    assert BookOrbit(cfg).find_by_asin("B06XRCBRX8")["id"] == 7
+
+
+@responses.activate
+def test_find_by_asin_does_not_match_a_title_merely_containing_the_asin(cfg):
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.post(QUERY, json={"total": 1, "items": [
+        _list_item(5, "Notes on B06XRCBRX8 and other codes"),
+    ]})
+    assert BookOrbit(cfg).find_by_asin("B06XRCBRX8") is None
+
+
+@responses.activate
+def test_find_by_asin_reads_past_the_first_page(cfg):
+    # total(205) > size(200): the book we want sits on page 1. Scanning only
+    # page 0 made every book past the 200th invisible to reconciliation.
+    page0 = {"total": 205, "page": 0, "size": 200,
+             "items": [_list_item(i, f"Book {i}") for i in range(200)]}
+    page1 = {"total": 205, "page": 1, "size": 200,
+             "items": [_list_item(900, "B06XRCBRX8")]}
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.post(QUERY, json=page0)
+    responses.post(QUERY, json=page1)
+    assert BookOrbit(cfg).find_by_asin("B06XRCBRX8")["id"] == 900
+
+
+@responses.activate
+def test_pagination_stops_and_does_not_loop_forever(cfg):
+    # A server that keeps returning items must not spin the cycle indefinitely.
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.post(QUERY, json={"total": 1, "page": 0, "size": 200,
+                                "items": [_list_item(1, "Only")]})
+    assert BookOrbit(cfg).find_by_asin("B0MISSING1") is None
+    assert len([c for c in responses.calls if c.request.url == QUERY]) == 1

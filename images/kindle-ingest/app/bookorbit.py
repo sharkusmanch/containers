@@ -75,8 +75,9 @@ class BookOrbit:
 
     # --- queries --------------------------------------------------------
     def query_books(self, page: int = 0, size: int = 200) -> list[dict]:
-        """Pagination is NESTED. Flat page/size params are silently replaced by
-        zod defaults, which silently caps every query at the first 50 books."""
+        """One page. Pagination is NESTED: flat page/size params are silently
+        replaced by zod defaults, which caps every query at the first 50 books.
+        The envelope carries {items, page, size, total}."""
         r = self.s.post(
             f"{self.base}/api/v1/books/query",
             headers=self._headers(),
@@ -86,14 +87,57 @@ class BookOrbit:
         self._raise_for(r.status_code, r.text)
         return (r.json() or {}).get("items", [])
 
+    def iter_books(self, size: int = 200) -> list[dict]:
+        """Every book, following `total` across pages.
+
+        query_books alone returns one page, so a library larger than `size` left
+        every book past the first page invisible to reconciliation -- observed
+        live at total=205 with size=200.
+        """
+        out, page = [], 0
+        while True:
+            r = self.s.post(
+                f"{self.base}/api/v1/books/query",
+                headers=self._headers(),
+                json={"pagination": {"page": page, "size": size}},
+                timeout=60,
+            )
+            self._raise_for(r.status_code, r.text)
+            body = r.json() or {}
+            items = body.get("items") or []
+            out.extend(items)
+            total = body.get("total")
+            if not items or total is None or len(out) >= total:
+                return out
+            page += 1
+
     def find_by_asin(self, asin: str) -> dict | None:
-        """Reconciliation key. Title matching is unusable: Amazon retitles books,
-        so a retitled book would not match and would upload as a duplicate."""
-        for b in self.query_books():
-            if asin and asin in str(b.get("asin") or ""):
+        """Has this ASIN already been uploaded?
+
+        This is the crash-recovery net for the window between a successful POST
+        and the ledger write; the ledger is authoritative otherwise.
+
+        Matching is on the title. The list endpoint returns files as
+        {id, format, role, sizeBytes} with no filename, and carries no asin
+        field, so neither is available here -- but we upload `<ASIN>.<ext>` and
+        BookOrbit derives the title from the filename, so anything this pipeline
+        uploaded is titled with the bare ASIN. Equality, not substring: a real
+        book whose blurb mentions an ASIN must not count as a match. The
+        filename/asin checks are kept in case the API starts returning them.
+
+        Books uploaded by other means carry real titles and no ASIN anywhere,
+        so they cannot be matched by any route -- for those the ledger, not
+        this, is what prevents rework.
+        """
+        if not asin:
+            return None
+        for b in self.iter_books():
+            if str(b.get("title") or "").strip() == asin:
+                return b
+            if asin in str(b.get("asin") or ""):
                 return b
             for f in b.get("files") or []:
-                if asin and asin in str(f.get("filename") or ""):
+                if asin in str(f.get("filename") or ""):
                     return b
         return None
 
