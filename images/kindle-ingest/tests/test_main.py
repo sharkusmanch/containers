@@ -308,11 +308,12 @@ def test_main_waits_for_the_device_before_the_first_cycle(monkeypatch):
     calls = []
     monkeypatch.setattr(m, "await_device", lambda dev, **kw: calls.append(dev) or True)
     monkeypatch.setattr(m.metrics, "rebuild_from_ledger", lambda *a: None)
-    monkeypatch.setattr(m.metrics, "serve", lambda *a: None)
+    monkeypatch.setattr(m.metrics, "serve", lambda *a, **k: None)
 
     ctx = types.SimpleNamespace(device=object(), ledger=object(),
                                 stop={"now": True})   # exit after one check
-    cfg = types.SimpleNamespace(metrics_port=0, poll_interval=1)
+    cfg = types.SimpleNamespace(metrics_port=0, poll_interval=1,
+                                pull_timeout=10, convert_timeout=10)
     monkeypatch.setattr(m.Ctx, "build", staticmethod(lambda c: ctx))
     monkeypatch.setattr(m.Config, "from_env", staticmethod(lambda: cfg))
 
@@ -386,3 +387,22 @@ def test_a_book_missing_its_key_is_retryable_not_failed(cfg, monkeypatch):
     ctx = _ctx(cfg, FakeDevice({b.asin: b}))
     M.run_cycle(ctx)
     assert ctx.ledger.get(b.asin)["outcome"] == RETRYABLE
+
+
+def test_health_stall_window_outlives_one_slow_book(cfg, monkeypatch):
+    # liveness hits /healthz every 60s with failureThreshold 5, so a stale
+    # heartbeat kills the pod after ~5 min. One book may legitimately take
+    # pull_timeout + convert_timeout (3600 + 1800 = 5400s), which blew straight
+    # past the old fixed 1800s window -- a restart loop on exactly the large
+    # comics PULL_TIMEOUT exists to allow.
+    import app.main as m
+    seen = {}
+    monkeypatch.setattr(m.metrics, "rebuild_from_ledger", lambda *a: None)
+    monkeypatch.setattr(m.metrics, "serve",
+                        lambda port, **kw: seen.update(kw) or None)
+    monkeypatch.setattr(m, "await_device", lambda *a, **k: True)
+    ctx = types.SimpleNamespace(device=object(), ledger=object(), stop={"now": True})
+    monkeypatch.setattr(m.Ctx, "build", staticmethod(lambda c: ctx))
+    monkeypatch.setattr(m.Config, "from_env", staticmethod(lambda: cfg))
+    m.main()
+    assert seen.get("stale_after", 0) > cfg.pull_timeout + cfg.convert_timeout

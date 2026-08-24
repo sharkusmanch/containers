@@ -149,6 +149,7 @@ def test_a_pull_that_times_out_is_a_transport_fault(monkeypatch, tmp_path):
         def __enter__(self): return self
         def __exit__(self, *a): return False
         def wait(self): return 0
+        def kill(self): pass
 
     def boom(argv, **kw):
         raise subprocess.TimeoutExpired(argv, kw.get("timeout", 1))
@@ -158,3 +159,57 @@ def test_a_pull_that_times_out_is_a_transport_fault(monkeypatch, tmp_path):
     b = DeviceBook("B0TEST1234", "Title_B0TEST1234", 10, 2)
     with pytest.raises(TruncatedPull):
         Device(_Cfg()).fetch_book(b, str(tmp_path / "d2"))
+
+
+# --- a vanished work dir means "pulled nothing", not a crash ----------------
+# Seen in the cluster: os.listdir raised FileNotFoundError from fetch_book and
+# the book was recorded as an unexpected error. The question being asked is
+# "did we get any files?" -- a missing directory answers that plainly.
+
+def test_missing_dest_dir_is_reported_as_a_transport_fault(monkeypatch, tmp_path):
+    import subprocess
+    from app.device import Device, DeviceBook, DeviceUnreachable
+
+    class FakeProc:
+        stdout = None
+        stderr = type("E", (), {"read": staticmethod(lambda: b"")})()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def wait(self): return 255            # ssh failed
+
+    def run_and_remove(argv, **kw):
+        # whatever removed it in production, the check must survive it
+        import shutil as sh
+        sh.rmtree(tmp_path / "gone", ignore_errors=True)
+        return subprocess.CompletedProcess(argv, 2, b"", b"not a tar archive")
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(subprocess, "run", run_and_remove)
+    b = DeviceBook("B0TEST1234", "Title_B0TEST1234", 10, 2)
+    with pytest.raises(DeviceUnreachable):        # not FileNotFoundError
+        Device(_Cfg()).fetch_book(b, str(tmp_path / "gone"))
+
+
+def test_a_timed_out_pull_kills_the_ssh_child(monkeypatch, tmp_path):
+    # Popen.__exit__ waits with no timeout and no kill, so a remote tar that
+    # stalls while the link stays healthy would block the pod past its budget.
+    import subprocess
+    from app.device import Device, DeviceBook, TruncatedPull
+    killed = []
+
+    class FakeProc:
+        stdout = None
+        stderr = type("E", (), {"read": staticmethod(lambda: b"")})()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def wait(self): return 0
+        def kill(self): killed.append(True)
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(subprocess, "run",
+                        lambda argv, **kw: (_ for _ in ()).throw(
+                            subprocess.TimeoutExpired(argv, 1)))
+    b = DeviceBook("B0TEST1234", "Title_B0TEST1234", 10, 2)
+    with pytest.raises(TruncatedPull):
+        Device(_Cfg()).fetch_book(b, str(tmp_path / "d3"))
+    assert killed, "ssh child must be killed, not waited on indefinitely"

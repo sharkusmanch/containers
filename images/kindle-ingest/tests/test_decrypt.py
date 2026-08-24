@@ -3,8 +3,8 @@ import pytest
 from app import decrypt
 from app.decrypt import decrypt_archive, DecryptFailed
 
-SPIKE = "/private/tmp/claude-501/-Users-marcus/ae9250ee-b9bc-4a27-bff1-68c3e98c8019/scratchpad/spike"
-VENDOR = "/private/tmp/claude-501/-Users-marcus/ae9250ee-b9bc-4a27-bff1-68c3e98c8019/scratchpad/ddrm"
+SPIKE = os.environ.get("KI_SPIKE", "/private/tmp/claude-501/-Users-marcus/ae9250ee-b9bc-4a27-bff1-68c3e98c8019/scratchpad/spike")
+VENDOR = os.environ.get("KI_VENDOR", "/private/tmp/claude-501/-Users-marcus/ae9250ee-b9bc-4a27-bff1-68c3e98c8019/scratchpad/ddrm")
 ONDEV = os.path.expanduser("~/Books/kindle-dedrm/kfx-zip/Halo_ Rise of Atriox #1 (Halo Rise of Atriox)_B074TH9GL3.kfx-zip")
 have_fixtures = os.path.exists(os.path.join(SPIKE, "encrypted.kfx-zip")) and os.path.exists(VENDOR)
 

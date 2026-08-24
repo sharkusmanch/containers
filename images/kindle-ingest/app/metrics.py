@@ -75,9 +75,16 @@ class _Handler(BaseHTTPRequestHandler):
         pass                     # probes must not spam the log
 
 
-def serve(port: int) -> HTTPServer:
+def serve(port: int, stale_after: int | None = None) -> HTTPServer:
     """Runs on its own thread so a blocking ssh or a 30-minute conversion does
-    not make the probe fail and kill the pod mid-book."""
+    not make the probe fail and kill the pod mid-book.
+
+    stale_after must exceed the longest legitimate gap between heartbeats --
+    one book may take pull_timeout + convert_timeout -- or liveness kills the
+    pod mid-pull and the transfer restarts from zero.
+    """
+    if stale_after is not None:
+        _Handler.stale_after = stale_after
     srv = HTTPServer(("0.0.0.0", port), _Handler)
     threading.Thread(target=srv.serve_forever, daemon=True, name="metrics").start()
     return srv

@@ -3,7 +3,7 @@ import zipfile
 import pytest
 from app.convert import classify, epub_to_cbz, ConvertFailed, CLEAR, AMBIGUOUS
 
-REAL_COMIC = "/private/tmp/claude-501/-Users-marcus/ae9250ee-b9bc-4a27-bff1-68c3e98c8019/scratchpad/cbztest/halo.epub"
+REAL_COMIC = os.environ.get("KI_REAL_COMIC", "/private/tmp/claude-501/-Users-marcus/ae9250ee-b9bc-4a27-bff1-68c3e98c8019/scratchpad/cbztest/halo.epub")
 have_comic = os.path.exists(REAL_COMIC)
 
 

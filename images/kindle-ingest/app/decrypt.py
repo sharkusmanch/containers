@@ -40,8 +40,11 @@ def _is_missing_key(e: Exception) -> bool:
     empty key from the (empty) skeylist. "Incorrect padding - Wrong key" is the
     different, terminal case: a key was found and it did not work.
     """
-    t = str(e)
-    return "key length (0 bytes)" in t or "no key candidate available" in t
+    # Only the AES signature is checkable. "Failed all decryption attempts and
+    # no key candidate available" looks like the obvious marker but ion.py
+    # prints it and then re-raises the LAST voucher exception, so that text
+    # never reaches an exception message.
+    return "key length (0 bytes)" in str(e)
 
 
 def decrypt_archive(encrypted_path: str, keyfile_path: str, out_path: str) -> int:

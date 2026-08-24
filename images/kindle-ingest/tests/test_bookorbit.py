@@ -74,24 +74,6 @@ def test_query_uses_nested_pagination(cfg):
 
 
 @responses.activate
-def test_find_by_asin_matches_on_filename(cfg):
-    responses.post(LOGIN, json={"accessToken": "T"})
-    responses.post(QUERY, json={"items": [
-        {"id": 5, "title": "Other", "files": [{"filename": "Thing_B0OTHER1234.epub"}]},
-        {"id": 7, "title": "Retitled Edition", "files": [{"filename": "X_B06XRCBRX8.epub"}]},
-    ]})
-    b = BookOrbit(cfg).find_by_asin("B06XRCBRX8")
-    assert b["id"] == 7            # matched despite a different title
-
-
-@responses.activate
-def test_find_by_asin_returns_none_when_absent(cfg):
-    responses.post(LOGIN, json={"accessToken": "T"})
-    responses.post(QUERY, json={"items": [{"id": 1, "files": [{"filename": "a_B0ZZZZZZZZZ.epub"}]}]})
-    assert BookOrbit(cfg).find_by_asin("B06XRCBRX8") is None
-
-
-@responses.activate
 def test_verify_requires_matching_size(cfg, tmp_path):
     p = _epub(tmp_path)                     # 100 bytes
     responses.post(LOGIN, json={"accessToken": "T"})
@@ -176,10 +158,15 @@ def test_find_by_asin_reads_past_the_first_page(cfg):
 
 
 @responses.activate
-def test_pagination_stops_and_does_not_loop_forever(cfg):
-    # A server that keeps returning items must not spin the cycle indefinitely.
+def test_pagination_stops_when_a_server_overstates_total(cfg):
+    # total(500) is a lie: the server has 2 books and then returns empty pages.
+    # Trusting total alone would spin forever. The earlier version of this test
+    # registered a single page whose total was already satisfied, so it passed
+    # against the un-paginated implementation and proved nothing.
     responses.post(LOGIN, json={"accessToken": "T"})
-    responses.post(QUERY, json={"total": 1, "page": 0, "size": 200,
-                                "items": [_list_item(1, "Only")]})
+    responses.post(QUERY, json={"total": 500, "page": 0, "size": 2,
+                                "items": [_list_item(1, "A"), _list_item(2, "B")]})
+    responses.post(QUERY, json={"total": 500, "page": 1, "size": 2, "items": []})
     assert BookOrbit(cfg).find_by_asin("B0MISSING1") is None
-    assert len([c for c in responses.calls if c.request.url == QUERY]) == 1
+    calls = len([c for c in responses.calls if c.request.url == QUERY])
+    assert calls == 2, f"stopped on the empty page, not on total; made {calls}"

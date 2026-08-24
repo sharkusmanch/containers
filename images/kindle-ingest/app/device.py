@@ -4,6 +4,7 @@ Everything here is reached over SSH/rclone through the Tailscale sidecar's
 SOCKS5 proxy. The device is asleep most of the time; unreachable is a normal
 state and must never surface as an error.
 """
+import logging
 import os
 import re
 import shlex
@@ -14,6 +15,8 @@ from dataclasses import dataclass
 
 from .identity import asin_of
 
+log = logging.getLogger("kindle-ingest")
+
 ITEMS = "/mnt/us/documents/Downloads/Items01"
 TOOL = "/mnt/us/extensions/kfxdedrm"
 KEYFILE = "/mnt/us/dedrm/keyfile.txt"
@@ -22,6 +25,21 @@ KEYFILE = "/mnt/us/dedrm/keyfile.txt"
 # (apostrophes, commas, #, parentheses, &) and strict about shell
 # metacharacters that have no business in a filename.
 _UNSAFE = frozenset(["`", "$", "\\", '"', "\n", "\r", "\x00"])
+
+
+def _pulled_anything(dest_dir: str) -> bool:
+    """Did the pull leave any files? A missing directory answers that: no.
+
+    os.listdir raised FileNotFoundError straight out of fetch_book in the
+    cluster, turning a plain transport failure into an unexpected error. The
+    directory is created at the top of fetch_book, so its absence here means
+    something removed it mid-pull; log that rather than crash on it.
+    """
+    try:
+        return bool(os.listdir(dest_dir))
+    except FileNotFoundError:
+        log.warning("work dir %s vanished during the pull", dest_dir)
+        return False
 
 
 def _unsafe_name(name: str) -> bool:
@@ -245,6 +263,10 @@ class Device:
             except subprocess.TimeoutExpired as e:
                 # A transport fault, not an unexpected error: re-pull next
                 # cycle. Seen on a several-hundred-MB comic compendium.
+                # Kill ssh explicitly: Popen.__exit__ waits with no timeout, so
+                # a remote tar stalled on flash behind a healthy link would
+                # block here long past the budget we just enforced.
+                p.kill()
                 raise TruncatedPull(
                     f"{book.asin}: pull exceeded {self.cfg.pull_timeout}s") from e
             finally:
@@ -252,9 +274,9 @@ class Device:
                     p.stdout.close()
             err = (p.stderr.read() or b"").decode(errors="replace")
             rc = p.wait()
-        if rc != 0 and not os.listdir(dest_dir):
+        if rc != 0 and not _pulled_anything(dest_dir):
             raise DeviceUnreachable(f"fetch {book.asin}: ssh rc={rc} {err.strip()[:160]}")
-        if tar.returncode != 0 and not os.listdir(dest_dir):
+        if tar.returncode != 0 and not _pulled_anything(dest_dir):
             raise TruncatedPull(f"{book.asin}: tar failed {tar.stderr[:160]!r}")
 
         # Flatten: the archive the decryptor expects has every part at the root.

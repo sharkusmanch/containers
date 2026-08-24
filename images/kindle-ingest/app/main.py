@@ -371,7 +371,11 @@ def main() -> int:
     cfg = Config.from_env()
     ctx = Ctx.build(cfg)
     metrics.rebuild_from_ledger(ctx.ledger)     # before serving, so a restart
-    metrics.serve(cfg.metrics_port)             # does not reset the stall window
+    # The window must outlive one slow book, or liveness kills the pod
+    # mid-pull and the transfer restarts from zero.
+    metrics.serve(cfg.metrics_port,
+                  stale_after=cfg.pull_timeout + cfg.convert_timeout
+                  + cfg.poll_interval)
     await_device(ctx.device)                    # else cycle 1 loses the race
 
     def _stop(signum, _frame):
