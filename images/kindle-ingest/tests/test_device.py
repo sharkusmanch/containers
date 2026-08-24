@@ -125,9 +125,12 @@ def test_pull_timeout_is_generous_enough_for_a_large_comic(monkeypatch, tmp_path
     def fake_run(argv, **kw):
         seen["timeout"] = kw.get("timeout")
         d = tmp_path / "d"
-        d.mkdir(parents=True, exist_ok=True)
-        # the post-pull check compares the pulled .kfx against book.kfx_size
+        # the post-pull checks compare against book.kfx_size AND asset_count
+        att = d / "Title_B0TEST1234.sdr" / "assets" / "attachables"
+        att.mkdir(parents=True, exist_ok=True)
         (d / "Title_B0TEST1234.kfx").write_bytes(b"x" * 10)
+        for i in range(2):
+            (att / f"CR!A{i}.kfx").write_bytes(b"a")
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProc())
@@ -213,3 +216,52 @@ def test_a_timed_out_pull_kills_the_ssh_child(monkeypatch, tmp_path):
     with pytest.raises(TruncatedPull):
         Device(_Cfg()).fetch_book(b, str(tmp_path / "d3"))
     assert killed, "ssh child must be killed, not waited on indefinitely"
+
+
+# --- the assets are the payload; verify them, not just the .kfx -------------
+# fetch_book checked only the main .kfx size, which is tiny next to the asset
+# containers holding the actual content. A pull that dropped containers passed
+# verification and then died in the decryptor with a bare EOFError, which
+# _process records as DecryptFailed -> FAILED, terminal. Observed on
+# "Invincible Compendium Vol. 1" after a 400MB+ transfer.
+
+def _fake_pull(tmp_path, monkeypatch, basename, kfx_size, n_assets):
+    """Stand in for ssh+tar, laying down the on-device layout."""
+    import subprocess
+    dest = tmp_path / "d"
+
+    class FakeProc:
+        stdout = None
+        stderr = type("E", (), {"read": staticmethod(lambda: b"")})()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def wait(self): return 0
+        def kill(self): pass
+
+    def fake_run(argv, **kw):
+        att = dest / f"{basename}.sdr" / "assets" / "attachables"
+        att.mkdir(parents=True, exist_ok=True)
+        (dest / f"{basename}.kfx").write_bytes(b"x" * kfx_size)
+        for i in range(n_assets):
+            (att / f"CR!ASSET{i:03d}.kfx").write_bytes(b"a" * 4)
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return str(dest)
+
+
+def test_a_pull_missing_asset_containers_is_truncated_not_corrupt(monkeypatch, tmp_path):
+    from app.device import Device, DeviceBook, TruncatedPull
+    dest = _fake_pull(tmp_path, monkeypatch, "Title_B0TEST1234", 10, n_assets=3)
+    b = DeviceBook("B0TEST1234", "Title_B0TEST1234", 10, 5)   # device says 5
+    with pytest.raises(TruncatedPull) as e:
+        Device(_Cfg()).fetch_book(b, dest)
+    assert "3" in str(e.value) and "5" in str(e.value)
+
+
+def test_a_complete_pull_passes_asset_verification(monkeypatch, tmp_path):
+    from app.device import Device, DeviceBook
+    dest = _fake_pull(tmp_path, monkeypatch, "Title_B0TEST1234", 10, n_assets=5)
+    b = DeviceBook("B0TEST1234", "Title_B0TEST1234", 10, 5)
+    assert Device(_Cfg()).fetch_book(b, dest) == dest

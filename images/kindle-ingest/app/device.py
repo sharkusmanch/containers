@@ -279,6 +279,12 @@ class Device:
         if tar.returncode != 0 and not _pulled_anything(dest_dir):
             raise TruncatedPull(f"{book.asin}: tar failed {tar.stderr[:160]!r}")
 
+        # Count the containers BEFORE flattening, while the on-device layout is
+        # still intact. The .kfx is small; these hold the actual content, so a
+        # pull that drops them is the truncation worth catching.
+        att = os.path.join(dest_dir, book.basename + ".sdr", "assets", "attachables")
+        pulled_assets = len(os.listdir(att)) if os.path.isdir(att) else 0
+
         # Flatten: the archive the decryptor expects has every part at the root.
         for root, _, files in os.walk(dest_dir):
             if root == dest_dir:
@@ -293,6 +299,13 @@ class Device:
         if got != book.kfx_size:
             raise TruncatedPull(
                 f"{book.asin}: pulled {got} of {book.kfx_size} bytes")
+        # Without this a short pull reached the decryptor, which failed with a
+        # bare EOFError -- classified DecryptFailed, i.e. TERMINAL, blaming the
+        # book for what is a transport fault. Re-pull instead.
+        if pulled_assets != book.asset_count:
+            raise TruncatedPull(
+                f"{book.asin}: pulled {pulled_assets} of {book.asset_count} "
+                f"asset containers")
         return dest_dir
 
     def build_archive(self, src_dir: str, dest: str) -> str:
