@@ -222,3 +222,37 @@ def test_failures_notify_once_not_every_cycle(cfg):
     ctx = _ctx(cfg, FakeDevice(), FakeApi(), led)
     M._notify_once(ctx); M._notify_once(ctx); M._notify_once(ctx)
     assert ctx.notifier.failures == ["B0FAIL1234"]
+
+
+# --- startup: wait for the Tailscale sidecar's SOCKS port -------------------
+# The sidecar registers with Headscale a few seconds after the pod starts. A
+# first cycle that runs before then reports "device unreachable" and then sleeps
+# a full poll_interval, so every restart cost up to 10 idle minutes.
+
+def test_await_proxy_returns_true_once_the_port_accepts():
+    import socket
+    from app.main import await_proxy
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    host, port = srv.getsockname()
+    try:
+        assert await_proxy(f"{host}:{port}", timeout=5.0) is True
+    finally:
+        srv.close()
+
+
+def test_await_proxy_gives_up_and_returns_false(monkeypatch):
+    # Nothing is listening: it must give up at the deadline rather than block
+    # the loop forever -- an unreachable device is a normal state, not fatal.
+    from app.main import await_proxy
+
+    slept = []
+    monkeypatch.setattr("app.main.time.sleep", lambda s: slept.append(s))
+    assert await_proxy("127.0.0.1:9", timeout=0.0) is False
+
+
+def test_await_proxy_tolerates_a_malformed_address():
+    from app.main import await_proxy
+    assert await_proxy("not-a-host-port", timeout=0.0) is False

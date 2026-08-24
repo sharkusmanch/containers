@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import signal
+import socket
 import sys
 import time
 from dataclasses import dataclass, field
@@ -320,6 +321,35 @@ def _dir_bytes(path: str) -> int:
     return total
 
 
+def await_proxy(addr: str, timeout: float = 45.0) -> bool:
+    """Block until the Tailscale sidecar's SOCKS port accepts, or give up.
+
+    The sidecar needs a few seconds to register with Headscale. Without this the
+    first cycle after every restart reports "device unreachable" and then sleeps
+    a full poll_interval, so a rollout cost up to ten idle minutes. Giving up is
+    not fatal: an unreachable device is a normal state and the loop retries.
+    """
+    try:
+        host, _, port_s = addr.rpartition(":")
+        port = int(port_s)
+        if not host:
+            raise ValueError(addr)
+    except ValueError:
+        log.warning("SOCKS_PROXY %r is not host:port; not waiting for it", addr)
+        return False
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with socket.create_connection((host, port), timeout=2.0):
+                return True
+        except OSError:
+            pass
+        if time.monotonic() >= deadline:
+            log.info("SOCKS proxy %s not up after %.0fs; starting anyway", addr, timeout)
+            return False
+        time.sleep(1)
+
+
 def main() -> int:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -327,6 +357,7 @@ def main() -> int:
     ctx = Ctx.build(cfg)
     metrics.rebuild_from_ledger(ctx.ledger)     # before serving, so a restart
     metrics.serve(cfg.metrics_port)             # does not reset the stall window
+    await_proxy(cfg.socks_proxy)                # else cycle 1 always misses
 
     def _stop(signum, _frame):
         log.info("signal %s: finishing the current book then exiting", signum)
