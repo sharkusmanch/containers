@@ -47,6 +47,7 @@ class FakeApi:
         self.upload_calls += 1
         return self.upload_result
     def verify(self, book_id, path): return self.verify_ok
+    def upload_limit_bytes(self): return 500 * 1024 * 1024
 
 
 class FakeNotifier:
@@ -502,10 +503,13 @@ def test_a_book_that_always_hard_crashes_is_eventually_given_up_on(cfg, monkeypa
 # --- uploaded books get a readable title ------------------------------------
 
 class _MetaApi(FakeApi):
-    def __init__(self, fail=False, **kw):
+    def __init__(self, fail=False, limit=None, **kw):
         super().__init__(**kw)
         self.meta = []
         self._fail = fail
+        self._limit = limit
+    def upload_limit_bytes(self):
+        return self._limit if self._limit is not None else 500 * 1024 * 1024
     def set_metadata(self, book_id, title=None, asin=None):
         if self._fail:
             raise Transport("metadata service down")

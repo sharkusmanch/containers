@@ -251,3 +251,41 @@ def test_enrich_still_extracts_the_cover_when_the_refresh_fails(cfg):
                    json={"processed": 1, "updated": 1})
     BookOrbit(cfg).enrich(42)
     assert any(c.request.url.endswith("/re-extract-cover") for c in responses.calls)
+
+
+# --- the server owns the upload limit ---------------------------------------
+# max_upload_size_mb is an app setting in Postgres, editable in the UI, so a
+# value compiled into this pipeline drifts the moment it is changed there.
+
+SETTINGS = f"{BASE}/api/v1/app-settings"
+
+
+@responses.activate
+def test_upload_limit_comes_from_the_server(cfg):
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.get(SETTINGS, json=[{"key": "max_upload_size_mb", "value": "2048"}])
+    assert BookOrbit(cfg).upload_limit_bytes() == 2048 * 1024 * 1024
+
+
+@responses.activate
+def test_upload_limit_is_cached_not_refetched_per_book(cfg):
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.get(SETTINGS, json=[{"key": "max_upload_size_mb", "value": "2048"}])
+    api = BookOrbit(cfg)
+    api.upload_limit_bytes(); api.upload_limit_bytes(); api.upload_limit_bytes()
+    assert len([c for c in responses.calls if c.request.url == SETTINGS]) == 1
+
+
+@responses.activate
+def test_upload_limit_falls_back_when_the_setting_is_unreadable(cfg):
+    # Never block an upload because a cosmetic lookup failed.
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.get(SETTINGS, status=500, json={})
+    assert BookOrbit(cfg).upload_limit_bytes() == cfg.max_upload_bytes
+
+
+@responses.activate
+def test_upload_limit_ignores_a_nonsense_value(cfg):
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.get(SETTINGS, json=[{"key": "max_upload_size_mb", "value": "banana"}])
+    assert BookOrbit(cfg).upload_limit_bytes() == cfg.max_upload_bytes

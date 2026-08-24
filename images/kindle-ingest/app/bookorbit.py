@@ -42,6 +42,7 @@ class BookOrbit:
         self.base = cfg.bookorbit_url
         self.s = session or requests.Session()
         self._token: str | None = None
+        self._upload_limit: int | None = None
 
     # --- auth -----------------------------------------------------------
     def login(self) -> str:
@@ -137,6 +138,37 @@ class BookOrbit:
         r = self.s.patch(f"{self.base}/api/v1/books/{book_id}/metadata",
                          headers=self._headers(), json=body, timeout=60)
         self._raise_for(r.status_code, r.text)
+
+    def upload_limit_bytes(self) -> int:
+        """The server's own upload ceiling, in bytes.
+
+        max_upload_size_mb is an app setting stored in Postgres and editable in
+        the UI, so a value compiled in here drifts the moment it is changed
+        there -- which is exactly what happened: the pipeline assumed 500MB
+        while the server had been raised to 2048MB. Ask the server instead.
+
+        Cached for the life of this client, and any failure falls back to the
+        configured value: a cosmetic lookup must never block an upload.
+        """
+        if self._upload_limit is not None:
+            return self._upload_limit
+        limit = self.cfg.max_upload_bytes
+        try:
+            r = self.s.get(f"{self.base}/api/v1/app-settings",
+                           headers=self._headers(), timeout=30)
+            self._raise_for(r.status_code, r.text)
+            body = r.json()
+            items = body if isinstance(body, list) else (
+                body.get("items") or body.get("settings") or [])
+            for it in items:
+                if str(it.get("key")) == "max_upload_size_mb":
+                    limit = int(str(it.get("value")).strip()) * 1024 * 1024
+                    break
+        except Exception as e:
+            log.warning("could not read the server upload limit (%s); using %d",
+                        str(e)[:80], limit)
+        self._upload_limit = limit
+        return limit
 
     def enrich(self, book_id: int) -> None:
         """Populate author/series/description and pull a cover off the file.
