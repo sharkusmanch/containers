@@ -98,3 +98,63 @@ def test_fetch_book_refuses_an_unsafe_basename(tmp_path):
     b = DeviceBook("B0TEST1234", "evil`whoami`_B0TEST1234", 10, 2)
     with pytest.raises(UnsafeName):
         Device(Cfg()).fetch_book(b, str(tmp_path / "d"))
+
+
+# --- a big comic must not be cut off mid-pull -------------------------------
+# Observed in the cluster: "Invincible Compendium Vol. 1" is hundreds of MB and
+# the pull died at rclone_timeout + 120 = 420s. The link runs ~1 MB/s through
+# the Tailscale DERP relay, so 420s caps a book at roughly 400 MB.
+
+class _Cfg:
+    kindle_host = "h"; kindle_port = 2222; ssh_key_path = "/k"; socks_proxy = "p:1"
+    ssh_connect_timeout = 5; rclone_timeout = 300; pull_timeout = 3600
+
+
+def test_pull_timeout_is_generous_enough_for_a_large_comic(monkeypatch, tmp_path):
+    import subprocess
+    from app.device import Device, DeviceBook
+    seen = {}
+
+    class FakeProc:
+        stdout = None
+        stderr = type("E", (), {"read": staticmethod(lambda: b"")})()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def wait(self): return 0
+
+    def fake_run(argv, **kw):
+        seen["timeout"] = kw.get("timeout")
+        d = tmp_path / "d"
+        d.mkdir(parents=True, exist_ok=True)
+        # the post-pull check compares the pulled .kfx against book.kfx_size
+        (d / "Title_B0TEST1234.kfx").write_bytes(b"x" * 10)
+        return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    b = DeviceBook("B0TEST1234", "Title_B0TEST1234", 10, 2)
+    Device(_Cfg()).fetch_book(b, str(tmp_path / "d"))
+    assert seen["timeout"] == 3600           # not rclone_timeout + 120
+
+
+def test_a_pull_that_times_out_is_a_transport_fault(monkeypatch, tmp_path):
+    # It was surfacing as a bare TimeoutExpired, which _process could only treat
+    # as an unexpected error. It is a transport fault: re-pull next cycle.
+    import subprocess
+    from app.device import Device, DeviceBook, TruncatedPull
+
+    class FakeProc:
+        stdout = None
+        stderr = type("E", (), {"read": staticmethod(lambda: b"")})()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def wait(self): return 0
+
+    def boom(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, kw.get("timeout", 1))
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProc())
+    monkeypatch.setattr(subprocess, "run", boom)
+    b = DeviceBook("B0TEST1234", "Title_B0TEST1234", 10, 2)
+    with pytest.raises(TruncatedPull):
+        Device(_Cfg()).fetch_book(b, str(tmp_path / "d2"))

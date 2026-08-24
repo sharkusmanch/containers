@@ -238,10 +238,18 @@ class Device:
         )
         argv = self._ssh_base() + [remote]
         with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
-            tar = subprocess.run(["tar", "xf", "-", "-C", dest_dir],
-                                 stdin=p.stdout, capture_output=True,
-                                 timeout=self.cfg.rclone_timeout + 120)
-            p.stdout.close()
+            try:
+                tar = subprocess.run(["tar", "xf", "-", "-C", dest_dir],
+                                     stdin=p.stdout, capture_output=True,
+                                     timeout=self.cfg.pull_timeout)
+            except subprocess.TimeoutExpired as e:
+                # A transport fault, not an unexpected error: re-pull next
+                # cycle. Seen on a several-hundred-MB comic compendium.
+                raise TruncatedPull(
+                    f"{book.asin}: pull exceeded {self.cfg.pull_timeout}s") from e
+            finally:
+                if p.stdout:
+                    p.stdout.close()
             err = (p.stderr.read() or b"").decode(errors="replace")
             rc = p.wait()
         if rc != 0 and not os.listdir(dest_dir):

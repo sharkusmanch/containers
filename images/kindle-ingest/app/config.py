@@ -55,6 +55,7 @@ class Config:
     # timeouts (seconds)
     ssh_connect_timeout: int
     rclone_timeout: int
+    pull_timeout: int
     convert_timeout: int
     cycle_deadline: int
     ledger_path: str
@@ -91,6 +92,9 @@ class Config:
             metrics_port=_i("METRICS_PORT", 9090),
             ssh_connect_timeout=_i("SSH_CONNECT_TIMEOUT", 15),
             rclone_timeout=_i("RCLONE_TIMEOUT", 300),
+            # One book, one tar stream, ~1 MB/s over the DERP relay: a large
+            # comic compendium needs far more than the old 420s.
+            pull_timeout=_i("PULL_TIMEOUT", 3600),
             convert_timeout=_i("CONVERT_TIMEOUT", 1800),
             cycle_deadline=deadline,
             ledger_path=_s("LEDGER_PATH", os.path.join(state_dir, "books.jsonl")),
