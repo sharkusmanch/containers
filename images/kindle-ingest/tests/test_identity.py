@@ -31,3 +31,16 @@ def test_full_path_is_basenamed():
 def test_commas_and_hashes_in_title_do_not_break_it():
     assert asin_of("The Walking Dead #151_B01B1YHS9Y.kfx") == "B01B1YHS9Y"
     assert asin_of("A Parade of Horribles_ DCC, Book 8_B0GJJDXG4L.kfx") == "B0GJJDXG4L"
+
+
+def test_title_words_are_not_mistaken_for_asins():
+    """Shape alone is not enough: real ASINs contain digits, title words do not."""
+    assert asin_of("The_BLACKBIRDS.kfx") is None
+    assert asin_of("Some Title_BLOODLINES.azw3") is None
+
+
+def test_matches_real_on_device_variants():
+    assert asin_of("Warbreaker-asin_B002KYHZHA-type_EBOK-v_0.azw3") == "B002KYHZHA"
+    assert asin_of("Warbreaker_B002KYHZHA (1).kfx") == "B002KYHZHA"
+    assert asin_of("B002KYHZHA.kfx") == "B002KYHZHA"
+    assert asin_of("Title_B002KYHZHA-v2.kfx") == "B002KYHZHA"
