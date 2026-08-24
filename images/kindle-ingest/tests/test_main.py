@@ -451,3 +451,47 @@ def test_the_partial_keyfile_is_still_used_after_a_failed_emission(cfg, monkeypa
     monkeypatch.setattr(M, "verify_artifact", lambda *a, **k: None)
     M.run_cycle(_ctx(cfg, dev, api))
     assert api.upload_calls == 1
+
+
+# --- a hard crash must still cost an attempt --------------------------------
+# The pod was OOMKilled mid-decrypt on a 400MB+ comic. No except clause can
+# catch that. _process only wrote a ledger record AFTER decryption succeeded,
+# so attempts stayed unchanged and the same book would OOM the pod every cycle
+# forever -- blocking every other book behind it.
+
+def test_the_attempt_is_recorded_before_the_expensive_work(cfg, monkeypatch):
+    b = _book("B0OOMKILL01")
+    seen = {}
+
+    def spy_decrypt(enc, keyfile, out):
+        # stand-in for the moment the process dies: what is durable right now?
+        rec = ctx.ledger.get(b.asin) or {}
+        seen["attempts_at_decrypt"] = rec.get("attempts")
+        raise M.DecryptFailed("boom")
+
+    monkeypatch.setattr(M, "decrypt_archive", spy_decrypt)
+    ctx = _ctx(cfg, FakeDevice({b.asin: b}))
+    M.run_cycle(ctx)
+    assert seen["attempts_at_decrypt"] == 1, "attempt was not durable before decrypt"
+
+
+def test_a_book_that_always_hard_crashes_is_eventually_given_up_on(cfg, monkeypatch):
+    # Simulates the OOM loop: the process dies before any outcome is written.
+    b = _book("B0OOMKILL02")
+    led = Ledger(cfg.ledger_path)
+
+    class Crash(BaseException):        # not an Exception: no handler catches it
+        pass
+
+    def hard_crash(*a):
+        raise Crash()
+
+    monkeypatch.setattr(M, "decrypt_archive", hard_crash)
+    for _ in range(M.MAX_ATTEMPTS + 1):
+        ctx = _ctx(cfg, FakeDevice({b.asin: b}), ledger=led)
+        try:
+            M.run_cycle(ctx)
+        except Crash:
+            pass                        # the "process" died; next cycle restarts
+    rec = led.get(b.asin) or {}
+    assert rec.get("attempts", 0) >= M.MAX_ATTEMPTS

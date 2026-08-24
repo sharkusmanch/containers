@@ -122,6 +122,15 @@ def _process(ctx: Ctx, book, keyfile: str, res: CycleResult) -> None:
         os.makedirs(os.path.dirname(p[d]), exist_ok=True)
     os.makedirs(cfg.work_dir, exist_ok=True)
 
+    # Spend the attempt BEFORE the expensive work, so a crash no handler can
+    # catch still costs one. The pod was OOMKilled mid-decrypt on a 400MB+
+    # comic; because the first record was written only after decryption
+    # succeeded, attempts never moved and that book would have OOMed the pod
+    # every cycle forever, blocking every other book behind it. MAX_ATTEMPTS
+    # can only bound what it can count.
+    ctx.ledger.record(asin, RETRYABLE, attempts=attempts, title=book.basename,
+                      detail="started")
+
     try:
         ctx.check_stop()
         # --- pull + decrypt ------------------------------------------------
