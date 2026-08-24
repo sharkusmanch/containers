@@ -37,3 +37,14 @@ def epub_factory(tmp_path):
     def _f(name="b.epub", **kw):
         return make_epub(tmp_path / name, **kw)
     return _f
+
+
+@pytest.fixture
+def cfg(monkeypatch, tmp_path):
+    monkeypatch.setenv("BOOKORBIT_URL", "http://bookorbit.media.svc.cluster.local:3000")
+    monkeypatch.setenv("BOOKORBIT_USER", "u")
+    monkeypatch.setenv("BOOKORBIT_PASS", "p")
+    monkeypatch.setenv("STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    from app.config import Config
+    return Config.from_env()
