@@ -570,3 +570,43 @@ def test_enrichment_failure_does_not_fail_the_upload(cfg, monkeypatch):
     r = M.run_cycle(ctx)
     assert r.uploaded == 1
     assert ctx.ledger.get(b.asin)["outcome"] == OK
+
+
+# --- a book too large for the server is a decision, not a defect ------------
+# BookOrbit hardcodes MAX_UPLOAD_BYTES = 500MB and 413s anything larger. The
+# Invincible compendiums convert to 699MB and 646MB CBZs, so they pulled,
+# decrypted and converted fine and then failed at the last step -- recorded
+# FAILED, which reads as "this book is broken" when nothing is broken.
+
+def test_an_oversized_artifact_is_not_uploaded(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    big = cfg.max_upload_bytes + 1
+    monkeypatch.setattr(M, "to_epub",
+                        lambda a, o, t: open(o, "wb").write(b"x" * big) and "")
+    b = DeviceBook("B0HUGE0001", "Huge Compendium_B0HUGE0001", 100, 2)
+    api = _MetaApi()
+    ctx = _ctx(cfg, FakeDevice({b.asin: b}), api)
+    M.run_cycle(ctx)
+    assert api.upload_calls == 0, "must not attempt a doomed upload"
+
+
+def test_an_oversized_artifact_needs_a_decision(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    big = cfg.max_upload_bytes + 1
+    monkeypatch.setattr(M, "to_epub",
+                        lambda a, o, t: open(o, "wb").write(b"x" * big) and "")
+    b = DeviceBook("B0HUGE0002", "Huge Compendium_B0HUGE0002", 100, 2)
+    ctx = _ctx(cfg, FakeDevice({b.asin: b}), _MetaApi())
+    r = M.run_cycle(ctx)
+    rec = ctx.ledger.get(b.asin)
+    assert rec["outcome"] == NEEDS_DECISION
+    assert "500" in str(rec.get("detail")) or "limit" in str(rec.get("detail")).lower()
+    assert r.needs_decision == 1
+
+
+def test_an_artifact_within_the_limit_uploads_normally(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    b = DeviceBook("B0FINE0003", "Normal Book_B0FINE0003", 100, 2)
+    api = _MetaApi()
+    M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), api))
+    assert api.upload_calls == 1

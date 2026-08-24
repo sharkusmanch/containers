@@ -56,6 +56,7 @@ class Config:
     ssh_connect_timeout: int
     rclone_timeout: int
     pull_timeout: int
+    max_upload_bytes: int
     convert_timeout: int
     cycle_deadline: int
     ledger_path: str
@@ -95,6 +96,11 @@ class Config:
             # One book, one tar stream, ~1 MB/s over the DERP relay: a large
             # comic compendium needs far more than the old 420s.
             pull_timeout=_i("PULL_TIMEOUT", 3600),
+            # BookOrbit hardcodes MAX_UPLOAD_BYTES = 500MB in
+            # upload-storage.service.js and 413s anything larger; it is a
+            # constant, not configurable server-side. Mirrored here so an
+            # oversized book is a clean decision instead of a wasted upload.
+            max_upload_bytes=_i("MAX_UPLOAD_BYTES", 500 * 1024 * 1024),
             convert_timeout=_i("CONVERT_TIMEOUT", 1800),
             cycle_deadline=deadline,
             ledger_path=_s("LEDGER_PATH", os.path.join(state_dir, "books.jsonl")),

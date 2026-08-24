@@ -178,6 +178,18 @@ def _process(ctx: Ctx, book, keyfile: str, res: CycleResult) -> None:
                               detail=f"already in library as #{existing.get('id')}")
             res.needs_decision += 1
             return
+        size = os.path.getsize(artifact)
+        if size > cfg.max_upload_bytes:
+            # Nothing is wrong with the book; the server will not take a file
+            # this big and no retry changes that. Say so plainly rather than
+            # spending a doomed multi-hundred-MB POST and recording FAILED.
+            mb, lim = size // (1024 * 1024), cfg.max_upload_bytes // (1024 * 1024)
+            ctx.ledger.record(asin, NEEDS_DECISION, attempts=attempts,
+                              title=book.basename, artifact=artifact, kind=kind,
+                              detail=f"{kind} is {mb}MB, over BookOrbit's "
+                                     f"{lim}MB upload limit; not uploaded")
+            res.needs_decision += 1
+            return
         ctx.ledger.record(asin, UPLOADING, attempts=attempts, title=book.basename)
         with metrics.STAGE.labels(stage="upload").time():
             up = ctx.api.upload(artifact)
