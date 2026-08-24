@@ -188,11 +188,11 @@ def _tagged_item(book_id, title, tags):
 def test_set_metadata_sends_title_and_asin_tag(cfg):
     import json
     responses.post(LOGIN, json={"accessToken": "T"})
-    responses.patch(f"{BASE}/api/v1/books/42/metadata", json={"id": 42})
+    responses.patch(f"{BASE}/api/v1/books/42/metadata-and-locks", json={"id": 42})
     BookOrbit(cfg).set_metadata(42, title="Real Title", asin="B06XRCBRX8")
     body = json.loads(responses.calls[-1].request.body)
-    assert body["title"] == "Real Title"
-    assert "asin:B06XRCBRX8" in body["tags"]
+    assert body["metadata"]["title"] == "Real Title"
+    assert "asin:B06XRCBRX8" in body["metadata"]["tags"]
 
 
 @responses.activate
@@ -289,3 +289,43 @@ def test_upload_limit_ignores_a_nonsense_value(cfg):
     responses.post(LOGIN, json={"accessToken": "T"})
     responses.get(SETTINGS, json=[{"key": "max_upload_size_mb", "value": "banana"}])
     assert BookOrbit(cfg).upload_limit_bytes() == cfg.max_upload_bytes
+
+
+# --- the asin tag must survive BookOrbit's own metadata import ---------------
+# EPUB uploads trigger an async import from the file (dc:title, dc:creator,
+# dc:subject -> tags) that lands AFTER our PATCH and overwrote tags, so the two
+# EPUBs in the run came out with correct titles and no reconciliation key.
+# CBZs have no such import, which is why only the EPUBs lost it. Locking the
+# field is what makes it durable; the title stays unlocked so enrichment may
+# still improve it.
+
+@responses.activate
+def test_set_metadata_locks_the_tag_field(cfg):
+    import json
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.patch(f"{BASE}/api/v1/books/42/metadata-and-locks", json={"id": 42})
+    BookOrbit(cfg).set_metadata(42, title="Real Title", asin="B06XRCBRX8")
+    body = json.loads(responses.calls[-1].request.body)
+    assert body["metadata"]["title"] == "Real Title"
+    assert "asin:B06XRCBRX8" in body["metadata"]["tags"]
+    assert body["lockedFields"] == ["tags"]
+
+
+@responses.activate
+def test_the_title_is_left_unlocked(cfg):
+    import json
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.patch(f"{BASE}/api/v1/books/42/metadata-and-locks", json={"id": 42})
+    BookOrbit(cfg).set_metadata(42, title="Provisional", asin="B06XRCBRX8")
+    body = json.loads(responses.calls[-1].request.body)
+    assert "title" not in body["lockedFields"]
+
+
+@responses.activate
+def test_set_metadata_without_an_asin_locks_nothing(cfg):
+    import json
+    responses.post(LOGIN, json={"accessToken": "T"})
+    responses.patch(f"{BASE}/api/v1/books/42/metadata-and-locks", json={"id": 42})
+    BookOrbit(cfg).set_metadata(42, title="Just A Title")
+    body = json.loads(responses.calls[-1].request.body)
+    assert body.get("lockedFields") == []

@@ -128,14 +128,20 @@ class BookOrbit:
         matches on: it rides in the LIST response, so lookup stays one request
         per page, and unlike the title it survives metadata enrichment.
         """
-        body: dict = {}
+        meta: dict = {}
         if title:
-            body["title"] = title
+            meta["title"] = title
         if asin:
-            body["tags"] = [self.asin_tag(asin)]
-        if not body:
+            meta["tags"] = [self.asin_tag(asin)]
+        if not meta:
             return
-        r = self.s.patch(f"{self.base}/api/v1/books/{book_id}/metadata",
+        # Lock the tag. An EPUB upload triggers an async import from the file
+        # (dc:title, dc:creator, dc:subject -> tags) that lands after this PATCH
+        # and wiped the tag, leaving those books with no reconciliation key --
+        # CBZs kept theirs only because they have no such import. The title is
+        # deliberately left unlocked so enrichment may still improve it.
+        body = {"metadata": meta, "lockedFields": ["tags"] if asin else []}
+        r = self.s.patch(f"{self.base}/api/v1/books/{book_id}/metadata-and-locks",
                          headers=self._headers(), json=body, timeout=60)
         self._raise_for(r.status_code, r.text)
 
