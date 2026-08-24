@@ -6,6 +6,7 @@ state and must never surface as an error.
 """
 import os
 import shlex
+import shutil
 import subprocess
 import zipfile
 from dataclasses import dataclass
@@ -29,6 +30,11 @@ LIST_CMD = (
 
 class DeviceUnreachable(Exception):
     """Not an error condition -- the device is simply asleep."""
+
+
+class TruncatedPull(Exception):
+    """The transfer did not complete. Retryable, and distinct from a book whose
+    Amazon assets were never delivered -- the remedies are opposite."""
 
 
 @dataclass(frozen=True)
@@ -153,6 +159,56 @@ class Device:
 
     def clear_keyfile(self) -> None:
         self._ssh(f"rm -f {shlex.quote(KEYFILE)}")
+
+    def _rclone_base(self) -> list[str]:
+        c = self.cfg
+        return [
+            "rclone", "--sftp-host", c.kindle_host, "--sftp-port", str(c.kindle_port),
+            "--sftp-user", "root", "--sftp-key-file", c.ssh_key_path,
+            "--sftp-shell-type", "unix",
+            "--contimeout", "30s", "--timeout", f"{c.rclone_timeout}s",
+            "--low-level-retries", "3", "--retries", "2",
+        ]
+
+    def fetch_keyfile(self, dest: str) -> str:
+        """Pull the whole keyfile. It carries one record per book and SKeyList
+        selects by voucher id, so there is no need to demultiplex it."""
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        text = self._ssh(f"cat {shlex.quote(KEYFILE)} 2>/dev/null || true")
+        tmp = dest + ".part"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, dest)
+        return dest
+
+    def fetch_book(self, book: DeviceBook, dest_dir: str) -> str:
+        """Pull a book's encrypted parts, verifying the transfer completed.
+
+        A truncated pull is a TRANSPORT fault -- re-pull immediately. It must
+        not be confused with incomplete Amazon assets, whose remedy is the
+        opposite (wait, or purge and re-download).
+        """
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        os.makedirs(dest_dir, exist_ok=True)
+        env = dict(os.environ, ALL_PROXY=f"socks5://{self.cfg.socks_proxy}")
+        kfx_local = os.path.join(dest_dir, os.path.basename(book.kfx_path))
+        for args in (
+            self._rclone_base() + ["copyto", f":sftp:{book.kfx_path}", kfx_local],
+            self._rclone_base() + ["copy", f":sftp:{book.assets_path}", dest_dir,
+                                   "--include", "metadata.kfx", "--include", "voucher",
+                                   "--include", "attachables/**"],
+        ):
+            r = subprocess.run(args, capture_output=True, text=True, env=env,
+                               timeout=self.cfg.rclone_timeout + 60)
+            if r.returncode != 0:
+                raise DeviceUnreachable(f"rclone: {r.stderr.strip()[:200]}")
+        got = os.path.getsize(kfx_local) if os.path.exists(kfx_local) else 0
+        if got != book.kfx_size:
+            raise TruncatedPull(f"{book.asin}: pulled {got} of {book.kfx_size} bytes")
+        return dest_dir
+
+    def build_archive(self, src_dir: str, dest: str) -> str:
+        return build_encrypted_archive(src_dir, dest)
 
     def delete_book(self, book: DeviceBook) -> list[str]:
         """Remove the encrypted source ONLY.

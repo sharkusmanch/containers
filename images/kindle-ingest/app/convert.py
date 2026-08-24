@@ -170,9 +170,17 @@ def epub_to_cbz(epub_path: str, out_path: str) -> int:
 
 
 def to_epub(src: str, out_path: str, timeout: int, binary: str = "ebook-convert") -> str:
+    """Convert to EPUB, returning calibre's output.
+
+    The log is returned rather than discarded so the caller can compare
+    calibre's own verdict against the structural classifier and count
+    disagreements -- the only way to notice calibre changing its wording.
+    Written temp+rename so a killed conversion cannot leave a complete-looking
+    file that skip-if-exists would then trust forever.
+    """
     tmp = out_path + ".part.epub"
     p = subprocess.run([binary, src, tmp], capture_output=True, text=True, timeout=timeout)
     if p.returncode != 0 or not os.path.exists(tmp):
         raise ConvertFailed((p.stderr or p.stdout or "")[-400:])
     os.replace(tmp, out_path)
-    return out_path
+    return (p.stdout or "") + (p.stderr or "")
