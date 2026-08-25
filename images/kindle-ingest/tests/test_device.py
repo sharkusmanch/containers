@@ -303,3 +303,43 @@ def test_no_stale_archives_is_silent(monkeypatch, caplog):
         assert dev.stale_archives({"B000000001": type("B", (), {
             "basename": "Alpha_B000000001"})()}) == []
     assert caplog.text == ""
+
+
+# --- the tool's own decrypted output is never cleaned up --------------------
+# The on-device DeDRM tool writes a decrypted <basename>.kfx-zip into
+# /mnt/us/dedrm and leaves it there forever. 28 accumulated (339MB), and a
+# leftover also makes the tool SKIP that book on the next keyfile run, emitting
+# no key for it -- which is what starved key emission down to 6 of 25.
+
+def test_delete_book_also_removes_the_decrypted_archive(monkeypatch):
+    from app.device import Device, DeviceBook, DEDRM_OUT
+    sent = {}
+    dev = Device(_Cfg())
+    monkeypatch.setattr(dev, "_ssh", lambda cmd, **k: sent.setdefault("cmd", cmd))
+    b = DeviceBook("B0TEST1234", "Some Title_B0TEST1234", 10, 2)
+    targets = dev.delete_book(b)
+    assert f"{DEDRM_OUT}/Some Title_B0TEST1234.kfx-zip" in sent["cmd"]
+    assert any("dedrm" in t for t in targets)
+
+
+def test_delete_book_still_never_touches_the_sdr(monkeypatch):
+    from app.device import Device, DeviceBook
+    sent = {}
+    dev = Device(_Cfg())
+    monkeypatch.setattr(dev, "_ssh", lambda cmd, **k: sent.setdefault("cmd", cmd))
+    b = DeviceBook("B0TEST1234", "Some Title_B0TEST1234", 10, 2)
+    dev.delete_book(b)
+    cmd = sent["cmd"]
+    assert ".sdr/assets" in cmd            # assets go
+    assert not any(t.endswith(".sdr") for t in cmd.split())   # the .sdr does not
+
+
+def test_delete_book_quotes_titles_with_apostrophes(monkeypatch):
+    # "The Butcher's Masquerade" broke an earlier hand-quoted command.
+    from app.device import Device, DeviceBook
+    sent = {}
+    dev = Device(_Cfg())
+    monkeypatch.setattr(dev, "_ssh", lambda cmd, **k: sent.setdefault("cmd", cmd))
+    b = DeviceBook("B0TEST1234", "The Butcher's Masquerade_B0TEST1234", 10, 2)
+    dev.delete_book(b)
+    assert "Butcher" in sent["cmd"]        # quoted, not mangled or split

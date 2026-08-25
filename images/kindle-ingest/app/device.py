@@ -346,10 +346,17 @@ class Device:
     def delete_book(self, book: DeviceBook) -> list[str]:
         """Remove the encrypted source ONLY.
 
-        Deletes the .kfx and the assets/ subtree. The .sdr directory itself is
+        Deletes the .kfx, the assets/ subtree, and the decrypted .kfx-zip the
+        on-device tool wrote for this book. The .sdr directory itself is
         preserved: it holds reading position, bookmarks and highlights, and
         destroying it would silently discard reading history.
+
+        The decrypted archive is included because nothing else ever removes it.
+        They accumulated to 339MB, and a leftover archive additionally makes
+        the tool SKIP that book on the next keyfile run and emit no key for it
+        -- the cause of key emission covering 6 of 25 books.
         """
-        targets = [book.kfx_path, book.assets_path]
+        targets = [book.kfx_path, book.assets_path,
+                   f"{DEDRM_OUT}/{book.basename}.kfx-zip"]
         self._ssh(" && ".join(f"rm -rf {shlex.quote(t)}" for t in targets))
         return targets
