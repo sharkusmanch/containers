@@ -354,7 +354,8 @@ def run_cycle(ctx: Ctx) -> CycleResult:
             except Stopping:
                 log.info("stopping; abandoned %s cleanly", b.asin)
                 break
-        ctx.notifier.batch_success(uploaded_titles)
+
+    _announce_successes(ctx)
 
     _cleanup(ctx, books, res)
     _notify_once(ctx)
@@ -371,9 +372,35 @@ def _notify_once(ctx: Ctx) -> None:
         for rec in ctx.ledger.by_outcome(outcome):
             if rec.get("notified"):
                 continue
-            fn(rec["asin"], rec.get("title", rec["asin"]),
-               rec.get("error") or rec.get("detail") or "")
-            ctx.ledger.record(rec["asin"], outcome, notified=True)
+            # Only record delivery if it actually happened. This marked
+            # notified unconditionally, so an alert sent while apprise was
+            # unreachable was dropped and never retried.
+            if fn(rec["asin"], rec.get("title", rec["asin"]),
+                  rec.get("error") or rec.get("detail") or ""):
+                ctx.ledger.record(rec["asin"], outcome, notified=True)
+
+
+def _announce_successes(ctx: Ctx) -> None:
+    """Announce uploaded books, and keep trying until the send lands.
+
+    This used to notify only the books uploaded in the current cycle, with no
+    record of whether the POST succeeded. apprise was unreachable for a whole
+    run, so a 14-book batch was announced into a void and nothing ever retried
+    -- the books were in the library, but silently.
+
+    The flag is written only on a successful send, so an outage delays
+    notification instead of losing it.
+    """
+    pending = [r for r in ctx.ledger.by_outcome(OK) if not r.get("announced")]
+    if not pending:
+        return
+    titles = [r.get("title") or r["asin"] for r in pending]
+    if not ctx.notifier.batch_success(titles):
+        log.info("could not announce %d book(s); will retry next cycle",
+                 len(titles))
+        return
+    for r in pending:
+        ctx.ledger.record(r["asin"], OK, announced=True)
 
 
 def _dir_bytes(path: str) -> int:

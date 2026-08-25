@@ -614,3 +614,65 @@ def test_an_artifact_within_the_limit_uploads_normally(cfg, monkeypatch):
     api = _MetaApi()
     M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), api))
     assert api.upload_calls == 1
+
+
+# --- notifications must survive apprise being down --------------------------
+# Success notifications were fire-and-forget: run_cycle announced only the
+# books uploaded in THAT cycle, with no record of whether the POST landed. A
+# blocked apprise silently lost the batch -- 14 books were uploaded and never
+# announced, and nothing retried. Failures had a durable flag but set it even
+# when the send failed, losing those too.
+
+class _FlakyNotifier(FakeNotifier):
+    def __init__(self, working=True):
+        super().__init__()
+        self.working = working
+        self.batches = []
+    def batch_success(self, titles):
+        if titles:
+            self.batches.append(list(titles))
+        return bool(titles) and self.working
+    def failure(self, a, t, r):
+        self.failures.append(a)
+        return self.working
+
+
+def _ctx_n(cfg, device, notifier, api=None, ledger=None):
+    return M.Ctx(cfg, device, api or FakeApi(),
+                 ledger or Ledger(cfg.ledger_path), notifier)
+
+
+def test_an_unannounced_upload_is_retried_next_cycle(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    b = DeviceBook("B0NOTIFY01", "Some Book_B0NOTIFY01", 100, 2)
+    led = Ledger(cfg.ledger_path)
+    down = _FlakyNotifier(working=False)
+    M.run_cycle(_ctx_n(cfg, FakeDevice({b.asin: b}), down, _MetaApi(), led))
+    assert not led.get(b.asin).get("announced"), "must not claim it announced"
+
+    up = _FlakyNotifier(working=True)
+    M.run_cycle(_ctx_n(cfg, FakeDevice({b.asin: b}), up, _MetaApi(), led))
+    assert any(b.basename in t for batch in up.batches for t in batch), \
+        "the missed book must be announced once apprise recovers"
+    assert led.get(b.asin).get("announced") is True
+
+
+def test_a_book_is_not_announced_twice(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    b = DeviceBook("B0NOTIFY02", "Some Book_B0NOTIFY02", 100, 2)
+    led = Ledger(cfg.ledger_path)
+    n = _FlakyNotifier(working=True)
+    M.run_cycle(_ctx_n(cfg, FakeDevice({b.asin: b}), n, _MetaApi(), led))
+    M.run_cycle(_ctx_n(cfg, FakeDevice({b.asin: b}), n, _MetaApi(), led))
+    sent = [t for batch in n.batches for t in batch if b.basename in t]
+    assert len(sent) == 1, f"announced {len(sent)} times"
+
+
+def test_a_failed_alert_is_not_marked_notified(cfg, monkeypatch):
+    b = _book("B0FAILNOT1")
+    led = Ledger(cfg.ledger_path)
+    led.record(b.asin, FAILED, title=b.basename, error="boom")
+    down = _FlakyNotifier(working=False)
+    M.run_cycle(_ctx_n(cfg, FakeDevice({b.asin: b}), down, FakeApi(), led))
+    assert not led.get(b.asin).get("notified"), \
+        "a failed send must not be recorded as delivered"
