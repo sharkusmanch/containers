@@ -57,6 +57,7 @@ class Config:
     rclone_timeout: int
     pull_timeout: int
     max_upload_bytes: int
+    backup_timeout: int
     convert_timeout: int
     cycle_deadline: int
     ledger_path: str
@@ -101,6 +102,9 @@ class Config:
             # constant, not configurable server-side. Mirrored here so an
             # oversized book is a clean decision instead of a wasted upload.
             max_upload_bytes=_i("MAX_UPLOAD_BYTES", 500 * 1024 * 1024),
+            # The config archive is ~0.4MB; the budget is for a sleepy
+            # device on a relayed link, not for volume.
+            backup_timeout=_i("BACKUP_TIMEOUT", 600),
             convert_timeout=_i("CONVERT_TIMEOUT", 1800),
             cycle_deadline=deadline,
             ledger_path=_s("LEDGER_PATH", os.path.join(state_dir, "books.jsonl")),

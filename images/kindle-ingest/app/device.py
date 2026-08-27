@@ -21,6 +21,50 @@ ITEMS = "/mnt/us/documents/Downloads/Items01"
 TOOL = "/mnt/us/extensions/kfxdedrm"
 KEYFILE = "/mnt/us/dedrm/keyfile.txt"
 DEDRM_OUT = "/mnt/us/dedrm"
+KOREADER = "/mnt/us/koreader"
+
+# What a restore actually needs. Everything here is hand-built state that
+# exists nowhere else; fonts, dictionaries and stock plugins are deliberately
+# absent because they are re-downloadable and documented.
+_BACKUP_PATHS = (
+    "settings.reader.lua",
+    "history.lua",
+    "defaults.custom.lua",
+    "settings",
+    "patches",
+    "styletweaks",
+    "plugins/bookorbit.koplugin",
+    "plugins/appstore.koplugin",
+    "plugins/tailscale.koplugin",   # for its locally patched main.lua
+)
+
+# Excluded for two different reasons, both load-bearing.
+#
+# SECRETS: plugins/tailscale.koplugin/bin holds tailscaled.state (the node's
+# WireGuard private keys) and auth.key (the Headscale pre-auth key); dropbear_*
+# are private SSH host keys. None may reach the backup volume or the offsite
+# restic repo. Leaked tailnet identity is worse than a leaked host key.
+#
+# BULK: that same bin/ is 65MB of re-downloadable Go binaries, restored by its
+# own install-tailscale.sh. Caches and .old/.bak.* files are noise that would
+# several-fold the archive.
+_BACKUP_EXCLUDES = (
+    "plugins/tailscale.koplugin/bin",
+    "dropbear_*_host_key",
+    # The live DBs never enter the archive -- their .dbbk copies do. This also
+    # removes the -wal/-shm hazard at the source rather than at restore time.
+    "*.sqlite3",
+    "*.sqlite3-wal",
+    "*.sqlite3-shm",
+    "*.old",
+    "*.bak.*",
+)
+
+# journal_mode=wal on both, and KOReader is usually running, so a plain copy of
+# the .sqlite3 can miss everything still in the WAL and restore silently stale.
+# .backup is safe against a live writer. The default busy timeout is 0, so
+# without .timeout a write in flight fails the whole run.
+_BACKUP_DBS = ("statistics", "vocabulary_builder")
 
 # Deliberately permissive about punctuation real book titles carry
 # (apostrophes, commas, #, parentheses, &) and strict about shell
@@ -339,6 +383,61 @@ class Device:
                 f"{book.asin}: pulled {pulled_assets} of {book.asset_count} "
                 f"asset containers")
         return dest_dir
+
+    def backup_config(self, dest: str) -> str:
+        """Pull KOReader's irreplaceable config and state into a .tar.gz.
+
+        The SQLite databases are captured with `sqlite3 .backup` and land in the
+        archive as `settings/<name>.sqlite3.dbbk`. The live .sqlite3/-wal/-shm
+        files are excluded outright, so no stale database can ship and there is
+        no WAL to replay on restore. Restore strips the suffix:
+
+            for f in settings/*.dbbk; do mv "$f" "${f%.dbbk}"; done
+        """
+        q = shlex.quote
+        # .backup each DB beside its live copy as <name>.sqlite3.dbbk, checking
+        # exit codes: a failed .backup that left a stale or absent file to be
+        # silently tarred is the exact outcome this routine exists to prevent.
+        #
+        # Staging INSIDE the koreader tree is deliberate. busybox tar's -C is
+        # global, not positional as in GNU tar -- verified on device: given
+        # `tar cf - fileA -C other fileB`, fileA is resolved under `other` and
+        # lost. So every member must share one root, and that root is here.
+        pre, cleanup = [], []
+        for db in _BACKUP_DBS:
+            live = f"{KOREADER}/settings/{db}.sqlite3"
+            stage = f"{live}.dbbk"
+            cleanup.append(stage)
+            pre.append(
+                f"if [ -f {q(live)} ]; then "
+                f"sqlite3 -cmd '.timeout 5000' {q(live)} \".backup {stage}\" || exit 91; "
+                f"fi"
+            )
+        excludes = " ".join(f"--exclude={q(e)}" for e in _BACKUP_EXCLUDES)
+        paths = " ".join(q(p) for p in _BACKUP_PATHS)
+        remote = (
+            "set -e; "
+            + "; ".join(pre) + "; "
+            + f"cd {q(KOREADER)} && tar czf - {excludes} {paths}; "
+            + "rm -f " + " ".join(q(c) for c in cleanup)
+        )
+        argv = self._ssh_base() + [remote]
+        tmp_dest = dest + ".part"
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        with open(tmp_dest, "wb") as out:
+            with subprocess.Popen(argv, stdout=out, stderr=subprocess.PIPE) as p:
+                try:
+                    _, err = p.communicate(timeout=self.cfg.backup_timeout)
+                except subprocess.TimeoutExpired as e:
+                    p.kill()
+                    raise TruncatedPull(
+                        f"config backup exceeded {self.cfg.backup_timeout}s") from e
+                rc = p.returncode
+        if rc != 0:
+            os.path.exists(tmp_dest) and os.unlink(tmp_dest)
+            msg = (err or b"").decode(errors="replace").strip()[:200]
+            raise TruncatedPull(f"config backup: ssh rc={rc} {msg}")
+        return tmp_dest
 
     def build_archive(self, src_dir: str, dest: str) -> str:
         return build_encrypted_archive(src_dir, dest)
