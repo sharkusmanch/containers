@@ -350,6 +350,11 @@ def test_delete_book_quotes_titles_with_apostrophes(monkeypatch):
 # journal_mode=wal with live -wal/-shm siblings and KOReader is usually running,
 # so a plain file copy can capture a stale database that restores silently
 # wrong. sqlite3 .backup is safe against a live writer.
+#
+# These assert on PARSED TOKENS, not substrings. An earlier version used
+# `"settings" in remote`, which was satisfied by "settings.reader.lua" -- so
+# deleting the whole settings tree from the backup passed. Same for
+# `"tailscale.koplugin" in remote`, satisfied by the --exclude that removes it.
 
 class _BackupCfg(_Cfg):
     backup_timeout = 600
@@ -358,75 +363,177 @@ class _BackupCfg(_Cfg):
 class _FakeBackupProc:
     """Stands in for the ssh child that streams the archive to stdout."""
 
-    def __init__(self, out_file, rc=0, payload=b"x" * 100):
+    def __init__(self, out_file, rc=0, payload=b"x" * 100, timeout_exc=False):
         self._out = out_file
         self.returncode = rc
         self._payload = payload
+        self._timeout_exc = timeout_exc
+        self.killed = False
+        self.seen_timeout = None
 
     def __enter__(self): return self
     def __exit__(self, *a): return False
-    def kill(self): pass
+    def kill(self): self.killed = True
 
     def communicate(self, timeout=None):
+        import subprocess
+        self.seen_timeout = timeout
+        if self._timeout_exc:
+            raise subprocess.TimeoutExpired("ssh", timeout or 0)
         self._out.write(self._payload)
         return None, b""
 
 
-def _run_backup(monkeypatch, tmp_path, rc=0, payload=b"x" * 100):
-    """Capture the remote command the device would run."""
+def _run_backup(monkeypatch, tmp_path, rc=0, payload=b"x" * 100, timeout_exc=False):
     import subprocess
     from app.device import Device
     sent = {}
 
     def fake_popen(argv, stdout=None, stderr=None, **kw):
         sent["remote"] = argv[-1]
-        return _FakeBackupProc(stdout, rc=rc, payload=payload)
+        proc = _FakeBackupProc(stdout, rc=rc, payload=payload,
+                               timeout_exc=timeout_exc)
+        sent["proc"] = proc
+        return proc
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    dest = str(tmp_path / "koreader.tar.gz")
+    sent["dest"] = str(tmp_path / "koreader.tar.gz")
     try:
-        sent["result"] = Device(_BackupCfg()).backup_config(dest)
+        sent["result"] = Device(_BackupCfg()).backup_config(sent["dest"])
     except Exception as e:
         sent["error"] = e
     return sent
 
 
+def _tar_operands(remote):
+    """The paths tar is actually told to archive, as whole tokens."""
+    import shlex
+    toks = shlex.split(remote.replace(";", " ; "))
+    # the `for p in <paths> ; do` list is what feeds tar via "$@"
+    i = toks.index("for")
+    return toks[i + 3:toks.index(";", i)]
+
+
+def _excludes(remote):
+    import shlex
+    return [t.split("=", 1)[1] for t in shlex.split(remote.replace(";", " ; "))
+            if t.startswith("--exclude=")]
+
+
 def test_backup_uses_sqlite_dot_backup_not_a_file_copy(monkeypatch, tmp_path):
     r = _run_backup(monkeypatch, tmp_path)["remote"]
-    assert "sqlite3" in r and ".backup" in r
-    assert ".timeout" in r, "a live lock must not fail the run silently"
-    assert "|| exit" in r, "a failed .backup must not be silently tarred"
+    assert "sqlite3 -cmd '.timeout 5000'" in r, "a live lock must not fail the run"
+    assert ".backup" in r
+    assert "exit 91" in r, "a failed .backup must not be silently tarred"
 
 
-def test_backup_excludes_secrets_and_the_tailscale_binaries(monkeypatch, tmp_path):
+def test_backup_degrades_when_sqlite3_is_absent(monkeypatch, tmp_path):
+    # Without sqlite3 the ~290KB of Lua config is still worth capturing;
+    # failing the whole run would lose it every time, forever.
+    r = _run_backup(monkeypatch, tmp_path)["remote"]
+    assert "command -v sqlite3" in r
+
+
+def test_backup_excludes_every_secret(monkeypatch, tmp_path):
     # tailscaled.state holds the node's WireGuard private keys and auth.key is
-    # the Headscale pre-auth key -- shipping those offsite is worse than the
-    # dropbear host keys we already exclude. bin/ is also 65MB of Go binaries.
-    r = _run_backup(monkeypatch, tmp_path)["remote"]
-    assert "plugins/tailscale.koplugin/bin" in r
-    assert "dropbear_*_host_key" in r
-    assert "*.bak.*" in r and "*.old" in r
-    assert "sqlite3-wal" in r and "sqlite3-shm" in r
+    # the Headscale pre-auth key -- worse to leak than the dropbear host keys.
+    ex = _excludes(_run_backup(monkeypatch, tmp_path)["remote"])
+    for secret in ("plugins/tailscale.koplugin/bin", "dropbear_*_host_key"):
+        assert secret in ex, f"{secret} must be excluded"
 
 
-def test_backup_includes_the_config_that_matters(monkeypatch, tmp_path):
+def test_backup_excludes_the_live_databases(monkeypatch, tmp_path):
+    # The single exclude that keeps a stale, WAL-missing database out of the
+    # archive. Its absence is the failure this whole routine exists to prevent.
+    ex = _excludes(_run_backup(monkeypatch, tmp_path)["remote"])
+    assert "*.sqlite3" in ex
+    assert "*.sqlite3-wal" in ex and "*.sqlite3-shm" in ex
+
+
+def test_backup_excludes_noise(monkeypatch, tmp_path):
+    ex = _excludes(_run_backup(monkeypatch, tmp_path)["remote"])
+    assert "*.old" in ex and "*.bak.*" in ex
+
+
+def test_backup_archives_the_settings_tree_itself(monkeypatch, tmp_path):
+    # Not satisfiable by "settings.reader.lua": the tree carries both DBs,
+    # gestures, lookup history, the outbox and authorized_keys.
+    assert "settings" in _tar_operands(_run_backup(monkeypatch, tmp_path)["remote"])
+
+
+def test_backup_archives_every_required_path(monkeypatch, tmp_path):
+    ops = _tar_operands(_run_backup(monkeypatch, tmp_path)["remote"])
+    for must in ("settings.reader.lua", "history.lua", "defaults.custom.lua",
+                 "settings", "patches", "styletweaks",
+                 "plugins/bookorbit.koplugin", "plugins/appstore.koplugin",
+                 "plugins/tailscale.koplugin", ".sdrbackup"):
+        assert must in ops, f"{must} missing from the tar operands"
+
+
+def test_backup_sweeps_per_book_sidecars(monkeypatch, tmp_path):
+    # Highlights and reading position live next to each book, outside the
+    # koreader tree, so a single-root tar cannot reach them without staging.
     r = _run_backup(monkeypatch, tmp_path)["remote"]
-    for must in ("settings.reader.lua", "settings", "patches", "styletweaks",
-                 "bookorbit.koplugin", "appstore.koplugin",
-                 "tailscale.koplugin", "history.lua"):
-        assert must in r, f"{must} missing from the archive"
+    assert "metadata.*.lua" in r
+    assert ".sdrbackup" in _tar_operands(r)
+
+
+def test_backup_uses_compression(monkeypatch, tmp_path):
+    r = _run_backup(monkeypatch, tmp_path)["remote"]
+    assert "tar czf -" in r, "the archive is stored gzipped"
+
+
+def test_backup_clears_a_stale_stage_before_dumping(monkeypatch, tmp_path):
+    # A .dbbk left by a crashed run must never be tarred as if it were fresh.
+    r = _run_backup(monkeypatch, tmp_path)["remote"]
+    assert r.index("rm -f") < r.index("sqlite3"), "stale stage must be cleared first"
+
+
+def test_backup_cleans_up_on_failure_paths_too(monkeypatch, tmp_path):
+    # `set -e` would skip cleanup on every failing path, leaving .dbbk files
+    # inside KOReader's live settings directory.
+    r = _run_backup(monkeypatch, tmp_path)["remote"]
+    assert "set -e" not in r
+    assert "rc=$?" in r and "exit $rc" in r, "tar's status must survive cleanup"
+
+
+def test_backup_tolerates_a_path_that_no_longer_exists(monkeypatch, tmp_path):
+    # An uninstalled plugin must not break every future backup.
+    r = _run_backup(monkeypatch, tmp_path)["remote"]
+    assert '[ -e "$p" ]' in r
+
+
+def test_backup_honours_the_configured_timeout(monkeypatch, tmp_path):
+    s = _run_backup(monkeypatch, tmp_path)
+    assert s["proc"].seen_timeout == 600
 
 
 def test_backup_writes_a_part_file_not_the_final_name(monkeypatch, tmp_path):
     # K8up backs up the live PVC at 02:00 without snapshotting, so a file being
     # written then would be captured torn AND counted toward retention.
-    out = _run_backup(monkeypatch, tmp_path)["result"]
-    assert out.endswith(".part")
+    s = _run_backup(monkeypatch, tmp_path)
+    assert s["result"].endswith(".part")
     assert not (tmp_path / "koreader.tar.gz").exists()
 
 
 def test_a_failed_backup_leaves_no_partial_file(monkeypatch, tmp_path):
-    r = _run_backup(monkeypatch, tmp_path, rc=91)
     from app.device import TruncatedPull
-    assert isinstance(r.get("error"), TruncatedPull)
+    s = _run_backup(monkeypatch, tmp_path, rc=91)
+    assert isinstance(s.get("error"), TruncatedPull)
     assert not (tmp_path / "koreader.tar.gz.part").exists()
+
+
+def test_a_timed_out_backup_leaves_no_partial_file(monkeypatch, tmp_path):
+    from app.device import TruncatedPull
+    s = _run_backup(monkeypatch, tmp_path, timeout_exc=True)
+    assert isinstance(s.get("error"), TruncatedPull)
+    assert s["proc"].killed
+    assert not (tmp_path / "koreader.tar.gz.part").exists()
+
+
+def test_an_unreachable_device_is_not_reported_as_a_broken_transfer(monkeypatch, tmp_path):
+    # ssh's own 255 means the Kindle is asleep -- normal, and the caller treats
+    # it differently from a transfer that broke mid-stream.
+    from app.device import DeviceUnreachable
+    s = _run_backup(monkeypatch, tmp_path, rc=255)
+    assert isinstance(s.get("error"), DeviceUnreachable)

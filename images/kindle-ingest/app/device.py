@@ -36,6 +36,7 @@ _BACKUP_PATHS = (
     "plugins/bookorbit.koplugin",
     "plugins/appstore.koplugin",
     "plugins/tailscale.koplugin",   # for its locally patched main.lua
+    ".sdrbackup",                   # per-book highlights and positions
 )
 
 # Excluded for two different reasons, both load-bearing.
@@ -66,10 +67,21 @@ _BACKUP_EXCLUDES = (
 # without .timeout a write in flight fails the whole run.
 _BACKUP_DBS = ("statistics", "vocabulary_builder")
 
+# Sidecars are copied here, under their original relative paths.
+_SDR_STAGE = f"{KOREADER}/.sdrbackup"
+
 # Deliberately permissive about punctuation real book titles carry
 # (apostrophes, commas, #, parentheses, &) and strict about shell
 # metacharacters that have no business in a filename.
 _UNSAFE = frozenset(["`", "$", "\\", '"', "\n", "\r", "\x00"])
+
+
+def _unlink_quietly(path: str) -> None:
+    """Remove a partial file, tolerating its absence."""
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
 
 
 def _pulled_anything(dest_dir: str) -> bool:
@@ -395,32 +407,63 @@ class Device:
             for f in settings/*.dbbk; do mv "$f" "${f%.dbbk}"; done
         """
         q = shlex.quote
-        # .backup each DB beside its live copy as <name>.sqlite3.dbbk, checking
-        # exit codes: a failed .backup that left a stale or absent file to be
-        # silently tarred is the exact outcome this routine exists to prevent.
-        #
-        # Staging INSIDE the koreader tree is deliberate. busybox tar's -C is
-        # global, not positional as in GNU tar -- verified on device: given
-        # `tar cf - fileA -C other fileB`, fileA is resolved under `other` and
-        # lost. So every member must share one root, and that root is here.
-        pre, cleanup = [], []
-        for db in _BACKUP_DBS:
+        # Staging lives INSIDE the koreader tree deliberately. busybox tar's -C
+        # is global, not positional as in GNU tar -- verified on device: given
+        # `tar cf - fileA -C other fileB`, fileA resolves under `other` and is
+        # lost. Every member must therefore share one root, and that root is
+        # here.
+        stages = [f"{KOREADER}/settings/{db}.sqlite3.dbbk" for db in _BACKUP_DBS]
+        rm_stages = "rm -f " + " ".join(q(x) for x in stages)
+
+        # .backup each DB, checking the exit code: a failed .backup that left a
+        # stale or absent file to be silently tarred is the exact outcome this
+        # routine exists to prevent. .timeout matters because the CLI's default
+        # busy timeout is 0 and KOReader is usually holding these open.
+        dumps = []
+        for db, stage in zip(_BACKUP_DBS, stages):
             live = f"{KOREADER}/settings/{db}.sqlite3"
-            stage = f"{live}.dbbk"
-            cleanup.append(stage)
-            pre.append(
+            dumps.append(
                 f"if [ -f {q(live)} ]; then "
-                f"sqlite3 -cmd '.timeout 5000' {q(live)} \".backup {stage}\" || exit 91; "
-                f"fi"
+                f"sqlite3 -cmd '.timeout 5000' {q(live)} \".backup {stage}\" "
+                f"|| {{ {rm_stages}; exit 91; }}; fi"
             )
         excludes = " ".join(f"--exclude={q(e)}" for e in _BACKUP_EXCLUDES)
-        paths = " ".join(q(p) for p in _BACKUP_PATHS)
-        remote = (
-            "set -e; "
-            + "; ".join(pre) + "; "
-            + f"cd {q(KOREADER)} && tar czf - {excludes} {paths}; "
-            + "rm -f " + " ".join(q(c) for c in cleanup)
+
+        # Per-book sidecars hold reading position, bookmarks and highlights and
+        # live NEXT TO each book, outside this tree -- unreachable from a
+        # single-root tar. Copy them in under their original relative paths so a
+        # restore knows where they belong. A few KB.
+        sdr = (
+            f"rm -rf {q(_SDR_STAGE)}; mkdir -p {q(_SDR_STAGE)}; "
+            f"find /mnt/us -name 'metadata.*.lua' ! -path {q(KOREADER + '/*')} "
+            f"2>/dev/null | while read -r f; do "
+            f'd="{_SDR_STAGE}/$(dirname "${{f#/mnt/us/}}")"; '
+            f'mkdir -p "$d" && cp "$f" "$d/" || true; done'
         )
+
+        # No `set -e`. It would skip the cleanup on every failing path, leaving
+        # .dbbk files inside KOReader's live settings directory, and a leftover
+        # stage could then be tarred as fresh on a later run. Errors are handled
+        # explicitly instead, and the run starts by clearing any stale stage.
+        remote = "; ".join([
+            rm_stages,
+            # Degrade rather than fail: without sqlite3 the ~290KB of Lua config
+            # is still worth capturing.
+            f"if command -v sqlite3 >/dev/null 2>&1; then {'; '.join(dumps)}; fi",
+            sdr,
+            f"cd {q(KOREADER)} || {{ {rm_stages}; exit 92; }}",
+            # A path that has gone missing (an uninstalled plugin) must not fail
+            # the whole backup forever.
+            "set --",
+            "for p in " + " ".join(q(x) for x in _BACKUP_PATHS)
+            + '; do [ -e "$p" ] && set -- "$@" "$p"; done',
+            f'[ $# -gt 0 ] || {{ {rm_stages}; exit 93; }}',
+            f'tar czf - {excludes} "$@"',
+            "rc=$?",
+            rm_stages,
+            f"rm -rf {q(_SDR_STAGE)}",
+            "exit $rc",
+        ])
         argv = self._ssh_base() + [remote]
         tmp_dest = dest + ".part"
         os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
@@ -430,13 +473,18 @@ class Device:
                     _, err = p.communicate(timeout=self.cfg.backup_timeout)
                 except subprocess.TimeoutExpired as e:
                     p.kill()
+                    _unlink_quietly(tmp_dest)
                     raise TruncatedPull(
                         f"config backup exceeded {self.cfg.backup_timeout}s") from e
                 rc = p.returncode
         if rc != 0:
-            os.path.exists(tmp_dest) and os.unlink(tmp_dest)
+            _unlink_quietly(tmp_dest)
             msg = (err or b"").decode(errors="replace").strip()[:200]
-            raise TruncatedPull(f"config backup: ssh rc={rc} {msg}")
+            # 255 is ssh's own "could not connect" -- a sleeping Kindle, which
+            # the caller treats as normal rather than as a broken transfer.
+            if rc == 255:
+                raise DeviceUnreachable(f"config backup: {msg}")
+            raise TruncatedPull(f"config backup: rc={rc} {msg}")
         return tmp_dest
 
     def build_archive(self, src_dir: str, dest: str) -> str:
