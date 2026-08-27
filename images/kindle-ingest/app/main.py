@@ -12,7 +12,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-from . import metrics
+from . import backup, metrics
 from .bookorbit import AuthExpired, BookOrbit, Duplicate, Transport, UploadRejected
 from .config import Config
 from .convert import ConvertFailed, classify, epub_to_cbz, to_epub
@@ -308,6 +308,19 @@ def run_cycle(ctx: Ctx) -> CycleResult:
         log.info("device unreachable; skipping cycle")     # normal, not an error
         return res
     metrics.REACHABLE.set(1)
+
+    # Snapshot the device's KOReader config. Deliberately here and not inside
+    # `if todo:` where emit_keys sits: a caught-up device has no todo, and
+    # would otherwise never be backed up. backup.run decides whether one is
+    # actually due; this runs every cycle only to ask.
+    #
+    # Best-effort, like emit_keys and the metadata block. Nothing about the
+    # Kindle's config is worth failing a book over.
+    try:
+        with metrics.STAGE.labels(stage="backup").time():
+            backup.run(ctx.device, ctx.cfg.state_dir)
+    except Exception as e:
+        log.warning("config backup skipped (%s: %s)", type(e).__name__, str(e)[:160])
 
     reconcile_startup(ctx)
     books = ctx.device.list_books()

@@ -676,3 +676,61 @@ def test_a_failed_alert_is_not_marked_notified(cfg, monkeypatch):
     M.run_cycle(_ctx_n(cfg, FakeDevice({b.asin: b}), down, FakeApi(), led))
     assert not led.get(b.asin).get("notified"), \
         "a failed send must not be recorded as delivered"
+
+
+# --- config backup runs in the cycle, and can never break it ----------------
+# It sits AFTER the reachability check (so a sleeping Kindle is free) and
+# deliberately NOT inside `if todo:` where emit_keys lives -- a caught-up
+# device has no todo and would otherwise never back up.
+
+class _BackupDevice(FakeDevice):
+    def __init__(self, exc=None, **kw):
+        super().__init__(**kw)
+        self.backups = 0
+        self._exc = exc
+    def backup_config(self, dest):
+        self.backups += 1
+        if self._exc:
+            raise self._exc
+        open(dest + ".part", "wb").write(b"x")
+        return dest + ".part"
+
+
+def test_a_caught_up_device_still_gets_backed_up(cfg, monkeypatch):
+    # The whole point: no books to process must not mean no backup.
+    dev = _BackupDevice()
+    called = []
+    monkeypatch.setattr(M.backup, "run", lambda d, s, **k: called.append(d) or "snap")
+    M.run_cycle(_ctx(cfg, dev))          # no books at all
+    assert called, "backup must not be gated on there being work to do"
+
+
+def test_an_unreachable_device_is_not_backed_up(cfg, monkeypatch):
+    dev = _BackupDevice(reachable=False)
+    called = []
+    monkeypatch.setattr(M.backup, "run", lambda d, s, **k: called.append(d))
+    M.run_cycle(_ctx(cfg, dev))
+    assert not called, "a sleeping Kindle is normal, not a backup attempt"
+
+
+def test_a_backup_failure_cannot_break_the_cycle(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    b = DeviceBook("B0BACKUP01", "Some Book_B0BACKUP01", 100, 2)
+    def boom(*a, **k):
+        raise RuntimeError("backup exploded")
+    monkeypatch.setattr(M.backup, "run", boom)
+    api = _MetaApi()
+    ctx = _ctx(cfg, _BackupDevice(books={b.asin: b}), api)
+    r = M.run_cycle(ctx)                 # must not raise
+    assert r.uploaded == 1, "the book still went through"
+    assert ctx.ledger.get(b.asin)["outcome"] == OK
+
+
+def test_a_backup_failure_does_not_mark_a_book_failed(cfg, monkeypatch):
+    _stub_pipeline(monkeypatch)
+    b = DeviceBook("B0BACKUP02", "Some Book_B0BACKUP02", 100, 2)
+    monkeypatch.setattr(M.backup, "run",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("nope")))
+    ctx = _ctx(cfg, _BackupDevice(books={b.asin: b}), _MetaApi())
+    M.run_cycle(ctx)
+    assert ctx.ledger.get(b.asin)["outcome"] != FAILED
