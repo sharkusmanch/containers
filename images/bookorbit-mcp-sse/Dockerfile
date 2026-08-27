@@ -6,6 +6,15 @@ ARG BOOKORBIT_MCP_COMMIT=1fc55abc357e0bbc800f3d3d1cd8ee12dc9f5793
 # renovate: datasource=github-releases depName=sparfenyuk/mcp-proxy
 ARG MCP_PROXY_VERSION=v0.12.0
 
+# renovate: datasource=pypi depName=mcp
+# Held at 1.x ON PURPOSE. mcp-proxy 0.12.0 declares `mcp>=1.17.0` with no upper
+# bound, but mcp 2.x dropped `mcp.server.lowlevel.server.request_ctx`, which
+# proxy_server.py imports at module scope -- an unpinned build resolves mcp 2.x
+# and the entrypoint dies with ImportError before it ever listens (observed on
+# the first deploy of this image, 2026-08-27). Only unpin when mcp-proxy ships
+# a release that supports mcp 2.x.
+ARG MCP_SDK_VERSION=1.29.1
+
 # renovate: datasource=docker depName=node versioning=docker
 ARG NODE_VERSION=24
 
@@ -49,6 +58,7 @@ RUN --mount=type=cache,target=/root/.npm \
 FROM python:${PYTHON_VERSION}-alpine${ALPINE_VERSION} AS py-builder
 
 ARG MCP_PROXY_VERSION
+ARG MCP_SDK_VERSION
 
 # Copy uv from official image
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
@@ -62,7 +72,8 @@ ENV UV_LINK_MODE=copy \
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv && \
-    uv pip install --python=/app/.venv/bin/python "mcp-proxy==${MCP_PROXY_VERSION#v}"
+    uv pip install --python=/app/.venv/bin/python \
+      "mcp-proxy==${MCP_PROXY_VERSION#v}" "mcp==${MCP_SDK_VERSION}"
 
 # ============================================================================
 # Runtime stage
