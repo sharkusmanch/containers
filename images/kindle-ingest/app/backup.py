@@ -29,6 +29,9 @@ RETRY_AFTER = 3600         # a failed one retries sooner, but not every cycle
 
 _DB_SUFFIX = ".sqlite3.dbbk"
 _SQLITE_MAGIC = b"SQLite format 3\x00"
+# The real databases are ~100KB; this only stops a berserk device from
+# turning a backup into an OOM.
+_MAX_DB_BYTES = 64 * 1024 * 1024
 
 
 class BackupInvalid(Exception):
@@ -54,19 +57,31 @@ def is_due(state_dir: str, now: float | None = None) -> bool:
 
     A success is good for DUE_AFTER; a failure retries after RETRY_AFTER, so a
     deterministic failure neither hammers the device every cycle nor waits a
-    full day. A timestamp in the future means the clock stepped backward and is
-    treated as due, rather than holding the gate shut until it catches up.
+    full day.
+
+    A stamp in the FUTURE means the clock stepped backward. Such a stamp simply
+    does not suppress -- it is never treated as "recent". Note the backoff is
+    checked first and on its own terms, so a backward clock step cannot turn a
+    repeatedly-failing backup into a retry on every 10-minute cycle.
     """
     now = time.time() if now is None else now
     s = _read_state(state_dir)
-    for key, window in (("last_success", DUE_AFTER), ("last_attempt", RETRY_AFTER)):
+
+    def stamp(key):
+        v = s.get(key)
+        if isinstance(v, bool):          # float(True) == 1.0 would read as epoch+1
+            return None
         try:
-            stamp = float(s[key])
-        except (KeyError, TypeError, ValueError):
-            continue
-        if stamp > now:                    # clock skew
-            return True
-        if now - stamp < window:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        if f != f:                       # NaN compares false against everything
+            return None
+        return f
+
+    for key, window in (("last_attempt", RETRY_AFTER), ("last_success", DUE_AFTER)):
+        f = stamp(key)
+        if f is not None and f <= now and now - f < window:
             return False
     return True
 
@@ -88,7 +103,7 @@ def record(state_dir: str, ok: bool, now: float | None = None) -> None:
     os.replace(tmp, _state_path(state_dir))
 
 
-def verify(archive: str) -> None:
+def verify(archive: str, expect_dbs: tuple[str, ...] = ()) -> None:
     """Reject an archive that would restore badly.
 
     `tar tzf` alone is not enough: it passes on a zero-byte database member,
@@ -107,18 +122,32 @@ def verify(archive: str) -> None:
                 raise BackupInvalid("archive carries neither settings nor databases")
             for m in dbs:
                 _verify_db(t, m)
+            # A database that is simply absent is the silent-stale failure this
+            # design exists to prevent, so say so. It is a warning rather than a
+            # rejection because the design's sqlite3-missing path deliberately
+            # ships the Lua config without databases.
+            present = {os.path.basename(m.name)[:-len(_DB_SUFFIX)] for m in dbs}
+            for want in expect_dbs:
+                if want not in present:
+                    log.warning("backup carries no %s database", want)
     except BackupInvalid:
         raise
-    except (tarfile.TarError, EOFError, OSError) as e:
+    except (tarfile.TarError, EOFError, OSError, KeyError) as e:
         raise BackupInvalid(f"unreadable archive: {type(e).__name__}: {e}") from e
 
 
 def _verify_db(tar: tarfile.TarFile, member: tarfile.TarInfo) -> None:
+    # isreg first: directories and links also report size 0, and "is empty"
+    # would be a misleading diagnosis for them.
+    if not member.isreg():
+        raise BackupInvalid(f"{member.name} is not a regular file")
     if member.size == 0:
         raise BackupInvalid(f"{member.name} is empty")
+    if member.size > _MAX_DB_BYTES:
+        raise BackupInvalid(f"{member.name} is implausibly large ({member.size} bytes)")
     fh = tar.extractfile(member)
     if fh is None:
-        raise BackupInvalid(f"{member.name} is not a regular file")
+        raise BackupInvalid(f"{member.name} could not be read")
     blob = fh.read()
     if not blob.startswith(_SQLITE_MAGIC):
         raise BackupInvalid(f"{member.name} is not a SQLite database")
@@ -148,8 +177,16 @@ def rotate(backup_dir: str, keep: int = KEEP) -> list[str]:
         names = os.listdir(backup_dir)
     except FileNotFoundError:
         return []
-    snaps = [n for n in names if n.startswith(PREFIX) and n.endswith(SUFFIX)]
-    snaps.sort(key=lambda n: os.path.getmtime(os.path.join(backup_dir, n)))
+    # Ordered by the date in the name, not mtime. Names are
+    # koreader-YYYYMMDD.tar.gz -- fixed width and zero padded, so lexicographic
+    # order IS chronological, and unlike mtime it survives a restore that does
+    # not preserve timestamps (restoring from restic into a rebuilt PVC would
+    # otherwise stamp every file with `now` and rotation could delete the
+    # newest). Directories matching the prefix are skipped: unlink would fail
+    # on them and a real snapshot would die in their place.
+    snaps = sorted(n for n in names
+                   if n.startswith(PREFIX) and n.endswith(SUFFIX)
+                   and os.path.isfile(os.path.join(backup_dir, n)))
     removed = []
     for n in snaps[:max(0, len(snaps) - keep)]:
         try:
@@ -160,8 +197,15 @@ def rotate(backup_dir: str, keep: int = KEEP) -> list[str]:
     return removed
 
 
+def _unlink_quietly(path: str) -> None:
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
 def run(device, state_dir: str, now: float | None = None,
-        keep: int = KEEP) -> str | None:
+        keep: int = KEEP, expect_dbs: tuple[str, ...] = ()) -> str | None:
     """Take a snapshot if one is due. Returns its path, or None.
 
     Raises only BackupInvalid or whatever `device` raises; the caller is
@@ -174,18 +218,31 @@ def run(device, state_dir: str, now: float | None = None,
     os.makedirs(backup_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%d", time.localtime(now))
     final = os.path.join(backup_dir, f"{PREFIX}{stamp}{SUFFIX}")
+    part = None
     try:
         part = device.backup_config(final)
-        verify(part)
+        verify(part, expect_dbs=expect_dbs)
+        os.replace(part, final)      # only a verified archive gets the real name
+        part = None
     except Exception:
+        # Ownership of the .part transfers to us the moment backup_config
+        # returns it, and rotate() deliberately ignores .part files -- so
+        # without this a failing verify would mint a new date-stamped orphan
+        # every day, in a directory K8up ships offsite. That is the same hazard
+        # the .part exists to avoid.
+        if part:
+            _unlink_quietly(part)
         # The attempt is recorded even on failure, so a deterministic problem
         # backs off instead of retrying every cycle.
         record(state_dir, ok=False, now=now)
         raise
-    os.replace(part, final)          # only a verified archive gets the real name
     record(state_dir, ok=True, now=now)
     dropped = rotate(backup_dir, keep)
+    try:
+        size = os.path.getsize(final)
+    except OSError:                  # pruned from under us; the backup still worked
+        size = -1
     log.info("koreader config backed up to %s (%d bytes)%s",
-             os.path.basename(final), os.path.getsize(final),
+             os.path.basename(final), size,
              f", pruned {len(dropped)}" if dropped else "")
     return final

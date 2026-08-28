@@ -65,7 +65,8 @@ _BACKUP_EXCLUDES = (
 # the .sqlite3 can miss everything still in the WAL and restore silently stale.
 # .backup is safe against a live writer. The default busy timeout is 0, so
 # without .timeout a write in flight fails the whole run.
-_BACKUP_DBS = ("statistics", "vocabulary_builder")
+BACKUP_DBS = ("statistics", "vocabulary_builder")
+_BACKUP_DBS = BACKUP_DBS   # internal alias, kept for readability below
 
 # Sidecars are copied here, under their original relative paths.
 _SDR_STAGE = f"{KOREADER}/.sdrbackup"

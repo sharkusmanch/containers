@@ -17,7 +17,7 @@ from .bookorbit import AuthExpired, BookOrbit, Duplicate, Transport, UploadRejec
 from .config import Config
 from .convert import ConvertFailed, classify, epub_to_cbz, to_epub
 from .decrypt import DecryptFailed, KeyUnavailable, decrypt_archive
-from .device import Device, DeviceUnreachable, TruncatedPull
+from .device import BACKUP_DBS, Device, DeviceUnreachable, TruncatedPull
 from .identity import title_from_basename
 from .ledger import (FAILED, Ledger, NEEDS_DECISION, OK, RETRYABLE, UPLOADING)
 from .notify import Notifier
@@ -318,7 +318,8 @@ def run_cycle(ctx: Ctx) -> CycleResult:
     # Kindle's config is worth failing a book over.
     try:
         with metrics.STAGE.labels(stage="backup").time():
-            backup.run(ctx.device, ctx.cfg.state_dir)
+            backup.run(ctx.device, ctx.cfg.state_dir,
+                       expect_dbs=BACKUP_DBS)
     except Exception as e:
         log.warning("config backup skipped (%s: %s)", type(e).__name__, str(e)[:160])
 
