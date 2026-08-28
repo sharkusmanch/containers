@@ -54,7 +54,7 @@ ARG GH_VERSION=v2.98.0
 # renovate: datasource=github-releases depName=openbao/openbao
 ARG BAO_VERSION=v2.6.2
 # renovate: datasource=github-releases depName=astral-sh/uv
-ARG UV_VERSION=0.12.6
+ARG UV_VERSION=0.12.7
 
 # NOTE: task-master-ai (which powers cloudcli's TaskMaster tab) is deliberately NOT baked
 # here. It resolves to 685 packages / ~1.3 GB, and depends on @anthropic-ai/claude-code —
