@@ -44,7 +44,7 @@ ARG CRANE_VERSION=v0.22.0
 # renovate: datasource=github-releases depName=getsops/sops
 ARG SOPS_VERSION=v3.13.3
 # renovate: datasource=github-releases depName=anchore/grype
-ARG GRYPE_VERSION=v0.117.0
+ARG GRYPE_VERSION=v0.118.0
 # renovate: datasource=github-releases depName=anchore/syft
 ARG SYFT_VERSION=v1.51.1
 # renovate: datasource=github-releases depName=mikefarah/yq
