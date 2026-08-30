@@ -60,7 +60,7 @@ ARG RCLONE_SHA256_ARM64=d0ad88ba4c8e285b7c9efa591e0ab643280a91741e13c27f3a9c0957
 # renovate: datasource=pypi depName=prometheus-client
 ARG PROMETHEUS_CLIENT_VERSION=0.26.0
 # renovate: datasource=pypi depName=requests
-ARG REQUESTS_VERSION=2.33.0
+ARG REQUESTS_VERSION=2.34.2
 # renovate: datasource=pypi depName=pycryptodomex
 ARG PYCRYPTODOMEX_VERSION=3.23.0
 
