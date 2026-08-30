@@ -41,6 +41,36 @@ WORKDIR /build
 RUN git clone https://github.com/joshstrange/bookorbit-mcp.git . && \
     git checkout "${BOOKORBIT_MCP_COMMIT}"
 
+# ---------------------------------------------------------------------------
+# PATCH: pageParams sends a 1-based page to an API that treats it as 0-based.
+#
+# Every tool with a `page`/`size` argument documents "1-based page (default 1)"
+# and enforces minimum:1, but BookOrbit computes offset = page * size. So page 1
+# SKIPS the first page and the real first page is unreachable through the MCP.
+#
+# Measured against the live library 2026-08-29 -- systematic, not per-endpoint:
+#   smart-scopes/16/books  total=125 size=100 page=1 -> 25 books ("The Odds".."Zeroboxer")
+#   series                 total=111 size=100 page=1 -> 11 series (the LAST 11)
+# In both cases the tail, never the head. A naive "page=1,2,... until empty"
+# loop therefore enumerates a fraction of the library and terminates CLEANLY --
+# silent data loss with no error, which is how it went unnoticed.
+#
+# Subtracting 1 here makes the documented contract true (page 1 -> offset 0).
+# Deliberately scoped to pageParams(), which serves the `size`-based endpoints
+# verified above. listAnnotations() and getReadingSessions() take `pageSize`
+# against different endpoints and are NOT patched -- their behaviour was not
+# tested, and guessing would just move the bug.
+#
+# The grep is a build-time assertion on purpose: when Renovate bumps
+# BOOKORBIT_MCP_COMMIT, a silently-dropped patch would restore the data loss
+# with a green build. Failing loudly forces a re-check against upstream.
+RUN test "$(grep -c 'params.set("page", String(opts.page))' src/bookorbit-client.ts)" = "3" \
+      || (echo "PATCH GUARD: expected 3 page-setting sites upstream; source changed" && exit 1) && \
+    sed -i 's|^  if (opts?.page != null) params.set("page", String(opts.page));|  if (opts?.page != null) params.set("page", String(opts.page - 1));|' \
+      src/bookorbit-client.ts && \
+    grep -q 'String(opts.page - 1)' src/bookorbit-client.ts \
+      || (echo "PATCH GUARD: pageParams patch did not apply" && exit 1)
+
 # Install from the committed lockfile, then patch transitive advisories before
 # compiling. Upstream's July lockfile pins vulnerable hono / fast-uri /
 # ip-address, all reached only through @modelcontextprotocol/sdk's HTTP
