@@ -10,7 +10,7 @@ ARG KUBECTL_VERSION=v1.37.0
 ARG HELM_VERSION=v4.2.4
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_VERSION=2.1.252
+ARG CLAUDE_VERSION=2.1.257
 
 # renovate: datasource=github-releases depName=sigstore/cosign
 ARG COSIGN_VERSION=v3.1.3
