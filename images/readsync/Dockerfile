@@ -16,7 +16,7 @@ FROM python:${PYTHON_VERSION}
 # renovate: datasource=pypi depName=audible
 ARG AUDIBLE_VERSION=0.12.0
 # renovate: datasource=pypi depName=websocket-client
-ARG WEBSOCKET_CLIENT_VERSION=1.9.1
+ARG WEBSOCKET_CLIENT_VERSION=1.9.2
 # renovate: datasource=pypi depName=PyYAML
 ARG PYYAML_VERSION=6.0.3
 
