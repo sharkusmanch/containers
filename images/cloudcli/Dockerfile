@@ -50,7 +50,7 @@ ARG SYFT_VERSION=v1.51.1
 # renovate: datasource=github-releases depName=mikefarah/yq
 ARG YQ_VERSION=v4.53.6
 # renovate: datasource=github-releases depName=cli/cli
-ARG GH_VERSION=v2.98.0
+ARG GH_VERSION=v2.100.0
 # renovate: datasource=github-releases depName=openbao/openbao
 ARG BAO_VERSION=v2.6.2
 # renovate: datasource=github-releases depName=astral-sh/uv
