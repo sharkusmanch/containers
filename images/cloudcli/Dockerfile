@@ -19,7 +19,7 @@ ARG CLOUDCLI_VERSION=1.37.3
 ARG NODE_VERSION=22-trixie-slim
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_VERSION=2.1.263
+ARG CLAUDE_VERSION=2.1.266
 
 # ---------------------------------------------------------------------------
 # GitOps / secrets / image toolchain, matching what the paseo image carries so agents
