@@ -7,7 +7,7 @@ ARG ALPINE_VERSION=3.24
 ARG KUBECTL_VERSION=v1.37.0
 
 # renovate: datasource=github-releases depName=helm/helm
-ARG HELM_VERSION=v4.2.4
+ARG HELM_VERSION=v4.3.0
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_VERSION=2.1.267
