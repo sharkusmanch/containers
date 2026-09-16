@@ -44,6 +44,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python=/app/.venv/bin/python "mcp-proxy==${MCP_PROXY_VERSION#v}"
 
+# Fail the build, not the deploy: mcp-proxy imports mcp internals at startup, and
+# mcp 2.x removed one it needs (request_ctx). Here the mcp version comes from
+# hass-mcp's own uv.lock (1.x as of v0.6.0), so this only trips if a hass-mcp
+# release moves its lock to mcp 2.x -- the other *-mcp-sse images pin
+# MCP_SDK_VERSION for exactly that case.
+RUN /app/.venv/bin/mcp-proxy --help > /dev/null
+
 # ============================================================================
 # Runtime stage
 # ============================================================================

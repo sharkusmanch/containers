@@ -53,9 +53,14 @@
       "enabled": false
     },
     {
-      "description": "bookorbit-mcp-sse: hold the mcp SDK at 1.x until mcp-proxy supports 2.x (see the comment above MCP_SDK_VERSION in its Dockerfile)",
+      "description": "mcp-proxy images: hold the mcp SDK at 1.x until mcp-proxy supports 2.x (see the comment above MCP_SDK_VERSION in each Dockerfile). Every image that pins MCP_SDK_VERSION must be listed here, or Renovate will propose mcp 2.x for it.",
       "matchFileNames": [
-        "images/bookorbit-mcp-sse/**"
+        "images/bookorbit-mcp-sse/**",
+        "images/changedetection-mcp-sse/**",
+        "images/loseit-mcp-sse/**",
+        "images/mcp-proxy/**",
+        "images/miniflux-mcp-sse/**",
+        "images/vikunja-mcp-sse/**"
       ],
       "matchDepNames": [
         "mcp"

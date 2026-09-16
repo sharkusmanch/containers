@@ -6,6 +6,16 @@ ARG CHANGEDETECTION_MCP_COMMIT=f708f3784c62cb3bee6ef4c53347a4fd460a3702
 # renovate: datasource=github-releases depName=sparfenyuk/mcp-proxy
 ARG MCP_PROXY_VERSION=v0.12.0
 
+# Held at 1.x ON PURPOSE. mcp-proxy 0.12.0 declares `mcp>=1.17.0` with no upper
+# bound, but mcp 2.x dropped `mcp.server.lowlevel.server.request_ctx`, which
+# proxy_server.py imports at module scope -- an unpinned build resolves mcp 2.x
+# and the entrypoint dies with ImportError before it ever listens (the alpine
+# 3.24 rebuild of 2026-09-16 shipped mcp 2.2.0 and crash-looped the pod). Only
+# unpin when mcp-proxy ships a release that supports mcp 2.x. Renovate tracks
+# 1.x only (allowedVersions in renovate.json); lift that rule when unpinning.
+# renovate: datasource=pypi depName=mcp
+ARG MCP_SDK_VERSION=1.30.0
+
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.13
 
@@ -19,6 +29,7 @@ FROM python:${PYTHON_VERSION}-alpine${ALPINE_VERSION} AS builder
 
 ARG CHANGEDETECTION_MCP_COMMIT
 ARG MCP_PROXY_VERSION
+ARG MCP_SDK_VERSION
 
 # Copy uv from official image
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
@@ -40,7 +51,13 @@ ENV UV_LINK_MODE=copy \
 # Build a self-contained venv with the MCP server + mcp-proxy bridge
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv venv /app/.venv && \
-    uv pip install --python=/app/.venv/bin/python . "mcp-proxy==${MCP_PROXY_VERSION#v}"
+    uv pip install --python=/app/.venv/bin/python . \
+      "mcp-proxy==${MCP_PROXY_VERSION#v}" "mcp==${MCP_SDK_VERSION}"
+
+# Fail the build, not the deploy: mcp-proxy imports mcp internals at startup
+# (see MCP_SDK_VERSION above), so an incompatible SDK bump surfaces here as an
+# ImportError instead of a crash-looping pod after it automerges.
+RUN /app/.venv/bin/mcp-proxy --help > /dev/null
 
 # ============================================================================
 # Runtime stage
