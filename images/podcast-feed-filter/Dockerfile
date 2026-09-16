@@ -4,7 +4,7 @@
 ARG PYTHON_VERSION=3.12
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.24
 
 ARG VERSION=1.0.0
 
