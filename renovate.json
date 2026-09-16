@@ -4,10 +4,12 @@
     "config:recommended"
   ],
   "mode": "full",
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 0,
   "packageRules": [
     {
-      "description": "Auto-merge all updates",
-      "matchPackagePatterns": [
+      "description": "Auto-merge all updates. This repo just builds the latest images; rollout is gated in the deployment repos",
+      "matchPackageNames": [
         "*"
       ],
       "automerge": true,
@@ -15,11 +17,20 @@
       "automergeStrategy": "squash"
     },
     {
+      "description": "One PR per image per dependency. A dep shared by several images otherwise gets one branch and PR title for all of them: one image's failing build holds the bump for every image, and when a lagging image later reaches a version another image already merged, the reused branch + title trips Renovate's 'automerged previously' brake and the PR never merges (#233, #259, #290)",
+      "matchFileNames": [
+        "images/**"
+      ],
+      "additionalBranchPrefix": "{{parentDir}}-",
+      "semanticCommitScope": "{{parentDir}}"
+    },
+    {
       "description": "Disable built-in dockerfile manager for FROM lines with ARG-suffixed tags (custom regex handles these)",
       "matchManagers": [
         "dockerfile"
       ],
       "matchDepNames": [
+        "alpine",
         "golang",
         "oven/bun",
         "python",
@@ -33,7 +44,7 @@
       "matchDepNames": [
         "python"
       ],
-      "matchPaths": [
+      "matchFileNames": [
         "images/autoshift/**",
         "images/changedetection-mcp-sse/**",
         "images/hass-mcp/**",
@@ -43,7 +54,7 @@
     },
     {
       "description": "Group Dockerfile updates by image",
-      "matchPaths": [
+      "matchFileNames": [
         "images/redlib/**"
       ],
       "groupName": "redlib"
@@ -52,15 +63,25 @@
   "customManagers": [
     {
       "customType": "regex",
-      "fileMatch": [
-        "images/.*/Dockerfile$"
+      "description": "'# renovate: datasource=X depName=Y [versioning=Z]' directly above 'ARG *_VERSION='. No versioning fallback, so each datasource's default applies (a forced semver fallback rejected docker tags like 3.21 and silently skipped them). An 'ARG *_SHA256=' directly below is captured as the digest, for datasource=github-release-attachments",
+      "managerFilePatterns": [
+        "/images/.*/Dockerfile$/"
       ],
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(\\s+versioning=(?<versioning>\\S+))?(\\s+branch=(?<currentBranch>\\S+))?\\n(ARG|ENV)\\s+\\w+_VERSION=(?<currentValue>.+)\\n",
-        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(\\s+branch=(?<currentBranch>\\S+))?\\n(ARG|ENV)\\s+\\w+_COMMIT=(?<currentDigest>\\S+)\\n"
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(\\s+versioning=(?<versioning>\\S+))?\\n(ARG|ENV)\\s+\\w+_VERSION=(?<currentValue>.+)\\n((ARG|ENV)\\s+\\w+_SHA256=(?<currentDigest>[0-9a-f]{64})\\n)?"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "'# renovate: datasource=github-commits depName=owner/repo branch=B' directly above 'ARG *_COMMIT=<40-char sha>'. github-commits is not a Renovate datasource (these were never updated), so track the branch head through git-refs",
+      "managerFilePatterns": [
+        "/images/.*/Dockerfile$/"
       ],
-      "datasourceTemplate": "{{datasource}}",
-      "versioningTemplate": "{{#if versioning}}{{{versioning}}}{{else}}semver{{/if}}"
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=github-commits\\s+depName=(?<depName>\\S+)\\s+branch=(?<currentValue>\\S+)\\n(ARG|ENV)\\s+\\w+_COMMIT=(?<currentDigest>[0-9a-f]{40})\\n"
+      ],
+      "datasourceTemplate": "git-refs",
+      "packageNameTemplate": "https://github.com/{{{depName}}}"
     }
   ]
 }

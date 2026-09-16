@@ -33,24 +33,42 @@ FROM ... AS runtime
 
 ### Renovate Comments
 
-Include renovate comments for automated version updates:
+Include renovate comments for automated version updates. Renovate automerges
+every update (one PR per image per dependency), so a comment that doesn't match
+is silently never updated rather than a PR you'd notice. The comment must sit
+directly above the ARG, and the ARG name must end in `_VERSION` or `_COMMIT`:
 
 ```dockerfile
 # For GitHub releases:
 # renovate: datasource=github-releases depName=owner/repo
-ARG VERSION=v1.2.3
+ARG APP_VERSION=v1.2.3
 
-# For GitHub commits (when tracking a branch):
+# For GitHub commits (when tracking a branch), full 40-char SHA.
+# renovate.json maps github-commits to the git-refs datasource:
 # renovate: datasource=github-commits depName=owner/repo branch=main
-ARG COMMIT=abc123...
+ARG APP_COMMIT=0123456789abcdef0123456789abcdef01234567
 
-# For Docker base images:
+# For Docker base images (versioning= is optional; each datasource's
+# default applies):
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.24
 
 # renovate: datasource=docker depName=python
-ARG PYTHON_VERSION=3.12
+ARG PYTHON_VERSION=3.14
 ```
+
+Never pin a checksum Renovate can't bump: the update PR then fails verification
+on every run. Pick a pin Renovate moves itself:
+
+- **Release asset**: `ARG *_SHA256=` directly under the `_VERSION` ARG, with
+  `datasource=github-release-attachments`; both are bumped together.
+- **Binary from an upstream image**: `FROM owner/image:1.2.3@sha256:... AS name`
+  plus `COPY --from=name`; the dockerfile manager bumps tag and digest.
+- **Source at a commit**: `git fetch` the pinned commit instead of downloading a
+  tarball; git verifies the content against the commit SHA.
+
+After adding an image, check the Dependency Dashboard (issue #7): a dependency
+missing from "Detected Dependencies" is being skipped.
 
 ### OCI Labels
 
