@@ -7,7 +7,7 @@ ARG SWC_COMMIT=9a4f28b9b36eb5072ce0b4d631b4c68fced73423
 ARG PYTHON_VERSION=3.14
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.24
 
 # ============================================================================
 # Builder stage
