@@ -7,7 +7,7 @@ ARG MINIFLUX_MCP_VERSION=v0.1.0
 ARG MCP_PROXY_VERSION=v0.12.0
 
 # renovate: datasource=docker depName=golang
-ARG GOLANG_VERSION=1.25
+ARG GOLANG_VERSION=1.27
 
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.14
