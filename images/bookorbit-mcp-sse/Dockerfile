@@ -14,7 +14,7 @@ ARG MCP_PROXY_VERSION=v0.12.0
 # a release that supports mcp 2.x. Renovate tracks 1.x only (allowedVersions in
 # renovate.json); lift that rule when unpinning.
 # renovate: datasource=pypi depName=mcp
-ARG MCP_SDK_VERSION=1.29.1
+ARG MCP_SDK_VERSION=1.30.0
 
 # renovate: datasource=docker depName=node versioning=docker
 ARG NODE_VERSION=24
