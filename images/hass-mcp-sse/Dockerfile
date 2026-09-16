@@ -10,7 +10,7 @@ ARG MCP_PROXY_VERSION=v0.12.0
 ARG PYTHON_VERSION=3.13
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.24
 
 # ============================================================================
 # Builder stage
