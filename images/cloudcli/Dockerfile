@@ -15,7 +15,7 @@ ARG CLOUDCLI_VERSION=1.37.3
 # (scripts/fix-node-pty.js) is an explicit `process.platform !== 'darwin'` no-op on Linux.
 # trixie over bookworm: same glibc and prebuild compatibility, current Debian stable,
 # materially smaller backlog of unfixed OS CVEs.
-# renovate: datasource=docker depName=node
+# renovate: datasource=docker depName=node versioning=docker
 ARG NODE_VERSION=24-trixie-slim
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
