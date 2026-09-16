@@ -4,7 +4,7 @@
 ARG PYTHON_VERSION=3.12
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.24
 
 # renovate: datasource=pypi depName=yt-dlp versioning=loose
 ARG YTDLP_VERSION=2026.8.30.232658.dev0
