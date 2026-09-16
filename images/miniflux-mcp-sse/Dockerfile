@@ -13,7 +13,7 @@ ARG GOLANG_VERSION=1.25
 ARG PYTHON_VERSION=3.14
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.24
 
 # ============================================================================
 # Go builder stage (compiles miniflux-mcp binary)
