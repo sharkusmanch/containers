@@ -7,7 +7,7 @@ ARG AUTOSHIFT_VERSION=v2.1.4
 ARG PYTHON_VERSION=3.12
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.24
 
 # ============================================================================
 # Builder stage
