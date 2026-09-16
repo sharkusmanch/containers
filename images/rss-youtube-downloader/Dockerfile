@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=docker depName=python
-ARG PYTHON_VERSION=3.12
+ARG PYTHON_VERSION=3.14
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
