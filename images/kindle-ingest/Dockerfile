@@ -70,7 +70,7 @@ FROM python:${PYTHON_VERSION}
 # renovate: datasource=pypi depName=prometheus-client
 ARG PROMETHEUS_CLIENT_VERSION=0.26.0
 # renovate: datasource=pypi depName=requests
-ARG REQUESTS_VERSION=2.33.0
+ARG REQUESTS_VERSION=2.34.2
 # renovate: datasource=pypi depName=pycryptodomex
 ARG PYCRYPTODOMEX_VERSION=3.23.0
 
