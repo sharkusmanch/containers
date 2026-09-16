@@ -53,6 +53,16 @@
       "enabled": false
     },
     {
+      "description": "bookorbit-mcp-sse: hold the mcp SDK at 1.x until mcp-proxy supports 2.x (see the comment above MCP_SDK_VERSION in its Dockerfile)",
+      "matchFileNames": [
+        "images/bookorbit-mcp-sse/**"
+      ],
+      "matchDepNames": [
+        "mcp"
+      ],
+      "allowedVersions": "<2"
+    },
+    {
       "description": "Group Dockerfile updates by image",
       "matchFileNames": [
         "images/redlib/**"
