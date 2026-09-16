@@ -23,7 +23,7 @@ ARG NODE_VERSION=24
 ARG PYTHON_VERSION=3.14
 
 # renovate: datasource=docker depName=alpine
-ARG ALPINE_VERSION=3.21
+ARG ALPINE_VERSION=3.24
 
 # ============================================================================
 # Node builder stage (compiles the bookorbit-mcp TypeScript server)
