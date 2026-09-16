@@ -22,16 +22,21 @@ FROM python:${PYTHON_VERSION} AS vendor
 #   kluyg's GitHub mirror at a pinned commit. NOTE the mirror lags upstream
 #   (2.25.0 vs 2.33.0 as of 2026-08); the smoke test below is what catches a
 #   version that cannot read a real book.
+#
+# Updates automerge, so every pin here must be one Renovate can move by itself:
+# DEDRM_SHA256 sits directly under its version and is bumped with it
+# (github-release-attachments), and KFX Input is fetched with git at the full
+# commit SHA, which verifies the content without a tarball checksum that
+# Renovate would leave stale.
 
-# renovate: datasource=github-releases depName=Satsuoni/DeDRM_tools
+# renovate: datasource=github-release-attachments depName=Satsuoni/DeDRM_tools
 ARG DEDRM_VERSION=v10.0.30
 ARG DEDRM_SHA256=980bfc17715b998afc5995d6a308e5998681a3ad1a59fa6dd97ab6c414d8f0d6
 # renovate: datasource=github-commits depName=kluyg/calibre-kfx-input branch=main
 ARG KFX_INPUT_COMMIT=44db6b6ee8c0094a98c33770575a9070ddb90fda
-ARG KFX_INPUT_SHA256=59dabc9cbac690bbdadc402bfe51d4cee58ce3a062d2ed9cc5258a8149eaa3fb
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl unzip zip \
+    && apt-get install -y --no-install-recommends ca-certificates curl git unzip zip \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -43,20 +48,25 @@ RUN curl -fsSL -o dedrm.zip \
     && unzip -q -j DeDRM_plugin.zip "ion.py" "kfxdedrm.py" "kfxtables.py" -d /opt/vendor \
     && for f in ion kfxdedrm kfxtables; do test -s "/opt/vendor/$f.py"; done
 
-RUN curl -fsSL -o kfx.tar.gz \
-      "https://github.com/kluyg/calibre-kfx-input/archive/${KFX_INPUT_COMMIT}.tar.gz" \
-    && echo "${KFX_INPUT_SHA256}  kfx.tar.gz" | sha256sum -c - \
-    && mkdir -p kfx && tar xzf kfx.tar.gz -C kfx --strip-components=1 \
+# git checks every fetched object against its hash, so the tree is exactly the
+# pinned commit's; git archive exports it without the .git directory.
+RUN git init -q kfx-src \
+    && git -C kfx-src fetch -q --depth 1 \
+         https://github.com/kluyg/calibre-kfx-input.git "${KFX_INPUT_COMMIT}" \
+    && test "$(git -C kfx-src rev-parse FETCH_HEAD)" = "${KFX_INPUT_COMMIT}" \
+    && git -C kfx-src archive -o /build/kfx.tar FETCH_HEAD \
+    && mkdir -p kfx && tar -xf kfx.tar -C kfx \
     && (cd kfx && zip -qr /opt/KFX_Input.zip .) \
     && test -s /opt/KFX_Input.zip
 
 
+# rclone comes from its official image, pinned by digest: the digest verifies
+# the bytes, and Renovate bumps tag and digest together.
+FROM rclone/rclone:1.75.1@sha256:45401ad7410db1d67ffdb58e19059ad20b0d8e0285a60e38bbec55cc1019c7a5 AS rclone
+
+
 FROM python:${PYTHON_VERSION}
 
-# renovate: datasource=github-releases depName=rclone/rclone
-ARG RCLONE_VERSION=v1.75.0
-ARG RCLONE_SHA256_AMD64=aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa
-ARG RCLONE_SHA256_ARM64=d0ad88ba4c8e285b7c9efa591e0ab643280a91741e13c27f3a9c0957ccfa5203
 # renovate: datasource=pypi depName=prometheus-client
 ARG PROMETHEUS_CLIENT_VERSION=0.26.0
 # renovate: datasource=pypi depName=requests
@@ -74,18 +84,12 @@ LABEL org.opencontainers.image.title="kindle-ingest" \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          calibre openssh-client netcat-openbsd ca-certificates curl unzip xz-utils \
-    && rm -rf /var/lib/apt/lists/* \
-    && ARCH="$(dpkg --print-architecture)" \
-    && case "$ARCH" in \
-         amd64) R=amd64; SUM="${RCLONE_SHA256_AMD64}" ;; \
-         arm64) R=arm64; SUM="${RCLONE_SHA256_ARM64}" ;; \
-         *) echo "unsupported $ARCH" >&2; exit 1 ;; \
-       esac \
-    && curl -fsSL -o /tmp/rclone.zip \
-         "https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-${R}.zip" \
-    && echo "${SUM}  /tmp/rclone.zip" | sha256sum -c - \
-    && unzip -qj /tmp/rclone.zip "*/rclone" -d /usr/local/bin \
-    && chmod +x /usr/local/bin/rclone && rm -f /tmp/rclone.zip
+    && rm -rf /var/lib/apt/lists/*
+
+# The upstream binary is static Go, so it runs on this Debian base; the version
+# check fails the build if a future image ever ships one that does not.
+COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
+RUN rclone version
 
 RUN pip install --no-cache-dir \
       "prometheus-client==${PROMETHEUS_CLIENT_VERSION}" \
