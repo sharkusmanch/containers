@@ -54,7 +54,7 @@ RUN curl -fsSL -o kfx.tar.gz \
 FROM python:${PYTHON_VERSION}
 
 # renovate: datasource=github-releases depName=rclone/rclone
-ARG RCLONE_VERSION=v1.75.0
+ARG RCLONE_VERSION=v1.75.1
 ARG RCLONE_SHA256_AMD64=aa2804e08f48250e71009c727124b6341cd0288465804a9a09d14663cabafbaa
 ARG RCLONE_SHA256_ARM64=d0ad88ba4c8e285b7c9efa591e0ab643280a91741e13c27f3a9c0957ccfa5203
 # renovate: datasource=pypi depName=prometheus-client
