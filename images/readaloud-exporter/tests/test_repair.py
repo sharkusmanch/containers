@@ -83,3 +83,10 @@ def test_repair_hole_chunks_and_offsets():
     assert calls == [(100.0, 700.0), (700.0, 1300.0), (1300.0, 1400.0)]
     assert [a.ts for a in out] == [100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
     assert all(gap.c_a < a.char < gap.c_b for a in out)
+
+
+def test_no_endpoints_is_a_clear_unavailable(tmp_path):
+    wav = tmp_path / "x.wav"
+    wav.write_bytes(b"x")
+    with pytest.raises(R.WhisperUnavailable, match="no whisper endpoints configured"):
+        R.WhisperClient([]).transcribe(wav)

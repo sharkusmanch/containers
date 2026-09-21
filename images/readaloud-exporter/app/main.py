@@ -36,6 +36,32 @@ def _code_sha256() -> str:
 CODE_SHA256 = _code_sha256()
 
 
+class ConfigError(Exception):
+    pass
+
+
+def _endpoints(v: str) -> list[tuple[str, str]]:
+    out = []
+    for x in v.split(","):
+        if not x.strip():
+            continue
+        url, sep, model = (y.strip() for y in x.partition("|"))
+        if not sep or not url or not model:
+            raise ConfigError(f"WHISPER_ENDPOINTS entry {x.strip()!r} is not url|model")
+        out.append((url, model))
+    return out
+
+
+def _max_books(v: str) -> int:
+    try:
+        n = int(v.strip())
+    except ValueError:
+        raise ConfigError(f"MAX_BOOKS_PER_RUN must be a non-negative integer, got {v!r}") from None
+    if n < 0:
+        raise ConfigError(f"MAX_BOOKS_PER_RUN must be a non-negative integer, got {v!r}")
+    return n
+
+
 @dataclass
 class Config:
     db_path: str = "/data/database.db"
@@ -56,8 +82,8 @@ class Config:
         return cls(db_path=env.get("DB_PATH", "/data/database.db"),
                    books_roots=[x for x in env.get("BOOKS_ROOTS", "/books:/data/epub_cache").split(":") if x],
                    out_dir=env.get("OUT_DIR", "/out"), tmp_dir=env.get("TMPDIR", "/tmp"),
-                   whisper=pairs(env.get("WHISPER_ENDPOINTS", ""), "|"), only=only,
-                   max_books=int(env.get("MAX_BOOKS_PER_RUN", "3")), bitrate=env.get("BITRATE", "32k"),
+                   whisper=_endpoints(env.get("WHISPER_ENDPOINTS", "")), only=only,
+                   max_books=_max_books(env.get("MAX_BOOKS_PER_RUN", "3")), bitrate=env.get("BITRATE", "32k"),
                    path_map=pairs(env.get("PATH_MAP", ""), "="))
 
 
@@ -338,9 +364,16 @@ def run(cfg: Config, db: BookBridgeDB, abs_client, whisper_client) -> list[Outco
 
 
 def main() -> int:
-    cfg = Config.from_env(os.environ)
-    if not Path(cfg.db_path).exists():
-        print(json.dumps({"event": "config_error", "error": f"missing {cfg.db_path}"}), flush=True)
+    try:
+        cfg = Config.from_env(os.environ)
+        print(json.dumps({"event": "config", "version": VERSION, "code_sha256": CODE_SHA256,
+                          "whisper_endpoints": [f"{u}|{m}" for u, m in cfg.whisper],
+                          "only_count": None if cfg.only is None else len(cfg.only),
+                          "max_books": cfg.max_books, "out_dir": cfg.out_dir}), flush=True)
+        if not Path(cfg.db_path).exists():
+            raise ConfigError(f"missing {cfg.db_path}")
+    except ConfigError as e:
+        print(json.dumps({"event": "config_error", "error": str(e)}), flush=True)
         return 2
     db = BookBridgeDB(cfg.db_path)
     s = db.settings()

@@ -337,3 +337,73 @@ def test_epub_structure_error_is_a_refusal_and_part_removed(tmp_path, monkeypatc
     folder = tmp_path / "out" / "Book [B1]"
     assert not list(folder.glob("*.part")) and not list(folder.glob(".*.part"))
     assert not list(folder.glob("*.epub"))
+
+
+def test_from_env_parses_valid_config():
+    cfg = M.Config.from_env({"WHISPER_ENDPOINTS": "http://a/v1|big, http://b/v1|small",
+                             "MAX_BOOKS_PER_RUN": "0", "EXPORT_ONLY_ABS_IDS": "x, y"})
+    assert cfg.whisper == [("http://a/v1", "big"), ("http://b/v1", "small")]
+    assert cfg.max_books == 0 and cfg.only == {"x", "y"}
+    assert M.Config.from_env({}).whisper == []
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("env", [
+    {"WHISPER_ENDPOINTS": "http://a/v1"},
+    {"WHISPER_ENDPOINTS": "http://a/v1|"},
+    {"WHISPER_ENDPOINTS": "|model"},
+    {"MAX_BOOKS_PER_RUN": "three"},
+    {"MAX_BOOKS_PER_RUN": "-1"},
+])
+def test_from_env_rejects_bad_config(env):
+    with pytest.raises(M.ConfigError):
+        M.Config.from_env(env)
+
+
+def test_main_returns_2_on_bad_config(monkeypatch, capsys, tmp_path):
+    db = tmp_path / "d.db"
+    sqlite3.connect(db).close()
+    monkeypatch.setenv("DB_PATH", str(db))
+    monkeypatch.setenv("WHISPER_ENDPOINTS", "http://a/v1")
+    assert M.main() == 2
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert line["event"] == "config_error" and "WHISPER_ENDPOINTS" in line["error"]
+
+
+def test_main_returns_2_on_missing_db(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "missing.db"))
+    monkeypatch.delenv("WHISPER_ENDPOINTS", raising=False)
+    monkeypatch.delenv("MAX_BOOKS_PER_RUN", raising=False)
+    assert M.main() == 2
+    line = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert line["event"] == "config_error" and "missing.db" in line["error"]
+
+
+def test_main_logs_config_line_without_secrets(monkeypatch, capsys, tmp_path):
+    db = tmp_path / "d.db"
+    c = sqlite3.connect(db)
+    c.executescript("""
+    create table books(abs_id text, abs_title text, ebook_filename text, status text, audio_source text);
+    create table book_alignments(abs_id text, alignment_map_json text, last_updated text, align_method text,
+                                 total_chars int);
+    create table settings(key text, value text);
+    insert into settings values ('ABS_SERVER','http://abs:80'),('ABS_KEY','sekrit');
+    """)
+    c.commit()
+    c.close()
+    monkeypatch.setenv("DB_PATH", str(db))
+    monkeypatch.setenv("WHISPER_ENDPOINTS", "http://a/v1|big")
+    monkeypatch.setenv("EXPORT_ONLY_ABS_IDS", "x,y")
+    monkeypatch.setenv("OUT_DIR", str(tmp_path / "out"))
+    monkeypatch.delenv("MAX_BOOKS_PER_RUN", raising=False)
+    assert M.main() == 0
+    out = capsys.readouterr().out
+    lines = [json.loads(x) for x in out.strip().splitlines()]
+    cfg_lines = [x for x in lines if x["event"] == "config"]
+    assert len(cfg_lines) == 1 and lines[0]["event"] == "config"
+    c = cfg_lines[0]
+    assert c["whisper_endpoints"] == ["http://a/v1|big"] and c["only_count"] == 2
+    assert c["max_books"] == 3 and c["out_dir"] == str(tmp_path / "out")
+    assert "sekrit" not in out

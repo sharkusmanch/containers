@@ -42,6 +42,8 @@ class WhisperClient:
         self.timeout = timeout
 
     def transcribe(self, wav_path) -> tuple[list[Word], str]:
+        if not self.endpoints:
+            raise WhisperUnavailable("no whisper endpoints configured (WHISPER_ENDPOINTS is empty)")
         errors = []
         for url, model in self.endpoints:
             try:
