@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Pre-build test gate (invoked by .github/workflows/build.yml). Runs the full
+# suite; ffmpeg-dependent tests run when the runner has ffmpeg.
+set -euo pipefail
+PY=$(command -v python3.11 || command -v python3)
+"$PY" -m pip install --quiet -r requirements.txt
+PYTHONPATH=. "$PY" -m pytest -q tests/
