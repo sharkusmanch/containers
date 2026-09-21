@@ -61,7 +61,37 @@ def test_text_change_fails_v5(tmp_path):
                 data = data.replace(b"Three.", b"Thr33.")
             zo.writestr(info, data)
     r = verify(src, tampered, 3.0, audio_duration=fake_duration)
+    # V5 (edited-tree body text) and V6 (bs4/ebooklib reference text) are independent
+    # checks over independent representations of the document; a real non-whitespace
+    # text change must be caught by both.
     assert any(f.startswith("V5") for f in r.failures)
+    assert any(f.startswith("V6") for f in r.failures)
+
+
+def test_irregular_whitespace_at_split_point_passes_v6(tmp_path):
+    # Regression: a sentence boundary that falls on non-ASCII-space whitespace (here a
+    # hair space, U+200A, between the closing quotes) makes segment.wrap() split the
+    # text node so bs4's get_text(" ", strip=True) re-joins across that split with a
+    # single ASCII space, differing byte-for-byte from the untouched source even though
+    # no non-whitespace text changed. V6 must be whitespace-insensitive.
+    body = "<p>Define ‘a little.’ ” I consider lying.</p>"
+    src = make_epub(tmp_path / "src.epub", [("c0.xhtml", body)])
+    docs = textmap.build(src)
+    pars, t = [], 0
+    for d in docs:
+        frags = segment.fragments(d)
+        segment.wrap(d, frags)
+        for f in frags:
+            pars.append(Par(f.id, d.index, t, t + 1000, f.c0, f.c1))
+            t += 1000
+    assert len(pars) >= 2  # the boundary must actually split the text node
+    files = [AudioFile("ra-0001.mp4", 0, len(pars) * 1000)]
+    p = tmp_path / "ra-0001.mp4"
+    p.write_bytes(b"\0")
+    dst = tmp_path / "out_ws.epub"
+    W.write_readaloud(src, dst, docs, pars, files, {"ra-0001.mp4": p}, "2026-09-21T00:00:00Z")
+    r = verify(src, dst, len(pars) * 1.0, audio_duration=lambda zf, name: len(pars) * 1.0)
+    assert r.ok, r.failures
 
 
 # --- two-audio-file fixture: ra-0001.mp4 covers 0-2000ms, ra-0002.mp4 covers 2000-3000ms ---

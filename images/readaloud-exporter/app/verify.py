@@ -146,7 +146,13 @@ def verify(src_epub, out_epub, duration_s: float, audio_duration=None) -> Verify
         if abs(total_ms / 1000 - duration_s) > 0.5:
             fails.append(f"V1 overlay {total_ms / 1000:.3f}s vs audio {duration_s:.3f}s")
     try:
-        if reference_string(reference_documents(out_epub)) != reference_string(reference_documents(src_epub)):
+        # Whitespace-insensitive: wrapping a span at a split point can turn a run of
+        # non-ASCII-space whitespace (hair space, NBSP, newlines, ...) into a
+        # differently-joined whitespace run without changing any non-whitespace text -
+        # bs4's get_text(" ", strip=True) is sensitive to exactly that split.
+        out_ref = re.sub(r"\s+", "", reference_string(reference_documents(out_epub)))
+        src_ref = re.sub(r"\s+", "", reference_string(reference_documents(src_epub)))
+        if out_ref != src_ref:
             fails.append("V6 reference text changed")
     except Exception as e:  # noqa: BLE001 - any parser failure is a verification failure
         fails.append(f"V6 cannot re-read output: {e}")
