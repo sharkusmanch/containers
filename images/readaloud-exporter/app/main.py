@@ -104,10 +104,26 @@ def _write_json_atomic(path: Path, data: dict) -> None:
 
 
 def _is_fixed_layout(epub_path) -> bool:
+    """Book-wide fixed layout only: a package-level `<meta property="rendition:layout">` of
+    `pre-paginated` (no `refines`). A per-item spine override
+    (`properties="rendition:layout-pre-paginated"`) in a reflowable book does not count."""
     import zipfile
+
+    from lxml import etree
     with zipfile.ZipFile(epub_path) as z:
-        opf = z.read(textmap.opf_path(z)).decode("utf-8", "replace")
-    return "pre-paginated" in opf
+        root = etree.fromstring(z.read(textmap.opf_path(z)), etree.XMLParser(recover=True))
+    if root is None:
+        return False
+    local = etree.QName
+    for md in root:
+        if not isinstance(md.tag, str) or local(md).localname != "metadata":
+            continue
+        for el in md:
+            if (isinstance(el.tag, str) and local(el).localname == "meta" and el.get("refines") is None
+                    and (el.get("property") or "").strip() == "rendition:layout"
+                    and (el.text or "").strip() == "pre-paginated"):
+                return True
+    return False
 
 
 def _error(row: BookRow, e: BaseException, detail: dict | None = None) -> Outcome:

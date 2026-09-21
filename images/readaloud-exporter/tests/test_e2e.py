@@ -277,3 +277,33 @@ def test_audio_only_gap_with_whisper_down_is_deferred(tmp_path):
     row, item, cfg, _, _ = setup_book(tmp_path, audio_gap_s=90.0)
     out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(fail=True), "t")
     assert out.status == "deferred" and out.reason == "whisper_unavailable"
+
+
+def _patch_opf(epub, fn):
+    with zipfile.ZipFile(epub) as z:
+        items = [(i, z.read(i.filename)) for i in z.infolist()]
+    with zipfile.ZipFile(epub, "w") as z:
+        for info, data in items:
+            if info.filename.endswith(".opf"):
+                data = fn(data.decode()).encode()
+            z.writestr(info, data, compress_type=info.compress_type)
+
+
+@needs_ffmpeg
+def test_book_wide_pre_paginated_is_refused(tmp_path):
+    row, item, cfg, _, _ = setup_book(tmp_path)
+    _patch_opf(tmp_path / "books" / "Book (2020).epub", lambda o: o.replace(
+        "</metadata>", '<meta property="rendition:layout">pre-paginated</meta></metadata>'))
+    out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
+    assert out.status == "refused" and out.reason == "fixed_layout"
+
+
+@needs_ffmpeg
+def test_per_item_pre_paginated_spine_property_is_not_fixed_layout(tmp_path):
+    row, item, cfg, _, _ = setup_book(tmp_path)
+    epub = tmp_path / "books" / "Book (2020).epub"
+    _patch_opf(epub, lambda o: o.replace('<itemref idref="d0"/>',
+                                         '<itemref idref="d0" properties="rendition:layout-pre-paginated"/>'))
+    assert not M._is_fixed_layout(epub)
+    out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
+    assert out.status == "ok", out
