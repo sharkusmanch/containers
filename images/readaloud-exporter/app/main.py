@@ -174,6 +174,7 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
 
     work = Path(tempfile.mkdtemp(prefix=f"ra-{row.abs_id[:8]}-", dir=cfg.tmp_dir))
     detail: dict = {"fingerprint_inputs": fp_src}
+    part: Path | None = None
     try:
         if item.n_files != 1:
             raise Refuse("multi_file_audio", f"{item.n_files} files")
@@ -270,8 +271,11 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
         audio_paths = {}
         for f in files:
             p = work / f.name
-            audio.encode_opus(m4b, f.start, f.end, p, cfg.bitrate)
-            got = audio.probe_duration(p)
+            try:
+                audio.encode_opus(m4b, f.start, f.end, p, cfg.bitrate)
+                got = audio.probe_duration(p)
+            except audio.AudioError as e:
+                raise Refuse("audio_encode_failed", str(e)) from e
             if abs(got - (f.end - f.start) / 1000) > G5_TOLERANCE_S:
                 raise Refuse("audio_cut_mismatch", f"{f.name}: {got:.3f}s vs {(f.end - f.start) / 1000:.3f}s")
             audio_paths[f.name] = p
@@ -279,7 +283,11 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
 
         folder.mkdir(parents=True, exist_ok=True)
         part = folder / f".{stem} (readaloud).epub.part"
-        epubwrite.write_readaloud(epub_path, part, docs, pars, files, audio_paths, now)
+        try:
+            epubwrite.write_readaloud(epub_path, part, docs, pars, files, audio_paths, now)
+        except (ValueError, KeyError, AttributeError) as e:
+            # manifest collision, malformed NCX, missing NCX/manifest entry: deterministic
+            raise Refuse("epub_structure", f"{type(e).__name__}: {e}") from e
         vr = verify.verify(epub_path, part, item.duration)
         detail["verify"] = {"ok": vr.ok, "failures": vr.failures[:20], "overlay_seconds": vr.overlay_seconds}
         if not vr.ok:
@@ -296,6 +304,8 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
         return Outcome(row.abs_id, row.title, "error", type(e).__name__, {**detail, "error": str(e)[:500]})
     finally:
         shutil.rmtree(work, ignore_errors=True)
+        if part is not None:
+            part.unlink(missing_ok=True)  # published by os.replace, or abandoned
     folder.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(manifest_path, {"fingerprint": fingerprint, "status": out.status, "reason": out.reason,
                                        "exporter_version": VERSION, "code_sha256": CODE_SHA256,

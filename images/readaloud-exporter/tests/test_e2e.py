@@ -307,3 +307,33 @@ def test_per_item_pre_paginated_spine_property_is_not_fixed_layout(tmp_path):
     assert not M._is_fixed_layout(epub)
     out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
     assert out.status == "ok", out
+
+
+@needs_ffmpeg
+def test_audio_encode_failure_is_a_refusal(tmp_path, monkeypatch):
+    row, item, cfg, _, _ = setup_book(tmp_path)
+
+    def boom(*a, **k):
+        raise M.audio.AudioError("ffmpeg failed (1): bad stream")
+
+    monkeypatch.setattr(M.audio, "encode_opus", boom)
+    out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
+    assert out.status == "refused" and out.reason == "audio_encode_failed", out
+    assert "bad stream" in out.detail["error"]
+
+
+@needs_ffmpeg
+def test_epub_structure_error_is_a_refusal_and_part_removed(tmp_path, monkeypatch):
+    row, item, cfg, _, _ = setup_book(tmp_path)
+
+    def broken(src, dst, *a, **k):
+        from pathlib import Path
+        Path(dst).write_bytes(b"partial")
+        raise ValueError("manifest collision: x y")
+
+    monkeypatch.setattr(M.epubwrite, "write_readaloud", broken)
+    out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
+    assert out.status == "refused" and out.reason == "epub_structure", out
+    folder = tmp_path / "out" / "Book [B1]"
+    assert not list(folder.glob("*.part")) and not list(folder.glob(".*.part"))
+    assert not list(folder.glob("*.epub"))
