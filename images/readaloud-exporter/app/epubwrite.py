@@ -7,7 +7,7 @@ import posixpath
 import zipfile
 from collections import defaultdict
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 from lxml import etree
 
@@ -93,7 +93,7 @@ def _nav_from_ncx(ncx_bytes: bytes | None, ncx_dir: str, spine_hrefs: list[str])
             walk(p, ol)
     else:
         for i, h in enumerate(spine_hrefs):
-            add(ol, f"Section {i + 1}", h)
+            add(ol, f"Section {i + 1}", quote(h, safe="/"))
     return etree.tostring(html, xml_declaration=True, encoding="utf-8", doctype="<!DOCTYPE html>")
 
 
@@ -110,6 +110,22 @@ def write_readaloud(src_epub, dst, docs: list[DocMap], pars: list[Par], files: l
         opf.set("version", "3.0")
         metadata = opf.find(_q("metadata"))
         manifest = opf.find(_q("manifest"))
+
+        # Strip any readaloud/media-overlay artifacts already present in the
+        # source (an EPUB 3 source may already have its own overlays) so the
+        # output never ends up with duplicate media:* metas or orphaned old
+        # SMIL files/references.
+        old_smil_zip_paths: set[str] = set()
+        for it in list(manifest.iter(_q("item"))):
+            if it.get("media-type") == "application/smil+xml":
+                old_smil_zip_paths.add(z(unquote(it.get("href"))))
+                manifest.remove(it)
+        for it in manifest.iter(_q("item")):
+            if it.get("media-overlay") is not None:
+                del it.attrib["media-overlay"]
+        for m in [m for m in metadata.iter(_q("meta")) if (m.get("property") or "").startswith("media:")]:
+            metadata.remove(m)
+
         items = list(manifest.iter(_q("item")))
         by_href = {unquote(i.get("href")): i for i in items}
         ids = {i.get("id") for i in items}
@@ -151,12 +167,12 @@ def write_readaloud(src_epub, dst, docs: list[DocMap], pars: list[Par], files: l
                 continue
             smil_id = f"ra-smil-{d.index:04d}"
             smil_href = f"{SMIL_DIR}/ra-{d.index:04d}.smil"
-            doc_rel = posixpath.relpath(d.href, SMIL_DIR)
+            doc_rel = quote(posixpath.relpath(d.href, SMIL_DIR), safe="/")
             smil_items = []
             for p in dpars:
                 fi = files[file_index(files, p.begin)]
-                smil_items.append((p.frag_id, posixpath.relpath(f"{AUDIO_DIR}/{fi.name}", SMIL_DIR),
-                                   p.begin - fi.start, p.end - fi.start))
+                audio_rel = quote(posixpath.relpath(f"{AUDIO_DIR}/{fi.name}", SMIL_DIR), safe="/")
+                smil_items.append((p.frag_id, audio_rel, p.begin - fi.start, p.end - fi.start))
             dur = sum(p.end - p.begin for p in dpars)
             total_ms += dur
             add_item(smil_id, smil_href, "application/smil+xml")
@@ -175,7 +191,7 @@ def write_readaloud(src_epub, dst, docs: list[DocMap], pars: list[Par], files: l
             link = etree.SubElement(head, f"{{{ns}}}link" if ns else "link")
             link.set("rel", "stylesheet")
             link.set("type", "text/css")
-            link.set("href", posixpath.relpath(CSS_HREF, posixpath.dirname(d.href) or "."))
+            link.set("href", quote(posixpath.relpath(CSS_HREF, posixpath.dirname(d.href) or "."), safe="/"))
             replaced_docs[d.zip_path] = etree.tostring(d.tree, xml_declaration=True, encoding="utf-8")
 
         add_meta("media:duration", fmt_clock(total_ms))
@@ -194,7 +210,7 @@ def write_readaloud(src_epub, dst, docs: list[DocMap], pars: list[Par], files: l
             out.writestr(zipfile.ZipInfo("mimetype"), b"application/epub+zip", compress_type=zipfile.ZIP_STORED)
             for info in zf.infolist():
                 name = info.filename
-                if name == "mimetype" or name in new_entries:
+                if name == "mimetype" or name in new_entries or name in old_smil_zip_paths:
                     continue
                 if name == opf_zip:
                     out.writestr(name, opf_bytes, compress_type=zipfile.ZIP_DEFLATED)
