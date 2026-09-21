@@ -55,6 +55,8 @@ ARG GH_VERSION=v2.101.0
 ARG BAO_VERSION=v2.6.2
 # renovate: datasource=github-releases depName=astral-sh/uv
 ARG UV_VERSION=0.12.17
+# renovate: datasource=github-releases depName=anomalyco/opencode
+ARG OPENCODE_VERSION=v1.18.32
 
 # NOTE: task-master-ai (which powers cloudcli's TaskMaster tab) is deliberately NOT baked
 # here. It resolves to 685 packages / ~1.3 GB, and depends on @anthropic-ai/claude-code —
@@ -118,6 +120,7 @@ ARG YQ_VERSION
 ARG GH_VERSION
 ARG BAO_VERSION
 ARG UV_VERSION
+ARG OPENCODE_VERSION
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl tar \
@@ -169,11 +172,18 @@ RUN set -eux; \
       | tar -xz -C /tmp/dl \
     && install -m0755 /tmp/dl/uv-x86_64-unknown-linux-gnu/uv /out/bin/uv \
     && install -m0755 /tmp/dl/uv-x86_64-unknown-linux-gnu/uvx /out/bin/uvx; \
+    # opencode — the release binary, NOT the opencode-ai npm package: npm pulls both the
+    # AVX2 and baseline platform packages (~185 MB each) and postinstall copies a third.
+    # baseline (no AVX2) because not every worker is NFD-labelled AVX2-capable, and the
+    # AVX2 build dies with SIGILL on a CPU without it. cloudcli's OpenCode provider finds
+    # it with a plain PATH lookup (spawn('opencode', ['--version'])).
+    curl -fsSL "https://github.com/anomalyco/opencode/releases/download/${OPENCODE_VERSION}/opencode-linux-x64-baseline.tar.gz" \
+      | tar -xz -C /out/bin opencode; \
     chmod 0755 /out/bin/*
 
 # Fail the build here rather than shipping a tool that 404'd into a 9-byte HTML file.
 RUN set -eux; \
-    for b in kubectl helm flux cosign kubeconform kustomize crane sops grype syft yq gh bao uv; do \
+    for b in kubectl helm flux cosign kubeconform kustomize crane sops grype syft yq gh bao uv opencode; do \
       test -s "/out/bin/$b" || { echo "FATAL: /out/bin/$b missing or empty"; exit 1; }; \
       head -c4 "/out/bin/$b" | grep -q ELF \
         || { echo "FATAL: /out/bin/$b is not an ELF binary (bad asset URL?)"; exit 1; }; \
@@ -193,7 +203,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/siteboon/claudecodeui" \
       org.opencontainers.image.title="cloudcli" \
-      org.opencontainers.image.description="CloudCLI (claudecodeui) web UI for coding agents, with claude + the GitOps toolchain baked"
+      org.opencontainers.image.description="CloudCLI (claudecodeui) web UI for coding agents, with claude, opencode + the GitOps toolchain baked"
 
 # tini: PID 1 reaper. cloudcli spawns interactive shells via node-pty and agent
 #   subprocesses via the Claude Agent SDK; without an init they zombie.
@@ -246,6 +256,7 @@ RUN test -x "$(readlink -f /usr/local/bin/claude)" \
     && gh --version | head -1 \
     && bao version \
     && uv --version \
+    && opencode --version \
     && grype version | head -2 \
     && syft version | head -2
 
