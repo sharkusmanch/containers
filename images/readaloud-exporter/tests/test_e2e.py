@@ -124,6 +124,9 @@ class FakeDB:
     def eligible(self, only):
         return list(self.rows)
 
+    def map_json(self, abs_id):
+        return next(r.map_json for r in self.rows if r.abs_id == abs_id)
+
 
 class ABSByID:
     """Item for known ids; raises (-> deferred abs_unavailable) for every other id."""
@@ -198,3 +201,27 @@ def test_missing_readaloud_is_re_exported(tmp_path):
     epub.unlink()
     again = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
     assert again.status == "ok" and epub.exists()
+
+
+class MapDB:
+    """eligible() rows carry no map (as the real DB); map_json() is recorded per call."""
+    def __init__(self, row):
+        self.full, self.calls = row.map_json, []
+        self.row = BookRow(row.abs_id, row.title, row.ebook_filename, row.align_method, row.total_chars,
+                           "", row.last_updated)
+
+    def eligible(self, only):
+        return [self.row]
+
+    def map_json(self, abs_id):
+        self.calls.append(abs_id)
+        return self.full
+
+
+@needs_ffmpeg
+def test_run_loads_the_map_lazily_for_the_processed_book(tmp_path):
+    row, item, cfg, _, _ = setup_book(tmp_path)
+    db = MapDB(row)
+    outs = M.run(cfg, db, FakeABS(item), FakeWhisper())
+    assert [(o.abs_id, o.status) for o in outs] == [("a1", "ok")], outs
+    assert db.calls == ["a1"]

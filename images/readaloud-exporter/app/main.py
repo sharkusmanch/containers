@@ -11,6 +11,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from app import VERSION, anchors, audio, epubwrite, repair, segment, textmap, timing, verify
 from app.absclient import ABSClient
@@ -110,15 +111,18 @@ def _read_manifest(path: Path) -> dict | None:
     return prev if isinstance(prev, dict) else None
 
 
-def process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: str) -> Outcome:
-    """Never raises: any unexpected failure (incl. fingerprinting/manifest I/O) is an `error` outcome."""
+def process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: str,
+                 load_map: Callable[[str], str] | None = None) -> Outcome:
+    """Never raises: any unexpected failure (incl. fingerprinting/manifest I/O) is an `error` outcome.
+    `load_map(abs_id)` supplies the alignment map JSON lazily; without it `row.map_json` is used."""
     try:
-        return _process_book(row, cfg, abs_client, whisper_client, now)
+        return _process_book(row, cfg, abs_client, whisper_client, now, load_map)
     except Exception as e:  # noqa: BLE001 - one bad book must not stop the run
         return _error(row, e)
 
 
-def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: str) -> Outcome:
+def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: str,
+                  load_map: Callable[[str], str] | None = None) -> Outcome:
     try:
         item = abs_client.item(row.abs_id)
     except Exception as e:  # noqa: BLE001
@@ -155,11 +159,13 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
         except textmap.TextMapError as e:
             raise Refuse(e.reason, e.detail) from e
         ref = textmap.reference_string([(d.href, d.ref_text) for d in docs])
+        raw_map = json.loads(load_map(row.abs_id) if load_map is not None else row.map_json)
         try:
-            anc = anchors.clean(json.loads(row.map_json))
+            anc = anchors.clean(raw_map)
             rate = anchors.book_rate(anc)
         except anchors.AnchorError as e:
             raise Refuse(e.reason, str(e)) from e
+        del raw_map
         gaps = anchors.gaps(anc, row.total_chars, item.duration, rate)
         holes = [g for g in gaps if g.kind == "hole"]
         detail.update(book_rate=round(rate, 2), holes=len(holes),
@@ -266,7 +272,7 @@ def run(cfg: Config, db: BookBridgeDB, abs_client, whisper_client) -> list[Outco
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         t0 = time.monotonic()
         try:
-            o = process_book(row, cfg, abs_client, whisper_client, now)
+            o = process_book(row, cfg, abs_client, whisper_client, now, load_map=db.map_json)
         except Exception as e:  # noqa: BLE001 - belt and braces: one book never stops the run
             o = _error(row, e)
         o.detail["seconds"] = round(time.monotonic() - t0, 1)
