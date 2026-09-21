@@ -225,3 +225,26 @@ def test_run_loads_the_map_lazily_for_the_processed_book(tmp_path):
     outs = M.run(cfg, db, FakeABS(item), FakeWhisper())
     assert [(o.abs_id, o.status) for o in outs] == [("a1", "ok")], outs
     assert db.calls == ["a1"]
+
+
+def test_code_hash_covers_the_package_source():
+    import hashlib
+    from pathlib import Path
+    h = hashlib.sha256()
+    for p in sorted(Path(M.__file__).parent.glob("*.py")):
+        h.update(p.name.encode() + b"\0" + p.read_bytes() + b"\0")
+    assert M.CODE_SHA256 == h.hexdigest()
+
+
+@needs_ffmpeg
+def test_code_change_reprocesses_a_refused_book(tmp_path, monkeypatch):
+    row, item, cfg, _, _ = setup_book(tmp_path)
+    row.total_chars += 1
+    out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
+    assert out.status == "refused" and out.detail["fingerprint_inputs"]["code_sha256"] == M.CODE_SHA256
+    manifest = json.loads((tmp_path / "out" / "Book [B1]" / ".Book (2020).readaloud.json").read_text())
+    assert manifest["code_sha256"] == M.CODE_SHA256
+    assert M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t").status == "skipped"
+    monkeypatch.setattr(M, "CODE_SHA256", "0" * 64)
+    again = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
+    assert again.status == "refused" and again.reason == "text_mismatch"

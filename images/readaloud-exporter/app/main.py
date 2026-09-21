@@ -24,6 +24,18 @@ MIN_COVERAGE = 0.99
 WORK_STATUSES = ("ok", "refused")
 
 
+def _code_sha256() -> str:
+    """Hash of this package's own source, so any code change re-triggers every book (a fix to a
+    refusal cause would otherwise never be retried while VERSION stays the same)."""
+    h = hashlib.sha256()
+    for p in sorted(Path(__file__).parent.glob("*.py")):
+        h.update(p.name.encode() + b"\0" + p.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+CODE_SHA256 = _code_sha256()
+
+
 @dataclass
 class Config:
     db_path: str = "/data/database.db"
@@ -134,7 +146,8 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
     target = folder / f"{stem} (readaloud).epub"
     m4b = Path(_map_path(item.audio_path, cfg.path_map))
 
-    fp_src = {"version": VERSION, "last_updated": row.last_updated, "bitrate": cfg.bitrate,
+    fp_src = {"version": VERSION, "code_sha256": CODE_SHA256,
+              "last_updated": row.last_updated, "bitrate": cfg.bitrate,
               "epub_sha256": _sha256(epub_path) if epub_path else None,
               "m4b": [str(m4b), m4b.stat().st_size, int(m4b.stat().st_mtime)] if m4b.exists() else None}
     fingerprint = hashlib.sha256(json.dumps(fp_src, sort_keys=True).encode()).hexdigest()
@@ -259,7 +272,8 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
         shutil.rmtree(work, ignore_errors=True)
     folder.mkdir(parents=True, exist_ok=True)
     _write_json_atomic(manifest_path, {"fingerprint": fingerprint, "status": out.status, "reason": out.reason,
-                                       "exporter_version": VERSION, "abs_id": row.abs_id, "title": row.title,
+                                       "exporter_version": VERSION, "code_sha256": CODE_SHA256,
+                                       "abs_id": row.abs_id, "title": row.title,
                                        "align_method": row.align_method, "written_at": now, **out.detail})
     return out
 
