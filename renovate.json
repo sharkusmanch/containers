@@ -48,7 +48,23 @@
         "images/autoshift/**",
         "images/changedetection-mcp-sse/**",
         "images/hass-mcp/**",
-        "images/hass-mcp-sse/**"
+        "images/hass-mcp-sse/**",
+        "images/readaloud-exporter/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "readaloud-exporter: the EPUB parser stack must match the alignment-map producer's character for character (text offsets index into the text it extracts), so these pins only move deliberately, together with the producer. An auto-merged bump could silently shift every offset.",
+      "matchFileNames": [
+        "images/readaloud-exporter/**"
+      ],
+      "matchPackageNames": [
+        "EbookLib",
+        "ebooklib",
+        "beautifulsoup4",
+        "lxml",
+        "soupsieve",
+        "six"
       ],
       "enabled": false
     },
