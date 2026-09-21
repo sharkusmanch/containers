@@ -181,11 +181,18 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
         del raw_map
         gaps = anchors.gaps(anc, row.total_chars, item.duration, rate)
         holes = [g for g in gaps if g.kind == "hole"]
+        audio_only = [g for g in gaps if g.kind == "audio_only"]
         detail.update(book_rate=round(rate, 2), holes=len(holes),
-                      hole_seconds=round(sum(g.dts for g in holes), 1))
+                      hole_seconds=round(sum(g.dts for g in holes), 1),
+                      audio_only_gaps=len(audio_only),
+                      audio_only_seconds=round(sum(g.dts for g in audio_only), 1),
+                      audio_only_max_s=round(max((g.dts for g in audio_only), default=0.0), 1))
 
+        # Holes (narrated text with no anchor) and audio-only stretches (long audio, little text)
+        # are both re-transcribed; only holes left after repair fail G3.
+        targets = sorted(holes + audio_only, key=lambda g: g.c_a)
         repaired = 0
-        if holes:
+        if targets:
             cache = folder / ".cache" / row.abs_id
             cache.mkdir(parents=True, exist_ok=True)
 
@@ -206,17 +213,19 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
                 return absw
 
             extra = []
-            for g in holes:
+            for g in targets:
                 extra.extend(repair.repair_hole(g, ref, transcribe_range))
             repaired = len(extra)
             anc = anchors.merge(anc, extra)
             gaps = anchors.gaps(anc, row.total_chars, item.duration, rate)
             left = [g for g in gaps if g.kind == "hole"]
             detail.update(repaired_anchors=repaired, residual_holes=len(left),
-                          residual_max_hole_s=round(max((g.dts for g in left), default=0.0), 1))
+                          residual_max_hole_s=round(max((g.dts for g in left), default=0.0), 1),
+                          residual_audio_only=sum(g.kind == "audio_only" for g in gaps))
             if left:
                 raise Refuse("unrepaired_hole", f"{len(left)} holes, max {max(g.dts for g in left):.0f}s")
         detail["repaired_anchors"] = repaired
+        detail["residual_audio_only"] = sum(g.kind == "audio_only" for g in gaps)
 
         frags = [f for d in docs for f in segment.fragments(d)]
         narr = timing.narrated(frags, gaps)
@@ -226,7 +235,8 @@ def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: st
         except timing.TimingError as e:
             raise Refuse(e.reason, str(e)) from e
         cov = timing.coverage(narr, pars)
-        detail.update(fragments=len(frags), narrated_fragments=len(narr), pars=len(pars), coverage=round(cov, 5))
+        detail.update(fragments=len(frags), narrated_fragments=len(narr), pars=len(pars), coverage=round(cov, 5),
+                      max_par_s=round(max(p.end - p.begin for p in pars) / 1000, 1))
         if cov < MIN_COVERAGE:
             raise Refuse("low_coverage", f"{cov:.4f}")
         have = {p.frag_id for p in pars}

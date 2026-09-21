@@ -34,7 +34,7 @@ class FakeWhisper:
         return self.words, "fake"
 
 
-def setup_book(tmp_path, drop_middle=False):
+def setup_book(tmp_path, drop_middle=False, audio_gap_s=0.0):
     books = tmp_path / "books"
     books.mkdir()
     src = make_epub(books / "Book (2020).epub", BODIES)
@@ -49,12 +49,21 @@ def setup_book(tmp_path, drop_middle=False):
     if drop_middle:
         c_lo, c_hi = ref.index("Sentence number 5"), ref.index("Another line 30")
         anchors = [a for a in anchors if not (c_lo < a["char"] < c_hi)]
+    ch2 = 5.0 + (ref.index("Another line 0") - start) / 15.0
+    if audio_gap_s:
+        # a stretch of audio with (almost) no text: e.g. music between two sentences
+        c_gap = ref.index("Sentence number 20")
+        for a in anchors:
+            if a["char"] >= c_gap:
+                a["ts"] += audio_gap_s
+        duration += audio_gap_s
+        ch2 += audio_gap_s
     abs_dir = tmp_path / "audiobooks" / "Book [B1]"
     abs_dir.mkdir(parents=True)
-    m4b = make_m4b(abs_dir / "Book.m4b", duration, [0.0, 5.0 + (ref.index("Another line 0") - start) / 15.0])
+    m4b = make_m4b(abs_dir / "Book.m4b", duration, [0.0, ch2])
     row = BookRow("a1", "Book", "Book (2020).epub", "lexical", len(ref), json.dumps(
         [{"char": 0, "ts": 0.0}] + anchors + [{"char": len(ref), "ts": duration + 30}]), "2026-09-21")
-    item = AudioItem(str(abs_dir), str(m4b), duration, [0.0, 5.0 + (ref.index("Another line 0") - start) / 15.0], 1)
+    item = AudioItem(str(abs_dir), str(m4b), duration, [0.0, ch2], 1)
     cfg = M.Config(db_path=str(tmp_path / "x.db"), books_roots=[str(books)], out_dir=str(tmp_path / "out"),
                    tmp_dir=str(tmp_path / "tmp"), whisper=[], only=None, max_books=3, bitrate="32k", path_map=[])
     (tmp_path / "tmp").mkdir()
@@ -248,3 +257,23 @@ def test_code_change_reprocesses_a_refused_book(tmp_path, monkeypatch):
     monkeypatch.setattr(M, "CODE_SHA256", "0" * 64)
     again = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
     assert again.status == "refused" and again.reason == "text_mismatch"
+
+
+@needs_ffmpeg
+def test_audio_only_gap_is_repaired_but_not_gated(tmp_path):
+    row, item, cfg, _, _ = setup_book(tmp_path, audio_gap_s=90.0)
+    w = FakeWhisper()  # the stretch is music: the transcript finds nothing
+    out = M.process_book(row, cfg, FakeABS(item), w, "t")
+    assert out.status == "ok", out
+    d = out.detail
+    assert w.calls >= 1
+    assert d["audio_only_gaps"] == 1 and d["audio_only_seconds"] >= 90.0 and d["audio_only_max_s"] >= 90.0
+    assert d["residual_audio_only"] == 1 and d["max_par_s"] >= 90.0
+    assert d["holes"] == 0
+
+
+@needs_ffmpeg
+def test_audio_only_gap_with_whisper_down_is_deferred(tmp_path):
+    row, item, cfg, _, _ = setup_book(tmp_path, audio_gap_s=90.0)
+    out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(fail=True), "t")
+    assert out.status == "deferred" and out.reason == "whisper_unavailable"
