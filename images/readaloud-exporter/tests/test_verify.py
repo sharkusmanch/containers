@@ -1,3 +1,4 @@
+import posixpath
 import zipfile
 
 from app import epubwrite as W
@@ -61,3 +62,62 @@ def test_text_change_fails_v5(tmp_path):
             zo.writestr(info, data)
     r = verify(src, tampered, 3.0, audio_duration=fake_duration)
     assert any(f.startswith("V5") for f in r.failures)
+
+
+# --- two-audio-file fixture: ra-0001.mp4 covers 0-2000ms, ra-0002.mp4 covers 2000-3000ms ---
+
+def two_file_fixture(tmp_path):
+    src = make_epub(tmp_path / "src.epub", [("c0.xhtml", "<p>One. Two.</p>"), ("c1.xhtml", "<p>Three.</p>")])
+    docs = textmap.build(src)
+    pars, t = [], 0
+    for d in docs:
+        frags = segment.fragments(d)
+        segment.wrap(d, frags)
+        for f in frags:
+            pars.append(Par(f.id, d.index, t, t + 1000, f.c0, f.c1))
+            t += 1000
+    files = [AudioFile("ra-0001.mp4", 0, 2000), AudioFile("ra-0002.mp4", 2000, 3000)]
+    audio_paths = {}
+    for f in files:
+        p = tmp_path / f.name
+        p.write_bytes(b"\0")
+        audio_paths[f.name] = p
+    dst = tmp_path / "out2.epub"
+    W.write_readaloud(src, dst, docs, pars, files, audio_paths, "2026-09-21T00:00:00Z")
+    return src, dst
+
+
+def fake_duration_two(overrides=None):
+    durations = {"ra-0001.mp4": 2.0, "ra-0002.mp4": 1.0}
+    if overrides:
+        durations.update(overrides)
+
+    def f(zf, name):
+        return durations[posixpath.basename(name)]
+
+    return f
+
+
+def test_two_files_fully_consumed_passes(tmp_path):
+    src, dst = two_file_fixture(tmp_path)
+    r = verify(src, dst, 3.0, audio_duration=fake_duration_two())
+    assert r.ok, r.failures
+
+
+def test_file_not_fully_consumed_fails_v3(tmp_path):
+    src, dst = two_file_fixture(tmp_path)
+    r = verify(src, dst, 3.0, audio_duration=fake_duration_two({"ra-0001.mp4": 2.5}))
+    assert any(f.startswith("V3") for f in r.failures)
+
+
+def test_new_file_nonzero_start_fails_v3(tmp_path):
+    src, dst = two_file_fixture(tmp_path)
+    tampered = tmp_path / "t2.epub"
+    with zipfile.ZipFile(dst) as zi, zipfile.ZipFile(tampered, "w") as zo:
+        for info in zi.infolist():
+            data = zi.read(info)
+            if info.filename == "OEBPS/MediaOverlays/ra-0001.smil":
+                data = data.replace(b'clipBegin="0.000s"', b'clipBegin="0.100s"')
+            zo.writestr(info, data)
+    r = verify(src, tampered, 3.0, audio_duration=fake_duration_two())
+    assert any(f.startswith("V3") for f in r.failures)

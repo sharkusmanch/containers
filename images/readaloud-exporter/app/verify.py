@@ -18,6 +18,7 @@ from app.textmap import opf_path, parse_xhtml, reference_documents, reference_st
 OPF_NS = "http://www.idpf.org/2007/opf"
 SMIL_NS = "http://www.w3.org/ns/SMIL"
 _CLOCK = re.compile(r"^(?:(\d+):)?(?:(\d+):)?(\d+(?:\.\d+)?)s?$")
+FILE_END_TOLERANCE_S = 0.25  # same tolerance as gate G5 on encoded-vs-planned file length
 
 
 @dataclass
@@ -72,6 +73,12 @@ def verify(src_epub, out_epub, duration_s: float, audio_duration=None) -> Verify
         o_items = {i.get("id"): i for i in o_opf.iter(f"{{{OPF_NS}}}item")}
         durations: dict[str, float] = {}
         prev = None  # (audio zip path, clip end ms)
+
+        def check_consumed(zip_path: str, end_ms: int) -> None:
+            dur = durations[zip_path]
+            if abs(end_ms / 1000 - dur) > FILE_END_TOLERANCE_S:
+                fails.append(f"V3 file {zip_path} not fully consumed ({end_ms / 1000:.3f}s of {dur:.3f}s)")
+
         for idref in spine(o_opf):
             item = o_items.get(idref)
             if item is None:
@@ -128,10 +135,14 @@ def verify(src_epub, out_epub, duration_s: float, audio_duration=None) -> Verify
                 elif prev[0] == a_zip:
                     if prev[1] != b:
                         fails.append(f"V3 discontinuity before {par.get('id')}")
-                elif b != 0:
-                    fails.append(f"V3 new file does not start at 0 at {par.get('id')}")
+                else:
+                    check_consumed(*prev)
+                    if b != 0:
+                        fails.append(f"V3 new file does not start at 0 at {par.get('id')}")
                 total_ms += e - b
                 prev = (a_zip, e)
+        if prev is not None:
+            check_consumed(*prev)
         if abs(total_ms / 1000 - duration_s) > 0.5:
             fails.append(f"V1 overlay {total_ms / 1000:.3f}s vs audio {duration_s:.3f}s")
     try:
