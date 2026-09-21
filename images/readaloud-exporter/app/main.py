@@ -18,6 +18,9 @@ from app.bbsource import BookBridgeDB, BookRow, resolve_epub
 
 G5_TOLERANCE_S = 0.25
 MIN_COVERAGE = 0.99
+# Only outcomes that did real export work count against MAX_BOOKS_PER_RUN, so books that
+# defer or error every run cannot starve the rest of the queue.
+WORK_STATUSES = ("ok", "refused")
 
 
 @dataclass
@@ -94,8 +97,28 @@ def _is_fixed_layout(epub_path) -> bool:
     return "pre-paginated" in opf
 
 
+def _error(row: BookRow, e: BaseException, detail: dict | None = None) -> Outcome:
+    return Outcome(row.abs_id, row.title, "error", type(e).__name__, {**(detail or {}), "error": str(e)[:500]})
+
+
+def _read_manifest(path: Path) -> dict | None:
+    """Previous manifest, or None when absent, unreadable or not a JSON object."""
+    try:
+        prev = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    return prev if isinstance(prev, dict) else None
+
+
 def process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: str) -> Outcome:
-    out = Outcome(row.abs_id, row.title, "error")
+    """Never raises: any unexpected failure (incl. fingerprinting/manifest I/O) is an `error` outcome."""
+    try:
+        return _process_book(row, cfg, abs_client, whisper_client, now)
+    except Exception as e:  # noqa: BLE001 - one bad book must not stop the run
+        return _error(row, e)
+
+
+def _process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: str) -> Outcome:
     try:
         item = abs_client.item(row.abs_id)
     except Exception as e:  # noqa: BLE001
@@ -111,10 +134,10 @@ def process_book(row: BookRow, cfg: Config, abs_client, whisper_client, now: str
               "epub_sha256": _sha256(epub_path) if epub_path else None,
               "m4b": [str(m4b), m4b.stat().st_size, int(m4b.stat().st_mtime)] if m4b.exists() else None}
     fingerprint = hashlib.sha256(json.dumps(fp_src, sort_keys=True).encode()).hexdigest()
-    if manifest_path.exists():
-        prev = json.loads(manifest_path.read_text())
-        if prev.get("fingerprint") == fingerprint and prev.get("status") in ("ok", "refused"):
-            return Outcome(row.abs_id, row.title, "skipped", prev.get("reason", ""))
+    prev = _read_manifest(manifest_path)
+    if prev and prev.get("fingerprint") == fingerprint and (
+            prev.get("status") == "refused" or (prev.get("status") == "ok" and target.exists())):
+        return Outcome(row.abs_id, row.title, "skipped", prev.get("reason", ""))
 
     work = Path(tempfile.mkdtemp(prefix=f"ra-{row.abs_id[:8]}-", dir=cfg.tmp_dir))
     detail: dict = {"fingerprint_inputs": fp_src}
@@ -242,9 +265,12 @@ def run(cfg: Config, db: BookBridgeDB, abs_client, whisper_client) -> list[Outco
             break
         now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         t0 = time.monotonic()
-        o = process_book(row, cfg, abs_client, whisper_client, now)
+        try:
+            o = process_book(row, cfg, abs_client, whisper_client, now)
+        except Exception as e:  # noqa: BLE001 - belt and braces: one book never stops the run
+            o = _error(row, e)
         o.detail["seconds"] = round(time.monotonic() - t0, 1)
-        if o.status != "skipped":
+        if o.status in WORK_STATUSES:
             worked += 1
         print(json.dumps({"event": "book", **asdict(o)}, default=str), flush=True)
         outcomes.append(o)

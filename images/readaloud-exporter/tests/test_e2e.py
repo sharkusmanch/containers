@@ -115,3 +115,86 @@ def test_hole_with_whisper_down_is_deferred(tmp_path):
     out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(fail=True), "t")
     assert out.status == "deferred" and out.reason == "whisper_unavailable"
     assert M.process_book(row, cfg, FakeABS(item), FakeWhisper(fail=True), "t").status == "deferred"
+
+
+class FakeDB:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def eligible(self, only):
+        return list(self.rows)
+
+
+class ABSByID:
+    """Item for known ids; raises (-> deferred abs_unavailable) for every other id."""
+    def __init__(self, items):
+        self.items = items
+
+    def item(self, abs_id):
+        if abs_id not in self.items:
+            raise ConnectionError("server down")
+        return self.items[abs_id]
+
+
+@needs_ffmpeg
+def test_corrupt_previous_manifest_is_ignored(tmp_path):
+    row, item, cfg, _, _ = setup_book(tmp_path)
+    folder = tmp_path / "out" / "Book [B1]"
+    folder.mkdir(parents=True)
+    (folder / ".Book (2020).readaloud.json").write_text("{not json")
+    out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
+    assert out.status == "ok", out
+    assert json.loads((folder / ".Book (2020).readaloud.json").read_text())["status"] == "ok"
+
+
+def test_run_survives_a_book_that_raises(tmp_path, monkeypatch):
+    rows = [BookRow("bad", "Bad", "x.epub", "lexical", 1, "[]", "t"),
+            BookRow("good", "Good", "y.epub", "lexical", 1, "[]", "t")]
+
+    def fake_process(row, *a, **k):
+        if row.abs_id == "bad":
+            raise RuntimeError("boom")
+        return M.Outcome(row.abs_id, row.title, "ok")
+
+    monkeypatch.setattr(M, "process_book", fake_process)
+    cfg = M.Config(out_dir=str(tmp_path), tmp_dir=str(tmp_path), max_books=3)
+    outs = M.run(cfg, FakeDB(rows), None, None)
+    assert [(o.abs_id, o.status) for o in outs] == [("bad", "error"), ("good", "ok")]
+    assert outs[0].reason == "RuntimeError" and "boom" in outs[0].detail["error"]
+
+
+def test_process_book_never_raises_on_pre_try_failure(tmp_path):
+    row = BookRow("a1", "Book", "Book.epub", "lexical", 1, "[]", "t")
+    item = AudioItem(str(tmp_path / "Book [B1]"), str(tmp_path / "missing.m4b"), 10.0, [0.0], 1)
+    cfg = M.Config(books_roots=[str(tmp_path)], out_dir=str(tmp_path / "out"),
+                   tmp_dir=str(tmp_path / "does-not-exist"))
+    out = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
+    assert out.status == "error" and out.reason == "FileNotFoundError"
+
+
+@needs_ffmpeg
+def test_deferred_books_do_not_count_against_cap(tmp_path):
+    row, item, cfg, _, _ = setup_book(tmp_path)
+    cfg.max_books = 1
+    rows = [BookRow("d1", "D1", "x.epub", "lexical", 1, "[]", "t"),
+            BookRow("d2", "D2", "y.epub", "lexical", 1, "[]", "t"), row]
+    outs = M.run(cfg, FakeDB(rows), ABSByID({"a1": item}), FakeWhisper())
+    assert [(o.abs_id, o.status) for o in outs] == [("d1", "deferred"), ("d2", "deferred"), ("a1", "ok")]
+
+
+def test_cap_counts_ok_and_refused_only(tmp_path, monkeypatch):
+    statuses = {"r1": "refused", "o1": "ok", "x": "ok"}
+    rows = [BookRow(i, i, "e.epub", "lexical", 1, "[]", "t") for i in statuses]
+    monkeypatch.setattr(M, "process_book", lambda row, *a, **k: M.Outcome(row.abs_id, row.title, statuses[row.abs_id]))
+    outs = M.run(M.Config(max_books=2), FakeDB(rows), None, None)
+    assert [o.abs_id for o in outs] == ["r1", "o1"]
+
+
+@needs_ffmpeg
+def test_missing_readaloud_is_re_exported(tmp_path):
+    row, item, cfg, _, _ = setup_book(tmp_path)
+    assert M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t").status == "ok"
+    epub = tmp_path / "out" / "Book [B1]" / "Book (2020) (readaloud).epub"
+    epub.unlink()
+    again = M.process_book(row, cfg, FakeABS(item), FakeWhisper(), "t")
+    assert again.status == "ok" and epub.exists()
