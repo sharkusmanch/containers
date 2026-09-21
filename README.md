@@ -31,7 +31,6 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [nextdns-rewrites-sync](./images/nextdns-rewrites-sync/) | Sync Tailscale devices + static entries to NextDNS rewrites API | Original |
 | [pod-reaper](./images/pod-reaper/) | Rule-based Kubernetes pod cleanup controller | [target/pod-reaper](https://github.com/target/pod-reaper) |
 | [podcast-feed-filter](./images/podcast-feed-filter/) | Podcast RSS feed filter preserving enclosures | Original |
-| [readaloud-exporter](./images/readaloud-exporter/) | Alignment maps -> EPUB 3 read-along (media overlay) books | Original |
 | [redlib](./images/redlib/) | Private Reddit frontend | [redlib-org/redlib](https://github.com/redlib-org/redlib) (PR #509) |
 | [rss-youtube-downloader](./images/rss-youtube-downloader/) | RSS feed YouTube video downloader with series routing | Original |
 | [steam-wishlist-calendar](./images/steam-wishlist-calendar/) | ICS calendar from Steam wishlist release dates | [icue/SteamWishlistCalendar](https://github.com/icue/SteamWishlistCalendar) |

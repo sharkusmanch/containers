@@ -1,7 +1,0 @@
-EbookLib==0.20
-beautifulsoup4==4.15.0
-lxml==5.4.0
-soupsieve==2.9.2
-six==1.17.0
-requests==2.34.2
-pytest==8.4.2
