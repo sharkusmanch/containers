@@ -364,20 +364,33 @@ def run(cfg: Config, db: BookBridgeDB, abs_client, whisper_client) -> list[Outco
 
 
 def main() -> int:
+    db = None
     try:
         cfg = Config.from_env(os.environ)
+        if not Path(cfg.db_path).exists():
+            raise ConfigError(f"missing {cfg.db_path}")
+        db = BookBridgeDB(cfg.db_path)
+        s = db.settings()
+        # Env overrides the alignment database's stored ABS server/key: the producer moved to
+        # per-user tokens, so the DB-stored key can go stale while the env is kept current.
+        env_server, env_token = os.environ.get("ABS_SERVER", ""), os.environ.get("ABS_TOKEN", "")
+        abs_server = env_server or s.get("ABS_SERVER", "")
+        abs_token = env_token or s.get("ABS_KEY", "")
+        abs_token_source = "env" if env_token else "database"
+        if not abs_server or not abs_token:
+            raise ConfigError("ABS_SERVER/ABS_TOKEN must be set (env ABS_SERVER/ABS_TOKEN or "
+                              "database settings ABS_SERVER/ABS_KEY)")
         print(json.dumps({"event": "config", "version": VERSION, "code_sha256": CODE_SHA256,
                           "whisper_endpoints": [f"{u}|{m}" for u, m in cfg.whisper],
                           "only_count": None if cfg.only is None else len(cfg.only),
-                          "max_books": cfg.max_books, "out_dir": cfg.out_dir}), flush=True)
-        if not Path(cfg.db_path).exists():
-            raise ConfigError(f"missing {cfg.db_path}")
+                          "max_books": cfg.max_books, "out_dir": cfg.out_dir,
+                          "abs_server": abs_server, "abs_token_source": abs_token_source}), flush=True)
     except ConfigError as e:
         print(json.dumps({"event": "config_error", "error": str(e)}), flush=True)
+        if db is not None:
+            db.close()
         return 2
-    db = BookBridgeDB(cfg.db_path)
-    s = db.settings()
-    abs_client = ABSClient(s.get("ABS_SERVER", ""), s.get("ABS_KEY", ""))
+    abs_client = ABSClient(abs_server, abs_token)
     whisper_client = repair.WhisperClient(cfg.whisper)
     try:
         run(cfg, db, abs_client, whisper_client)

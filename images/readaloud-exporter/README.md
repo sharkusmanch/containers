@@ -19,7 +19,7 @@ was produced.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DB_PATH` | `/data/database.db` | Alignment-map SQLite database (opened read-only). Also supplies the audiobook server URL and API key. |
+| `DB_PATH` | `/data/database.db` | Alignment-map SQLite database (opened read-only). Also supplies the audiobook server URL and API key (`ABS_SERVER`/`ABS_KEY` settings rows), used when the env vars below are unset. |
 | `BOOKS_ROOTS` | `/books:/data/epub_cache` | Colon-separated directories searched, in order, for each book's source EPUB |
 | `OUT_DIR` | `/out` | Output root; each book is written to `<OUT_DIR>/<audiobook folder name>/` |
 | `TMPDIR` | `/tmp` | Scratch space for encoded audio and transcription chunks (removed per book) |
@@ -28,13 +28,17 @@ was produced.
 | `MAX_BOOKS_PER_RUN` | `3` | Books actually worked on per run: only `ok` and `refused` count (skipped, deferred and errored books do not). Must be a non-negative integer |
 | `BITRATE` | `32k` | Opus bitrate for the embedded audio |
 | `PATH_MAP` | *(none)* | `src=dst,...` prefix rewrites translating the audiobook server's container paths to this container's mounts |
+| `ABS_SERVER` | *(none)* | Audiobookshelf base URL; overrides the alignment database's stored URL when non-empty. Recommended |
+| `ABS_TOKEN` | *(none)* | Audiobookshelf API token; overrides the alignment database's stored key when non-empty. Recommended |
 
 Entrypoint: `python -m app.main`. At startup it logs one `"event": "config"` line
-(version, code hash, whisper endpoints, `only_count`, `max_books`, `out_dir` — no secrets).
+(version, code hash, whisper endpoints, `only_count`, `max_books`, `out_dir`, `abs_server`,
+`abs_token_source` — `"env"` or `"database"`, never the token itself — no secrets).
 Exit code `2` with a `"event": "config_error"` line if the configuration is invalid (a
 `WHISPER_ENDPOINTS` entry that is not `url|model`, a non-integer or negative
-`MAX_BOOKS_PER_RUN`) or `DB_PATH` is missing; otherwise `0` (per-book failures are
-reported, never fatal to the run).
+`MAX_BOOKS_PER_RUN`, `DB_PATH` is missing, or the resolved ABS server/token — env else
+database settings — is empty); otherwise `0` (per-book failures are reported, never
+fatal to the run).
 
 The alignment maps are loaded one book at a time, as each book is processed; selecting
 the eligible books reads only their metadata (and applies `EXPORT_ONLY_ABS_IDS` in SQL).
