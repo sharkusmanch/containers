@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Pre-build test gate (invoked by .github/workflows/build.yml). Runs from the
+# image dir; must pass before an image is built or pushed. Uses uv if present
+# (matches local dev iteration), else falls back to pip (CI runners without
+# uv preinstalled).
+set -euo pipefail
+
+# Pinned to the newest mcp 1.x as of 2026-09-22 (uv pip index versions mcp);
+# mcp 2.x is a breaking major and out of scope for this pin -- see global
+# constraints ("mcp 1.x").
+if command -v uv >/dev/null 2>&1; then
+  uv run -q --with pytest --with requests==2.34.2 --with prometheus-client==0.26.0 --with mcp==1.30.0 \
+    python -m pytest -q tests
+else
+  python3 -m pip install -q pytest "requests==2.34.2" "prometheus-client==0.26.0" "mcp==1.30.0"
+  python3 -m pytest -q tests
+fi
