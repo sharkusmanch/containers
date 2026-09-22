@@ -195,43 +195,39 @@ def kids_signals(lists: KidsLists, *, series=None, asins=(), authors=()) -> dict
     }
 
 
-def _extract_kids_inputs(dossier: dict) -> dict:
-    """Best-effort re-derivation of the series/asins/authors signals that
-    fed the dossier's original (possibly stale) `trusted.kids` computation,
-    pulled from the SAME untrusted fields `app.dossier.build_dossier` already
-    persists (sidecar, epub metadata, m4b tags, top-level source_id). Never
-    stores raw text anywhere -- `kids_signals` only ever turns this into
-    closed-vocabulary hit strings via normalized set membership."""
-    untrusted = dossier.get("untrusted") or {}
-    asins: set = set()
-    authors: list = []
-    series = None
+def _safe_kids_inputs(dossier: dict) -> dict:
+    """The EXACT series/asins/authors `app.dossier.build_dossier` used for
+    its own kids_signals call, read back from `untrusted.kids_inputs`.
 
-    sidecar = untrusted.get("sidecar") or {}
-    if sidecar.get("asin"):
-        asins.add(sidecar["asin"])
-    authors.extend(sidecar.get("authors") or [])
+    Fix round 2: guard 7 previously RE-DERIVED these itself from raw tag
+    text (e.g. taking a "series" tag verbatim from the first file that had
+    one). That diverged from build_dossier's real computation -- which
+    uses only the PRIMARY file's series/album tag, run through
+    `app.titles.parse_series` to strip a trailing "#2"/", Book 2" and
+    normalize the rest -- so a tag like "Murderbot Diaries #2" would
+    normalize to "murderbot diaries 2" here but "murderbot diaries" in the
+    dossier's own (correct) computation, silently missing every
+    allow/deny-list series match. Guard 7 must reuse build_dossier's own
+    answer, not recompute a different one.
 
-    epub = untrusted.get("epub") or {}
-    authors.extend(epub.get("creators") or [])
+    Defensively re-validates types (a dossier file on disk may predate this
+    fix, or may itself be malformed) so a bad "asins"/"authors" shape can
+    never crash this guard -- see fix round 2 minor: a sidecar with a
+    non-string "asin" or a non-list "authors" must be ignored, not raise or
+    get exploded into individual characters.
+    """
+    raw = (dossier.get("untrusted") or {}).get("kids_inputs") or {}
 
-    for f in untrusted.get("files") or []:
-        tags = f.get("tags") or {}
-        if tags.get("artist"):
-            authors.append(tags["artist"])
-        if series is None and tags.get("series"):
-            series = tags["series"]
-        elif series is None and tags.get("album"):
-            series = tags["album"]
-        asin = tags.get("audible_asin") or tags.get("asin")
-        if asin:
-            asins.add(asin)
+    series = raw.get("series")
+    series = series if isinstance(series, str) else None
 
-    source_id = dossier.get("source_id")
-    if source_id:
-        asins.add(source_id)
+    asins_raw = raw.get("asins")
+    asins = tuple(a for a in asins_raw if isinstance(a, str)) if isinstance(asins_raw, list) else ()
 
-    return {"series": series, "asins": tuple(asins), "authors": tuple(authors)}
+    authors_raw = raw.get("authors")
+    authors = tuple(a for a in authors_raw if isinstance(a, str)) if isinstance(authors_raw, list) else ()
+
+    return {"series": series, "asins": asins, "authors": authors}
 
 
 # --- render_folder -----------------------------------------------------------
@@ -627,7 +623,7 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
         stored_kids = trusted.get("kids") or {}
         stored_deny_hit = bool(stored_kids.get("deny"))
 
-        inputs = _extract_kids_inputs(dossier)
+        inputs = _safe_kids_inputs(dossier)
         fresh = kids_signals(ctx.lists, series=inputs["series"], asins=inputs["asins"],
                               authors=inputs["authors"])
         fresh_deny_hit = bool(fresh["deny"])

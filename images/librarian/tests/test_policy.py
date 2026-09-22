@@ -115,21 +115,21 @@ def _kids_dir_lists(tmp_path, *, allow_series=(), deny_series=()):
 
 def _dossier_for_kids(*, stored_allow=(), stored_deny=(), fresh_series=None,
                        fresh_authors=(), fresh_asins=(), candidates=None):
+    """Build a dossier the way build_dossier actually would: `kids_inputs`
+    already holds the parsed/normalized series name and the plain
+    asins/authors lists (fix round 2 -- guard 7 must consume exactly this,
+    not re-derive its own from raw tag text)."""
     d = make_dossier(
         candidates=candidates,
         kids={"allow": list(stored_allow), "deny": list(stored_deny)},
-        source_id=fresh_asins[0] if fresh_asins else None,
     )
-    has_fresh = fresh_series or fresh_authors or fresh_asins
     d["untrusted"] = {
-        "files": [{"tags": {
+        "files": [], "epub": None, "sidecar": None, "folder_name": "x",
+        "kids_inputs": {
             "series": fresh_series,
-            "artist": fresh_authors[0] if fresh_authors else None,
-            "audible_asin": fresh_asins[0] if fresh_asins else None,
-        }}] if has_fresh else [],
-        "epub": None,
-        "sidecar": None,
-        "folder_name": "x",
+            "asins": list(fresh_asins),
+            "authors": list(fresh_authors),
+        },
     }
     return d
 
@@ -725,6 +725,77 @@ def test_guard7_attach_kids_target_deny_rejected(tmp_path):
     dossier = _dossier_for_kids(candidates=[candidate(2)], fresh_series="x")
     ok, msg = check_intent(attach_intent(2), ctx(dossier, index, lists=lists))
     assert not ok
+
+
+# --- I4 fix round 2: guard 7 must use build_dossier's OWN parsed series, ---
+# --- not re-derive one from a raw tag (a "#2" suffix normalizes          ---
+# --- differently than the plain series name) -------------------------------
+
+
+def test_guard7_hash_number_series_tag_matches_plain_denylist_entry(tmp_path):
+    from app.titles import parse_series
+
+    lists = _kids_dir_lists(tmp_path, deny_series=("Murderbot Diaries",))
+    # This is what build_dossier ACTUALLY stores in kids_inputs.series: the
+    # PARSED name, with the "#2" already split off by parse_series -- not
+    # the raw tag "Murderbot Diaries #2" (which normalizes to "murderbot
+    # diaries 2" and would never match "Murderbot Diaries").
+    parsed_series, _number = parse_series("Murderbot Diaries #2")
+    dossier = _dossier_for_kids(fresh_series=parsed_series)
+
+    ok, msg = check_intent(create_book_intent(library="kids"), ctx(dossier, FakeIndex({}), lists=lists))
+    assert not ok
+
+
+def test_guard7_hash_number_series_tag_matches_plain_allowlist_entry(tmp_path):
+    from app.titles import parse_series
+
+    lists = _kids_dir_lists(tmp_path, allow_series=("Murderbot Diaries",))
+    parsed_series, _number = parse_series("Murderbot Diaries #2")
+    dossier = _dossier_for_kids(fresh_series=parsed_series)
+
+    ok, msg = check_intent(create_book_intent(library="kids"), ctx(dossier, FakeIndex({}), lists=lists))
+    assert ok
+
+
+def test_guard7_raw_hash_number_series_tag_would_have_missed_the_denylist():
+    """Documents the actual bug this fix closes: normalizing the RAW tag
+    (what the old, reverted _extract_kids_inputs did) produces a DIFFERENT
+    key than normalizing the parsed series name, so a naive re-derivation
+    silently misses list entries."""
+    from app.titles import normalize, parse_series
+
+    raw_normalized = normalize("Murderbot Diaries #2")
+    parsed_series, _number = parse_series("Murderbot Diaries #2")
+    assert raw_normalized != normalize("Murderbot Diaries")
+    assert parsed_series == normalize("Murderbot Diaries")
+
+
+# --- fix round 2 minor: malformed kids_inputs must never crash guard 7 -----
+
+
+def test_guard7_malformed_kids_inputs_does_not_raise():
+    lists = KidsLists.load("/nonexistent-dir-for-tests")
+    dossier = make_dossier()
+    dossier["untrusted"]["kids_inputs"] = {
+        "series": ["not", "a", "string"],
+        "asins": "not-a-list",
+        "authors": "Not A List",
+    }
+    ok, msg = check_intent(create_book_intent(library="kids"), ctx(dossier, FakeIndex({}), lists=lists))
+    assert ok is False  # no crash; safe default is reject (no valid fresh allow)
+
+
+def test_guard7_kids_inputs_with_non_string_list_entries_does_not_raise(tmp_path):
+    lists = _kids_dir_lists(tmp_path, allow_series=("x",))
+    dossier = make_dossier()
+    dossier["untrusted"]["kids_inputs"] = {
+        "series": "x",
+        "asins": [123, None, "real-asin"],
+        "authors": [456, {"nested": "dict"}, "Real Author"],
+    }
+    ok, msg = check_intent(create_book_intent(library="kids"), ctx(dossier, FakeIndex({}), lists=lists))
+    assert ok  # "x" still matches; the junk entries are filtered, not fatal
 
 
 def test_guard7_attach_kids_target_allow_accepted(tmp_path):

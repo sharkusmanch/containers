@@ -107,11 +107,20 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
     if c.source == "libation":
         audible_asin = c.source_id
     if c.source == "kindle" and c.sidecar:
-        kindle_asin = c.sidecar.get("asin")
+        # The sidecar is attacker-influenced (kindle-ingest writes it, but a
+        # corrupt/tampered file is not impossible) -- a wrong-typed "asin"
+        # (e.g. a list) must not propagate as a value, and a wrong-typed
+        # "authors" (e.g. a bare string) must never be exploded into
+        # individual characters by list.extend(str).
+        raw_asin = c.sidecar.get("asin")
+        if isinstance(raw_asin, str):
+            kindle_asin = raw_asin
         sidecar_title = c.sidecar.get("title")
         if sidecar_title:
             titles.append(sidecar_title)
-        authors.extend(c.sidecar.get("authors") or [])
+        raw_authors = c.sidecar.get("authors")
+        if isinstance(raw_authors, list):
+            authors.extend(a for a in raw_authors if isinstance(a, str))
 
     folder_title = _title_from_folder(c)
     if folder_title:
@@ -234,6 +243,19 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
     asins = tuple(a for a in (audible_asin, kindle_asin) if a)
     kids_result = kids(series=arrival_series_name, asins=asins, authors=tuple(authors)) or {}
     kids_out = {"allow": list(kids_result.get("allow", [])), "deny": list(kids_result.get("deny", []))}
+    # The EXACT inputs this dossier used for the kids() call above -- stored
+    # so app.policy's guard 7 can recompute kids_signals against the CURRENT
+    # allow/denylist at check time without re-deriving (and potentially
+    # diverging from) series/asins/authors itself. `series` here is already
+    # the parsed, normalized primary-file series name (see parse_series()
+    # above, not the raw tag -- a raw "Murderbot Diaries #2" tag would
+    # normalize differently than a denylist's "Murderbot Diaries" entry).
+    # `authors` is raw text, so this whole object lives under `untrusted`.
+    kids_inputs = {
+        "series": arrival_series_name,
+        "asins": list(asins),
+        "authors": list(authors),
+    }
 
     trusted = {
         "m4b_count": m4b_count,
@@ -260,6 +282,7 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
             "epub": untrusted_epub,
             "sidecar": c.sidecar,
             "folder_name": folder_name,
+            "kids_inputs": kids_inputs,
         },
         "candidates": candidates_out,
     }

@@ -279,3 +279,55 @@ def test_kids_callable_invoked_with_series_asins_authors(tmp_path):
     assert "B0MURDERB0T" in seen["asins"]
     assert "Martha Wells" in seen["authors"]
     assert d["trusted"]["kids"] == {"allow": ["murderbot diaries"], "deny": []}
+
+    # fix round 2 (I4): app.policy's guard 7 must recompute against exactly
+    # these inputs, not re-derive its own -- so the dossier persists them
+    # verbatim under untrusted.kids_inputs.
+    assert d["untrusted"]["kids_inputs"] == {
+        "series": seen["series"],
+        "asins": list(seen["asins"]),
+        "authors": list(seen["authors"]),
+    }
+
+
+def test_kids_inputs_stores_parsed_series_not_raw_hash_number_tag(tmp_path):
+    idx = make_index(tmp_path)
+    c = libation_candidate(tmp_path)
+    tags = json.loads(json.dumps(LIBATION_TAGS))
+    # A series tag with a literal "#2" suffix and no separate series-part --
+    # parse_series() must be what lands in kids_inputs, not this raw string
+    # (which would normalize to "murderbot diaries 2", a different key than
+    # a "Murderbot Diaries" allow/denylist entry -- see app.policy fix
+    # round 2 / finding I4).
+    tags["format"]["tags"]["series"] = "Murderbot Diaries #2"
+    del tags["format"]["tags"]["series-part"]
+
+    d = build_dossier("libation:B0MURDERB0T:abc123", c, "abc123", idx, prober=lambda _p: tags)
+
+    assert d["untrusted"]["kids_inputs"]["series"] == "murderbot diaries"
+
+
+def test_kindle_sidecar_non_string_asin_and_non_list_authors_does_not_raise(tmp_path):
+    idx = make_index(tmp_path)
+    root = str(tmp_path / "kindle")
+    os.makedirs(root)
+    epub_path = f"{root}/weird.epub"
+    make_epub(epub_path, "Some Title", ["Some Author"], "hello")
+    # Both fields wrong-typed: "asin" a list (would raise if put straight
+    # into a set/compared as a string), "authors" a bare string (would
+    # otherwise get exploded into one "author" per character by
+    # list.extend(str)).
+    bad_sidecar = {"sha256": "x", "asin": ["not", "a", "string"], "title": "Some Title",
+                   "authors": "Not A List"}
+    c = Candidate(source="kindle", source_id="weird", path=epub_path, files=[epub_path],
+                  sidecar=bad_sidecar)
+
+    d = build_dossier("kindle:weird:abc123", c, "abc123", idx)  # must not raise
+
+    assert d["untrusted"]["kids_inputs"]["asins"] == []
+    # the bad sidecar "authors" string must not have been exploded into
+    # single-character "author" entries
+    assert "N" not in d["untrusted"]["kids_inputs"]["authors"]
+    assert "o" not in d["untrusted"]["kids_inputs"]["authors"]
+    # the epub's real author is unaffected by the sidecar's bad shape
+    assert "Some Author" in d["untrusted"]["kids_inputs"]["authors"]
