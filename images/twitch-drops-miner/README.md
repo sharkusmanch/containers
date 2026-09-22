@@ -26,12 +26,12 @@ Summer Drops event, freezing all drop progress, upstream
 ## Upstream
 
 - **Repository**: [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner)
-- **Version**: upstream release `v1.2.6` (Renovate-tracked) + patch [PR #62](https://github.com/rangermix/TwitchDropsMiner/pull/62) + a local GQL retry-budget patch
+- **Version**: whatever `ARG UPSTREAM_VERSION` in the Dockerfile says (Renovate-tracked; the image tag mirrors it) + patch [PR #62](https://github.com/rangermix/TwitchDropsMiner/pull/62) + a local GQL retry-budget patch
 
 ## Usage
 
 ```bash
-docker run -p 8080:8080 -v tdm-data:/app/data ghcr.io/sharkusmanch/containers/twitch-drops-miner:v1.2.6
+docker run -p 8080:8080 -v tdm-data:/app/data ghcr.io/sharkusmanch/containers/twitch-drops-miner:latest
 ```
 
 (The image tag is the upstream release version; the local patches are applied on top.)
