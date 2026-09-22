@@ -67,7 +67,10 @@ def _band(chars_per_sec: float | None) -> str:
     return "ok"
 
 
-def _agreement(arrival_index: float | None, candidate_index) -> str:
+def agreement(arrival_index: float | None, candidate_index) -> str:
+    """Public so app.policy's guard 10 can recompute agreement at check time
+    for a candidate that has no dossier measure (e.g. a book the LLM found
+    via search_books rather than one of this dossier's ranked candidates)."""
     if arrival_index is None or candidate_index is None:
         return "unknown"
     try:
@@ -224,7 +227,7 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
             "book_id": summary.get("id"),
             "chars_per_sec": round(chars_per_sec, 2) if chars_per_sec is not None else None,
             "band": _band(chars_per_sec),
-            "series_index_agreement": _agreement(arrival_series_index, summary.get("series_index")),
+            "series_index_agreement": agreement(arrival_series_index, summary.get("series_index")),
         })
 
     # --- kids signals --------------------------------------------------------
@@ -239,6 +242,10 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
         "edition_flags": edition,
         "measures": measures_out,
         "kids": kids_out,
+        # a bare number, not free text -- safe under `trusted`. Lets
+        # app.policy's guard 10 recompute agreement() at check time for a
+        # candidate with no dossier measure (e.g. found via search_books).
+        "arrival_series_index": arrival_series_index,
     }
     if multiple_primaries:
         trusted["multiple_primaries"] = True
