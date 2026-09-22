@@ -19,6 +19,11 @@
 #   its patch stopped applying on the v1.2.5 bump and was removed 2026-07-29, exactly as the
 #   maintenance model predicts.
 #   Refs: https://github.com/rangermix/TwitchDropsMiner (issue #69, PRs #70/#62)
+# RUNTIME NOTE: v1.3.1 switched the OAuth device client from ANDROID_APP to SMARTBOX
+# (Twitch now rejects the Android client ID with "invalid client"). A saved session issued
+# by the old client fails the client-ID check in auth_state.validate(), which clears the jar
+# and deletes cookies.jar -> ONE forced device-code re-login per instance at twitch.tv/activate.
+# Expect that once on the 1.3.0 -> 1.3.1 rollout; later restarts reuse the new session.
 # RUNTIME NOTE: drop crediting needs beacon.twitch.tv to resolve — blocked by default on
 # tracker-blocking DNS (NextDNS); must be allowlisted or the watch-event POST hits 0.0.0.0.
 
@@ -106,7 +111,10 @@ USER appuser
 
 EXPOSE 8080
 
+# /healthz (1.3.0+) is the only always-public, always-present endpoint: it is on
+# AuthMiddleware's PUBLIC list so it answers even with the dashboard password set, and it
+# doesn't 503 before the GUI manager finishes initialising the way /api/status does.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/status')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz')" || exit 1
 
 CMD ["python", "main.py"]
