@@ -21,6 +21,9 @@ ARG NODE_VERSION=24-trixie-slim
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_VERSION=2.1.278
 
+# renovate: datasource=npm depName=@openai/codex
+ARG CODEX_VERSION=0.155.1
+
 # ---------------------------------------------------------------------------
 # GitOps / secrets / image toolchain, matching what the paseo image carries so agents
 # launched here can do the same cluster work. paseo gets most of these from Alpine
@@ -74,6 +77,7 @@ FROM node:${NODE_VERSION} AS builder
 
 ARG CLOUDCLI_VERSION
 ARG CLAUDE_VERSION
+ARG CODEX_VERSION
 
 # ca-certificates + git: @vscode/ripgrep's postinstall downloads the `rg` binary from
 # GitHub Releases over TLS. Do NOT add --ignore-scripts to the install below to "harden"
@@ -85,6 +89,7 @@ RUN apt-get update \
 
 RUN npm install -g "@cloudcli-ai/cloudcli@${CLOUDCLI_VERSION}" \
     && npm install -g "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
+    && npm install -g "@openai/codex@${CODEX_VERSION}" \
     && npm cache clean --force
 
 # Assert the glibc prebuilds actually landed. Without this the image builds fine and then
@@ -203,7 +208,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/siteboon/claudecodeui" \
       org.opencontainers.image.title="cloudcli" \
-      org.opencontainers.image.description="CloudCLI (claudecodeui) web UI for coding agents, with claude, opencode + the GitOps toolchain baked"
+      org.opencontainers.image.description="CloudCLI (claudecodeui) web UI for coding agents, with claude, codex, opencode + the GitOps toolchain baked"
 
 # tini: PID 1 reaper. cloudcli spawns interactive shells via node-pty and agent
 #   subprocesses via the Claude Agent SDK; without an init they zombie.
@@ -236,6 +241,7 @@ COPY --from=toolchain /out/bin/ /usr/local/bin/
 RUN ln -sf ../lib/node_modules/@cloudcli-ai/cloudcli/dist-server/server/modules/cli/cli.js \
            /usr/local/bin/cloudcli \
     && ln -sf ../lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe /usr/local/bin/claude \
+    && ln -sf ../lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex \
     && chmod -R a+rX /usr/local/lib/node_modules
 
 # Assert the launcher and the toolchain actually run. Without this the image builds fine
@@ -244,6 +250,7 @@ RUN ln -sf ../lib/node_modules/@cloudcli-ai/cloudcli/dist-server/server/modules/
 # these binaries.
 RUN test -x "$(readlink -f /usr/local/bin/claude)" \
     && claude --version \
+    && codex --version \
     && kubectl version --client=true -o yaml >/dev/null \
     && helm version --short \
     && flux --version \
