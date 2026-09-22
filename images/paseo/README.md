@@ -49,9 +49,10 @@ docker run -d \
   a musl/Alpine image).
 - **`tini` as PID 1** — paseo spawns agent CLIs (claude) via node-pty; tini reaps the
   grandchild processes so they don't accumulate as zombies under the daemon.
-- **Runtime patches via `NODE_OPTIONS`** (`/opt/paseo-patches`) — `deflate.cjs` enables
-  WebSocket permessage-deflate, which paseo leaves off, and registers `lease-hook.mjs`,
-  which widens the daemon's 45s application-socket lease. Both target paseo internals
-  and fail silently if a release moves them, so re-check them on every `PASEO_VERSION`
-  bump. Set `NODE_OPTIONS=` in the pod spec to disable both.
+- **No runtime patches** — `/opt/paseo-patches` (a `NODE_OPTIONS` preload holding
+  `deflate.cjs` and `lease-hook.mjs`) was removed on 2026-09-22 with paseo 0.9.1. The
+  lease patch is obsolete: 0.9.x pings every 10s, so the unchanged 45s lease has a 4.5x
+  cushion rather than the 1.8x that iOS timer throttling used to trip. permessage-deflate
+  is still off upstream, so if mobile clients start stalling and reconnecting (code 1006)
+  on large `session_message` frames, restoring `deflate.cjs` from git history is the fix.
 - **amd64 only** (see `.platforms`) — the target cluster is amd64.

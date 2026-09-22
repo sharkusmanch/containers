@@ -138,8 +138,8 @@ COPY --from=builder /opt/claude                /opt/claude
 RUN ln -sf ../lib/node_modules/@getpaseo/cli/bin/paseo /usr/local/bin/paseo \
     && ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude
 
-# rootfs/ carries the entrypoint (seeds a default config.json, voice off, then execs the
-# daemon) and /opt/paseo-patches, the WebSocket preloads NODE_OPTIONS loads below.
+# rootfs/ carries the entrypoint (seeds a default config.json, voice off, then execs
+# the daemon).
 COPY rootfs/ /
 RUN chmod +x /entrypoint.sh
 
@@ -148,14 +148,17 @@ RUN chmod +x /entrypoint.sh
 # /config PVC) are reachable in NON-interactive shells too (Claude/agents don't source
 # ~/.bashrc, so `mise activate` never runs). APPENDED so baked /usr/local/bin wins over any
 # stale mise `latest` shim; the dir is created lazily by mise and may not exist at build.
-# NODE_OPTIONS: deflate.cjs turns on WebSocket permessage-deflate and registers
-# lease-hook.mjs, which widens the daemon's 45s socket lease — see both files for the
-# measurements. Baked here rather than read from the /config PVC, where a missing file
-# would stop the daemon booting. Both patches fail silently if a paseo release moves
-# the code they target, so re-check them when PASEO_VERSION changes.
+# NODE_OPTIONS is deliberately NOT set. It used to preload /opt/paseo-patches
+# (deflate.cjs, lease-hook.mjs); both were dropped on 2026-09-22 with paseo 0.9.1.
+# The lease patch is obsolete — 0.9.x pings every 10s (client HEARTBEAT_INTERVAL_MS),
+# so the unchanged 45s APPLICATION_SOCKET_LEASE_MS now has a 4.5x cushion instead of
+# the 1.8x that made iOS timer throttling trip it. permessage-deflate is still off
+# upstream (websocket-server.js constructs WebSocketServer with no perMessageDeflate),
+# so if uncompressed session_message frames stall the socket on cellular again —
+# code 1006 and a permanent "reconnecting" on mobile — that patch is what to restore;
+# see git history for the measurements.
 ENV DISABLE_AUTOUPDATER=1 \
     HOME=/config \
-    NODE_OPTIONS="--require=/opt/paseo-patches/deflate.cjs" \
     PATH="${PATH}:/config/.local/share/mise/shims"
 
 USER 1000
