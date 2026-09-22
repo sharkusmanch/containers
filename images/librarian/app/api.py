@@ -1,0 +1,427 @@
+"""Internal loopback HTTP API: the only surface a sandboxed `claude -p` (via
+the MCP shim, app/mcp_shim.py, Task 10) can reach.
+
+Strictly scoped per run and per mode. `ApiServer(core, host="127.0.0.1",
+port=0)` wraps a `ThreadingHTTPServer` bound to loopback only -- Claude Code
+issues MCP tool calls in parallel, so the handler must be safe under
+concurrent requests (see the module docstrings of app/store.py and
+app/intents.py for the locking rules this module leans on).
+
+`core` satisfies the Global `Core` protocol (implemented for real by
+app/service.py's `Service`, Task 12): `current_run() -> Run|None`,
+`arrivals: Store`, `intents: IntentBook`, `index: LibraryIndex`,
+`lists: KidsLists`, `load_dossier(key) -> dict|None`, `lock: threading.Lock`.
+
+Every request needs `Authorization: Bearer <run token>` -- wrong/absent
+token, or no open run at all, is 401 (never 403; 403 is reserved for "you
+have a valid token but this endpoint/arrival is not for you"). The run's
+`mode` ("librarian" | "reviewer") gates which endpoints are reachable at
+all; a handful of read endpoints are further scoped to the run's own
+arrivals via `run.seen_ids`/`run.arrival_keys` -- this is what lets
+`app.policy.check_intent`'s guard 1 trust an attach's `book_id` (a
+hallucinated id the LLM never actually saw a real response for is rejected
+there, not here; this module's job is only to make sure `seen_ids` is a
+truthful record of what the run was actually shown).
+"""
+import hmac
+import http.server
+import json
+import os
+import threading
+from urllib.parse import parse_qs, unquote, urlparse
+
+from app.media import search_epub
+from app.policy import GuardContext
+
+_MAX_BODY_BYTES = 64 * 1024
+
+
+class _DossierMissing(Exception):
+    """Raised by the `POST /intents` ctx_factory when `core.load_dossier`
+    returns None -- caught by the handler and turned into a 404, never let
+    to propagate into `IntentBook.submit`'s guard machinery."""
+
+
+# --- small pure helpers, kept free of the handler for easy testing ----------
+
+
+def _dossier_candidate_ids(dossier: dict) -> set:
+    ids = set()
+    for c in (dossier.get("candidates") or []):
+        bid = (c.get("book") or {}).get("id")
+        if bid is not None:
+            ids.add(bid)
+    return ids
+
+
+def _plain_epub_file(book: dict) -> dict | None:
+    """The book's plain EPUB: format epub, filename not the read-along
+    variant. Case-insensitive on both, matching app.policy's own
+    `_has_conflicting_format` check for the same distinction."""
+    for f in (book.get("files") or []):
+        fmt = str(f.get("format") or "").casefold()
+        filename = str(f.get("filename") or "").casefold()
+        if fmt == "epub" and not filename.endswith("(readaloud).epub"):
+            return f
+    return None
+
+
+def _visible_arrivals(core, run) -> list:
+    """The arrival keys this run may see. Librarian mode: the run's own
+    `arrival_keys`. Reviewer mode: the arrivals of the proposals it is
+    reviewing (`core.intents.proposals(run.review_of)`) -- a reviewer run's
+    own `arrival_keys` is not what gates its reads (controller ruling)."""
+    if run.mode == "reviewer":
+        seen: list = []
+        for p in core.intents.proposals(run.review_of):
+            arrival = p.get("arrival")
+            if arrival is not None and arrival not in seen:
+                seen.append(arrival)
+        return seen
+    return list(run.arrival_keys)
+
+
+def _history_for_key(store, key: str, limit: int = 20) -> list:
+    """The last `limit` store records for `key`. `Store` keeps no in-memory
+    history (see app/store.py's docstring: "the JSONL file IS the
+    history") -- so this reads the JSONL file directly, tolerating a
+    missing file and skipping any unparseable line (this is a read-only
+    convenience endpoint, not the store's own crash-recovery path)."""
+    if not os.path.exists(store.path):
+        return []
+    records = []
+    with open(store.path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(rec, dict) and rec.get(store.key_field) == key:
+                records.append(rec)
+    return records[-limit:]
+
+
+def _error_status(error: str) -> int:
+    return {"bad_request": 400, "not_found": 404, "conflict": 409}.get(error, 400)
+
+
+# --- handler ------------------------------------------------------------
+
+
+def _build_handler(core):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, fmt, *args):  # noqa: A002 - stdlib signature
+            pass  # keep test/CI output quiet; nothing here is user-facing
+
+        # --- response helpers ------------------------------------------------
+
+        def _send_json(self, status: int, payload) -> None:
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _error(self, status: int, error: str, reason: str | None = None) -> None:
+            payload = {"error": error}
+            if reason:
+                payload["reason"] = reason
+            self._send_json(status, payload)
+
+        # --- auth --------------------------------------------------------
+
+        def _authorize(self):
+            run = core.current_run()
+            if run is None:
+                return None
+            auth = self.headers.get("Authorization", "")
+            if not auth.startswith("Bearer "):
+                return None
+            token = auth[len("Bearer "):]
+            if not hmac.compare_digest(token, run.token):
+                return None
+            return run
+
+        # --- dispatch ------------------------------------------------------
+
+        def do_GET(self):
+            self._handle("GET")
+
+        def do_POST(self):
+            self._handle("POST")
+
+        def _handle(self, method: str) -> None:
+            try:
+                length_hdr = self.headers.get("Content-Length", "0") or "0"
+                try:
+                    length = int(length_hdr)
+                except ValueError:
+                    length = 0
+
+                if length > _MAX_BODY_BYTES:
+                    # Don't bother draining a hostile Content-Length -- just
+                    # close the connection after responding.
+                    self.close_connection = True
+                    self._error(413, "payload_too_large")
+                    return
+
+                raw = self.rfile.read(length) if length else b""
+
+                run = self._authorize()
+                if run is None:
+                    self._error(401, "unauthorized")
+                    return
+
+                body = None
+                if method == "POST":
+                    if raw:
+                        try:
+                            body = json.loads(raw)
+                        except json.JSONDecodeError:
+                            self._error(400, "bad_request", "invalid JSON")
+                            return
+                    else:
+                        body = {}
+
+                parsed = urlparse(self.path)
+                segments = [s for s in parsed.path.split("/") if s]
+                qs = parse_qs(parsed.query)
+                self._route(method, segments, qs, body, run)
+            except Exception:  # never let a bug wedge the whole server
+                try:
+                    self._error(500, "internal_error")
+                except Exception:
+                    pass
+
+        def _route(self, method, segments, qs, body, run) -> None:
+            if method == "GET" and segments == ["arrivals"]:
+                return self._get_arrivals(run)
+            if method == "GET" and len(segments) == 2 and segments[0] == "arrivals":
+                return self._get_arrival(run, unquote(segments[1]))
+            if method == "GET" and segments == ["books", "search"]:
+                return self._get_books_search(run, qs)
+            if method == "GET" and len(segments) == 3 and segments[0] == "books" and segments[2] == "search":
+                return self._get_book_search_in_book(run, segments[1], qs)
+            if method == "GET" and len(segments) == 2 and segments[0] == "books":
+                return self._get_book(run, segments[1], qs)
+            if method == "POST" and segments == ["intents"]:
+                return self._post_intent(run, body)
+            if method == "GET" and segments == ["proposals"]:
+                return self._get_proposals(run)
+            if method == "POST" and segments == ["reviews"]:
+                return self._post_review(run, body)
+            return self._error(404, "not_found")
+
+        # --- GET /arrivals -------------------------------------------------
+
+        def _get_arrivals(self, run) -> None:
+            out = []
+            for key in _visible_arrivals(core, run):
+                rec = core.arrivals.get(key) or {}
+                out.append({"key": key, "state": rec.get("state"), "title_hint": rec.get("title_hint")})
+            self._send_json(200, out)
+
+        # --- GET /arrivals/{key} --------------------------------------------
+
+        def _get_arrival(self, run, key: str) -> None:
+            if key not in _visible_arrivals(core, run):
+                return self._error(403, "forbidden")
+            dossier = core.load_dossier(key)
+            if dossier is None:
+                return self._error(404, "not_found")
+
+            ids = _dossier_candidate_ids(dossier)
+            with core.lock:
+                run.seen_ids.setdefault(key, set()).update(ids)
+
+            history = _history_for_key(core.arrivals, key)
+            arrival_rec = core.arrivals.get(key) or {}
+            self._send_json(200, {
+                "dossier": dossier,
+                "history": history,
+                "human_answer": arrival_rec.get("human_answer"),
+            })
+
+        # --- GET /books/search -----------------------------------------------
+
+        def _get_books_search(self, run, qs) -> None:
+            arrival = (qs.get("arrival") or [None])[0]
+            if not arrival:
+                return self._error(400, "bad_request", "arrival is required")
+            if arrival not in _visible_arrivals(core, run):
+                return self._error(403, "forbidden")
+
+            q = (qs.get("q") or [""])[0]
+            results = core.index.candidates(titles=[q], limit=10)
+            summaries = [core.index.summarize(detail) for detail, _reasons in results]
+
+            ids = {s["id"] for s in summaries if s.get("id") is not None}
+            with core.lock:
+                run.seen_ids.setdefault(arrival, set()).update(ids)
+
+            self._send_json(200, summaries)
+
+        # --- GET /books/{id} -------------------------------------------------
+
+        def _get_book(self, run, raw_id: str, qs) -> None:
+            arrival = (qs.get("arrival") or [None])[0]
+            if not arrival:
+                return self._error(400, "bad_request", "arrival is required")
+            if arrival not in _visible_arrivals(core, run):
+                return self._error(403, "forbidden")
+
+            book_id = self._parse_id(raw_id)
+            if book_id is None:
+                return self._error(400, "bad_request", "id must be an integer")
+
+            book = core.index.book(book_id)
+            if book is None:
+                return self._error(404, "not_found")
+
+            summary = core.index.summarize(book)
+            with core.lock:
+                run.seen_ids.setdefault(arrival, set()).add(book_id)
+
+            self._send_json(200, summary)
+
+        # --- GET /books/{id}/search --------------------------------------------
+
+        def _get_book_search_in_book(self, run, raw_id: str, qs) -> None:
+            book_id = self._parse_id(raw_id)
+            if book_id is None:
+                return self._error(400, "bad_request", "id must be an integer")
+
+            book = core.index.book(book_id)
+            if book is None:
+                return self._error(404, "not_found")
+
+            epub_file = _plain_epub_file(book)
+            if epub_file is None:
+                return self._error(404, "not_found", "no plain EPUB for this book")
+
+            absolute_path = epub_file.get("absolutePath")
+            if not absolute_path:
+                return self._error(404, "not_found", "no plain EPUB for this book")
+
+            try:
+                local_path = core.index.local_path(absolute_path)
+            except ValueError:
+                return self._error(404, "not_found", "no plain EPUB for this book")
+
+            local_root = os.path.realpath(getattr(core.index, "_local_root", "/media/books"))
+            real = os.path.realpath(local_path)
+            if real != local_root and not real.startswith(local_root + os.sep):
+                return self._error(404, "not_found", "no plain EPUB for this book")
+
+            q = (qs.get("q") or [""])[0]
+            hits = search_epub(real, q)
+            self._send_json(200, hits)
+
+        # --- POST /intents -----------------------------------------------------
+
+        def _post_intent(self, run, body) -> None:
+            if run.mode != "librarian":
+                return self._error(403, "forbidden")
+            if not isinstance(body, dict):
+                return self._error(400, "bad_request", "body must be a JSON object")
+
+            def ctx_factory(key):
+                dossier = core.load_dossier(key)
+                if dossier is None:
+                    raise _DossierMissing()
+                arrival_rec = core.arrivals.get(key) or {}
+                return GuardContext(
+                    dossier=dossier,
+                    index=core.index,
+                    seen_ids=run.seen_ids.get(key, set()),
+                    run_claims=run.claims,
+                    lists=core.lists,
+                    human_answer=arrival_rec.get("human_answer"),
+                )
+
+            try:
+                result = core.intents.submit(run, body, ctx_factory)
+            except _DossierMissing:
+                return self._error(404, "not_found")
+
+            self._send_json(200, result)
+
+        # --- GET /proposals -------------------------------------------------
+
+        def _get_proposals(self, run) -> None:
+            if run.mode != "reviewer":
+                return self._error(403, "forbidden")
+            self._send_json(200, core.intents.proposals(run.review_of))
+
+        # --- POST /reviews -----------------------------------------------------
+
+        def _post_review(self, run, body) -> None:
+            if run.mode != "reviewer":
+                return self._error(403, "forbidden")
+            if not isinstance(body, dict):
+                return self._error(400, "bad_request", "body must be a JSON object")
+
+            intent_id = body.get("intent_id")
+            verdict = body.get("verdict")
+            argument = body.get("argument", "")
+            if not isinstance(intent_id, str) or not intent_id:
+                return self._error(400, "bad_request", "intent_id must be a non-empty string")
+            if not isinstance(verdict, str):
+                return self._error(400, "bad_request", "verdict must be a string")
+
+            result = core.intents.apply_review(run, intent_id, verdict, argument)
+            if "error" in result:
+                return self._error(_error_status(result["error"]), result["error"], result.get("reason"))
+            self._send_json(200, result)
+
+        # --- misc ------------------------------------------------------------
+
+        @staticmethod
+        def _parse_id(raw_id: str):
+            try:
+                return int(unquote(raw_id))
+            except ValueError:
+                return None
+
+    return Handler
+
+
+class ApiServer:
+    """`.start()` binds a `ThreadingHTTPServer` to loopback and returns the
+    bound port; `.stop()` shuts it down. Bind address is hard-locked to
+    `127.0.0.1` -- this is the only surface a sandboxed `claude -p` reaches,
+    and it must never be reachable from anywhere else on the pod's network
+    namespace, let alone the cluster."""
+
+    def __init__(self, core, host: str = "127.0.0.1", port: int = 0):
+        if host != "127.0.0.1":
+            raise ValueError("ApiServer must bind to 127.0.0.1 only")
+        self._core = core
+        self._host = host
+        self._port = port
+        self._httpd: http.server.ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> int:
+        handler = _build_handler(self._core)
+        self._httpd = http.server.ThreadingHTTPServer((self._host, self._port), handler)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread.start()
+        return self._httpd.server_address[1]
+
+    @property
+    def bound_host(self) -> str | None:
+        return self._httpd.server_address[0] if self._httpd else None
+
+    def stop(self) -> None:
+        if self._httpd is not None:
+            self._httpd.shutdown()
+            self._httpd.server_close()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
