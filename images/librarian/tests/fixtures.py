@@ -16,13 +16,23 @@ _CONTAINER_XML = (
 )
 
 
-def make_epub(path, title, creators, text, date="2020", identifiers=None):
+def make_epub(path, title, creators, text, date="2020", identifiers=None, raw_identifiers=None):
+    """`identifiers`: dict of scheme -> value, written with an `opf:scheme`
+    attribute (the common case). `raw_identifiers`: list of (id, value) pairs
+    written WITHOUT an `opf:scheme` attribute (id may be None) -- for
+    exercising EPUB2's optional-scheme / urn: / bare-ISBN fallback paths."""
     identifiers = identifiers or {}
+    raw_identifiers = raw_identifiers or []
 
     creator_xml = "".join(f"<dc:creator>{escape(c)}</dc:creator>" for c in creators)
     identifier_xml = "".join(
         f'<dc:identifier opf:scheme="{escape(str(scheme).upper())}">{escape(str(value))}</dc:identifier>'
         for scheme, value in identifiers.items()
+    )
+    raw_identifier_xml = "".join(
+        (f'<dc:identifier id="{escape(str(ident_id))}">' if ident_id else "<dc:identifier>")
+        + f"{escape(str(value))}</dc:identifier>"
+        for ident_id, value in raw_identifiers
     )
     opf = (
         '<?xml version="1.0" encoding="UTF-8"?>'
@@ -33,6 +43,7 @@ def make_epub(path, title, creators, text, date="2020", identifiers=None):
         f"<dc:date>{escape(date)}</dc:date>"
         "<dc:language>en</dc:language>"
         f"{identifier_xml}"
+        f"{raw_identifier_xml}"
         "</metadata>"
         "<manifest>"
         '<item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>'

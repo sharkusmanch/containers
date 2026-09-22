@@ -11,6 +11,7 @@ import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from urllib.parse import unquote
 from xml.etree import ElementTree as ET
 
 Prober = Callable[[str], dict]
@@ -129,7 +130,10 @@ def _opf_path(zf: zipfile.ZipFile) -> str:
     with zf.open("META-INF/container.xml") as f:
         tree = ET.parse(f)
     rootfile = tree.find(".//c:rootfile", _CONTAINER_NS)
-    return rootfile.get("full-path")
+    full_path = rootfile.get("full-path") if rootfile is not None else None
+    if not full_path:
+        raise ValueError("unreadable EPUB: container.xml has no rootfile")
+    return full_path
 
 
 def _el_text(el) -> str | None:
@@ -137,6 +141,52 @@ def _el_text(el) -> str | None:
         return None
     t = el.text.strip()
     return t or None
+
+
+_URN_RE = re.compile(r"^urn:([A-Za-z0-9.+-]+):(.+)$", re.IGNORECASE)
+_ISBN13_RE = re.compile(r"^\d{13}$")
+_ISBN10_RE = re.compile(r"^\d{9}[\dXx]$")
+# Amazon ASINs are 10-char alphanumeric (commonly "B0..." for audiobooks/
+# ebooks); require at least one letter so a plain 10-digit ISBN-10 (already
+# handled above) is never misclassified as an ASIN.
+_ASIN_RE = re.compile(r"^(?=.*[A-Za-z])[A-Za-z0-9]{10}$")
+
+
+def _is_isbn(value: str) -> bool:
+    stripped = re.sub(r"[-\s]", "", value)
+    return bool(_ISBN13_RE.match(stripped) or _ISBN10_RE.match(stripped))
+
+
+def _is_asin(value: str) -> bool:
+    return bool(_ASIN_RE.match(value))
+
+
+def _classify_identifier(ident_id: str | None, scheme_attr: str | None, raw_value: str) -> tuple[str, str] | None:
+    """Best-effort (scheme, value) for a `dc:identifier` element.
+
+    `opf:scheme` is optional in EPUB2, and several real-world producers omit
+    it: `urn:isbn:`/`urn:uuid:`-prefixed values, bare ISBNs, and Amazon-style
+    ASINs are all common in the wild (calibre, in particular, always sets
+    opf:scheme, but plenty of others don't). Falls back to the element's
+    `id` attribute, then "unknown", rather than dropping the identifier.
+    """
+    value = raw_value.strip()
+    if not value:
+        return None
+
+    if scheme_attr:
+        return scheme_attr.strip().lower(), value
+
+    m = _URN_RE.match(value)
+    if m:
+        return m.group(1).lower(), m.group(2).strip()
+
+    if _is_isbn(value):
+        return "isbn", value
+    if _is_asin(value):
+        return "asin", value
+
+    return (ident_id.strip().lower() if ident_id else "unknown"), value
 
 
 def _parse_opf(zf: zipfile.ZipFile, opf_path: str) -> tuple[dict, list[str]]:
@@ -160,10 +210,11 @@ def _parse_opf(zf: zipfile.ZipFile, opf_path: str) -> tuple[dict, list[str]]:
     identifiers: dict[str, str] = {}
     if metadata is not None:
         for ident in metadata.findall("dc:identifier", _NS):
-            scheme = ident.get(f"{{{_OPF_NS}}}scheme")
-            value = (ident.text or "").strip()
-            if scheme and value:
-                identifiers[scheme.lower()] = value
+            scheme_attr = ident.get(f"{{{_OPF_NS}}}scheme")
+            classified = _classify_identifier(ident.get("id"), scheme_attr, ident.text or "")
+            if classified:
+                key, value = classified
+                identifiers.setdefault(key, value)  # first one wins, never overwritten
 
     manifest: dict[str, str] = {}
     manifest_el = root.find("opf:manifest", _NS)
@@ -195,6 +246,9 @@ def _parse_opf(zf: zipfile.ZipFile, opf_path: str) -> tuple[dict, list[str]]:
 def _spine_text(zf: zipfile.ZipFile, base_dir: str, hrefs: list[str]) -> str:
     parts = []
     for href in hrefs:
+        # Manifest hrefs are URLs and may be percent-encoded (e.g. a space
+        # in the filename as "%20") -- the zip entry itself never is.
+        href = unquote(href)
         path = f"{base_dir}/{href}" if base_dir else href
         try:
             with zf.open(path) as f:

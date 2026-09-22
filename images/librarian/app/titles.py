@@ -77,7 +77,11 @@ def title_keys(title: str, subtitle: str | None = None) -> set[str]:
 
 # --- surname / surnames -------------------------------------------------------
 
-_SUFFIX_RE = re.compile(r",?\s*(jr\.?|sr\.?|ii|iii)\.?\s*$", re.IGNORECASE)
+# The suffix must be preceded by an actual separator (comma or whitespace),
+# not just "\s*" (zero-or-more) -- otherwise "ii"/"iii" matches the tail of
+# any surname that happens to end in those letters (Torii, Ishii) and
+# truncates it.
+_SUFFIX_RE = re.compile(r"(?:,\s*|\s+)(jr\.?|sr\.?|ii|iii)\.?\s*$", re.IGNORECASE)
 
 
 def surname(author: str) -> str:

@@ -75,3 +75,15 @@ def test_surname_empty_input():
 
 def test_parse_series_comma_book_form():
     assert parse_series("Foundation, Book 1") == ("foundation", 1.0)
+
+
+def test_surname_ii_ending_names_not_truncated_as_suffix():
+    # "ii"/"iii" must only be stripped as a standalone generational-suffix
+    # token, not whenever a surname happens to end in those letters.
+    assert surname("Genji Torii") == "torii"
+    assert surname("Junji Ishii") == "ishii"
+
+
+def test_surname_suffix_requires_token_boundary():
+    assert surname("John Smith III") == "smith"
+    assert surname("Smith, John Jr.") == "smith"
