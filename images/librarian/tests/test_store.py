@@ -135,3 +135,42 @@ def test_concurrent_writes_are_lock_guarded(tmp_path):
 
     reloaded = Store(str(p), "key", STATES)
     assert len(reloaded.all()) == 200
+
+
+def test_concurrent_all_by_state_counts_during_writes_never_raises(tmp_path):
+    """Fix round 1, M1: `all()`/`by_state()`/`counts()` iterate
+    `self._state.values()` -- without snapshotting under `self._lock` (the
+    same lock `record()` uses), a writer resizing the dict mid-iteration on
+    another thread can raise "dictionary changed size during iteration".
+    This reproduces the race (readers spinning while writers insert new
+    keys) and asserts it never surfaces once those methods lock too."""
+    s = Store(str(tmp_path / "a.jsonl"), "key", STATES)
+    stop = threading.Event()
+    errors: list[Exception] = []
+
+    def writer(n):
+        for i in range(200):
+            s.record(f"w{n}-{i}", "ready")
+
+    def reader():
+        while not stop.is_set():
+            try:
+                s.all()
+                s.by_state("ready")
+                s.counts()
+            except RuntimeError as e:  # "dictionary changed size during iteration"
+                errors.append(e)
+
+    writers = [threading.Thread(target=writer, args=(n,)) for n in range(5)]
+    readers = [threading.Thread(target=reader) for _ in range(5)]
+    for t in readers:
+        t.start()
+    for t in writers:
+        t.start()
+    for t in writers:
+        t.join()
+    stop.set()
+    for t in readers:
+        t.join()
+
+    assert errors == []

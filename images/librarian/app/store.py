@@ -18,6 +18,11 @@ Differences from ledger.py:
     parallel and ThreadingHTTPServer serves them concurrently, so concurrent
     writers are a real scenario here, unlike kindle-ingest's single-threaded
     poll loop
+  * `all`/`by_state`/`counts` snapshot under that same lock too (fix round 1,
+    M1) -- a reader iterating `dict.values()` while `record()` resizes the
+    dict on another thread can otherwise raise "dictionary changed size
+    during iteration"; this is a real race under concurrent requests (e.g.
+    app/api.py's `_visible_arrivals`/`IntentBook.proposals` path)
 
 Durability rules (unchanged from ledger.py):
   * append-only: a torn final line is discarded, and the damage from a
@@ -160,14 +165,23 @@ class Store:
         return dict(r) if r is not None else None
 
     def all(self) -> list[dict]:
-        return [dict(r) for r in self._state.values()]
+        # Snapshot under the same lock `record()` uses (fix round 1, M1):
+        # without it, a concurrent `record()` resizing `self._state` while
+        # this iterates `.values()` can raise "dictionary changed size
+        # during iteration" -- a real race under ThreadingHTTPServer, where
+        # e.g. app.api's proposals()/_visible_arrivals reads can run
+        # concurrently with a reviewer's apply_review recording a verdict.
+        with self._lock:
+            return [dict(r) for r in self._state.values()]
 
     def by_state(self, state: str) -> list[dict]:
-        return [dict(r) for r in self._state.values() if r.get("state") == state]
+        with self._lock:
+            return [dict(r) for r in self._state.values() if r.get("state") == state]
 
     def counts(self) -> dict[str, int]:
-        c: dict[str, int] = {}
-        for r in self._state.values():
-            s = r.get("state", "unknown")
-            c[s] = c.get(s, 0) + 1
-        return c
+        with self._lock:
+            c: dict[str, int] = {}
+            for r in self._state.values():
+                s = r.get("state", "unknown")
+                c[s] = c.get(s, 0) + 1
+            return c

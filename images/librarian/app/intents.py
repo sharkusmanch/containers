@@ -136,7 +136,7 @@ class IntentBook:
 
     # --- reviewer verdicts -------------------------------------------------------
 
-    def apply_review(self, run, intent_id: str, verdict: str, argument: str) -> dict:
+    def apply_review(self, run, intent_id: str, verdict: str, argument: str, precheck=None) -> dict:
         """Apply a reviewer's verdict to a proposed intent.
 
         `run` is the REVIEWER's own Run (`mode="reviewer"`); `run.reviewed`
@@ -144,11 +144,25 @@ class IntentBook:
         Returns an error dict (`{"error": ..., "reason": ...}`) on any
         failure -- unknown intent, wrong state, already reviewed, or a bad
         verdict -- for the API layer to map to the appropriate HTTP status.
+
+        `precheck`, if given, is called with no arguments as the very first
+        thing inside the locked section and must return `(ok, reason)`; a
+        falsy `ok` short-circuits with `{"error": "conflict", "reason":
+        reason}` before any state is read or written. This is how the API
+        layer (app/api.py, fix round 1 I1) re-checks that the run applying
+        this review hasn't been closed by the service between request auth
+        and this locked section, without IntentBook needing to know
+        anything about `Core` or run identity itself.
         """
         if verdict not in ("approve", "reject"):
             return {"error": "bad_request", "reason": f"unknown verdict {verdict!r}"}
 
         with self.lock:
+            if precheck is not None:
+                ok, reason = precheck()
+                if not ok:
+                    return {"error": "conflict", "reason": reason}
+
             rec = self.store.get(intent_id)
             if rec is None:
                 return {"error": "not_found", "reason": f"no such intent {intent_id!r}"}

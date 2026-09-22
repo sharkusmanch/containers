@@ -21,17 +21,43 @@ arrivals via `run.seen_ids`/`run.arrival_keys` -- this is what lets
 `app.policy.check_intent`'s guard 1 trust an attach's `book_id` (a
 hallucinated id the LLM never actually saw a real response for is rejected
 there, not here; this module's job is only to make sure `seen_ids` is a
-truthful record of what the run was actually shown).
+truthful record of what the run was actually shown). The same scoping
+applies to the write endpoints: `POST /intents` 403s unless the intent's
+own `arrival` field is one this run may see, and `POST /reviews` 403s
+unless the target intent belongs to the run this reviewer was assigned
+(`intent.run_id == run.review_of`) -- a reviewer only ever rules on the
+run it was actually asked to review.
+
+Run lifecycle (fix round 1, I1): `core.current_run()` can change -- or go
+to `None` -- at any moment, independent of any in-flight request: the
+service closes a run when `claude -p` exits, including a timeout kill.
+A request is authorized once, against whichever run was open when it
+arrived; but a WRITE handler (`POST /intents`, `POST /reviews`) re-checks
+`core.current_run() is run` again, a second time, inside the very locked
+section that performs the mutation -- `POST /intents`' `ctx_factory` raises
+`_RunClosed` (caught here, mapped to 409) before `IntentBook.submit` ever
+computes an intent id, and `POST /reviews` passes a `precheck` callback
+into `IntentBook.apply_review` that runs first thing inside `apply_review`'s
+own `with self.lock:`. **This guarantee only holds if the service closes or
+replaces a run while ALSO holding `core.lock`** -- the same lock
+`IntentBook.submit`/`apply_review` already hold from guard-check to record
+(see app/intents.py's module docstring). A close performed without that
+lock can still race a request that already passed its precheck a moment
+before the close and is now proceeding to mutate state.
 """
 import hmac
 import http.server
 import json
+import logging
 import os
 import threading
+from http import HTTPStatus
 from urllib.parse import parse_qs, unquote, urlparse
 
 from app.media import search_epub
 from app.policy import GuardContext
+
+logger = logging.getLogger(__name__)
 
 _MAX_BODY_BYTES = 64 * 1024
 
@@ -40,6 +66,13 @@ class _DossierMissing(Exception):
     """Raised by the `POST /intents` ctx_factory when `core.load_dossier`
     returns None -- caught by the handler and turned into a 404, never let
     to propagate into `IntentBook.submit`'s guard machinery."""
+
+
+class _RunClosed(Exception):
+    """Raised by the `POST /intents` ctx_factory when the run that was
+    authorized at request start is no longer the open run by the time the
+    locked section runs (see the module docstring, fix round 1 I1) --
+    caught by the handler and turned into a 409."""
 
 
 # --- small pure helpers, kept free of the handler for easy testing ----------
@@ -70,7 +103,13 @@ def _visible_arrivals(core, run) -> list:
     """The arrival keys this run may see. Librarian mode: the run's own
     `arrival_keys`. Reviewer mode: the arrivals of the proposals it is
     reviewing (`core.intents.proposals(run.review_of)`) -- a reviewer run's
-    own `arrival_keys` is not what gates its reads (controller ruling)."""
+    own `arrival_keys` is not what gates its reads (controller ruling).
+
+    `IntentBook.proposals` reads the intents `Store` via `Store.all()`,
+    which snapshots under the store's own lock (app/store.py, fix round 1
+    M1) -- safe to call here without any additional locking even while a
+    concurrent review is being recorded.
+    """
     if run.mode == "reviewer":
         seen: list = []
         for p in core.intents.proposals(run.review_of):
@@ -126,13 +165,38 @@ def _build_handler(core):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            if self.command != "HEAD":
+                self.wfile.write(body)
 
         def _error(self, status: int, error: str, reason: str | None = None) -> None:
             payload = {"error": error}
             if reason:
                 payload["reason"] = reason
             self._send_json(status, payload)
+
+        def send_error(self, code, message=None, explain=None):
+            """Override the stdlib's default HTML error page -- used for
+            request-line/header parse failures the framework catches
+            before any `do_*` method even runs (fix round 1, M4) -- so a
+            malformed request gets the same JSON shape as every other
+            error path here.
+
+            A request line so broken `parse_request()` bails before ever
+            determining the real HTTP version leaves `self.request_version`
+            at the class default `"HTTP/0.9"` -- and `send_response`/
+            `send_header`/`end_headers` all silently no-op under
+            `HTTP/0.9` (correctly: that version has no headers at all).
+            Force it to this server's real protocol version first, or
+            `_send_json` would write a bare body with no status line.
+            """
+            self.close_connection = True
+            if self.request_version == "HTTP/0.9":
+                self.request_version = self.protocol_version
+            try:
+                error = "bad_request" if int(code) < 500 else "internal_error"
+                self._error(int(code), error, str(message) if message else None)
+            except Exception:
+                pass
 
         # --- auth --------------------------------------------------------
 
@@ -144,7 +208,12 @@ def _build_handler(core):
             if not auth.startswith("Bearer "):
                 return None
             token = auth[len("Bearer "):]
-            if not hmac.compare_digest(token, run.token):
+            try:
+                # fix round 1, M2: hmac.compare_digest raises TypeError on
+                # non-ASCII str input rather than just comparing unequal.
+                if not hmac.compare_digest(token, run.token):
+                    return None
+            except TypeError:
                 return None
             return run
 
@@ -156,13 +225,62 @@ def _build_handler(core):
         def do_POST(self):
             self._handle("POST")
 
+        def _reject_method(self) -> None:
+            """PUT/DELETE/PATCH/OPTIONS/HEAD: none of this API's endpoints
+            use them (fix round 1, M4). Still drain any declared body so a
+            reused keep-alive connection isn't left with stale bytes."""
+            self.close_connection = True
+            length_hdr = self.headers.get("Content-Length")
+            try:
+                length = int(length_hdr) if length_hdr is not None else 0
+            except ValueError:
+                length = 0
+            if length > 0:
+                try:
+                    self.rfile.read(min(length, _MAX_BODY_BYTES))
+                except Exception:
+                    pass
+            self._error(405, "method_not_allowed")
+
+        def do_PUT(self):
+            self._reject_method()
+
+        def do_DELETE(self):
+            self._reject_method()
+
+        def do_PATCH(self):
+            self._reject_method()
+
+        def do_OPTIONS(self):
+            self._reject_method()
+
+        def do_HEAD(self):
+            self._reject_method()
+
         def _handle(self, method: str) -> None:
             try:
-                length_hdr = self.headers.get("Content-Length", "0") or "0"
-                try:
-                    length = int(length_hdr)
-                except ValueError:
-                    length = 0
+                # fix round 1, I2: a chunked/Transfer-Encoding body has no
+                # Content-Length to trust -- refuse it outright rather than
+                # silently treating it as a zero-length body.
+                if "Transfer-Encoding" in self.headers:
+                    self.close_connection = True
+                    self._error(HTTPStatus.LENGTH_REQUIRED, "length_required",
+                                "chunked/Transfer-Encoding request bodies are not supported")
+                    return
+
+                length_hdr = self.headers.get("Content-Length")
+                length = 0
+                if length_hdr is not None:
+                    try:
+                        length = int(length_hdr)
+                    except ValueError:
+                        self.close_connection = True
+                        self._error(400, "bad_request", "invalid Content-Length")
+                        return
+                    if length < 0:
+                        self.close_connection = True
+                        self._error(400, "bad_request", "invalid Content-Length")
+                        return
 
                 if length > _MAX_BODY_BYTES:
                     # Don't bother draining a hostile Content-Length -- just
@@ -183,7 +301,7 @@ def _build_handler(core):
                     if raw:
                         try:
                             body = json.loads(raw)
-                        except json.JSONDecodeError:
+                        except (json.JSONDecodeError, UnicodeDecodeError):
                             self._error(400, "bad_request", "invalid JSON")
                             return
                     else:
@@ -194,6 +312,7 @@ def _build_handler(core):
                 qs = parse_qs(parsed.query)
                 self._route(method, segments, qs, body, run)
             except Exception:  # never let a bug wedge the whole server
+                logger.exception("unhandled error handling %s %s", method, self.path)
                 try:
                     self._error(500, "internal_error")
                 except Exception:
@@ -224,7 +343,11 @@ def _build_handler(core):
             out = []
             for key in _visible_arrivals(core, run):
                 rec = core.arrivals.get(key) or {}
-                out.append({"key": key, "state": rec.get("state"), "title_hint": rec.get("title_hint")})
+                out.append({
+                    "key": key,
+                    "state": rec.get("state"),
+                    "untrusted": {"title_hint": rec.get("title_hint")},
+                })
             self._send_json(200, out)
 
         # --- GET /arrivals/{key} --------------------------------------------
@@ -244,8 +367,10 @@ def _build_handler(core):
             arrival_rec = core.arrivals.get(key) or {}
             self._send_json(200, {
                 "dossier": dossier,
-                "history": history,
-                "human_answer": arrival_rec.get("human_answer"),
+                "untrusted": {
+                    "history": history,
+                    "human_answer": arrival_rec.get("human_answer"),
+                },
             })
 
         # --- GET /books/search -----------------------------------------------
@@ -331,7 +456,19 @@ def _build_handler(core):
             if not isinstance(body, dict):
                 return self._error(400, "bad_request", "body must be a JSON object")
 
+            # fix round 1, C1: an intent's own `arrival` must be one this
+            # run may actually see -- otherwise a librarian run could file
+            # against (and move the state of) an arrival it was never
+            # handed, just by guessing/enumerating a key.
+            arrival = body.get("arrival")
+            if not isinstance(arrival, str) or arrival not in _visible_arrivals(core, run):
+                return self._error(403, "forbidden", "arrival is not visible to this run")
+
             def ctx_factory(key):
+                # fix round 1, I1: re-check inside the same locked section
+                # IntentBook.submit is about to record into.
+                if core.current_run() is not run:
+                    raise _RunClosed()
                 dossier = core.load_dossier(key)
                 if dossier is None:
                     raise _DossierMissing()
@@ -349,6 +486,8 @@ def _build_handler(core):
                 result = core.intents.submit(run, body, ctx_factory)
             except _DossierMissing:
                 return self._error(404, "not_found")
+            except _RunClosed:
+                return self._error(409, "conflict", "run is no longer open")
 
             self._send_json(200, result)
 
@@ -375,7 +514,24 @@ def _build_handler(core):
             if not isinstance(verdict, str):
                 return self._error(400, "bad_request", "verdict must be a string")
 
-            result = core.intents.apply_review(run, intent_id, verdict, argument)
+            # fix round 1, C2: this reviewer may only rule on intents from
+            # the run it was actually assigned to review -- read-only check
+            # against an immutable field (an intent's run_id never changes
+            # after creation), so no lock is needed for this alone.
+            rec = core.intents.store.get(intent_id)
+            if rec is None:
+                return self._error(404, "not_found")
+            if rec.get("run_id") != run.review_of:
+                return self._error(403, "forbidden")
+
+            def precheck():
+                # fix round 1, I1: re-checked again inside apply_review's
+                # own locked section, same rationale as ctx_factory above.
+                if core.current_run() is not run:
+                    return False, "run is no longer open"
+                return True, None
+
+            result = core.intents.apply_review(run, intent_id, verdict, argument, precheck=precheck)
             if "error" in result:
                 return self._error(_error_status(result["error"]), result["error"], result.get("reason"))
             self._send_json(200, result)
