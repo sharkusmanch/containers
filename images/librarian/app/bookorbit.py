@@ -330,6 +330,13 @@ class LibraryIndex:
             if score > 0:
                 scored.append((score, detail, reasons))
 
+        # Controller ruling: a title-key-only match (score 20, "kept only if
+        # nothing better") is GLOBAL suppression -- if any candidate in the
+        # full result set scores >=60 (title+surname, ISBN, or ASIN), every
+        # score-20 candidate is dropped entirely, not merely outranked.
+        if any(score >= 60 for score, _detail, _reasons in scored):
+            scored = [t for t in scored if t[0] != 20]
+
         scored.sort(key=lambda t: t[0], reverse=True)
         return [(detail, reasons) for _score_val, detail, reasons in scored[:limit]]
 

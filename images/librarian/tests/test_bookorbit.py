@@ -1,5 +1,5 @@
 import json
-from app.bookorbit import BookorbitClient, LibraryIndex
+from app.bookorbit import FULL_REFRESH_INTERVAL_SECONDS, BookorbitClient, LibraryIndex
 
 # `authors`/`narrators` on GET /books/{id} are objects ({"id","name","sortName"}),
 # not plain strings -- verified live against bookorbit.sharkus.xyz 2026-09-22;
@@ -26,21 +26,21 @@ BOOKS = {
      "updatedAt": "t2"},
 }
 
-def fake_transport(calls):
+def fake_transport(calls, books=BOOKS):
     def t(method, url, body, headers):
         calls.append((method, url))
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
         if url.endswith("/books/query"):
             page = json.loads(body)["pagination"]["page"]
-            items = [{"id": i, "updatedAt": b["updatedAt"]} for i, b in BOOKS.items()] if page == 0 else []
-            return 200, json.dumps({"items": items, "total": 2, "page": page, "size": 100})
+            items = [{"id": i, "updatedAt": b["updatedAt"]} for i, b in books.items()] if page == 0 else []
+            return 200, json.dumps({"items": items, "total": len(books), "page": page, "size": 100})
         bid = int(url.rsplit("/", 1)[1])
-        return 200, json.dumps(BOOKS[bid])
+        return 200, json.dumps(books[bid])
     return t
 
-def make(tmp_path, calls):
-    c = BookorbitClient("http://b/api/v1", "u", "p", transport=fake_transport(calls),
+def make(tmp_path, calls, books=BOOKS):
+    c = BookorbitClient("http://b/api/v1", "u", "p", transport=fake_transport(calls, books=books),
                         cookie_path=str(tmp_path / "c.txt"))
     c.authenticate()
     return LibraryIndex(c, state_path=str(tmp_path / "idx.json"))
@@ -110,3 +110,90 @@ def test_detail_fresh_vs_cached(tmp_path):
     after_fresh = len([c for c in calls if "/books/1" in c[1]])
     assert after_cached == before
     assert after_fresh == before + 1
+
+# --- fix round 1 additions -----------------------------------------------
+
+def test_full_refresh_every_24h_refetches_unchanged_details(tmp_path):
+    calls = []
+    idx = make(tmp_path, calls)
+    idx.refresh(now=0, force=True)
+    n = len([c for c in calls if "/books/1" in c[1] or "/books/2" in c[1]])
+    # Same updatedAt as before, but 24h+1s later -> the independent full-
+    # refresh clock should force a re-GET of every book regardless.
+    idx.refresh(now=FULL_REFRESH_INTERVAL_SECONDS + 1, force=True)
+    m = len([c for c in calls if "/books/1" in c[1] or "/books/2" in c[1]])
+    assert n == 2
+    assert m == n + 2   # both books refetched again despite unchanged updatedAt
+
+def test_refresh_within_15_min_without_force_fetches_nothing(tmp_path):
+    calls = []
+    idx = make(tmp_path, calls)
+    idx.refresh(now=0, force=True)
+    before = len(calls)
+    idx.refresh(now=100, force=False)   # well within the 15-min cadence, not forced
+    after = len(calls)
+    assert after == before   # no HTTP calls at all -- not even /books/query
+
+def test_refresh_pagination_multi_page(tmp_path):
+    calls = []
+    ids = list(range(1, 251))  # 250 books -> pages of 100 need 3 requests
+
+    def t(method, url, body, headers):
+        calls.append((method, url))
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/books/query"):
+            pagination = json.loads(body)["pagination"]
+            page, size = pagination["page"], pagination["size"]
+            page_ids = ids[page * size:(page + 1) * size]
+            items = [{"id": i, "updatedAt": "t"} for i in page_ids]
+            return 200, json.dumps({"items": items, "total": len(ids), "page": page, "size": size})
+        bid = int(url.rsplit("/", 1)[1])
+        return 200, json.dumps({
+            "id": bid, "title": f"Book {bid}", "subtitle": None, "authors": [],
+            "providerIds": {}, "tags": [], "isbn13": None, "isbn10": None,
+            "libraryName": "Library", "seriesName": None, "seriesIndex": None,
+            "publishedYear": None, "readAloudSync": {"state": "unavailable"},
+            "folderPath": f"/books/Library/x/{bid}", "files": [], "updatedAt": "t",
+        })
+
+    c = BookorbitClient("http://b/api/v1", "u", "p", transport=t,
+                        cookie_path=str(tmp_path / "c.txt"))
+    c.authenticate()
+    idx = LibraryIndex(c, state_path=str(tmp_path / "idx.json"))
+    idx.refresh(now=0, force=True)
+
+    query_calls = [u for _, u in calls if u.endswith("/books/query")]
+    assert len(query_calls) == 3   # pages 0, 1, 2 (100 + 100 + 50), then stop
+    assert len(idx.books()) == 250
+    assert {int(b["id"]) for b in idx.books()} == set(ids)
+
+# Second book with a title-key overlap but no author-surname overlap, used to
+# exercise the controller ruling: a title-only (score 20) match is dropped
+# from the result set whenever a stronger (>=60) match is also present, but
+# kept when it is the only match.
+THRAWN_ALLIANCES = {
+    "id": 3, "title": "Thrawn: Alliances", "subtitle": None,
+    "authors": [{"id": 9, "name": "John Doe", "sortName": "Doe, John"}],
+    "providerIds": {"audible": None}, "tags": [], "isbn13": None, "isbn10": None,
+    "libraryName": "Library", "seriesName": None, "seriesIndex": None,
+    "publishedYear": None, "readAloudSync": {"state": "unavailable"},
+    "folderPath": "/books/Library/John Doe/Thrawn Alliances",
+    "files": [], "updatedAt": "t3",
+}
+
+def test_title_only_match_suppressed_when_better_match_present(tmp_path):
+    books = {1: BOOKS[1], 3: THRAWN_ALLIANCES}
+    idx = make(tmp_path, [], books=books)
+    idx.refresh(now=0, force=True)
+    results = idx.candidates(titles=["Thrawn"], authors=["Timothy Zahn"])
+    ids = [d["id"] for d, _ in results]
+    assert ids == [1]   # book 1 scores 60 (title+surname); book 3's 20 is dropped
+
+def test_title_only_match_kept_when_nothing_better(tmp_path):
+    books = {3: THRAWN_ALLIANCES}
+    idx = make(tmp_path, [], books=books)
+    idx.refresh(now=0, force=True)
+    results = idx.candidates(titles=["Thrawn"], authors=["Timothy Zahn"])
+    ids = [d["id"] for d, _ in results]
+    assert ids == [3]   # only a title-only (20) match exists -- kept
