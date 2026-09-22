@@ -166,5 +166,5 @@ USER 1000
 EXPOSE 6767
 
 # tini as PID 1 reaps zombies (claude is spawned via node-pty); the entrypoint seeds
-# config then execs `paseo daemon start --foreground --no-relay` as the main process.
+# config then execs `paseo daemon run` as the main process.
 ENTRYPOINT ["/sbin/tini", "--", "/entrypoint.sh"]

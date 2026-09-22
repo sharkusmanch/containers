@@ -7,8 +7,9 @@
 # Why seed at all: paseo's built-in defaults (a) keep a relay control-connection to
 # paseo.sh open and (b) background-download local voice models (parakeet/kokoro) into
 # PASEO_HOME. This deployment is reached directly (no relay) with voice OFF, so we disable
-# both — relay via the --no-relay flag below, voice via this config.json. PASEO_HOME is
-# on a shared PVC, so a baked image file can't supply it; we seed it here once.
+# both in this config.json (0.9 removed the --no-relay launch flag; relay is config-only
+# now). PASEO_HOME is on a shared PVC, so a baked image file can't supply it; we seed it
+# here once.
 
 PASEO_HOME="${PASEO_HOME:-${HOME:-/config}/.paseo}"
 cfg="${PASEO_HOME}/config.json"
@@ -27,5 +28,7 @@ if [ ! -f "${cfg}" ]; then
 JSON
 fi
 
-# PASEO_LISTEN / PASEO_PASSWORD / PASEO_HOME are read from the environment by paseo.
-exec paseo daemon start --foreground --no-relay
+# `daemon run` is the 0.9+ foreground entrypoint and the only mode that applies
+# deployment env overrides (PASEO_LISTEN / PASEO_PASSWORD / PASEO_HOSTNAMES / ...);
+# `daemon start` now rejects --foreground/--no-relay and exits 1.
+exec paseo daemon run --home "${PASEO_HOME}"
