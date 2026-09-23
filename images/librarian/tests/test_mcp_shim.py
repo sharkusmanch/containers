@@ -8,16 +8,23 @@ drive tools the same way Claude Code would: `asyncio.run(server.call_tool(...))`
 """
 import asyncio
 import json
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
+import app.mcp_shim as mcp_shim
 from app.mcp_shim import build_mcp_config, build_server
 
 BOTH_TOOLS = {"list_arrivals", "get_arrival", "search_books", "get_book", "search_in_book"}
 LIBRARIAN_ONLY = {"attach", "create_book", "escalate", "defer"}
 REVIEWER_ONLY = {"list_proposals", "review"}
+
+# Sentinel telling _StubHandler to send a zero-length body (as opposed to a
+# JSON-encoded `{}` or `null`) -- for exercising a non-2xx response with a
+# genuinely empty body.
+_NO_BODY = object()
 
 
 def _tool_names(server):
@@ -26,20 +33,13 @@ def _tool_names(server):
 
 
 def _call(server, name, args):
-    """For tools whose HTTP route returns a JSON *object* (get_arrival,
-    get_book, attach, create_book, escalate, defer, review): FastMCP
-    serializes a dict return as exactly one TextContent block."""
+    """Every tool returns exactly one JSON object (fix round 1, controller
+    ruling): list-returning routes are wrapped as `{"items": [...]}` so
+    FastMCP always serializes the result as a single TextContent block,
+    never split across elements the way a bare list return would be."""
     result = asyncio.run(server.call_tool(name, args))
     assert len(result) == 1
     return json.loads(result[0].text)
-
-
-def _call_list(server, name, args):
-    """For tools whose HTTP route returns a JSON *array* (list_arrivals,
-    search_books, search_in_book, list_proposals): FastMCP splits a list
-    return into one TextContent block per element, so reassemble it."""
-    result = asyncio.run(server.call_tool(name, args))
-    return [json.loads(block.text) for block in result]
 
 
 class _StubHandler(BaseHTTPRequestHandler):
@@ -63,12 +63,13 @@ class _StubHandler(BaseHTTPRequestHandler):
         status, payload = self.server.responses.get(
             (self.command, self.path.split("?")[0]), (200, {}),
         )
-        body = json.dumps(payload).encode("utf-8")
+        body = b"" if payload is _NO_BODY else json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        if body:
+            self.wfile.write(body)
 
     def do_GET(self):
         self._handle()
@@ -145,8 +146,8 @@ def test_unknown_mode_registers_no_tools_and_raises():
 def test_list_arrivals_returns_stub_json(stub_api):
     stub_api.responses[("GET", "/arrivals")] = (200, [{"key": "a:1", "state": "ready"}])
     server = build_server("librarian", _api_url(stub_api), "sekrit")
-    result = _call_list(server, "list_arrivals", {})
-    assert result == [{"key": "a:1", "state": "ready"}]
+    result = _call(server, "list_arrivals", {})
+    assert result == {"items": [{"key": "a:1", "state": "ready"}]}
     req = stub_api.requests[-1]
     assert req["headers"]["Authorization"] == "Bearer sekrit"
 
@@ -164,8 +165,8 @@ def test_get_arrival_quotes_key_with_colon_and_slash(stub_api):
 def test_search_books_passes_query_and_arrival(stub_api):
     stub_api.responses[("GET", "/books/search")] = (200, [{"id": 1}])
     server = build_server("librarian", _api_url(stub_api), "tok")
-    result = _call_list(server, "search_books", {"query": "dune", "arrival": "a:1"})
-    assert result == [{"id": 1}]
+    result = _call(server, "search_books", {"query": "dune", "arrival": "a:1"})
+    assert result == {"items": [{"id": 1}]}
     req = stub_api.requests[-1]
     assert req["path"].startswith("/books/search?")
     assert "q=dune" in req["path"]
@@ -183,8 +184,8 @@ def test_get_book_passes_arrival(stub_api):
 def test_search_in_book(stub_api):
     stub_api.responses[("GET", "/books/7/search")] = (200, [{"snippet": "x"}])
     server = build_server("librarian", _api_url(stub_api), "tok")
-    result = _call_list(server, "search_in_book", {"book_id": 7, "query": "hello"})
-    assert result == [{"snippet": "x"}]
+    result = _call(server, "search_in_book", {"book_id": 7, "query": "hello"})
+    assert result == {"items": [{"snippet": "x"}]}
 
 
 def test_attach_posts_flat_intent(stub_api):
@@ -254,8 +255,8 @@ def test_defer_posts_flat_intent(stub_api):
 def test_list_proposals(stub_api):
     stub_api.responses[("GET", "/proposals")] = (200, [{"intent_id": "i1"}])
     server = build_server("reviewer", _api_url(stub_api), "tok")
-    result = _call_list(server, "list_proposals", {})
-    assert result == [{"intent_id": "i1"}]
+    result = _call(server, "list_proposals", {})
+    assert result == {"items": [{"intent_id": "i1"}]}
 
 
 def test_review_posts_body(stub_api):
@@ -296,6 +297,43 @@ def test_unreachable_api_returns_error_dict_without_raising():
     server = build_server("librarian", "http://127.0.0.1:1", "tok")
     result = _call(server, "list_arrivals", {})
     assert result == {"error": "librarian API unreachable", "status": 0}
+
+
+def test_http_error_with_no_body_defaults_error_field(stub_api):
+    # Fix round 1, Minor: an empty (or non-JSON-object) error body must
+    # still get a plain "error" key, not just "status".
+    stub_api.responses[("GET", "/arrivals")] = (500, _NO_BODY)
+    server = build_server("librarian", _api_url(stub_api), "tok")
+    result = _call(server, "list_arrivals", {})
+    assert result == {"error": "http_error", "status": 500}
+
+
+def test_timeout_returns_unreachable_error_without_raising(monkeypatch):
+    # Fix round 1, Important: a server that accepts the TCP connection but
+    # never responds must not let a bare TimeoutError escape past the
+    # timeout -- reproduced upstream as a ToolError("... timed out").
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    release = threading.Event()
+
+    def accept_and_stall():
+        conn, _ = listener.accept()
+        release.wait(5)  # hold the connection open; never send a response
+        conn.close()
+
+    thread = threading.Thread(target=accept_and_stall, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setattr(mcp_shim, "_TIMEOUT_SECONDS", 0.2)
+        server = build_server("librarian", f"http://127.0.0.1:{port}", "tok")
+        result = _call(server, "list_arrivals", {})
+        assert result == {"error": "librarian API unreachable", "status": 0}
+    finally:
+        release.set()
+        listener.close()
+        thread.join(timeout=5)
 
 
 # --- build_mcp_config ------------------------------------------------------
