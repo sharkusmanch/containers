@@ -897,3 +897,75 @@ def test_startup_logs_queued_arrivals_of_non_live_sources(tmp_path, live_factory
     svc.stop()
     live_factory(FakeModel(), FakeExecutor()).tick()
     assert "1 queued filing(s) of sources not in LIVE_SOURCES" in caplog.text
+
+
+# --- fix round 2 ------------------------------------------------------------------------------
+
+
+def test_one_bad_dossier_does_not_wedge_go_live(tmp_path, live_factory, caplog):
+    import hashlib
+    clock = Clock()
+    dry = live_factory(FakeModel(), None, clock, dry_run=True)
+    keys = {}
+    for asin, data in (("B0GOOD0000", b"G" * 10), ("B0BAD00000", b"B" * 10)):
+        folder = add_libation(tmp_path, asin=asin, data=data, title=asin)
+        sha = hashlib.sha256(data).hexdigest()
+        keys[asin] = f"libation:{asin}:{sha[:12]}"
+        dry.arrivals.record(keys[asin], states.SIMULATED, source="libation", source_id=asin,
+                            path=str(folder), primary=str(folder / f"{asin}.m4b"), sha256=sha)
+    dry.stop()
+
+    live = live_factory(FakeModel(), FakeExecutor(), clock)
+    real = live.make_dossier
+
+    def flaky(key, *a, **kw):
+        if key == keys["B0BAD00000"]:
+            raise RuntimeError("malformed arrival")
+        return real(key, *a, **kw)
+
+    live.make_dossier = flaky
+    caplog.set_level(logging.WARNING)
+    add_libation(tmp_path, asin="B0NEW00000", data=b"N" * 10, title="New")
+    live.tick()
+    clock.t += 1
+    live.tick()                                   # intake keeps running: the new arrival lands
+    sd = live.settings.state_dir
+    assert live.arrivals.get(keys["B0GOOD0000"])["state"] == states.READY
+    assert live.arrivals.get(keys["B0BAD00000"])["state"] == states.SIMULATED
+    assert any(r["source_id"] == "B0NEW00000" and r["state"] == states.READY
+               for r in live.arrivals.all())
+    assert not os.path.exists(os.path.join(sd, "live-since-libation"))
+    assert os.path.exists(os.path.join(sd, "live-since-manual"))
+    assert caplog.text.count("malformed arrival") == 1          # logged once, not per tick
+
+    live.make_dossier = real
+    clock.t += 1
+    live.tick()
+    assert live.arrivals.get(keys["B0BAD00000"])["state"] == states.READY
+    assert os.path.exists(os.path.join(sd, "live-since-libation"))
+
+
+def test_crash_after_filing_simulated_sets_arrival_simulated(tmp_path, live_factory):
+    clock = Clock()
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all), None, clock,
+                       dry_run=True)
+    real = svc.arrivals.record
+
+    def crash_on_simulated(key, state, **kw):
+        if state == states.SIMULATED:
+            raise Crash()
+        return real(key, state, **kw)
+
+    svc.arrivals.record = crash_on_simulated
+    add_libation(tmp_path)
+    with pytest.raises(Crash):
+        drive(svc, clock)
+    svc.arrivals.record = real
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.PROPOSED
+    assert filing_intent(svc, key)["state"] == states.SIMULATED_I
+    svc.stop()
+
+    svc2 = live_factory(FakeModel(), None, clock, dry_run=True)
+    rec = svc2.arrivals.get(key)
+    assert rec["state"] == states.SIMULATED and any("mv <primary>" in s for s in rec["would_do"])

@@ -434,16 +434,31 @@ def _find_in_intake(svc, rec, candidates):
     return None
 
 
-def go_live(svc) -> None:
+def _log_once(svc, key, msg) -> None:
+    """Log a go_live error once per distinct (arrival, error) -- the source
+    is retried every tick until it completes."""
+    seen = svc.__dict__.setdefault("_go_live_errors", set())
+    if (key, msg) not in seen:
+        seen.add((key, msg))
+        logger.error("go-live re-offer of %s failed (left simulated, retried next tick): %s",
+                     log_safe(key), log_safe(msg))
+
+
+def go_live(svc) -> bool:
     """Dry-run -> live, once per source (`<state>/live-since-<source>`):
     each simulated arrival of that source that is still in the intake
     unchanged (same candidate, same key and sha) gets a freshly rebuilt
     dossier -- exactly as intake builds one -- and goes back to `ready`
     (re-offered for live); the rest become `failed` "intake copy gone" (no
-    push). Then the marker is written. Any exception (intake scan,
-    BookOrbit while building a dossier) propagates, so the service retries
-    the whole step next tick; already-handled arrivals are no longer
-    simulated, so a retry never touches them twice."""
+    push). Then the marker is written.
+
+    Never raises for one arrival (fix round 2): an error building one
+    arrival's dossier is logged once, leaves THAT arrival simulated and
+    withholds only its source's marker; an intake scan error withholds
+    every pending marker. Returns True once every live source is done --
+    the service calls it again on later ticks until then, while intake,
+    runs and execution carry on."""
+    complete = True
     candidates = None
     for source in sorted(svc.settings.live_sources):
         if not _SOURCE_RE.match(source):
@@ -451,17 +466,28 @@ def go_live(svc) -> None:
         marker = _marker(svc, source)
         if os.path.exists(marker):
             continue
+        source_ok = True
         for rec in svc.arrivals.by_state(states.SIMULATED):
             if rec.get("source") != source:
                 continue
             if svc.stopping():
-                return                      # marker not written: finishes next start
+                return False                # marker not written: finishes later
             if candidates is None:
-                candidates = intake.scan(svc.settings.intake_root)
-            found = _find_in_intake(svc, rec, candidates)
-            if found is not None:
-                c, sha = found
-                svc.make_dossier(rec["key"], c, sha, intake.previously_filed(rec["key"], c, svc.arrivals))
+                try:
+                    candidates = intake.scan(svc.settings.intake_root)
+                except Exception as e:
+                    _log_once(svc, "<intake scan>", f"{type(e).__name__}: {e}")
+                    return False
+            try:
+                found = _find_in_intake(svc, rec, candidates)
+                if found is not None:
+                    c, sha = found
+                    svc.make_dossier(rec["key"], c, sha,
+                                     intake.previously_filed(rec["key"], c, svc.arrivals))
+            except Exception as e:
+                _log_once(svc, rec["key"], f"{type(e).__name__}: {e}")
+                source_ok = False
+                continue
             with svc.lock:
                 if found is not None:
                     history = list(rec.get("history") or [])
@@ -470,6 +496,9 @@ def go_live(svc) -> None:
                                         history=history, would_do=None)
                 else:
                     svc.arrivals.record(rec["key"], states.FAILED, error="intake copy gone")
+        if not source_ok:
+            complete = False
+            continue
         tmp = f"{marker}.tmp{os.getpid()}"
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(f"{time.time()}\n")
@@ -477,3 +506,4 @@ def go_live(svc) -> None:
             os.fsync(f.fileno())
         os.replace(tmp, marker)
         logger.info("source %s is live from now on", source)
+    return complete

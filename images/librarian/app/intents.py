@@ -377,6 +377,8 @@ class IntentBook:
         for each of `keys` still `proposed` once `_finalize` has re-run --
         i.e. finalize died between its own records -- finish the arrival's
         escalation. Idempotent: keyed on the current states only.
+          * the run's filing for it is already simulated: the arrival
+            becomes simulated too (with the intent's would_do);
           * the run already filed an escalation for it (proposed or
             simulated): simulate it and move the arrival to needs-decision;
           * else the run's filing for it was rejected (the crash hit
@@ -389,6 +391,14 @@ class IntentBook:
                     continue
                 mine = [r for r in self.store.all()
                         if r.get("run_id") == run_id and r.get("arrival") == key]
+                simulated = [r for r in mine if r.get("kind") in (ATTACH, CREATE_BOOK)
+                             and r.get("state") == SIMULATED_I]
+                if simulated:
+                    # dry-run finalize died between the intent's record and
+                    # the arrival's: finish it (never reset to ready)
+                    self.arrivals.record(key, SIMULATED, would_do=simulated[-1].get("would_do")
+                                         or would_do(simulated[-1]["payload"], index=index))
+                    continue
                 escs = [r for r in mine if r.get("kind") == ESCALATE]
                 if not escs:
                     rejected = [r for r in mine if r.get("kind") in (ATTACH, CREATE_BOOK)

@@ -99,6 +99,8 @@ class Service:
         self.vikunja = vikunja              # Plan 2 Task 6
         self.exec_budget = 0                # executions left this tick (max_exec_per_tick)
         self._live_started = False
+        self._go_live_pending = False
+        self._go_live_errors: set = set()   # (key, error) already logged by go_live
         self.executor = None
         if not settings.dry_run:
             self.executor = executor if hasattr(executor, "execute") else executor(self)
@@ -328,6 +330,9 @@ class Service:
         if not self._live_started:
             self._start_live()           # raises -> retried next tick
             self._live_started = True
+        if self._go_live_pending and not self._stop.is_set():
+            # never raises per arrival: a bad arrival only delays its source
+            self._go_live_pending = not execution.go_live(self)
         if self._stop.is_set():
             return
         self._intake(now)
@@ -358,7 +363,7 @@ class Service:
             logger.warning("%d queued filing(s) of sources not in LIVE_SOURCES are left untouched",
                            len(stranded))
         execution.resume_executing(self)
-        execution.go_live(self)
+        self._go_live_pending = True     # tick() runs go_live until it completes
 
     # --- intake --------------------------------------------------------------
 
