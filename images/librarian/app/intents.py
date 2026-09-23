@@ -68,6 +68,12 @@ from app.states import (
 _LIBRARY_NAME_FOR = {"adult": "Library", "kids": "Kids Audiobooks"}
 _LIBRARY_IDS = {"Library": 7, "Kids Audiobooks": 8}
 
+# Defer limit (final review I4): at most DEFER_LIMIT accepted defers per
+# arrival, and none once DEFER_WINDOW has passed since the first one.
+DEFER_LIMIT = 3
+DEFER_WINDOW = 7 * 86400
+DEFER_LIMIT_REASON = "defer limit reached — escalate"
+
 # Only filing intents are ever put before the reviewer (final review I1).
 _REVIEWABLE = frozenset({ATTACH, CREATE_BOOK})
 
@@ -108,6 +114,8 @@ class IntentBook:
             if ok:
                 ctx = ctx_factory(arrival)
                 ok, reason = check_intent(intent, ctx)
+            if ok and kind == DEFER:
+                ok, reason = self._defer_allowed(arrival)
 
             intent_id = self._next_id(run.run_id)
 
@@ -126,6 +134,7 @@ class IntentBook:
             self.store.record(
                 intent_id, PROPOSED_I, run_id=run.run_id, arrival=arrival, kind=kind,
                 payload=intent, reason=intent.get("reason"), guard=reason, review=None,
+                submitted_at=self.clock(),
             )
 
             if kind in (ATTACH, CREATE_BOOK):
@@ -137,6 +146,26 @@ class IntentBook:
                 self.arrivals.record(arrival, DEFERRED, not_before=not_before)
 
             return {"intent_id": intent_id, "status": PROPOSED_I, "reason": reason}
+
+    def _defer_allowed(self, arrival: str) -> tuple[bool, str | None]:
+        """Final review I4: a model could otherwise defer the same arrival
+        forever -- one paid run per `not_before` window. Prior ACCEPTED
+        defers (anything not rejected/guard-rejected: a discarded run's
+        defer never took effect) are counted from the intent history; after
+        DEFER_LIMIT of them, or DEFER_WINDOW seconds after the first one,
+        the only way forward is to escalate."""
+        prior = [
+            r for r in self.store.all()
+            if r.get("arrival") == arrival and r.get("kind") == DEFER
+            and r.get("state") not in (REJECTED, GUARD_REJECTED)
+        ]
+        if not prior:
+            return True, None
+        firsts = [r.get("submitted_at", r.get("first_seen")) for r in prior]
+        first = min((t for t in firsts if isinstance(t, (int, float))), default=None)
+        if len(prior) >= DEFER_LIMIT or (first is not None and self.clock() - first >= DEFER_WINDOW):
+            return False, DEFER_LIMIT_REASON
+        return True, None
 
     # --- queries ---------------------------------------------------------------
 

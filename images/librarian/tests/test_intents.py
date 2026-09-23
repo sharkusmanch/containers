@@ -490,3 +490,60 @@ def test_finalize_moves_auto_escalations_to_simulated(tmp_path):
     assert [e["state"] for e in escalations] == [SIMULATED_I]
     assert [r["state"] for r in intents_store.all() if r["state"] == PROPOSED_I] == []
 
+
+
+# --- final review I4: defer limit ---------------------------------------------
+
+
+def _defer_in_new_run(book, n, clock_value):
+    book.clock = lambda: clock_value
+    run = make_run(run_id=f"run{n}")
+    return book.submit(run, defer_intent(hours=1), ctx_factory_for(make_dossier(), FakeIndex({}), run))
+
+
+def test_fourth_defer_is_guard_rejected(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    t = 1_000_000.0
+    for n in range(3):
+        r = _defer_in_new_run(book, n, t + n * 3600)
+        assert r["status"] == PROPOSED_I, r
+        book.finalize_dry_run(f"run{n}")
+    r = _defer_in_new_run(book, 3, t + 3 * 3600)
+    assert r["status"] == GUARD_REJECTED
+    assert r["reason"] == "defer limit reached — escalate"
+    # escalating is still allowed
+    run = make_run(run_id="run9")
+    esc = book.submit(run, escalate_intent(), ctx_factory_for(make_dossier(), FakeIndex({}), run))
+    assert esc["status"] == PROPOSED_I
+
+
+def test_defer_rejected_seven_days_after_first_defer(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    t = 1_000_000.0
+    assert _defer_in_new_run(book, 0, t)["status"] == PROPOSED_I
+    book.finalize_dry_run("run0")
+    r = _defer_in_new_run(book, 1, t + 7 * 86400)
+    assert r["status"] == GUARD_REJECTED
+    assert r["reason"] == "defer limit reached — escalate"
+
+
+def test_rejected_defers_do_not_count_toward_limit(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    t = 1_000_000.0
+    for n in range(3):
+        r = _defer_in_new_run(book, n, t + n)
+        # a discarded (failed) run's defer is rejected -- it never took effect
+        intents_store.record(r["intent_id"], REJECTED, review={"verdict": "reject", "argument": "x"})
+    assert _defer_in_new_run(book, 3, t + 10)["status"] == PROPOSED_I
+
+
+def test_defer_limit_is_per_arrival(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    t = 1_000_000.0
+    for n in range(3):
+        _defer_in_new_run(book, n, t + n)
+    book.clock = lambda: t + 5
+    run = make_run(run_id="runX")
+    r = book.submit(run, defer_intent(arrival=OTHER_ARRIVAL),
+                    ctx_factory_for(make_dossier(key=OTHER_ARRIVAL), FakeIndex({}), run))
+    assert r["status"] == PROPOSED_I
