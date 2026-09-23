@@ -20,6 +20,15 @@ from tests.test_vikunja import BASE, PUBLIC, TOKEN, FakeVikunjaSession
 BO = "https://bookorbit.example.com"
 
 
+class IdleExecutor:
+    """Live mode needs an executor; these tests never file anything."""
+
+    def execute(self, *a, **k):
+        raise AssertionError("no filing expected")
+
+    resume = execute_update = remove_duplicate = execute
+
+
 class LockCheckingSession(FakeVikunjaSession):
     svc = None
 
@@ -32,8 +41,11 @@ class LockCheckingSession(FakeVikunjaSession):
 def env(tmp_path):
     made = []
 
-    def make(model=None, *, vikunja=True, notifier=True, clock=None, **settings_kw):
+    def make(model=None, *, vikunja=True, notifier=True, clock=None, executor=None, **settings_kw):
         settings_kw.setdefault("bookorbit_public_url", BO)
+        # final review I3: tasks/pushes only for LIVE arrivals, so the
+        # harness runs live (manual is in the default LIVE_SOURCES)
+        settings_kw.setdefault("dry_run", False)
         fake = LockCheckingSession()
         vk = None
         if vikunja:
@@ -45,7 +57,7 @@ def env(tmp_path):
             nt = Notifier("http://apprise/notify/k", outbox, session=FakeSession())
         svc = Service(make_settings(tmp_path, **settings_kw), index=make_index(tmp_path),
                       runner=model or FakeModel(), prober=fake_prober, clock=clock or Clock(),
-                      notifier=nt, vikunja=vk)
+                      notifier=nt, vikunja=vk, executor=executor or IdleExecutor())
         fake.svc = svc
         made.append(svc)
         return svc, fake
@@ -391,8 +403,10 @@ def test_reply_reoffers_the_arrival_and_the_run_sees_human_answer(tmp_path, env)
             else:
                 call("POST", "/intents", ha["option_intent"])
 
+    from tests.test_live import FakeExecutor
     clock = Clock()
-    svc, fake = env(FakeModel(librarian=librarian, reviewer=approve_all), clock=clock)
+    svc, fake = env(FakeModel(librarian=librarian, reviewer=approve_all), clock=clock,
+                    executor=FakeExecutor())
     add_libation(tmp_path)
     for dt in (0, 1, 11):
         clock.t += dt
@@ -405,10 +419,10 @@ def test_reply_reoffers_the_arrival_and_the_run_sees_human_answer(tmp_path, env)
     assert svc.arrivals.get(key)["state"] == states.ANSWERED
     for dt in (1, 11):
         clock.t += dt
-        svc.tick()                              # debounce -> run -> simulated
+        svc.tick()                              # debounce -> run -> filed
     assert seen[0] is None
     assert seen[1]["option"] == 1 and seen[1]["option_intent"]["book_id"] == 2
-    assert svc.arrivals.get(key)["state"] == states.SIMULATED
+    assert svc.arrivals.get(key)["state"] == states.FILED
     svc.tick()
     assert fake.tasks[tid]["done"] is True
     assert svc.arrivals.get(key)["vikunja_closed"] is True
@@ -716,3 +730,38 @@ def test_attach_to_an_adult_book_is_not_flagged():
         def book(self, i):
             return {"id": i, "title": "T", "authors": [], "libraryName": "Library"}
     assert escalations.describe_action(dict(ATTACH2), Idx()).startswith("attach this arrival")
+
+
+# --- final review I3: only live arrivals get tasks and pushes ---------------------------------
+
+
+@pytest.mark.parametrize("vikunja", [True, False])
+def test_dry_run_needs_decision_waits_silently(env, caplog, vikunja):
+    caplog.set_level(logging.INFO)
+    svc, fake = env(vikunja=vikunja, dry_run=True)
+    escalate(svc)
+    svc.tick()
+    svc.tick()
+    assert fake.tasks == {} and fake.calls == []
+    assert [r for r in outbox(svc) if r["kind"] == "escalation"] == []
+    assert "1 needs-decision arrival(s) of non-live sources wait" in caplog.text
+
+
+@pytest.mark.parametrize("vikunja", [True, False])
+def test_non_live_source_needs_decision_waits_silently(env, vikunja):
+    svc, fake = env(vikunja=vikunja, live_sources=frozenset({"libation"}))
+    escalate(svc)                                   # source "manual": not live here
+    svc.tick()
+    assert fake.tasks == {}
+    assert [r for r in outbox(svc) if r["kind"] == "escalation"] == []
+
+
+def test_source_going_live_gets_its_task_then(env, tmp_path):
+    svc, fake = env(live_sources=frozenset({"libation"}))
+    escalate(svc)
+    svc.tick()
+    assert fake.tasks == {}
+    svc.stop()
+    svc2, fake2 = env()                             # manual live now
+    svc2.tick()
+    assert len(fake2.tasks) == 1

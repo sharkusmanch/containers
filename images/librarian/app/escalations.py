@@ -69,6 +69,11 @@ bracket; the first transport error halts the tick's HTTP work, after which
 a no-HTTP pass (`_stamp`) still stamps every task-less needs-decision
 arrival and pushes its `:fallback` once due.
 
+Final review I3: only LIVE arrivals are asked (`_asking`: not DRY_RUN and
+the source in LIVE_SOURCES). A needs-decision arrival of a dry-run or
+non-live source gets no task and no push -- it waits silently (count
+logged) and is asked on the first tick after its source goes live.
+
 With no Vikunja client (VIKUNJA_ENABLED false, or incompletely configured)
 the escalation push is sent right away instead, once per escalation
 (`escalation_notified` on the arrival).
@@ -77,7 +82,7 @@ import logging
 import re
 import unicodedata
 
-from app import metrics, states
+from app import execution, metrics, states
 from app.logutil import log_safe
 from app.policy import _LIBRARY_NAMES  # adult/kids -> BookOrbit library name
 from app.vikunja import VikunjaError
@@ -349,17 +354,39 @@ def _each(svc, recs, fn, budget=None) -> None:
                 logger.exception("escalation sync failed for arrival %s", log_safe(rec.get("key")))
 
 
+def _asking(svc) -> list:
+    """Final review I3: the needs-decision arrivals a human is actually
+    asked about -- only when not DRY_RUN and the arrival's source is live
+    (`execution.is_live`). The rest wait silently (a task answered for a
+    simulation would be cleared at go-live anyway); their count is logged
+    whenever it changes. Once a source goes live its waiting arrivals are
+    asked on the next tick."""
+    asking, waiting = [], 0
+    for rec in svc.arrivals.by_state(states.NEEDS_DECISION):
+        if execution.is_live(svc.settings, rec.get("source")):
+            asking.append(rec)
+        else:
+            waiting += 1
+    if waiting != svc.__dict__.get("_escalations_waiting", 0):
+        svc._escalations_waiting = waiting
+        if waiting:
+            logger.info("%d needs-decision arrival(s) of non-live sources wait silently (no "
+                        "Vikunja task or push until the source is live)", waiting)
+    return asking
+
+
 def sync(svc) -> None:
+    asking = _asking(svc)
     if svc.vikunja is None:
-        _push_only(svc)
+        _push_only(svc, asking)
         return
     budget = _Budget(MAX_WRITES_PER_TICK)
-    _each(svc, svc.arrivals.by_state(states.NEEDS_DECISION), lambda rec: _open(svc, rec, budget), budget)
+    _each(svc, asking, lambda rec: _open(svc, rec, budget), budget)
     if budget.halted:
         # fix round 3: the halt must not starve the others' fallback -- a
         # no-HTTP pass stamps every task-less arrival and pushes its
         # link-less fallback once due, so an outage silences nobody
-        _each(svc, svc.arrivals.by_state(states.NEEDS_DECISION), lambda rec: _stamp(svc, rec))
+        _each(svc, _asking(svc), lambda rec: _stamp(svc, rec))
 
     # final review I1: executor escalations on arrivals that need no
     # decision (filed-but-look, failed, metadata correction failed) become
@@ -433,7 +460,7 @@ def _attention(svc, rec, budget):
     return None
 
 
-def _push_only(svc) -> None:
+def _push_only(svc, asking) -> None:
     if svc.notifier is None:
         return
 
@@ -443,7 +470,7 @@ def _push_only(svc) -> None:
             return
         svc.notify_escalation(rec, esc)
         _annotate(svc, rec["key"], escalation_notified=esc["intent_id"])
-    _each(svc, svc.arrivals.by_state(states.NEEDS_DECISION), push)
+    _each(svc, asking, push)
 
 
 def _content(svc, rec, esc) -> str:
