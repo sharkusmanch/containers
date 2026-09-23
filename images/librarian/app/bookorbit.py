@@ -395,7 +395,13 @@ class BookorbitWriter:
         return self._client._write("POST", f"/books/{book_id}/rename-files", {})
 
     def patch_metadata(self, book_id, metadata, locked):
-        """PATCH /books/{id}/metadata-and-locks. lockedFields REPLACES the
+        """PATCH /books/{id}/metadata-and-locks. NOTE (Task 9b probe): when
+        `metadata` carries title/authors/seriesName/seriesIndex/publishedYear,
+        BookOrbit (fileRenameEnabled) moves the book to its rendered pattern
+        ~3 s AFTER this returns -- the response still shows the old path. The
+        executor runs guard 8 before calling this and polls afterwards.
+
+        lockedFields REPLACES the
         whole lock set server-side, so this always sends a fresh GET's
         current lockedFields unioned with the newly requested ones -- never
         drops an existing lock (e.g. a Kindle 'tags' lock).

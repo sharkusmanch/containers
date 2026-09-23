@@ -595,8 +595,9 @@ def _would_do_create_book(intent: dict) -> list:
         f"mv <primary> -> {folder}/",
         f"scan library {library_id} and wait for finish",
         "verify book created",
-        "set identity fields",
-        "rename-files <new book>",
+        "wait for BookOrbit's provider metadata fetch",
+        f"check {folder} is free, then set + lock identity fields",
+        f"BookOrbit moves the book to {folder}; verify",
         "remove intake folder",
     ]
 
