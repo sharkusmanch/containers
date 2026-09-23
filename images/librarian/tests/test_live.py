@@ -631,6 +631,7 @@ def test_end_to_end_live_attach_with_real_executor(tmp_path):
                   files=(("Artificial Condition.epub", b"epub-bytes"),),
                   providerIds={"audible": ASIN})
     fclock = FakeClock()
+    fake.clock = fclock
 
     ro = BookorbitClient("http://b/api/v1", "u", "p", transport=fake.transport,
                          cookie_path=str(tmp_path / "ro.txt"), clock=fclock)

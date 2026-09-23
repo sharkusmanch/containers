@@ -101,6 +101,25 @@ def test_update_metadata_failure_pushes_attention_and_opens_a_task(tmp_path, wir
     assert "seriesName" in task["description"]
 
 
+def test_update_metadata_applied_but_misplaced_is_executed_with_attention(tmp_path, wired):
+    """Task 9c: the PATCH landed but BookOrbit did not move the book where
+    guard 8 rendered it -- the correction stands, a human is told."""
+    svc, fx, fake, clock = wired(
+        update_results=[ExecResult(True, "updated", 2, "patched",
+                                   escalate="BookOrbit left book 2 at '/books/Library/x'")],
+        model=FakeModel(librarian=attach_and_update_script, reviewer=approve_all))
+    add_libation(tmp_path)
+    drive(svc, clock)
+    key = only_key(svc)
+    meta = [r for r in svc.intents.store.all() if r["kind"] == states.UPDATE_METADATA][0]
+    assert svc.intents.store.get(meta["intent_id"])["state"] == states.EXECUTED
+    [p] = pushes(svc, "attention")
+    assert p["msg_id"] == f"attention:{key}:{meta['intent_id']}"
+    assert "BookOrbit left book 2" in p["body"]
+    [task] = fake.tasks.values()
+    assert "BookOrbit left book 2" in task["description"]
+
+
 def test_without_vikunja_the_push_is_all_and_the_summary_says_see_push(tmp_path, wired, caplog):
     caplog.set_level(logging.INFO)
     svc, fx, fake, clock = wired([filed(escalate="cleanup failed")], vikunja=False)

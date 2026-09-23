@@ -3,12 +3,25 @@
 Two sequences (spec §3.4):
   attach       snapshot -> guard 2 -> stage -> re-hash -> guard 3 (re-read
                folderPath) -> link+unlink into the book folder -> scan+wait ->
-               locate our file -> guard 9 restore -> rename-files -> verify ->
-               intake cleanup
+               locate our file -> guard 9 restore (guard 8 first, then PATCH
+               + settle) -> guard 8 -> rename-files -> verify the pattern
+               name -> intake cleanup
   create_book  guard 2 -> stage -> re-hash -> exclusive mkdir
                `<root>/<author>/<title> [lib-<sha12>]` -> link+unlink ->
-               scan+wait -> locate the new book -> metadata+locks -> read back
-               -> rename-files -> verify -> intake cleanup
+               scan+wait -> locate the new book -> wait for BookOrbit's
+               provider fetch -> guard 8 -> metadata+locks (every identity
+               field, null when absent) -> BookOrbit's own async rename
+               settles -> verify folder + file -> intake cleanup
+
+Task 9c (live probe of BookOrbit 3.0.0): every PATCH that carries title,
+authors, seriesName, seriesIndex or publishedYear makes BookOrbit move the
+book to its rendered pattern ~3 s later, and a move onto an existing target
+is a silent no-op. So guard 8 (the collision check, against the exact
+renderer in app.bo_render) runs BEFORE any such PATCH -- a collision means
+no PATCH and an attention note, the file stays filed where it is -- and
+after the PATCH the executor polls until the folder settles and verifies
+it is exactly the rendered target. A mismatch is attention, never a failure:
+the file is filed either way. rename-files is kept only for attach.
 
 Crash safety (Global "Crash-safe execution"): before every side effect the
 arrival record is rewritten in state `executing` with an `exec` journal
@@ -40,7 +53,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from app import bookmeta, fsops, metrics, states
+from app import bo_render, bookmeta, fsops, metrics, states
 from app.bookorbit import ScanError
 from app.fsops import sha12
 from app.logutil import log_safe
@@ -55,8 +68,21 @@ INTENT_LIBRARY = {"adult": "Library", "kids": "Kids Audiobooks"}
 GUARD2_WAIT = 600        # s: wait at most 10 min for a foreign scan
 GUARD2_POLL = 15         # s
 SCAN_TIMEOUT = 1200      # s: our own scan (Global: 20 min)
-BASE_LOCKS = ("title", "subtitle", "description")
+BASE_LOCKS = bookmeta.BASE_LOCKS
 IDENTITY = bookmeta.IDENTITY
+# update_metadata may ask for these locks (policy._UPDATE_METADATA_LOCK_FIELDS)
+UPDATE_LOCKABLE = frozenset(BASE_LOCKS) | frozenset(bookmeta.IDENTITY_LOCKS)
+
+# Task 9c: BookOrbit renames a book ~3 s after any PATCH carrying a
+# rename-relevant field (bo_render.RENAME_RELEVANT_FIELDS), asynchronously.
+SETTLE_POLL = 3          # s between book-detail reads while the rename lands
+SETTLE_MAX = 90          # s: give up waiting; the verification decides
+SETTLE_MIN = 12          # s: a stable read that does not match yet only ends the wait after this
+# ... and ~5-12 s after a scan ADDS a book it fetches provider metadata that
+# overwrites unlocked fields. Wait for it to land before the create PATCH.
+FETCH_POLL = 5           # s
+FETCH_QUIET = 20         # s: updatedAt unchanged this long = fetch settled
+FETCH_MAX = 90           # s
 
 # One scan mutex for the process: the executor is the only BookOrbit writer
 # and every filing sequence runs under it end to end.
@@ -85,6 +111,11 @@ class _Fail(Exception):
 
 class _Stop(Exception):
     """The service is stopping: never start another step."""
+
+
+class _Attention(Exception):
+    """Filed stands, but a human should look (e.g. the metadata PATCH was
+    withheld because BookOrbit would move the book onto a collision)."""
 
 
 class _Integrity(_Fail):
@@ -223,8 +254,15 @@ class Executor:
         if not mapped:
             return ExecResult(False, "failed", book_id,
                               "update_metadata has no writable metadata fields after mapping")
-        lock = [f for f in (payload.get("lock") or []) if f in BASE_LOCKS]
+        # Task 9c (b): every identity field written is locked too
+        lock = sorted({f for f in (payload.get("lock") or []) if f in UPDATE_LOCKABLE}
+                      | (set(mapped) & set(bookmeta.IDENTITY_LOCKS)))
+        moves = outcome.get("moves") or []
+        filed = None                     # (ext, size) of the filed file, to find it after a rename
+        if moves and isinstance(moves[0], (list, tuple)) and len(moves[0]) == 3:
+            filed = (os.path.splitext(str(moves[0][1]))[1].lower(), moves[0][2])
 
+        note = None
         try:
             with _SCAN_MUTEX:
                 self._check_stop()
@@ -234,8 +272,12 @@ class Executor:
                     return ExecResult(False, "failed", book_id,
                                       f"book {book_id} is in library {library!r}, not a filing target")
                 self._guard2(LIBRARY_IDS[library])
+                try:
+                    plan = self._plan_patch(book_id, library, mapped)
+                except _Attention as e:
+                    return ExecResult(False, "failed", book_id, str(e))
                 self.writer.patch_metadata(book_id, mapped, lock)
-                after = self.index.detail(book_id, fresh=True)
+                after = self._settle(plan, filed)
                 got = bookmeta.norm_for_compare(bookmeta.identity(after))
                 want = bookmeta.norm_for_compare(mapped)
                 bad = [k for k in want if got.get(k) != want[k]]
@@ -250,13 +292,16 @@ class Executor:
                     return ExecResult(False, "failed", book_id,
                                       f"locks missing on book {book_id} after PATCH: "
                                       f"{', '.join(sorted(missing))}")
+                note = self._placement_problem(after, plan, filed)
         except (_Stop, _Retry) as e:
             return ExecResult(False, "retryable", book_id, str(e))
         except Exception as e:
             return ExecResult(False, "failed", book_id, f"{type(e).__name__}: {log_safe(e)}")
 
-        return ExecResult(True, "updated", book_id,
-                          f"patched metadata on book {book_id}: {', '.join(sorted(mapped))}")
+        detail = f"patched metadata on book {book_id}: {', '.join(sorted(mapped))}"
+        if note:
+            detail += f"; ESCALATE: {note}"
+        return ExecResult(True, "updated", book_id, detail, escalate=note)
 
     # --- duplicates (final review M3) -------------------------------------------
     def remove_duplicate(self, arrival_rec: dict) -> ExecResult:
@@ -621,8 +666,14 @@ class Executor:
     # --- the post-move sequence ----------------------------------------------
     def _continue(self, ctx, from_step: str) -> ExecResult:
         steps = STEPS[STEPS.index(from_step):]
-        escalate = None
+        notes = list(ctx.get("notes") or [])
         summary = None
+
+        def note(n):
+            if n:
+                notes.append(n)
+                ctx["notes"] = list(notes)
+                self._journal(ctx)
         try:
             if STEPS.index(from_step) > STEPS.index("located"):
                 self._locate(ctx)              # re-verify before anything else
@@ -636,21 +687,21 @@ class Executor:
                     self._journal(ctx)         # persist book_id
                 elif step == "metadata":
                     if ctx["kind"] == states.ATTACH:
-                        self._guard9(ctx)
+                        note(self._guard9(ctx))
                     else:
-                        self._write_metadata(ctx)
+                        note(self._write_metadata(ctx))
                 elif step == "renamed":
-                    escalate = self._rename(ctx)
+                    note(self._rename(ctx))
                 elif step == "cleaned":
                     try:
                         summary = fsops.cleanup(ctx["source"], ctx["staging_dir"],
                                                 self.intake_root, self._supplement_id(ctx))
                     except Exception as ce:     # the book IS filed and verified
-                        note = (f"intake cleanup of {ctx['staging_dir']} failed: "
-                                f"{type(ce).__name__}: {log_safe(ce)}")
-                        escalate = f"{escalate}; {note}" if escalate else note
+                        notes.append(f"intake cleanup of {ctx['staging_dir']} failed: "
+                                     f"{type(ce).__name__}: {log_safe(ce)}")
         except Exception as e:
             return self._after_move_error(ctx, e)
+        escalate = "; ".join(notes) if notes else None
         detail = f"filed {ctx['dst']} into book {ctx['book_id']}"
         if ctx.get("final_path"):
             detail += f" (now {ctx['final_path']})"
@@ -766,38 +817,54 @@ class Executor:
         return self.index.detail(b["id"], fresh=True), f, not exact
 
     # --- metadata ---------------------------------------------------------------
-    def _guard9(self, ctx):
-        """Re-apply any identity field the new file changed, lock, verify."""
+    def _guard9(self, ctx) -> str | None:
+        """Re-apply any identity field the new file changed, lock it, verify.
+        Guard 8 first: a restore that would make BookOrbit move the book onto
+        a collision is withheld (attention; the rename step is skipped too)."""
         snap = ctx["snapshot"]
         d = self.index.detail(ctx["book_id"], fresh=True)
         norm_snap = bookmeta.norm_for_compare(snap)
         cur = bookmeta.norm_for_compare(bookmeta.identity(d))
         changed = [k for k in IDENTITY if cur[k] != norm_snap[k]]
         if not changed:
-            return
+            return None
         if "seriesName" in changed or "seriesIndex" in changed:
             changed = sorted(set(changed) | {"seriesName", "seriesIndex"}, key=IDENTITY.index)
+        meta = {k: snap[k] for k in changed}
+        locks = set(BASE_LOCKS) | set(changed)          # Task 9c (b): lock what we restore
         self._guard2(ctx["library_id"])
-        self.writer.patch_metadata(ctx["book_id"], {k: snap[k] for k in changed}, list(BASE_LOCKS))
-        after = self.index.detail(ctx["book_id"], fresh=True)
+        try:
+            plan = self._plan_patch(ctx["book_id"], ctx["library"], meta)
+        except _Attention as e:
+            ctx["no_rename"] = True
+            return f"guard 9 restore of {', '.join(changed)}: {e}"
+        self.writer.patch_metadata(ctx["book_id"], meta, sorted(locks))
+        after = self._settle(plan, self._want(ctx))
         got = bookmeta.norm_for_compare(bookmeta.identity(after))
         still = [k for k in IDENTITY if got[k] != norm_snap[k]]
         if still:
             raise _Fail(f"guard 9: could not restore {', '.join(still)} on book {ctx['book_id']}")
-        self._check_locks(after, set(BASE_LOCKS) | set(snap.get("lockedFields") or []))
+        self._check_locks(after, locks | set(snap.get("lockedFields") or []))
         ctx["restored"] = changed
+        return self._placement_note(ctx, after, plan)
 
-    def _write_metadata(self, ctx):
+    def _write_metadata(self, ctx) -> str | None:
+        self._await_fetch(ctx["book_id"])
         meta = dict(ctx["meta"]["fields"])
-        locks = set(BASE_LOCKS)
+        locks = set(bookmeta.CREATE_LOCKS)
         d = self.index.detail(ctx["book_id"], fresh=True)
         tag = ctx["meta"].get("asin_tag")
         if tag:
             meta["tags"] = sorted(set(bookmeta.tag_names(d)) | {f"asin:{tag}"})
             locks.add("tags")
         self._guard2(ctx["library_id"])
+        try:
+            plan = self._plan_patch(ctx["book_id"], ctx["library"], meta)
+        except _Attention as e:
+            ctx["no_rename"] = True
+            return str(e)
         self.writer.patch_metadata(ctx["book_id"], meta, sorted(locks))
-        after = self.index.detail(ctx["book_id"], fresh=True)
+        after = self._settle(plan, self._want(ctx))
         got = bookmeta.norm_for_compare(bookmeta.identity(after))
         want = bookmeta.norm_for_compare(meta)
         bad = [k for k in want if got[k] != want[k]]
@@ -808,6 +875,21 @@ class Executor:
         if bad:
             raise _Fail(f"metadata read-back mismatch on book {ctx['book_id']}: {', '.join(bad)}")
         self._check_locks(after, locks | set(d.get("lockedFields") or []))
+        return self._placement_note(ctx, after, plan)
+
+    def _await_fetch(self, book_id) -> None:
+        """Task 9c (d): BookOrbit fetches provider metadata ~5-12 s after the
+        scan that added the book and overwrites unlocked fields. Wait until
+        the book's updatedAt has been still for FETCH_QUIET s (at most
+        FETCH_MAX s) so our PATCH lands after it, not under it."""
+        start = self.clock()
+        last = self.index.detail(book_id, fresh=True).get("updatedAt")
+        since = start
+        while self.clock() - since < FETCH_QUIET and self.clock() - start < FETCH_MAX:
+            self._sleep(FETCH_POLL)
+            cur = self.index.detail(book_id, fresh=True).get("updatedAt")
+            if cur != last:
+                last, since = cur, self.clock()
 
     @staticmethod
     def _check_locks(d, want):
@@ -816,34 +898,164 @@ class Executor:
         if missing:
             raise _Fail(f"locks missing on book {d.get('id')} after PATCH: {', '.join(sorted(missing))}")
 
-    # --- rename-files -------------------------------------------------------------
+    # --- guard 8 + BookOrbit's own rename (Task 9c) ------------------------------
+    @staticmethod
+    def _want(ctx):
+        """(extension, size) of the filed file -- how it is found after
+        BookOrbit renamed it."""
+        return (os.path.splitext(ctx["filename"])[1].lower(), ctx["size"])
+
+    def _render(self, ident: dict, library: str, ext: str | None = None):
+        """(folder rel, local folder, file name) BookOrbit renders for `ident`."""
+        rel = render_folder(ident.get("authors") or [], ident.get("seriesName"),
+                            ident.get("seriesIndex"), ident.get("title"))
+        local = os.path.normpath(os.path.join(self._lib_root(library), rel))
+        name = None
+        if ext:
+            path = bo_render.render_book_path(ident.get("authors") or [], ident.get("seriesName"),
+                                              ident.get("seriesIndex"), ident.get("title"), ext)
+            name = os.path.basename(path) if path else None
+        return rel, local, name
+
+    def _plan_patch(self, book_id: int, library: str, meta: dict) -> dict:
+        """Guard 8 BEFORE a metadata PATCH, on fresh data. When the PATCH
+        carries a rename-relevant field, render the folder BookOrbit will
+        move the book to (current identity overlaid with `meta`) and run the
+        collision check against it; a clash raises _Attention and nothing is
+        written. Returns the plan `_settle`/`_placement_problem` use."""
+        self.index.refresh(now=self.clock(), force=True)
+        d = self.index.detail(book_id, fresh=True)
+        own = os.path.normpath(self._local_folder(d, library))
+        plan = {"book_id": book_id, "library": library, "pre": own,
+                "renames": any(k in meta for k in bo_render.RENAME_RELEVANT_FIELDS)}
+        if not plan["renames"]:
+            return plan
+        ident = bookmeta.identity(d)
+        ident.update({k: meta[k] for k in IDENTITY if k in meta})
+        ident["seriesIndex"] = bookmeta.norm_index(ident.get("seriesIndex"))
+        try:
+            rel, target, _n = self._render(ident, library)
+        except (TypeError, ValueError) as e:
+            raise _Attention(f"metadata not written to book {book_id}: cannot render the folder "
+                             f"BookOrbit would move it to ({e}); it stays at {own}") from None
+        plan.update(ident=ident, rel=rel, target=target, change=target != own)
+        if plan["change"]:
+            clash = fsops.rename_collision(self.index, book_id, library, rel,
+                                           self._lib_root(library), own)
+            if clash:
+                raise _Attention(f"metadata not written to book {book_id}: BookOrbit would move it "
+                                 f"to {rel!r}, but {clash}; it stays filed at {own}")
+        return plan
+
+    def _sig(self, d):
+        return (d.get("folderPath"), tuple(sorted((str(f.get("filename")), f.get("sizeBytes"))
+                                                  for f in d.get("files") or [] if isinstance(f, dict))))
+
+    def _settle(self, plan: dict, want=None) -> dict:
+        """After the PATCH: poll the book every SETTLE_POLL s until its folder
+        and files are the same on two consecutive reads AND (when a move was
+        expected) the folder left the pre-PATCH path -- or, short of that,
+        the placement already matches the plan / SETTLE_MIN s passed; give up
+        after SETTLE_MAX s. Returns the last detail (verification decides)."""
+        bid = plan["book_id"]
+        if not plan["renames"]:
+            return self.index.detail(bid, fresh=True)
+        start, prev = self.clock(), None
+        while True:
+            self._sleep(SETTLE_POLL)
+            d = self.index.detail(bid, fresh=True)
+            sig = self._sig(d)
+            elapsed = self.clock() - start
+            if sig == prev:
+                try:
+                    moved = not plan["change"] or os.path.normpath(
+                        self.index.local_path(d.get("folderPath") or "")) != plan["pre"]
+                except ValueError:
+                    moved = False
+                if moved and (elapsed >= SETTLE_MIN or self._placement_problem(d, plan, want) is None):
+                    return d
+            if elapsed >= SETTLE_MAX:
+                return d
+            prev = sig
+
+    def _placement_problem(self, d: dict, plan: dict, want=None) -> str | None:
+        """None iff BookOrbit put the book exactly where the plan rendered it
+        (folderPath normalised) and lists the filed file -- by (extension,
+        size) -- under the pattern's file name."""
+        if not plan.get("renames"):
+            return None
+        bid = plan["book_id"]
+        fp = d.get("folderPath") or ""
+        try:
+            local = os.path.normpath(self.index.local_path(fp))
+        except ValueError:
+            local = None
+        if local != plan["target"]:
+            return (f"BookOrbit left book {bid} at {fp!r} instead of moving it to {plan['rel']!r} "
+                    f"(rename skipped or still pending); its file stays filed there")
+        if want is None:
+            return None
+        ext, size = want
+        mine = [f for f in d.get("files") or [] if isinstance(f, dict) and f.get("sizeBytes") == size
+                and str(f.get("filename") or "").lower().endswith(ext)]
+        if not mine:
+            return f"book {bid} no longer lists a {ext} file of {size} bytes after BookOrbit's rename"
+        _r, _l, name = self._render(plan["ident"], plan["library"], ext)
+        if name and not any(f.get("filename") == name for f in mine):
+            return (f"book {bid}'s file is {mine[0].get('filename')!r}, not the pattern name "
+                    f"{name!r}")
+        return None
+
+    def _placement_note(self, ctx, d, plan) -> str | None:
+        """_placement_problem for a filing, then re-locate the file on disk
+        (final_path) wherever it ended up."""
+        problem = self._placement_problem(d, plan, self._want(ctx))
+        try:
+            self._locate(ctx)
+        except _Integrity:
+            raise
+        except _Fail as e:
+            problem = f"{problem}; {e}" if problem else str(e)
+        return problem
+
+    # --- rename-files (attach only) ---------------------------------------------
     def _rename(self, ctx) -> str | None:
-        """Guard 8 on fresh data, then rename-files, then re-verify. Returns an
-        escalation note when the rename was skipped (file stays filed)."""
+        """create_book: BookOrbit's own async rename already placed the book
+        (verified in the metadata step); only drop our emptied [lib-] dir.
+        attach: guard 8 on fresh data, then rename-files so the new file
+        takes the pattern name, then verify folder + name. Returns an
+        attention note (file stays filed) or None."""
+        if ctx.get("no_rename"):
+            return None
+        library = ctx["library"]
+        if ctx["kind"] == states.CREATE_BOOK:
+            after = self._locate(ctx)
+            if ctx.get("dst_dir"):
+                new_folder = self._local_folder(after, library)
+                if os.path.realpath(ctx["dst_dir"]) != os.path.realpath(new_folder):
+                    n = self._rmdir_own(ctx)     # our [lib-] dir, if BookOrbit left it
+                    if n:
+                        return f"after BookOrbit's rename: {n}"
+            return None
         self.index.refresh(now=self.clock(), force=True)
         d = self.index.detail(ctx["book_id"], fresh=True)
         ident = bookmeta.identity(d)
-        library = ctx["library"]
         try:
-            rendered = render_folder(ident["authors"][0], ident["seriesName"],
-                                     d.get("seriesIndex"), ident["title"])
-        except (IndexError, TypeError, ValueError) as e:
+            rel, target, _n = self._render(ident, library)
+        except (TypeError, ValueError) as e:
             return f"rename-files skipped for book {ctx['book_id']}: cannot render its folder ({e})"
         own = self._local_folder(d, library)
-        clash = fsops.rename_collision(self.index, ctx["book_id"], library, rendered,
+        clash = fsops.rename_collision(self.index, ctx["book_id"], library, rel,
                                        self._lib_root(library), own)
         if clash:
             return f"rename-files skipped for book {ctx['book_id']}: {clash}"
         self._guard2(ctx["library_id"])
         self.writer.rename_files(ctx["book_id"])
         after = self._locate(ctx)               # re-read folderPath + verify on disk
-        if ctx["kind"] == states.CREATE_BOOK and ctx.get("dst_dir"):
-            new_folder = self._local_folder(after, library)
-            if os.path.realpath(ctx["dst_dir"]) != os.path.realpath(new_folder):
-                note = self._rmdir_own(ctx)     # our [lib-] dir, now empty
-                if note:
-                    return f"after rename-files: {note}"
-        return None
+        plan = {"book_id": ctx["book_id"], "library": library, "renames": True, "ident": ident,
+                "rel": rel, "target": target}
+        problem = self._placement_problem(after, plan, self._want(ctx))
+        return f"rename-files did not give the expected pattern: {problem}" if problem else None
 
     # --- resume -----------------------------------------------------------------
     def _resume_locked(self, rec) -> ExecResult:
