@@ -407,7 +407,7 @@ def test_would_do_create_book_shows_rendered_folder():
     intent["metadata"]["series"] = "Murderbot Diaries"
     intent["metadata"]["seriesIndex"] = 2
     steps = would_do(intent)
-    assert any("Murderbot Diaries/2. Artificial Condition" in s for s in steps)
+    assert any("Murderbot Diaries/02. Artificial Condition" in s for s in steps)
 
 
 def test_would_do_escalate_mentions_question_and_push():

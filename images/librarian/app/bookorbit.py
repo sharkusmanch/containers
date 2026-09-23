@@ -262,6 +262,7 @@ def _write_path_allowed(method, path):
 _TERMINAL_SCAN_STATUSES = frozenset({"completed", "failed"})
 
 _WRITER_LIBRARY_IDS = frozenset({7, 8})
+SCAN_HISTORY_PAGE = 20
 
 
 class BookorbitWriter:
@@ -287,7 +288,12 @@ class BookorbitWriter:
                 f"library_id must be one of {sorted(_WRITER_LIBRARY_IDS)}: {library_id!r}")
 
     def _scan_history(self, library_id):
-        return self._client.get(f"/scanner/libraries/{library_id}/scan-history")
+        # Task 9c (e): the default page is the newest 5 (scanner.controller.js
+        # `DefaultValuePipe(5)`); BookOrbit 3.0.0 clamps `limit` to its
+        # SCAN_HISTORY_LIMIT (10, scanner.service.js). Ids are global and the
+        # list is newest-first, so a bigger page keeps our own scan visible
+        # while other scans of the library finish.
+        return self._client.get(f"/scanner/libraries/{library_id}/scan-history?limit={SCAN_HISTORY_PAGE}")
 
     def _max_history_id(self, library_id):
         history = self._scan_history(library_id)
@@ -389,7 +395,13 @@ class BookorbitWriter:
         return self._client._write("POST", f"/books/{book_id}/rename-files", {})
 
     def patch_metadata(self, book_id, metadata, locked):
-        """PATCH /books/{id}/metadata-and-locks. lockedFields REPLACES the
+        """PATCH /books/{id}/metadata-and-locks. NOTE (Task 9b probe): when
+        `metadata` carries title/authors/seriesName/seriesIndex/publishedYear,
+        BookOrbit (fileRenameEnabled) moves the book to its rendered pattern
+        ~3 s AFTER this returns -- the response still shows the old path. The
+        executor runs guard 8 before calling this and polls afterwards.
+
+        lockedFields REPLACES the
         whole lock set server-side, so this always sends a fresh GET's
         current lockedFields unioned with the newly requested ones -- never
         drops an existing lock (e.g. a Kindle 'tags' lock).
@@ -608,6 +620,14 @@ class LibraryIndex:
         d = self._client.get(f"/books/{id}")
         self._books[str(id)] = d
         return d
+
+    def naming_settings(self, library_id):
+        """Reads (Task 9c fix round 1) of what BookOrbit's renamer depends on:
+        GET /libraries/{id} (fileNamingPattern, fileRenameEnabled,
+        organizationMode) and GET /app-settings/cross-platform-path-
+        sanitization ({"enabled": bool}, app-settings.controller.js)."""
+        return {"library": self._client.get(f"/libraries/{int(library_id)}"),
+                "sanitization": self._client.get("/app-settings/cross-platform-path-sanitization")}
 
     def local_path(self, bookorbit_path):
         if not bookorbit_path.startswith(self._path_prefix + "/") and bookorbit_path != self._path_prefix:

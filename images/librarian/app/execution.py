@@ -516,6 +516,14 @@ def _record_update(svc, m, key, book_id, res) -> None:
     mid = m["intent_id"]
     if res.state == "updated":
         svc.intents.store.record(mid, states.EXECUTED, exec_detail=res.detail)
+        if res.escalate:
+            # Task 9c: the correction landed, but BookOrbit's rename did not
+            # put the book where guard 8 rendered it -- a human should look
+            text = (f"The metadata correction on book {book_id} was applied, but needs a look: "
+                    f"{res.escalate}")
+            esc_id = svc.intents.record_escalation(m.get("run_id") or "executor", key, text,
+                                                   reason="update_metadata needs a look")
+            flag_attention(svc, key, mid, esc_id, text)
         return
     if res.state == "retryable":
         now = svc.clock()

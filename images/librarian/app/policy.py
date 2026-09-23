@@ -44,6 +44,7 @@ import json
 import unicodedata
 from dataclasses import dataclass, field
 
+from app import bo_render
 from app.dossier import agreement
 from app.states import ATTACH, CREATE_BOOK, DEFER, ESCALATE, INTENT_KINDS, UPDATE_METADATA
 from app.titles import normalize
@@ -62,9 +63,11 @@ _ALLOWED_TARGET_LIBRARY_NAMES = frozenset(_LIBRARY_NAMES.values())
 _MAX_STRING_LEN = 2000
 _MAX_LIST_LEN = 20
 
-# update_metadata's lock list (Global "Metadata locks"): series stays
-# unlocked, so only these three may ever be requested.
-_UPDATE_METADATA_LOCK_FIELDS = frozenset({"title", "subtitle", "description"})
+# update_metadata's lock list: title/subtitle/description plus, since Task 9c
+# (b), every identity field (BookOrbit's provider fetch overwrites unlocked
+# ones). The executor also locks every identity field it writes regardless.
+_UPDATE_METADATA_LOCK_FIELDS = frozenset({"title", "subtitle", "description", "authors", "seriesName",
+                                          "seriesIndex", "publishedYear", "language"})
 
 # Fields validate_shape's shared metadata checks accept (they're valid
 # create_book fields too) but app.bookmeta.update_metadata_fields silently
@@ -280,20 +283,33 @@ def _format_index(idx) -> str:
     return s
 
 
-def render_folder(first_author: str, series: str | None, series_index, title: str) -> str:
-    """BookOrbit's `{authors:first}/<{series}/><{seriesIndex}. >{title}`.
+def render_folder(authors, series: str | None, series_index, title: str) -> str:
+    """The book folder BookOrbit will move a book to, relative to the library
+    root -- the dirname of `app.bo_render.render_book_path`, i.e. BookOrbit's
+    own `{authors:first}/<{series}/><{seriesIndex}. >{title}/...` renderer
+    ported exactly (zero-padded index "02.5.", ":" -> "_", trailing dots
+    trimmed, reserved names suffixed, 255-byte segment truncation). The ONE
+    renderer used by guard 8 at submit, claims_for and the executor.
 
-    A missing series drops both the `series/` path segment AND the
-    `N. ` title prefix (the prefix is only meaningful alongside a series);
-    a present series with no index drops only the prefix.
-    """
-    parts = [first_author]
-    if series:
-        parts.append(series)
-        if series_index is not None:
-            title = f"{_format_index(series_index)}. {title}"
-    parts.append(title)
-    return "/".join(parts)
+    `authors` is the author list (or a single name); BookOrbit joins it with
+    ", " before taking `:first`. A numeric `series_index` is first written
+    the way the executor sends it (`_format_index`, "2.0" -> "2"). Raises
+    ValueError when the pattern renders to nothing."""
+    if isinstance(series_index, (int, float)) and not isinstance(series_index, bool):
+        series_index = _format_index(series_index)
+    rel = bo_render.render_book_path(authors, series, series_index, title, "epub")
+    if rel is None or "/" not in rel:
+        raise ValueError(f"BookOrbit's pattern renders no folder for {title!r}")
+    return rel.rsplit("/", 1)[0]
+
+
+def render_intent_folder(metadata: dict) -> str:
+    """render_folder for an intent's metadata, mapped the way
+    `bookmeta.create_metadata` writes it: the index only travels with a
+    series (sent as null otherwise)."""
+    series = metadata.get("series") or None
+    return render_folder(metadata["authors"], series,
+                         metadata.get("seriesIndex") if series else None, metadata["title"])
 
 
 def _folder_tail(folder_path, library_name):
@@ -817,9 +833,7 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
     if kind == CREATE_BOOK:
         library_name = _LIBRARY_NAMES[intent["library"]]
         metadata = intent["metadata"]
-        rendered = render_folder(
-            metadata["authors"][0], metadata.get("series"), metadata.get("seriesIndex"), metadata["title"],
-        )
+        rendered = render_intent_folder(metadata)
         if ("folder", library_name, rendered.casefold()) in ctx.run_claims:
             return False, f"folder name {rendered!r} was already claimed by another create_book this run"
         for book in ctx.index.books():
@@ -880,8 +894,6 @@ def claims_for(intent: dict, dossier: dict) -> list:
     if kind == CREATE_BOOK:
         library_name = _LIBRARY_NAMES[intent["library"]]
         metadata = intent["metadata"]
-        rendered = render_folder(
-            metadata["authors"][0], metadata.get("series"), metadata.get("seriesIndex"), metadata["title"],
-        )
+        rendered = render_intent_folder(metadata)
         claims.append(("folder", library_name, rendered.casefold()))
     return claims

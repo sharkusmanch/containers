@@ -3,9 +3,20 @@ BookOrbit transport, real filesystem moves on tmp_path roots.
 
 The fake server simulates a library scan by walking the fake library root
 (book-per-folder): a folder with files is one book; an existing book's file
-list is re-synced, a new folder becomes a new book. `rename-files` moves the
-book to BookOrbit's rendered pattern. Every scenario snapshots the library
-tree first and asserts that no pre-existing path was removed or modified.
+list is re-synced, a new folder becomes a new book. It behaves the way the
+Task 9b live probe showed BookOrbit 3.0.0 does:
+  * the scan never renames;
+  * a PATCH carrying a rename-relevant field schedules an ASYNC rename
+    ~3 s later (debounced) -- the immediate read-back shows the old path;
+  * a rename moves the folder to the rendered pattern (app.bo_render),
+    renames the files, and removes the emptied old dir and its parent;
+    a target folder/file that already exists makes it a silent no-op;
+  * `rename-files` does the same rename synchronously and answers 204;
+  * a scan that ADDS a book triggers a provider metadata fetch ~7 s later
+    that overwrites every UNLOCKED field in `fetch` (a bogus series).
+Time is the FakeClock (advanced only by the executor's sleeps). Every
+scenario snapshots the library tree first and asserts that no pre-existing
+path was removed or modified.
 """
 import errno
 import hashlib
@@ -14,12 +25,12 @@ import os
 
 import pytest
 
+from app import bo_render
 from app import executor as executor_mod
 from app import states
 from app.bookorbit import BookorbitClient, BookorbitWriter, LibraryIndex
 from app.config import Settings
 from app.executor import ExecResult, Executor, sha12
-from app.policy import render_folder
 from app.store import Store
 
 LIB_NAMES = {7: "Library", 8: "Kids Audiobooks"}
@@ -46,7 +57,23 @@ class FakeBookorbit:
         self.scan_never_finishes = False
         self.scan_enabled = True             # False: scan completes but indexes nothing
         self.on_scan = None                  # hook(fake, library_id) after indexing
-        self.rename_leaves_old_dir = True
+        self.clock = None                    # FakeClock; None = scheduled work is due at once
+        self.auto_rename = True              # PATCH with a rename-relevant field -> async rename
+        self.rename_delay = 3.0
+        self.rename_noop = False             # every rename silently does nothing (204)
+        self.fetch = {"seriesName": "The Arcanaeum", "seriesIndex": "3", "publishedYear": 1999}
+        self.fetch_delay = 7.0
+        self._due = []                       # [(due, kind, book_id)]
+        self.rename_log = []                 # (book_id, "moved"|"skipped"|"unchanged", why)
+        self.patch_bodies = []               # (time, book_id, body)
+        self.renamed_away = set()            # dirs a rename moved or emptied
+        # BookOrbit naming settings the executor checks before any PATCH/rename
+        self.libraries = {lid: {"id": lid, "name": name, "fileRenameEnabled": True,
+                                "fileNamingPattern": bo_render.PATTERN,
+                                "organizationMode": "book_per_folder"}
+                          for lid, name in LIB_NAMES.items()}
+        self.sanitize = True
+        self.fetch_log = []                  # (time, book_id)
         self.crash_on = {}                   # (method, path-suffix) -> exception to raise
         self.on_idle = None                  # hook(fake) when a foreign running scan ends
         self.on_patch = None                 # hook(fake, book) after a PATCH is applied
@@ -117,37 +144,94 @@ class FakeBookorbit:
                 "providerIds": {"audible": None}, "tags": ["from-file"], "lockedFields": [],
                 "folderPath": f"/books/{lib}/{rel}", "files": entries, "updatedAt": "new",
             }
+            if self.fetch:
+                self._schedule("fetch", self.next_book, self.fetch_delay)
         if self.on_scan:
             self.on_scan(self, library_id)
 
+    def _now(self):
+        return self.clock() if self.clock is not None else 0.0
+
+    def _schedule(self, kind, bid, delay):
+        self._due = [d for d in self._due if not (d[1] == kind and d[2] == bid)]   # debounce
+        self._due.append((self._now() + delay, kind, bid))
+
+    def _tick(self):
+        now = self._now()
+        due = sorted(d for d in self._due if self.clock is None or d[0] <= now)
+        self._due = [d for d in self._due if d not in due]
+        for _t, kind, bid in due:
+            if bid not in self.books:
+                continue
+            if kind == "rename":
+                self._rename_files(bid)
+            elif kind == "fetch":
+                b = self.books[bid]
+                for k, v in self.fetch.items():
+                    if k not in b["lockedFields"]:
+                        b[k] = v
+                self._touch(b)
+                self.fetch_log.append((now, bid))
+
+    def _try_rmdir(self, d):
+        try:
+            if not os.listdir(d):
+                os.rmdir(d)
+                self.renamed_away.add(d)
+        except OSError:
+            pass
+
     def _rename_files(self, bid):
+        """BookOrbit's performRenameLocked, reduced to what the probe saw."""
         b = self.books[bid]
         lib = b["libraryName"]
-        rendered = render_folder(b["authors"][0]["name"], b.get("seriesName"),
-                                 b.get("seriesIndex"), b["title"])
+        root = os.path.join(self.books_root, lib)
+        authors = [a["name"] for a in b["authors"]]
+
+        def render(f):
+            stem, ext = os.path.splitext(f["filename"])
+            return bo_render.render_book_path(authors, b.get("seriesName"), b.get("seriesIndex"),
+                                              b["title"], ext, stem)
+        primary = b["files"][0]
+        rel = render(primary)
         old = self._local(b["folderPath"])
-        new = os.path.join(self.books_root, lib, rendered)
-        os.makedirs(new, exist_ok=True)
-        base = os.path.basename(rendered)
-        out = []
-        for f in b["files"]:
-            ext = os.path.splitext(f["filename"])[1]
-            src = os.path.join(old, f["filename"])
-            dst = os.path.join(new, base + ext)
-            if src != dst:
-                assert not os.path.exists(dst), "fake rename-files would overwrite"
-                os.rename(src, dst)
-            out.append(self._file_entry(dst))
-        if old != new and not self.rename_leaves_old_dir:
-            os.rmdir(old)
-        b["files"] = out
-        b["folderPath"] = f"/books/{lib}/{rendered}"
+        new = os.path.normpath(os.path.join(root, os.path.dirname(rel)))
+        names = {f["filename"]: os.path.basename(render(f)) for f in b["files"]}
+        if len({n.lower() for n in names.values()}) != len(names):    # internal collision
+            names = {f["filename"]: f["filename"] for f in b["files"]}
+            names[primary["filename"]] = os.path.basename(rel)
+        if new == old and all(k == v for k, v in names.items()):
+            self.rename_log.append((bid, "unchanged", ""))
+            return
+        if self.rename_noop:
+            self.rename_log.append((bid, "skipped", "rename_noop"))
+            return
+        if new != old and os.path.lexists(new):
+            self.rename_log.append((bid, "skipped", "target folder exists"))
+            return
+        if new == old and any(k != v and os.path.lexists(os.path.join(old, v)) for k, v in names.items()):
+            self.rename_log.append((bid, "skipped", "target file exists"))
+            return
+        if new != old:
+            os.makedirs(os.path.dirname(new), exist_ok=True)
+            os.rename(old, new)
+            self.renamed_away.add(old)
+        for k, v in names.items():
+            if k != v:
+                os.rename(os.path.join(new, k), os.path.join(new, v))
+        if new != old:
+            self._try_rmdir(old)
+            self._try_rmdir(os.path.dirname(old))
+        b["files"] = [self._file_entry(os.path.join(new, names[f["filename"]])) for f in b["files"]]
+        b["folderPath"] = "/books/" + lib + "/" + os.path.relpath(new, root)
         self._touch(b)
+        self.rename_log.append((bid, "moved", ""))
 
     # transport ------------------------------------------------------------
     def transport(self, method, url, body, headers):
         path = url.split("/api/v1", 1)[1]
         self.calls.append((method, path))
+        self._tick()
         for (m, suffix), exc in list(self.crash_on.items()):
             if m == method and path.endswith(suffix):
                 del self.crash_on[(m, suffix)]
@@ -160,9 +244,13 @@ class FakeBookorbit:
             items = ([{"id": i, "updatedAt": b["updatedAt"]} for i, b in self.books.items()]
                      if page == 0 else [])
             return 200, json.dumps({"items": items, "total": len(self.books)})
+        if path == "/app-settings/cross-platform-path-sanitization" and method == "GET":
+            return 200, json.dumps({"enabled": self.sanitize})
+        if path.startswith("/libraries/") and method == "GET":
+            return 200, json.dumps(self.libraries[int(path.split("/")[2])])
         if path.startswith("/scanner/libraries/"):
-            lib = int(path.split("/")[3])
-            if path.endswith("/scan-history"):
+            lib = int(path.split("?")[0].split("/")[3])
+            if "/scan-history" in path:
                 return 200, json.dumps(self._history(lib))
             if path.endswith("/scan") and method == "POST":
                 if any(h["status"] == "running" for h in self.history[lib]):
@@ -180,9 +268,10 @@ class FakeBookorbit:
                 return 200, json.dumps(self.books[bid])
             if parts[3] == "rename-files" and method == "POST":
                 self._rename_files(bid)
-                return 200, "{}"
+                return 204, ""
             if parts[3] == "metadata-and-locks" and method == "PATCH":
                 b = self.books[bid]
+                self.patch_bodies.append((self._now(), bid, payload))
                 for k, v in payload["metadata"].items():
                     if k == "authors":
                         b["authors"] = [{"id": i, "name": n, "sortName": n} for i, n in enumerate(v)]
@@ -194,7 +283,10 @@ class FakeBookorbit:
                 if self.on_patch:
                     self.on_patch(self, b)
                 self._touch(b)
-                return 200, "{}"
+                if self.auto_rename and any(k in payload["metadata"]
+                                            for k in bo_render.RENAME_RELEVANT_FIELDS):
+                    self._schedule("rename", bid, self.rename_delay)
+                return 200, json.dumps(b)
         return 500, f"unhandled {method} {path}"
 
     def _history(self, lib):
@@ -250,6 +342,7 @@ class Env:
         (self.books_root / "Comics" / "keep.cbz").write_bytes(b"comic")
         self.fake = FakeBookorbit(self.books_root)
         self.clock = FakeClock()
+        self.fake.clock = self.clock
         self.beats = 0
         self.stop = False
         self.settings = Settings(bookorbit_url="http://b/api/v1", bookorbit_user="u",
@@ -316,9 +409,18 @@ class Env:
         return out
 
     def assert_library_intact(self):
+        """No pre-existing path removed or modified -- except by BookOrbit's
+        own rename (the fake's), which may move a file (same inode, size and
+        mtime, somewhere under the library) and drop the dirs it emptied."""
         assert self._before is not None
         after = self._tree()
+        moved_sigs = {sig for sig in after.values() if sig[0] == "file"}
         for p, sig in self._before.items():
+            if p not in after:
+                if sig[0] == "file" and sig in moved_sigs:
+                    continue
+                if sig[0] == "dir" and p in self.fake.renamed_away:
+                    continue
             assert p in after, f"pre-existing library path removed: {p}"
             assert after[p] == sig, f"pre-existing library path modified: {p}"
 
@@ -395,7 +497,8 @@ def test_execute_update_patches_metadata_and_merges_locks(env):
     b = env.fake.books[7001]
     assert b["title"] == "Artificial Condition (Fixed)"
     assert b["seriesName"] == "Murderbot Diaries" and b["seriesIndex"] == "2"
-    assert set(b["lockedFields"]) == {"tags", "title"}     # merged, not replaced
+    # merged, not replaced; every identity field written is locked (Task 9c)
+    assert set(b["lockedFields"]) == {"tags", "title", "seriesName", "seriesIndex"}
     assert len(env.fake.patches()) == 1
     assert env.fake.scans() == [] and r.moves == []        # no file moves
 
@@ -749,8 +852,8 @@ def test_attach_sha_mismatch_fails(env):
 
 def test_guard9_restores_identity_fields_changed_by_scan(env):
     attach_target(env, lockedFields=["tags"], seriesName="Murderbot Diaries", seriesIndex="2",
-                  rel="Martha Wells/Murderbot Diaries/2. Artificial Condition",
-                  files=(("2. Artificial Condition.epub", b"e"),))
+                  rel="Martha Wells/Murderbot Diaries/02. Artificial Condition",
+                  files=(("02. Artificial Condition.epub", b"e"),))
 
     def clobber(fake, lib):
         b = fake.books[7001]
@@ -854,13 +957,13 @@ def test_create_book_locates_patches_and_renames(env):
     assert b["title"] == "New Book" and b["seriesName"] == "Saga" and b["seriesIndex"] == "2"
     assert b["publishedYear"] == 2020 and b["language"] == "en"
     assert b["providerIds"]["audible"] == "B0NEWBOOK1"
-    assert set(b["lockedFields"]) >= {"title", "subtitle", "description"}
-    assert "seriesName" not in b["lockedFields"] and "seriesIndex" not in b["lockedFields"]
-    # renamed into BookOrbit's pattern
-    assert b["folderPath"] == "/books/Library/Jane Author/Saga/2. New Book"
-    assert (env.books_root / "Library" / "Jane Author" / "Saga" / "2. New Book" / "2. New Book.m4b").is_file()
+    assert set(b["lockedFields"]) >= {"title", "subtitle", "description", "seriesName", "seriesIndex"}
+    # BookOrbit's own async rename (after the PATCH) moved it into the pattern
+    assert env.fake.renames() == []
+    assert b["folderPath"] == "/books/Library/Jane Author/Saga/02. New Book"
+    assert (env.books_root / "Library" / "Jane Author" / "Saga" / "02. New Book" / "02. New Book.m4b").is_file()
     made = env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]"
-    final = env.books_root / "Library" / "Jane Author" / "Saga" / "2. New Book" / "2. New Book.m4b"
+    final = env.books_root / "Library" / "Jane Author" / "Saga" / "02. New Book" / "02. New Book.m4b"
     assert r.moves == [(arr["primary"], str(final), 5000)]
     assert not made.exists()                      # our emptied [lib-] dir removed after rename
     patch = env.fake.patches()
@@ -1335,7 +1438,7 @@ def test_rename_skipped_when_it_would_nest_inside_another_book(env):
 
 
 def test_rename_skipped_when_another_book_would_nest_inside_ours(env):
-    env.fake.add_book(71, 7, "Jane Author/Saga/2. New Book/Extras", "Extras", ["Jane Author"],
+    env.fake.add_book(71, 7, "Jane Author/Saga/02. New Book/Extras", "Extras", ["Jane Author"],
                       files=(("x.epub", b"x"),))
     arr = env.libation(asin="B0NEWBOOK1", title="New Book")
     ex = env.executor()
@@ -1607,3 +1710,416 @@ def test_duplicate_removal_resumes_a_staged_copy(env, monkeypatch):
 
     assert r.state == "removed", r.detail
     assert not os.path.exists(env.intake / ".executing" / sha12(rec["key"]))
+
+
+# --- Task 9c: BookOrbit renames on PATCH; provider fetch after import ------------------
+
+FULL_LOCKS = {"title", "subtitle", "description", "authors", "seriesName", "seriesIndex",
+              "publishedYear", "language"}
+
+
+def test_create_book_waits_for_the_provider_fetch_then_clears_and_locks_identity(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, series=None, seriesIndex=None, publishedYear=None), arr, {})
+
+    assert r.ok and r.state == "filed" and not r.escalate, r.detail
+    b = env.fake.books[r.book_id]
+    # the fetch ran (bogus series) BEFORE our PATCH, which cleared it with nulls
+    assert env.fake.fetch_log and env.fake.fetch_log[0][0] < env.fake.patch_bodies[0][0]
+    body = env.fake.patch_bodies[0][2]["metadata"]
+    assert body["seriesName"] is None and body["seriesIndex"] is None and body["publishedYear"] is None
+    assert b["seriesName"] is None and b["seriesIndex"] is None and b["publishedYear"] is None
+    assert set(b["lockedFields"]) >= FULL_LOCKS
+    # BookOrbit's own async rename moved it; the executor never called rename-files
+    assert env.fake.renames() == []
+    final = env.books_root / "Library" / "Jane Author" / "New Book" / "New Book.m4b"
+    assert final.is_file() and b["folderPath"] == "/books/Library/Jane Author/New Book"
+    assert r.moves == [(arr["primary"], str(final), 5000)]
+    assert not (env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]").exists()
+
+
+def test_create_book_fetch_at_12s_lands_before_the_patch(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.fetch_delay = 12        # the slowest fetch the probe saw
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok, r.detail
+    assert env.fake.fetch_log[0][0] < env.fake.patch_bodies[0][0]
+    t_patch = env.fake.patch_bodies[0][0]
+    assert t_patch - env.fake.fetch_log[0][0] >= 20            # waited out the quiet window
+    assert env.fake.books[r.book_id]["seriesName"] == "Saga"
+
+
+def test_a_fetch_after_the_patch_cannot_overwrite_locked_identity(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.fetch_delay = 200       # beyond FETCH_MAX: lands after our PATCH
+
+    r = ex.execute(intent_create(arr), arr, {})
+    assert r.ok and not r.escalate, r.detail
+    env.clock.t += 300
+    env.fake.transport("GET", f"http://b/api/v1/books/{r.book_id}", None, {})
+    b = env.fake.books[r.book_id]
+    assert env.fake.fetch_log                                  # it did run
+    assert (b["seriesName"], b["seriesIndex"], b["publishedYear"]) == ("Saga", "2", 2020)
+
+
+def test_create_book_collision_is_checked_before_any_patch(env):
+    # an unindexed directory already sits at the folder BookOrbit would render
+    stray = env.books_root / "Library" / "Jane Author" / "Saga" / "02. New Book"
+    stray.mkdir(parents=True)
+    (stray / "stray.txt").write_bytes(b"x")
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.fake.on_scan = lambda fake, lib: [fake.books.pop(i) for i in list(fake.books)
+                                          if fake.books[i]["folderPath"].endswith("/02. New Book")]
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed" and r.escalate, r.detail
+    assert "02. New Book" in r.escalate and "not written" in r.escalate
+    assert env.fake.patches() == [] and env.fake.renames() == []
+    made = env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]"
+    assert (made / "New Book.m4b").is_file()          # left filed where it is
+
+
+def test_create_book_nesting_collision_blocks_the_patch(env):
+    env.fake.add_book(70, 7, "Frank Herbert/Dune", "Dune", ["Frank Herbert"],
+                      files=(("Dune.epub", b"dune"),))
+    arr = env.libation(asin="B0MESSIAH1", title="Dune Messiah")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, title="Dune Messiah", authors=["Frank Herbert"],
+                                 series="Dune", seriesIndex=2), arr, {})
+
+    assert r.state == "filed" and r.escalate and "book 70" in r.escalate, r.detail
+    assert env.fake.patches() == [] and env.fake.renames() == []
+
+
+def test_create_book_silent_rename_noop_is_attention(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.rename_noop = True
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed" and r.escalate, r.detail
+    assert "Saga/02. New Book" in r.escalate
+    made = env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]"
+    assert (made / "New Book.m4b").is_file()
+    assert len(env.fake.patches()) == 1 and env.fake.renames() == []
+    assert max(env.clock.sleeps) <= 5 and sum(s for s in env.clock.sleeps if s == 3) <= 93
+
+
+def test_create_book_rename_slower_than_the_settle_window_is_attention(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.rename_delay = 500
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed" and r.escalate and "02. New Book" in r.escalate, r.detail
+
+
+def test_create_book_waits_for_the_async_rename_to_settle(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.rename_delay = 40            # slow, but inside the 90 s window
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and not r.escalate, r.detail
+    final = env.books_root / "Library" / "Jane Author" / "Saga" / "02. New Book" / "02. New Book.m4b"
+    assert final.is_file() and r.moves[0][1] == str(final)
+    assert 3 in env.clock.sleeps
+
+
+def test_create_book_stop_during_settle_is_retryable_then_resumes(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    def stop_after_patch(fake, b):
+        env.stop = True
+    env.fake.on_patch = stop_after_patch
+
+    r = ex.execute(intent_create(arr), arr, {})
+    assert r.state == "retryable", r.detail
+    env.stop = False
+    env.fake.on_patch = None
+    rec = env.arrivals.get(arr["key"])
+    r2 = ex.resume(rec)
+    assert r2.ok and r2.state == "filed" and not r2.escalate, r2.detail
+    final = env.books_root / "Library" / "Jane Author" / "Saga" / "02. New Book" / "02. New Book.m4b"
+    assert final.is_file()
+
+
+def test_guard9_restore_locks_the_restored_fields_and_settles(env):
+    attach_target(env, rel="Martha Wells/Murderbot Diaries/02. Artificial Condition",
+                  seriesName="Murderbot Diaries", seriesIndex="2",
+                  files=(("02. Artificial Condition.epub", b"e"),))
+
+    def clobber(fake, lib):
+        fake.books[7001]["seriesIndex"] = "7"
+    env.fake.on_scan = clobber
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.ok and r.state == "filed" and not r.escalate, r.detail
+    b = env.fake.books[7001]
+    assert b["seriesIndex"] == "2"
+    assert set(b["lockedFields"]) >= {"seriesName", "seriesIndex", "title", "subtitle", "description"}
+    folder = env.books_root / "Library" / "Martha Wells" / "Murderbot Diaries" / "02. Artificial Condition"
+    assert (folder / "02. Artificial Condition.m4b").is_file()        # pattern name
+    assert b["folderPath"].endswith("/02. Artificial Condition")
+
+
+def test_guard9_restore_collision_skips_the_patch_and_rename(env):
+    # the book sits in a non-canonical folder; restoring its title would make
+    # BookOrbit move it onto an existing (unindexed) directory
+    attach_target(env, rel="Martha Wells/odd folder")
+    stray = env.books_root / "Library" / "Martha Wells" / "Artificial Condition"
+    stray.mkdir(parents=True)
+    (stray / "stray.txt").write_bytes(b"x")
+
+    def clobber(fake, lib):
+        for i in [i for i in fake.books if fake.books[i]["folderPath"].endswith("/Artificial Condition")]:
+            fake.books.pop(i)
+        fake.books[7001]["title"] = "Artificial Condition (Unabridged)"
+    env.fake.on_scan = clobber
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.ok and r.state == "filed" and r.escalate and "not written" in r.escalate, r.detail
+    assert env.fake.patches() == [] and env.fake.renames() == []
+    assert (env.books_root / "Library" / "Martha Wells" / "odd folder" / "Artificial Condition.m4b").is_file()
+
+
+def test_attach_rename_files_that_does_nothing_is_attention(env):
+    attach_target(env)
+    src = env.intake / "manual" / "weird name.m4b"
+    src.write_bytes(b"M" * 4000)
+    arr = env._arrival("manual", "weird name", src, src)
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.rename_noop = True
+    arr_name = "weird name.m4b"
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.ok and r.state == "filed" and r.escalate and "pattern" in r.escalate, r.detail
+    assert len(env.fake.renames()) == 1
+    folder = env.books_root / "Library" / "Martha Wells" / "Artificial Condition"
+    assert (folder / arr_name).is_file()
+
+
+def test_attach_file_takes_the_pattern_name(env):
+    attach_target(env)
+    arr = env.intake / "manual" / "weird name.m4b"
+    arr.write_bytes(b"M" * 4000)
+    rec = env._arrival("manual", "weird name", arr, arr)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(rec, 7001), rec, {})
+
+    assert r.ok and not r.escalate, r.detail
+    folder = env.books_root / "Library" / "Martha Wells" / "Artificial Condition"
+    assert (folder / "Artificial Condition.m4b").stat().st_size == 4000
+    assert r.moves[0][1] == str(folder / "Artificial Condition.m4b")
+
+
+def test_execute_update_collision_refuses_to_patch(env):
+    attach_target(env)
+    env.fake.add_book(80, 7, "Martha Wells/Murderbot Diaries/02. Artificial Condition", "Other",
+                      ["Martha Wells"], files=(("o.epub", b"o"),))
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute_update(intent_update_metadata(
+        arr, 7001, metadata={"series": "Murderbot Diaries", "seriesIndex": 2}, lock=[]), arr, 7001)
+
+    assert r.state == "failed" and "book 80" in r.detail and "not written" in r.detail, r.detail
+    assert env.fake.patches() == []
+
+
+def test_execute_update_locks_identity_it_sets_and_verifies_the_move(env):
+    attach_target(env, lockedFields=["tags"])
+    arr = env.libation(title="Artificial Condition")
+    env.arrivals.record(arr["key"], states.EXECUTING, exec={"outcome": {
+        "state": "filed", "book_id": 7001,
+        "moves": [[arr["primary"], str(env.books_root / "Library" / "Martha Wells" / "Artificial Condition"
+                                       / "Artificial Condition.epub"), 10]]}})
+    arr = env.arrivals.get(arr["key"])
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute_update(intent_update_metadata(
+        arr, 7001, metadata={"series": "Murderbot Diaries", "seriesIndex": 2}, lock=[]), arr, 7001)
+
+    assert r.ok and r.state == "updated" and not r.escalate, r.detail
+    b = env.fake.books[7001]
+    assert set(b["lockedFields"]) >= {"tags", "seriesName", "seriesIndex"}
+    assert b["folderPath"] == "/books/Library/Martha Wells/Murderbot Diaries/02. Artificial Condition"
+
+
+def test_execute_update_rename_noop_is_updated_with_attention(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.rename_noop = True
+
+    r = ex.execute_update(intent_update_metadata(
+        arr, 7001, metadata={"series": "Murderbot Diaries", "seriesIndex": 2}, lock=[]), arr, 7001)
+
+    assert r.ok and r.state == "updated" and r.escalate and "02. Artificial Condition" in r.escalate
+
+
+# --- Task 9c fix round 1 ------------------------------------------------------------------
+
+
+def settings_gets(env):
+    return [c for c in env.fake.calls if c[0] == "GET" and
+            (c[1].startswith("/libraries/") or c[1].startswith("/app-settings/"))]
+
+
+def test_changed_naming_pattern_pauses_the_create_patch(env, caplog):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.libraries[7]["fileNamingPattern"] = "{authors:first}/{title}"
+
+    with caplog.at_level("WARNING"):
+        r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed" and r.escalate, r.detail
+    assert "naming settings changed" in r.escalate and "paused" in r.escalate
+    assert env.fake.patches() == [] and env.fake.renames() == []
+    made = env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]"
+    assert (made / "New Book.m4b").is_file()
+    assert sum("naming settings changed" in m for m in caplog.messages) == 1
+
+
+@pytest.mark.parametrize("change", [
+    lambda f: f.libraries[7].update(fileRenameEnabled=False),
+    lambda f: f.libraries[7].update(organizationMode="book_per_file"),
+    lambda f: f.libraries[7].update(fileNamingPattern=None),
+    lambda f: setattr(f, "sanitize", False),
+])
+def test_changed_naming_settings_refuse_the_attach_rename(env, change):
+    attach_target(env)
+    src = env.intake / "manual" / "weird name.m4b"
+    src.write_bytes(b"M" * 4000)
+    arr = env._arrival("manual", "weird name", src, src)
+    ex = env.executor()
+    env.snapshot_tree()
+    change(env.fake)
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.ok and r.state == "filed" and r.escalate and "naming settings changed" in r.escalate
+    assert env.fake.renames() == [] and env.fake.patches() == []
+    assert (env.books_root / "Library" / "Martha Wells" / "Artificial Condition" / "weird name.m4b").is_file()
+
+
+def test_changed_naming_settings_fail_execute_update_without_patching(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.sanitize = False
+
+    r = ex.execute_update(intent_update_metadata(arr, 7001), arr, 7001)
+
+    assert r.state == "failed" and "naming settings changed" in r.detail
+    assert env.fake.patches() == []
+
+
+def test_naming_settings_are_cached_for_at_most_ten_minutes(env, caplog):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    assert ex.execute_update(intent_update_metadata(arr, 7001), arr, 7001).ok
+    n = len(settings_gets(env))
+    assert n == 2                                             # library + sanitisation setting
+    assert ex.execute_update(intent_update_metadata(arr, 7001, metadata={"title": "Again"}),
+                             arr, 7001).ok
+    assert len(settings_gets(env)) == n                       # cached
+    env.clock.t += 601
+    assert ex.execute_update(intent_update_metadata(arr, 7001, metadata={"title": "Third"}),
+                             arr, 7001).ok
+    assert len(settings_gets(env)) == 2 * n                   # re-read after 10 min
+
+
+def test_stored_series_index_string_is_rendered_verbatim(env):
+    """A stored "2.50" renders "02.50." in BookOrbit; normalising it to 2.5
+    first would predict "02.5." and flag a correct move as misplaced."""
+    attach_target(env, rel="Martha Wells/Murderbot Diaries/02.50. Artificial Condition",
+                  seriesName="Murderbot Diaries", seriesIndex="2.50",
+                  files=(("02.50. Artificial Condition.epub", b"e"),))
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute_update(intent_update_metadata(arr, 7001, metadata={"title": "Artificial Condition II"}),
+                          arr, 7001)
+
+    assert r.ok and r.state == "updated" and not r.escalate, r.detail
+    assert env.fake.books[7001]["folderPath"] == \
+        "/books/Library/Martha Wells/Murderbot Diaries/02.50. Artificial Condition II"
+
+
+def test_guard9_restores_the_stored_series_index_string_verbatim(env):
+    attach_target(env, rel="Martha Wells/Murderbot Diaries/02.50. Artificial Condition",
+                  seriesName="Murderbot Diaries", seriesIndex="2.50",
+                  files=(("02.50. Artificial Condition.epub", b"e"),))
+    env.fake.on_scan = lambda fake, lib: fake.books[7001].update(seriesIndex="7")
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.ok and not r.escalate, r.detail
+    assert env.fake.patch_bodies[0][2]["metadata"]["seriesIndex"] == "2.50"
+    assert env.fake.books[7001]["folderPath"].endswith("/02.50. Artificial Condition")
+
+
+def test_create_payload_and_render_normalise_whitespace_like_bookorbit(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, authors=["Jane\u00a0 Author"], series="The  Saga"), arr, {})
+
+    assert r.ok and not r.escalate, r.detail
+    body = env.fake.patch_bodies[0][2]["metadata"]
+    assert body["authors"] == ["Jane Author"] and body["seriesName"] == "The Saga"
+    assert env.fake.books[r.book_id]["folderPath"] == "/books/Library/Jane Author/The Saga/02. New Book"
