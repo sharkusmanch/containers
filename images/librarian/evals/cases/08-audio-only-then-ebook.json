@@ -1,0 +1,58 @@
+{
+  "name": "audio-only-then-ebook",
+  "note": "The audiobook was filed weeks ago as an audio-only book; now the Kindle ebook arrives.",
+  "arrival": {
+    "source": "kindle",
+    "source_id": "B08FHBV4ZX",
+    "sidecar": {
+      "title": "Project Hail Mary: A Novel",
+      "authors": [
+        "Andy Weir"
+      ]
+    },
+    "files": [
+      {
+        "name": "B08FHBV4ZX.epub",
+        "kind": "epub",
+        "epub": {
+          "title": "Project Hail Mary: A Novel",
+          "creators": [
+            "Andy Weir"
+          ],
+          "chars": 812000,
+          "date": "2021-05-04"
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 1001,
+      "title": "Project Hail Mary",
+      "authors": [
+        "Andy Weir"
+      ],
+      "files": [
+        {
+          "format": "m4b",
+          "filename": "Project Hail Mary.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 58080
+        }
+      ],
+      "publishedYear": 2021,
+      "narrators": [
+        "Ray Porter"
+      ],
+      "providerIds": {
+        "audible": "B08G9PRS1K"
+      }
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "attach"
+    ],
+    "book_id": 1001
+  }
+}

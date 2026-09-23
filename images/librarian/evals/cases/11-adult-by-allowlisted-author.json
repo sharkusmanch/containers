@@ -1,0 +1,101 @@
+{
+  "name": "adult-by-allowlisted-author",
+  "note": "Author is on the kids allowlist for one series only (whole_author false). Their adult novel belongs in the adult library.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B0AMGODS01",
+    "folder": "American Gods [B0AMGODS01]",
+    "files": [
+      {
+        "name": "American Gods.m4b",
+        "kind": "m4b",
+        "size": 8000,
+        "probe": {
+          "duration": 70080,
+          "tags": {
+            "title": "American Gods",
+            "album": "American Gods",
+            "artist": "Neil Gaiman",
+            "album_artist": "George Guidall",
+            "date": "2011",
+            "audible_asin": "B0AMGODS01"
+          },
+          "chapters": [
+            "Opening Credits",
+            "Caveat, and Warning for Travelers",
+            "Chapter One"
+          ],
+          "chapter_count": 24
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 1301,
+      "title": "American Gods",
+      "authors": [
+        "Neil Gaiman"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "American Gods.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "subtitle": "The Tenth Anniversary Edition",
+      "publishedYear": 2011
+    },
+    {
+      "id": 1302,
+      "title": "Coraline",
+      "authors": [
+        "Neil Gaiman"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "Coraline.epub",
+          "sizeBytes": 900000
+        },
+        {
+          "format": "m4b",
+          "filename": "Coraline.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 12000
+        }
+      ],
+      "libraryName": "Kids Audiobooks",
+      "publishedYear": 2002
+    }
+  ],
+  "kids_lists": {
+    "allow": {
+      "series": [],
+      "asins": [],
+      "authors": [
+        {
+          "name": "Neil Gaiman",
+          "whole_author": false
+        }
+      ]
+    },
+    "deny": {
+      "series": [],
+      "asins": [],
+      "authors": []
+    }
+  },
+  "expect": {
+    "kind_in": [
+      "attach",
+      "create_book"
+    ],
+    "book_id": 1301,
+    "library": "adult",
+    "forbid": {
+      "library": "kids"
+    }
+  }
+}

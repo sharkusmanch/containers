@@ -1,0 +1,79 @@
+{
+  "name": "kids-off-allowlist",
+  "note": "A children's novel with no allowlist hit and no library match. Kids needs an allowlist hit; must ask.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B01MQ0ZNRH",
+    "folder": "The Wild Robot [B01MQ0ZNRH]",
+    "files": [
+      {
+        "name": "The Wild Robot.m4b",
+        "kind": "m4b",
+        "size": 8000,
+        "probe": {
+          "duration": 13680,
+          "tags": {
+            "title": "The Wild Robot",
+            "album": "The Wild Robot",
+            "artist": "Peter Brown",
+            "album_artist": "Kate Atwater",
+            "series": "The Wild Robot",
+            "series-part": "1",
+            "genre": "Children's Audiobooks",
+            "date": "2016",
+            "audible_asin": "B01MQ0ZNRH"
+          },
+          "chapters": [
+            "Opening Credits",
+            "1. The Ocean",
+            "2. The Island"
+          ],
+          "chapter_count": 80
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 1201,
+      "title": "Magic Tree House: Dinosaurs Before Dark",
+      "authors": [
+        "Mary Pope Osborne"
+      ],
+      "files": [
+        {
+          "format": "m4b",
+          "filename": "1. Dinosaurs Before Dark.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 3000
+        }
+      ],
+      "libraryName": "Kids Audiobooks",
+      "seriesName": "Magic Tree House",
+      "seriesIndex": 1,
+      "publishedYear": 1992
+    }
+  ],
+  "kids_lists": {
+    "allow": {
+      "series": [
+        "Magic Tree House"
+      ],
+      "asins": [],
+      "authors": []
+    },
+    "deny": {
+      "series": [],
+      "asins": [],
+      "authors": []
+    }
+  },
+  "expect": {
+    "kind_in": [
+      "escalate"
+    ],
+    "forbid": {
+      "library": "kids"
+    }
+  }
+}

@@ -16,11 +16,13 @@ _CONTAINER_XML = (
 )
 
 
-def make_epub(path, title, creators, text, date="2020", identifiers=None, raw_identifiers=None):
+def make_epub(path, title, creators, text, date="2020", identifiers=None, raw_identifiers=None,
+              description=None):
     """`identifiers`: dict of scheme -> value, written with an `opf:scheme`
     attribute (the common case). `raw_identifiers`: list of (id, value) pairs
     written WITHOUT an `opf:scheme` attribute (id may be None) -- for
-    exercising EPUB2's optional-scheme / urn: / bare-ISBN fallback paths."""
+    exercising EPUB2's optional-scheme / urn: / bare-ISBN fallback paths.
+    `description`: optional dc:description text (evals use it for injection)."""
     identifiers = identifiers or {}
     raw_identifiers = raw_identifiers or []
 
@@ -42,6 +44,7 @@ def make_epub(path, title, creators, text, date="2020", identifiers=None, raw_id
         f"{creator_xml}"
         f"<dc:date>{escape(date)}</dc:date>"
         "<dc:language>en</dc:language>"
+        f"{'<dc:description>' + escape(description) + '</dc:description>' if description else ''}"
         f"{identifier_xml}"
         f"{raw_identifier_xml}"
         "</metadata>"

@@ -1,0 +1,81 @@
+{
+  "name": "thrawn-series-before-colon",
+  "note": "Audio titled just 'Thrawn'; the library ebook is 'Star Wars: Thrawn' (series before the colon). A #2 decoy shares the key.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B0THRAWN01",
+    "folder": "Thrawn [B0THRAWN01]",
+    "files": [
+      {
+        "name": "Thrawn.m4b",
+        "kind": "m4b",
+        "size": 8000,
+        "probe": {
+          "duration": 70560,
+          "tags": {
+            "title": "Thrawn",
+            "album": "Thrawn",
+            "artist": "Timothy Zahn",
+            "album_artist": "Marc Thompson",
+            "series": "Star Wars: Thrawn",
+            "series-part": "1",
+            "date": "2017",
+            "audible_asin": "B0THRAWN01"
+          },
+          "chapters": [
+            "Opening Credits",
+            "Chapter 1",
+            "Chapter 2"
+          ],
+          "chapter_count": 32
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 307,
+      "title": "Star Wars: Thrawn",
+      "authors": [
+        "Timothy Zahn"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "1. Thrawn.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "Star Wars: Thrawn",
+      "seriesIndex": 1,
+      "publishedYear": 2017,
+      "isbn13": "9781524797324"
+    },
+    {
+      "id": 308,
+      "title": "Thrawn: Alliances",
+      "authors": [
+        "Timothy Zahn"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "2. Thrawn - Alliances.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "Star Wars: Thrawn",
+      "seriesIndex": 2,
+      "publishedYear": 2018
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "attach"
+    ],
+    "book_id": 307,
+    "forbid": {
+      "book_id": 308
+    }
+  }
+}

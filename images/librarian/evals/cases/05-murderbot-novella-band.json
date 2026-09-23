@@ -1,0 +1,89 @@
+{
+  "name": "murderbot-novella-band",
+  "note": "Kindle ebook onto an audio-only novella; chars/sec is 22 (outside 11-17) for the right pair, and a #2 decoy shares the series key.",
+  "arrival": {
+    "source": "kindle",
+    "source_id": "B01MYZ8X5C",
+    "sidecar": {
+      "title": "All Systems Red: The Murderbot Diaries",
+      "authors": [
+        "Martha Wells"
+      ]
+    },
+    "files": [
+      {
+        "name": "B01MYZ8X5C.epub",
+        "kind": "epub",
+        "epub": {
+          "title": "All Systems Red",
+          "creators": [
+            "Martha Wells"
+          ],
+          "chars": 253440,
+          "date": "2017-05-02"
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 701,
+      "title": "All Systems Red",
+      "authors": [
+        "Martha Wells"
+      ],
+      "files": [
+        {
+          "format": "m4b",
+          "filename": "1. All Systems Red.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 11520
+        }
+      ],
+      "subtitle": "The Murderbot Diaries",
+      "seriesName": "The Murderbot Diaries",
+      "seriesIndex": 1,
+      "publishedYear": 2017,
+      "narrators": [
+        "Kevin R. Free"
+      ],
+      "providerIds": {
+        "audible": "B0ASRAUD01"
+      }
+    },
+    {
+      "id": 702,
+      "title": "Artificial Condition",
+      "authors": [
+        "Martha Wells"
+      ],
+      "files": [
+        {
+          "format": "m4b",
+          "filename": "2. Artificial Condition.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 12600
+        }
+      ],
+      "subtitle": "The Murderbot Diaries",
+      "seriesName": "The Murderbot Diaries",
+      "seriesIndex": 2,
+      "publishedYear": 2018,
+      "narrators": [
+        "Kevin R. Free"
+      ],
+      "providerIds": {
+        "audible": "B0ACAUD002"
+      }
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "attach"
+    ],
+    "book_id": 701,
+    "forbid": {
+      "book_id": 702
+    }
+  }
+}

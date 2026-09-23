@@ -1,0 +1,80 @@
+{
+  "name": "sins-placeholder-title",
+  "note": "The ebook's metadata title is a pre-publication placeholder; its file name carries the real title.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B0SINSOF01",
+    "folder": "The Sins of Our Fathers [B0SINSOF01]",
+    "files": [
+      {
+        "name": "The Sins of Our Fathers.m4b",
+        "kind": "m4b",
+        "size": 8000,
+        "probe": {
+          "duration": 11160,
+          "tags": {
+            "title": "The Sins of Our Fathers",
+            "album": "The Sins of Our Fathers",
+            "artist": "James S. A. Corey",
+            "album_artist": "Jefferson Mays",
+            "series": "The Expanse",
+            "series-part": "9.5",
+            "date": "2022",
+            "audible_asin": "B0SINSOF01"
+          },
+          "chapters": [
+            "Opening Credits",
+            "The Sins of Our Fathers",
+            "End Credits"
+          ],
+          "chapter_count": 3
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 412,
+      "title": "New James S. A. Corey Novella #1",
+      "authors": [
+        "James S. A. Corey"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "The Sins of Our Fathers (The Expanse) (2022).epub",
+          "sizeBytes": 400000,
+          "text_chars": 160000
+        }
+      ],
+      "publishedYear": 2022,
+      "folderPath": "/books/Library/James S. A. Corey/New James S. A. Corey Novella #1"
+    },
+    {
+      "id": 410,
+      "title": "Leviathan Falls",
+      "authors": [
+        "James S. A. Corey"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "9. Leviathan Falls.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "The Expanse",
+      "seriesIndex": 9,
+      "publishedYear": 2021
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "attach"
+    ],
+    "book_id": 412,
+    "forbid": {
+      "book_id": 410
+    }
+  }
+}
