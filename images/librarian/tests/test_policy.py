@@ -505,6 +505,75 @@ def test_validate_shape_update_metadata_reason_required():
     assert not ok
 
 
+# --- fix round 1, Important: narrators/asinTag/None must be REJECTED, not --
+# --- silently dropped -- an approved no-op intent used to reach the       --
+# --- executor with nothing left to patch                                  --
+
+
+def test_validate_shape_update_metadata_rejects_narrators():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": "T", "narrators": ["N"]}))
+    assert not ok
+    assert "narrators" in msg
+
+
+def test_validate_shape_update_metadata_rejects_asin_tag():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": "T", "asinTag": "B0X"}))
+    assert not ok
+    assert "asinTag" in msg
+
+
+def test_validate_shape_update_metadata_rejects_only_narrators_and_asin_tag():
+    # nothing left for update_metadata_fields to map -- must be rejected,
+    # not silently accepted as a no-op
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"narrators": ["N"], "asinTag": "B0X"}))
+    assert not ok
+
+
+def test_validate_shape_update_metadata_rejects_none_value():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": "T", "subtitle": None}))
+    assert not ok
+    assert "subtitle" in msg
+
+
+def test_validate_shape_update_metadata_rejects_none_title():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": None}))
+    assert not ok
+    assert "title" in msg
+
+
+def test_validate_shape_update_metadata_rejects_empty_string_series():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"series": ""}))
+    assert not ok
+    assert "series" in msg
+
+
+def test_validate_shape_update_metadata_rejects_empty_string_subtitle():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"subtitle": ""}))
+    assert not ok
+    assert "subtitle" in msg
+
+
+def test_validate_shape_update_metadata_rejects_empty_string_language():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"language": ""}))
+    assert not ok
+    assert "language" in msg
+
+
+def test_validate_shape_update_metadata_rejects_empty_string_audible_id():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"audibleId": ""}))
+    assert not ok
+    assert "audibleId" in msg
+
+
+def test_validate_shape_update_metadata_series_index_alone_is_a_mapped_field():
+    # seriesIndex without series still maps to something patchable
+    assert validate_shape(update_metadata_intent(2, metadata={"seriesIndex": 3}))[0]
+
+
+def test_validate_shape_update_metadata_audible_id_alone_is_valid():
+    assert validate_shape(update_metadata_intent(2, metadata={"audibleId": "B0TEST1234"}))[0]
+
+
 # --- I5: folder-name-bound fields reject path-unsafe values ----------------
 
 

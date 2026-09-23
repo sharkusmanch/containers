@@ -60,6 +60,32 @@ _MAX_LIST_LEN = 20
 # unlocked, so only these three may ever be requested.
 _UPDATE_METADATA_LOCK_FIELDS = frozenset({"title", "subtitle", "description"})
 
+# Fields validate_shape's shared metadata checks accept (they're valid
+# create_book fields too) but app.bookmeta.update_metadata_fields silently
+# drops: narrators has no confirmed PATCH key, asinTag only makes sense
+# derived from a brand-new arrival's own file. Letting these through meant
+# an intent could pass every guard, get approved, and reach the executor
+# with nothing left to patch -- reviewer fix round 1, Important. Rejected
+# explicitly, by name, instead of silently ignored.
+_UPDATE_METADATA_REJECTED_KEYS = frozenset({"narrators", "asinTag"})
+
+# The metadata field names app.bookmeta.update_metadata_fields actually
+# turns into a PATCH key -- kept in lockstep with that function by hand;
+# update_metadata must supply at least one, or (after the rejected-keys
+# check above) it would have nothing left to patch.
+_UPDATE_METADATA_MAPPED_FIELDS = frozenset({
+    "title", "subtitle", "authors", "language", "audibleId",
+    "series", "seriesIndex", "publishedYear",
+})
+
+# update_metadata has no "clear this field" semantics -- an empty string is
+# not the same as omitting the key, but the shared metadata-body checks
+# treat "" as a perfectly valid string. Reject it explicitly for every
+# field an LLM might plausibly try to blank out (title/authors already
+# reject "" via the shared checks; the path fields only skip validation
+# when falsy, so "" sails through there unless caught here).
+_UPDATE_METADATA_NO_EMPTY_STRING = ("subtitle", "series", "language", "audibleId")
+
 # NUL and other C0 control characters, plus DEL -- never legitimate in a
 # filesystem path segment and a classic injection vector if let through into
 # render_folder() unfiltered.
@@ -437,9 +463,29 @@ def _validate_update_metadata(intent: dict) -> str | None:
         return "update_metadata.metadata must be an object"
     if not metadata:
         return "update_metadata.metadata must have at least one field"
+
+    rejected = sorted(_UPDATE_METADATA_REJECTED_KEYS & set(metadata))
+    if rejected:
+        return (f"update_metadata.metadata may not include {', '.join(rejected)} -- "
+                f"not accepted (no confirmed PATCH key, or only derivable from a NEW "
+                f"arrival file, which update_metadata never has)")
+
+    none_keys = sorted(k for k, v in metadata.items() if v is None)
+    if none_keys:
+        return (f"update_metadata.metadata may not set {', '.join(none_keys)} to null "
+                f"-- clearing a field is not supported")
+
     err = _validate_metadata_body(metadata, require_title_and_authors=False)
     if err:
         return err
+
+    empty = sorted(f for f in _UPDATE_METADATA_NO_EMPTY_STRING if metadata.get(f) == "")
+    if empty:
+        return (f"update_metadata.metadata may not set {', '.join(empty)} to an empty "
+                f"string -- clearing a field is not supported")
+
+    if not (set(metadata) & _UPDATE_METADATA_MAPPED_FIELDS):
+        return "update_metadata.metadata must include at least one field it can actually change"
 
     lock = intent["lock"]
     if not isinstance(lock, list) or not all(isinstance(x, str) for x in lock):

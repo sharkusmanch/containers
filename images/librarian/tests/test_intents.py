@@ -650,6 +650,45 @@ def test_update_metadata_rejected_when_paired_intent_is_create_book(tmp_path):
     assert "attach" in result["reason"]
 
 
+def test_update_metadata_rejected_when_the_attach_was_guard_rejected(tmp_path):
+    # fix round 1, Minor #7: a guard-rejected attach never claims the
+    # arrival's ("arrival", ...) slot, so update_metadata must see no
+    # accepted attach at all -- same rejection as no attach being submitted.
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier()          # no candidates -> book 412 fails guard 1
+    index = FakeIndex({})
+    factory = ctx_factory_for(dossier, index, run)
+
+    bad_attach = book.submit(run, attach_intent(412), factory)
+    assert bad_attach["status"] == GUARD_REJECTED
+
+    result = book.submit(run, update_metadata_intent(412), factory)
+
+    assert result["status"] == GUARD_REJECTED
+    assert "attach" in result["reason"]
+
+
+def test_update_metadata_for_a_different_arrival_than_the_attach_rejected(tmp_path):
+    # fix round 1, Minor #7: an attach for arrival A must never authorize an
+    # update_metadata submitted under arrival B, even with a matching
+    # book_id -- run.claims[("arrival", B)] simply doesn't exist.
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier_a = make_dossier(key=ARRIVAL, candidates=[candidate(412)])
+    dossier_b = make_dossier(key=OTHER_ARRIVAL)
+    index = FakeIndex({412: make_book(412)})
+
+    attach = book.submit(run, attach_intent(412, arrival=ARRIVAL), ctx_factory_for(dossier_a, index, run))
+    assert attach["status"] == PROPOSED_I
+
+    result = book.submit(run, update_metadata_intent(412, arrival=OTHER_ARRIVAL),
+                         ctx_factory_for(dossier_b, index, run))
+
+    assert result["status"] == GUARD_REJECTED
+    assert "attach" in result["reason"]
+
+
 # --- apply_review: update_metadata reject / cascade -------------------------
 
 
@@ -764,6 +803,36 @@ def test_finalize_dry_run_unreviewed_attach_cascades_to_update_metadata(tmp_path
     assert len(escalations) == 1        # only the attach's own auto-escalation
 
 
+def test_finalize_dry_run_never_simulates_approved_meta_whose_attach_is_not_ok(tmp_path):
+    # Fix round 1, Minor #6: the normal path always submits (hence stores)
+    # the attach before its update_metadata, so insertion order alone would
+    # mask this bug -- write the records directly, out of order, to prove
+    # finalize_dry_run checks the attach's own state rather than trusting
+    # that order (or that _cascade_reject_metadata already ran).
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run_id = "runX"
+    # update_metadata's record lands in the store FIRST, already APPROVED,
+    # with no cascade having ever had a chance to touch it.
+    intents_store.record(
+        f"{run_id}:1", APPROVED, run_id=run_id, arrival=ARRIVAL, kind=UPDATE_METADATA,
+        payload=update_metadata_intent(412),
+    )
+    # the paired attach is recorded SECOND, and is still unreviewed.
+    intents_store.record(
+        f"{run_id}:2", PROPOSED_I, run_id=run_id, arrival=ARRIVAL, kind=ATTACH,
+        payload=attach_intent(412),
+    )
+
+    book.finalize_dry_run(run_id, index=FakeIndex({412: make_book(412)}))
+
+    # the attach was auto-rejected (unreviewed) and its own cascade demotes
+    # the update_metadata -- but even if that cascade had somehow missed it,
+    # _attach_ok_for's own explicit check must refuse to simulate a patch
+    # whose attach never actually filed.
+    assert intents_store.get(f"{run_id}:1")["state"] == REJECTED
+    assert intents_store.get(f"{run_id}:2")["state"] == REJECTED
+
+
 # --- would_do: update_metadata ----------------------------------------------
 
 
@@ -779,3 +848,12 @@ def test_would_do_update_metadata_empty_lock_shown():
     intent = update_metadata_intent(412, lock=[])
     steps = would_do(intent)
     assert any(s == "lock: " for s in steps)
+
+
+def test_would_do_update_metadata_uses_mapped_bookorbit_key_names():
+    # fix round 1, Important: built from update_metadata_fields(...), so
+    # the raw intent-facing "series" key shows up as the real PATCH key
+    # "seriesName" -- proven by the exact keys line, not a substring match.
+    intent = update_metadata_intent(412, metadata={"title": "New Title", "series": "Saga"}, lock=[])
+    steps = would_do(intent)
+    assert any(s == "patch metadata of book 412: seriesName, title" for s in steps)

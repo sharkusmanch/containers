@@ -43,6 +43,7 @@ whether or not its runs.jsonl record survived.
 """
 import time
 
+from app import bookmeta
 from app.policy import check_intent, claims_for, render_folder, validate_shape
 from app.states import (
     APPROVED,
@@ -286,6 +287,22 @@ class IntentBook:
                 self.store.record(other["intent_id"], REJECTED,
                                   review={"verdict": "reject", "argument": "attach was rejected"})
 
+    def _attach_ok_for(self, rec: dict) -> bool:
+        """True iff `rec`'s (`update_metadata`) same-run, same-arrival
+        attach is itself `APPROVED` or `SIMULATED_I` -- i.e. it will, or
+        already did, actually file. Looked up fresh from the intent store
+        rather than assumed from insertion order or from `_cascade_reject_
+        metadata` having already run (fix round 1, Minor #6): a future
+        change to submission order, or a bug that let update_metadata
+        reach APPROVED without a real attach, must not be able to simulate
+        (and later execute) a metadata patch for a book that was never
+        actually attached to this arrival."""
+        return any(
+            other.get("run_id") == rec.get("run_id") and other.get("arrival") == rec.get("arrival")
+            and other.get("kind") == ATTACH and other.get("state") in (APPROVED, SIMULATED_I)
+            for other in self.store.all()
+        )
+
     def _summary(self, rec: dict) -> str:
         """A one-line summary of a filing intent, for an escalation option."""
         payload = rec.get("payload") or {}
@@ -357,8 +374,19 @@ class IntentBook:
                     # update_metadata -- see IntentBook.submit).
                     cur_state = (self.store.get(rec["intent_id"]) or {}).get("state")
                     if cur_state == APPROVED:
-                        wd = would_do(rec["payload"], index=index)
-                        self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
+                        # Fix round 1, Minor #6: don't just trust that the
+                        # cascade above already ran (which relies on
+                        # iteration order) -- explicitly require the SAME
+                        # arrival's SAME-run attach to itself be
+                        # APPROVED/SIMULATED_I (i.e. it will, or already
+                        # did, actually file) before simulating the patch.
+                        if self._attach_ok_for(rec):
+                            wd = would_do(rec["payload"], index=index)
+                            self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
+                        else:
+                            self.store.record(rec["intent_id"], REJECTED, review={
+                                "verdict": "reject", "argument": "paired attach is not approved",
+                            })
                     elif cur_state == PROPOSED_I:
                         # Never ruled on: dropped silently, same as an
                         # explicit reviewer reject -- no auto-escalation.
@@ -455,7 +483,13 @@ def _would_do_defer(intent: dict) -> list:
 
 
 def _would_do_update_metadata(intent: dict) -> list:
-    keys = sorted((intent.get("metadata") or {}).keys())
+    """Fix round 1, Important: built from the MAPPED PATCH keys
+    (`app.bookmeta.update_metadata_fields`), not the intent's raw metadata
+    keys -- e.g. `series` shows up as `seriesName`, and a rejected-at-guard
+    key (`narrators`/`asinTag`) can never appear here, so the plan always
+    describes what the executor will actually send."""
+    mapped = bookmeta.update_metadata_fields(intent.get("metadata") or {})
+    keys = sorted(mapped.keys())
     lock = intent.get("lock") or []
     return [
         f"patch metadata of book {intent['book_id']}: {', '.join(keys)}",

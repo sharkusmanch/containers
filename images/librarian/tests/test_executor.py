@@ -357,6 +357,16 @@ def attach_target(env, bid=7001, rel="Martha Wells/Artificial Condition", title=
     return env.fake.add_book(bid, 7, rel, title, ["Martha Wells"], files=files, **extra)
 
 
+def mark_filed(env, arr, book_id):
+    """Fix round 1, Minor #2: execute_update now refuses to PATCH anything
+    unless the arrival's own exec journal already shows a successful
+    filing to `book_id` -- this stands that journal up directly (a real
+    `ex.execute()` attach run is exercised elsewhere; this keeps
+    execute_update's own tests focused on execute_update)."""
+    env.arrivals.record(arr["key"], states.EXECUTING, exec={"outcome": {"state": "filed", "book_id": book_id}})
+    return env.arrivals.get(arr["key"])
+
+
 # --- states -------------------------------------------------------------------
 
 
@@ -372,6 +382,7 @@ def test_new_states_exist():
 def test_execute_update_patches_metadata_and_merges_locks(env):
     attach_target(env, lockedFields=["tags"])
     arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
     ex = env.executor()
     env.snapshot_tree()
 
@@ -380,7 +391,7 @@ def test_execute_update_patches_metadata_and_merges_locks(env):
     }, lock=["title"])
     r = ex.execute_update(intent, arr, 7001)
 
-    assert r.ok and r.state == "filed" and r.book_id == 7001, r.detail
+    assert r.ok and r.state == "updated" and r.book_id == 7001, r.detail
     b = env.fake.books[7001]
     assert b["title"] == "Artificial Condition (Fixed)"
     assert b["seriesName"] == "Murderbot Diaries" and b["seriesIndex"] == "2"
@@ -392,6 +403,7 @@ def test_execute_update_patches_metadata_and_merges_locks(env):
 def test_execute_update_waits_for_running_scan_before_patching(env):
     attach_target(env)
     arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
     ex = env.executor()
     env.snapshot_tree()
     env.fake.running_polls[7] = 3
@@ -412,6 +424,7 @@ def test_execute_update_rejects_non_filing_library_target(env):
         "folderPath": "/books/Comics/x", "files": [], "updatedAt": "u0",
     }
     arr = env.libation(title="Whatever")
+    arr = mark_filed(env, arr, 9)
     ex = env.executor()
     env.snapshot_tree()
 
@@ -425,10 +438,12 @@ def test_execute_update_rejects_non_filing_library_target(env):
 def test_execute_update_rejects_mismatched_book_id(env):
     attach_target(env)
     arr = env.libation(title="Artificial Condition")
+    # the arrival really did file to 9999 (matching the caller's argument);
+    # the payload itself is stale and still names 7001
+    arr = mark_filed(env, arr, 9999)
     ex = env.executor()
     env.snapshot_tree()
 
-    # payload says book 7001; the caller (service) passes a different id
     r = ex.execute_update(intent_update_metadata(arr, 7001), arr, 9999)
 
     assert not r.ok and r.state == "failed"
@@ -439,10 +454,14 @@ def test_execute_update_rejects_mismatched_book_id(env):
 def test_execute_update_no_writable_fields_fails(env):
     attach_target(env)
     arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
     ex = env.executor()
     env.snapshot_tree()
 
-    # narrators has no confirmed PATCH key -- mapping it produces nothing
+    # defense in depth: policy.validate_shape now REJECTS narrators-only
+    # metadata outright (fix round 1, Important), so this shape should
+    # never reach the executor in practice -- it must still refuse to
+    # PATCH rather than send an empty/no-op write if it somehow does.
     intent = intent_update_metadata(arr, 7001, metadata={"narrators": ["N"]}, lock=[])
     r = ex.execute_update(intent, arr, 7001)
 
@@ -453,6 +472,7 @@ def test_execute_update_no_writable_fields_fails(env):
 def test_execute_update_read_back_mismatch_fails(env):
     attach_target(env)
     arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
     ex = env.executor()
     env.snapshot_tree()
 
@@ -465,6 +485,119 @@ def test_execute_update_read_back_mismatch_fails(env):
 
     assert not r.ok and r.state == "failed"
     assert "mismatch" in r.detail
+
+
+# --- execute_update fix round 1: guard against a not-yet-filed / --
+# --- wrong-book / wrong-kind caller (Minor #2) ---------------------------
+
+
+def test_execute_update_rejects_wrong_kind(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    intent = intent_update_metadata(arr, 7001)
+    intent["kind"] = "attach"   # not update_metadata -- the payload still is
+    r = ex.execute_update(intent, arr, 7001)
+
+    assert not r.ok and r.state == "failed"
+    assert env.fake.patches() == []
+
+
+def test_execute_update_rejects_payload_arrival_mismatch(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    other = env.kindle(asin="B0OTHERONE")
+    arr = mark_filed(env, arr, 7001)
+    mark_filed(env, other, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    intent = intent_update_metadata(other, 7001)   # payload.arrival = other's key
+    r = ex.execute_update(intent, arr, 7001)        # but arrival_rec = arr
+
+    assert not r.ok and r.state == "failed"
+    assert env.fake.patches() == []
+
+
+def test_execute_update_rejects_no_exec_journal(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")   # never marked filed
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute_update(intent_update_metadata(arr, 7001), arr, 7001)
+
+    assert not r.ok and r.state == "failed"
+    assert "exec journal" in r.detail
+    assert env.fake.patches() == []
+
+
+def test_execute_update_rejects_non_filed_outcome(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    env.arrivals.record(arr["key"], states.EXECUTING,
+                        exec={"outcome": {"state": "retryable", "book_id": 7001}})
+    arr = env.arrivals.get(arr["key"])
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute_update(intent_update_metadata(arr, 7001), arr, 7001)
+
+    assert not r.ok and r.state == "failed"
+    assert env.fake.patches() == []
+
+
+def test_execute_update_rejects_journal_for_a_different_book(env):
+    attach_target(env)
+    attach_target(env, bid=7002, rel="Martha Wells/Other Book", title="Other Book",
+                  files=(("Other Book.epub", b"e"),))
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7002)   # journal says a DIFFERENT book filed
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute_update(intent_update_metadata(arr, 7001), arr, 7001)
+
+    assert not r.ok and r.state == "failed"
+    assert env.fake.patches() == []
+
+
+# --- execute_update fix round 1: audibleId in the read-back (Minor #3) ---
+
+
+def test_execute_update_audible_id_written_and_verified(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    intent = intent_update_metadata(arr, 7001, metadata={"audibleId": "B0CORRECT12"}, lock=[])
+    r = ex.execute_update(intent, arr, 7001)
+
+    assert r.ok and r.state == "updated", r.detail
+    assert env.fake.books[7001]["providerIds"]["audible"] == "B0CORRECT12"
+
+
+def test_execute_update_audible_id_read_back_mismatch_fails(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    def clobber(fake, b):
+        b["providerIds"] = {"audible": "WRONGID0000"}
+    env.fake.on_patch = clobber
+
+    intent = intent_update_metadata(arr, 7001, metadata={"audibleId": "B0CORRECT12"}, lock=[])
+    r = ex.execute_update(intent, arr, 7001)
+
+    assert not r.ok and r.state == "failed"
+    assert "audibleId" in r.detail
 
 
 # --- attach -------------------------------------------------------------------

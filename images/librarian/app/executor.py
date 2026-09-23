@@ -20,11 +20,14 @@ scan may have renamed the file) and continues -- it never moves a file twice.
 A journal is "open" while work is pending; a closed journal carries the final
 `outcome`, so resuming it again only replays that outcome.
 
-Outcomes: `filed`; `retryable` (nothing moved -- the arrival is restored to
-its intake path -- OR the move is done and only a resumable BookOrbit step is
-pending, journal left open; calling execute() again with the same intent
-resumes); `failed` (a human must look; `detail` names the exact paths; files
-are never moved back automatically).
+Outcomes (from `execute`/`resume`): `filed`; `retryable` (nothing moved --
+the arrival is restored to its intake path -- OR the move is done and only a
+resumable BookOrbit step is pending, journal left open; calling execute()
+again with the same intent resumes); `failed` (a human must look; `detail`
+names the exact paths; files are never moved back automatically).
+`execute_update` (Plan 2, Task 3) shares the `retryable`/`failed` vocabulary
+but reports `updated`, never `filed`, on success -- a metadata-only PATCH
+files nothing.
 
 Never deletes under /media/books: the only library-side calls are
 `os.makedirs(author dir, exist_ok=True)`, an exclusive `os.mkdir`, `os.link`,
@@ -62,7 +65,8 @@ _SCAN_MUTEX = threading.Lock()
 @dataclass
 class ExecResult:
     ok: bool
-    state: str                      # "filed" | "retryable" | "failed"
+    state: str                      # "filed" | "updated" | "retryable" | "failed"
+                                     # ("updated" only from execute_update)
     book_id: int | None
     detail: str
     moves: list = field(default_factory=list)   # [(src, dst, size)]
@@ -150,9 +154,41 @@ class Executor:
         (Global "Locks merge, never replace"), and the read-back comparison
         below is what decides success, so a re-run after a crash is simply
         another call with the same effect (patching is naturally idempotent
-        here, unlike a file move).
+        here, unlike a file move). On success `state` is `"updated"`, not
+        `"filed"` -- a metadata-only PATCH never filed anything (fix round
+        1, Minor #5); the caller (Task 4) maps this to whatever intent/
+        arrival state it uses for a completed correction.
+
+        Fix round 1, Minor #2: refuses to PATCH anything -- with `state`
+        `"failed"` and no BookOrbit call at all -- unless `intent`, the
+        live arrival record, and `book_id` all agree this is a genuine,
+        already-filed pairing: `intent["kind"]` must be `update_metadata`,
+        the payload's own `arrival` must match the arrival record's key,
+        and that arrival's exec journal must show a `filed` outcome for
+        this EXACT `book_id` (never a different book, a retryable/failed
+        outcome, or no journal at all -- e.g. calling this before the
+        paired attach has actually completed).
         """
+        if intent.get("kind") != states.UPDATE_METADATA:
+            return ExecResult(False, "failed", book_id,
+                              f"execute_update called with kind {intent.get('kind')!r}, expected "
+                              f"{states.UPDATE_METADATA!r}")
+
         payload = intent.get("payload") or intent
+        cur = self.arrivals.get(arrival_rec.get("key")) or arrival_rec
+        if payload.get("arrival") != cur.get("key"):
+            return ExecResult(False, "failed", book_id,
+                              f"update_metadata payload arrival {payload.get('arrival')!r} does not "
+                              f"match the arrival record {cur.get('key')!r}")
+
+        journal = cur.get("exec")
+        outcome = journal.get("outcome") if isinstance(journal, dict) else None
+        if not (isinstance(outcome, dict) and outcome.get("state") == "filed"
+                and outcome.get("book_id") == book_id):
+            return ExecResult(False, "failed", book_id,
+                              f"arrival {cur.get('key')!r} has no successful filing to book "
+                              f"{book_id} recorded in its exec journal")
+
         payload_book_id = payload.get("book_id")
         if payload_book_id is not None and payload_book_id != book_id:
             return ExecResult(False, "failed", book_id,
@@ -179,6 +215,8 @@ class Executor:
                 got = bookmeta.norm_for_compare(bookmeta.identity(after))
                 want = bookmeta.norm_for_compare(mapped)
                 bad = [k for k in want if got.get(k) != want[k]]
+                if "audibleId" in mapped and bookmeta.audible_of(after) != mapped["audibleId"]:
+                    bad.append("audibleId")
                 if bad:
                     return ExecResult(False, "failed", book_id,
                                       f"update_metadata read-back mismatch on book {book_id}: "
@@ -193,7 +231,7 @@ class Executor:
         except Exception as e:
             return ExecResult(False, "failed", book_id, f"{type(e).__name__}: {log_safe(e)}")
 
-        return ExecResult(True, "filed", book_id,
+        return ExecResult(True, "updated", book_id,
                           f"patched metadata on book {book_id}: {', '.join(sorted(mapped))}")
 
     # --- journal ------------------------------------------------------------
