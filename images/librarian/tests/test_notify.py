@@ -8,7 +8,7 @@ call so tests can assert on the payload and the URL.
 """
 import logging
 
-from app import states
+from app import metrics, states
 from app.notify import MAX_ATTEMPTS, OUTBOX_STATES, Notifier, cap, sanitize, truncate_utf8
 from app.service import Service
 from app.store import Store
@@ -46,6 +46,15 @@ class FakeSession:
         if code == "raise":
             raise ConnectionError("boom")
         return FakeResponse(code)
+
+
+class URLLeakingSession:
+    """A real `requests` connection/timeout error's own message commonly
+    embeds the request URL -- used to verify _send's log line never repeats
+    it (fix round 1: the Apprise URL carries a secret stateful key)."""
+
+    def post(self, url, json=None, timeout=None):
+        raise ConnectionError(f"Failed to establish a new connection to {url}: [Errno 111] refused")
 
 
 class Clk:
@@ -111,6 +120,42 @@ def test_cap_strips_control_chars_from_both_fields():
     assert "\n" in body
 
 
+# --- fix round 1: byte budgets are hard limits, never exceeded ---------------
+
+
+def test_truncate_utf8_budget_zero_returns_empty():
+    assert truncate_utf8("hello", 0) == ""
+
+
+def test_truncate_utf8_budget_of_one_hard_cuts_without_ellipsis():
+    # the ellipsis ("…") is 3 UTF-8 bytes -- a 1-byte budget can't hold it,
+    # so the old implementation returned the ellipsis alone (4x over budget)
+    out = truncate_utf8("hello", 1)
+    assert len(out.encode("utf-8")) <= 1
+    assert "…" not in out
+
+
+def test_truncate_utf8_budget_below_ellipsis_size_hard_cuts():
+    out = truncate_utf8("hello", 2)
+    assert len(out.encode("utf-8")) <= 2
+    assert "…" not in out
+
+
+def test_cap_truncates_an_oversized_title_too():
+    title = "T" * 5000
+    body = "B" * 5000
+    capped_title, capped_body = cap(title, body, max_bytes=100)
+    assert capped_title != title
+    total = len(capped_title.encode("utf-8")) + len(capped_body.encode("utf-8"))
+    assert total <= 100
+
+
+def test_cap_extreme_budget_of_one_never_exceeds_it():
+    capped_title, capped_body = cap("Title", "Body", max_bytes=1)
+    total = len(capped_title.encode("utf-8")) + len(capped_body.encode("utf-8"))
+    assert total <= 1
+
+
 # --- enqueue -------------------------------------------------------------------
 
 
@@ -145,7 +190,7 @@ def test_flush_sends_pending_on_200(tmp_path):
     assert outbox.get("m1")["state"] == "sent"
     url, payload, timeout = session.calls[0]
     assert url == "http://apprise/notify/k"
-    assert payload == {"title": "Title", "body": "Body", "format": "markdown"}
+    assert payload == {"title": "Title", "body": "Body", "format": "text"}
 
 
 def test_flush_204_stays_pending_and_is_retried(tmp_path):
@@ -193,6 +238,31 @@ def test_flush_network_error_stays_pending(tmp_path):
     sent, failed_n = n.flush()
     assert (sent, failed_n) == (0, 0)
     assert outbox.get("m1")["state"] == "pending"
+
+
+def test_connection_error_log_never_contains_the_url(tmp_path, caplog):
+    # fix round 1: the exception's own str() commonly embeds the URL, which
+    # here carries a secret Apprise stateful key -- only the exception's
+    # type name (and, separately, a plain status code) are safe to log.
+    caplog.set_level(logging.WARNING)
+    outbox = make_outbox(tmp_path)
+    url = "http://apprise.tools.svc.cluster.local:8000/notify/SUPERSECRETKEY"
+    n = Notifier(url, outbox, session=URLLeakingSession())
+    n.enqueue("failure", "m1", "T", "B")
+    n.flush()
+    assert "SUPERSECRETKEY" not in caplog.text
+    assert url not in caplog.text
+    assert "ConnectionError" in caplog.text
+    assert outbox.get("m1")["state"] == "pending"
+
+
+def test_non_200_status_is_logged_without_leaking_anything_secret(tmp_path, caplog):
+    caplog.set_level(logging.WARNING)
+    outbox = make_outbox(tmp_path)
+    n = Notifier("http://apprise/notify/k", outbox, session=FakeSession([503]))
+    n.enqueue("failure", "m1", "T", "B")
+    n.flush()
+    assert "503" in caplog.text
 
 
 def test_flush_backoff_is_capped_at_an_hour(tmp_path):
@@ -279,6 +349,58 @@ def test_flush_respects_max_per_tick(tmp_path):
     assert outbox.counts() == {"sent": 3}
 
 
+# --- fix round 1: stopping + liveness heartbeat during flush -----------------
+
+
+def test_flush_checks_stopping_between_messages(tmp_path):
+    outbox = make_outbox(tmp_path)
+    session = FakeSession([200, 200, 200])
+    seen = {"n": 0}
+
+    def stopping():
+        seen["n"] += 1
+        return seen["n"] > 1   # not stopping for the first message, then stops
+
+    n = Notifier("http://apprise/notify/k", outbox, session=session, stopping=stopping)
+    for i in range(3):
+        n.enqueue("summary", f"m{i}", f"T{i}", "b")
+    sent, failed_n = n.flush()
+    assert sent == 1
+    assert len(session.calls) == 1   # never started a 2nd send once stopping tripped
+    assert outbox.counts() == {"sent": 1, "pending": 2}
+
+
+def test_flush_default_stopping_never_stops():
+    # constructor default (stopping=lambda: False) -- direct Notifier use
+    # outside a Service must not silently stop after the first message
+    assert Notifier("http://x", None).stopping() is False
+
+
+def test_flush_calls_beat_after_each_send(tmp_path):
+    outbox = make_outbox(tmp_path)
+    session = FakeSession([200, 500])
+    beats = []
+    n = Notifier("http://apprise/notify/k", outbox, session=session, beat=lambda: beats.append(1))
+    n.enqueue("summary", "m1", "T1", "b")
+    n.enqueue("summary", "m2", "T2", "b")
+    n.flush()
+    assert len(beats) == 2   # once per send attempt, success or failure
+
+
+def test_flush_calls_beat_in_dry_run_too(tmp_path):
+    outbox = make_outbox(tmp_path)
+    beats = []
+    n = Notifier("http://apprise/notify/k", outbox, session=FakeSession(), dry_run=True,
+                beat=lambda: beats.append(1))
+    n.enqueue("summary", "m1", "T1", "b")
+    n.flush()
+    assert len(beats) == 1
+
+
+def test_flush_default_beat_is_a_noop():
+    Notifier("http://x", None).beat()   # must not raise
+
+
 def test_flush_no_session_lazily_uses_requests_module(tmp_path):
     # session=None must not raise at construction time
     outbox = make_outbox(tmp_path)
@@ -306,6 +428,54 @@ def test_flush_survives_a_fresh_notifier_over_the_same_outbox_file(tmp_path):
     sent, failed_n = n2.flush()
     assert (sent, failed_n) == (1, 0)
     assert outbox2.get("m1")["state"] == "sent"
+
+
+# --- outbox pruning (fix round 1) ---------------------------------------------
+#
+# `Store.record` always stamps `ts` with the REAL wall clock (`time.time()`),
+# never any clock injected into the Notifier -- so these tests pass an
+# explicit `now=` to `prune()` (real-time-based) rather than driving a fake
+# `Clk`, which would only move `next_at`/backoff math, not `ts`.
+
+
+def test_prune_drops_old_terminal_records_keeps_recent_and_pending(tmp_path):
+    import time as time_mod
+
+    outbox = make_outbox(tmp_path)
+    n = Notifier("http://apprise/notify/k", outbox, session=FakeSession([200]))
+    n.enqueue("summary", "old-sent", "T", "b")
+    n.flush()
+    assert outbox.get("old-sent")["state"] == "sent"
+
+    n.enqueue("summary", "new-pending", "T2", "b")
+
+    removed = n.prune(now=time_mod.time() + 40 * 86400)
+    assert removed == 1
+    assert outbox.get("old-sent") is None
+    assert outbox.get("new-pending") is not None
+
+
+def test_prune_never_drops_pending_regardless_of_age(tmp_path):
+    import time as time_mod
+
+    outbox = make_outbox(tmp_path)
+    n = Notifier("http://apprise/notify/k", outbox, session=FakeSession())
+    n.enqueue("summary", "m1", "T", "b")         # never flushed: stays pending
+    removed = n.prune(now=time_mod.time() + 400 * 86400)
+    assert removed == 0
+    assert outbox.get("m1")["state"] == "pending"
+
+
+def test_prune_keeps_a_recently_sent_record(tmp_path):
+    import time as time_mod
+
+    outbox = make_outbox(tmp_path)
+    n = Notifier("http://apprise/notify/k", outbox, session=FakeSession([200]))
+    n.enqueue("summary", "m1", "T", "b")
+    n.flush()
+    removed = n.prune(now=time_mod.time() + 1 * 86400)   # 1 day later: well under cutoff
+    assert removed == 0
+    assert outbox.get("m1")["state"] == "sent"
 
 
 # --- service integration -------------------------------------------------------
@@ -466,5 +636,100 @@ def test_notify_failure_and_escalation_are_noop_without_a_notifier(tmp_path):
     try:
         svc.notify_failure({"key": "k"}, None, "boom")
         svc.notify_escalation({"key": "k"}, {"intent_id": "i1", "payload": {"question": "q"}})
+    finally:
+        svc.stop()
+
+
+# --- service wiring of stopping/beat/pruning (fix round 1) --------------------
+
+
+def test_service_wires_notifier_stopping_and_beat(tmp_path):
+    outbox = make_outbox(tmp_path, "outbox8.jsonl")
+    notifier = Notifier("http://apprise/notify/k", outbox, session=FakeSession())
+    svc = Service(make_settings(tmp_path), index=make_index(tmp_path), runner=FakeModel(),
+                 prober=fake_prober, clock=Clock(), notifier=notifier)
+    try:
+        assert notifier.stopping == svc.stopping
+        assert notifier.beat is metrics.beat
+    finally:
+        svc.stop()
+
+
+def test_tick_does_not_flush_once_stopping(tmp_path):
+    # coarse case: stop is already set before tick() starts -- every earlier
+    # `if self._stop.is_set(): return` in tick() bails before reaching flush
+    outbox = make_outbox(tmp_path, "outbox9.jsonl")
+    session = FakeSession([200])
+    notifier = Notifier("http://apprise/notify/k", outbox, session=session)
+    svc = Service(make_settings(tmp_path), index=make_index(tmp_path), runner=FakeModel(),
+                 prober=fake_prober, clock=Clock(), notifier=notifier)
+    try:
+        notifier.enqueue("summary", "m1", "T", "b")
+        svc._stop.set()
+        svc.tick()
+        assert outbox.get("m1")["state"] == "pending"
+        assert session.calls == []
+    finally:
+        svc.stop()
+
+
+def test_tick_outer_gate_prevents_flush_even_without_the_inner_check(tmp_path, monkeypatch):
+    """Isolates tick()'s OWN gate (`if self.notifier is not None and not
+    self._stop.is_set(): self.notifier.flush()`) from `flush()`'s separate
+    internal `stopping()` check (fix 2's other half, already covered by
+    `test_flush_checks_stopping_between_messages`): `notifier.stopping` is
+    stubbed to always return False here, so only tick()'s own guard is left
+    standing. `_stop` flips to True partway through tick() -- as a real
+    SIGTERM would, landing while no claude child is running (`_in_runner`
+    False, so no `Stopping` exception, just the flag) -- AFTER every
+    earlier stop-check in tick() has already passed."""
+    outbox = make_outbox(tmp_path, "outbox9b.jsonl")
+    session = FakeSession([200])
+    notifier = Notifier("http://apprise/notify/k", outbox, session=session)
+    svc = Service(make_settings(tmp_path), index=make_index(tmp_path), runner=FakeModel(),
+                 prober=fake_prober, clock=Clock(), notifier=notifier)
+    try:
+        notifier.stopping = lambda: False   # neutralize flush()'s own inner guard
+        notifier.enqueue("summary", "m1", "T", "b")
+        orig_due = svc._due
+
+        def due_then_stop(now):
+            result = orig_due(now)
+            svc._stop.set()
+            return result
+
+        monkeypatch.setattr(svc, "_due", due_then_stop)
+        svc.tick()
+        assert outbox.get("m1")["state"] == "pending"
+        assert session.calls == []
+    finally:
+        svc._stop.clear()
+        svc.stop()
+
+
+def test_service_prunes_old_outbox_records_each_tick(tmp_path, monkeypatch):
+    import time as time_mod
+
+    # _prune_outbox()/Notifier.prune() age against the REAL wall clock (ts
+    # is always real-time-stamped by Store.record, unaffected by the
+    # service's injected `clock`) -- so the "old" record is backdated by
+    # briefly patching time.time() while it's created, not by advancing the
+    # service's fake clock.
+    outbox = make_outbox(tmp_path, "outbox10.jsonl")
+    session = FakeSession([200])
+    clock = Clock()
+    notifier = Notifier("http://apprise/notify/k", outbox, session=session, clock=clock)
+    svc = Service(make_settings(tmp_path), index=make_index(tmp_path), runner=FakeModel(),
+                 prober=fake_prober, clock=clock, notifier=notifier)
+    try:
+        real_now = time_mod.time()
+        monkeypatch.setattr(time_mod, "time", lambda: real_now - 31 * 86400)
+        notifier.enqueue("summary", "old", "T", "b")
+        svc.tick()                                    # flushes it -> sent, backdated ts
+        assert outbox.get("old")["state"] == "sent"
+
+        monkeypatch.undo()                            # back to the real wall clock
+        svc.tick()                                    # prunes it (>30 days old, real now)
+        assert outbox.get("old") is None
     finally:
         svc.stop()

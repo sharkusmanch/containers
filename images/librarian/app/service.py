@@ -106,6 +106,12 @@ class Service:
         self._in_runner = False
         self._lists_error: str | None = None
         self.notifier = notifier            # Plan 2 Task 5
+        if self.notifier is not None:
+            # fix round 1: the service is the one true source of `stopping`
+            # and the liveness heartbeat, whichever code constructed the
+            # Notifier (main.py builds it before the Service exists).
+            self.notifier.stopping = self.stopping
+            self.notifier.beat = metrics.beat
         self.vikunja = vikunja              # Plan 2 Task 6
         self.exec_budget = 0                # executions left this tick (max_exec_per_tick)
         self._live_started = False
@@ -354,12 +360,14 @@ class Service:
             self._run_cycle(keys)
         if self.executor is not None and not self._stop.is_set():
             execution.run_due(self)     # queued + retryable filings, within the tick budget
-        if self.notifier is not None:
+        if self.notifier is not None and not self._stop.is_set():
             # Outside svc.lock (Plan 2 Task 5): the outbox is its own Store
             # with its own lock, and an HTTP call must never hold svc.lock.
+            # Gated on the stop flag like execution.run_due (fix round 1).
             self.notifier.flush()
         metrics.rebuild_arrivals(self.arrivals)
         self._prune_transcripts()
+        self._prune_outbox()
 
     def _start_live(self) -> None:
         execution.clear_stale_markers(self)
@@ -617,3 +625,16 @@ class Service:
                     os.unlink(e.path)
             except OSError:
                 logger.warning("could not prune transcript %s", e.path)
+
+    def _prune_outbox(self) -> None:
+        """Fix round 1: same cadence as `_prune_transcripts` (every tick) --
+        drops sent/failed notification outbox records older than
+        `notify.OUTBOX_MAX_AGE`; pending ones are never touched, however
+        old. `Store.compact` already no-ops (no rewrite) when nothing is
+        removed, so this is cheap on the common no-op tick."""
+        if self.notifier is None:
+            return
+        try:
+            self.notifier.prune()
+        except OSError:
+            logger.warning("could not prune notification outbox")
