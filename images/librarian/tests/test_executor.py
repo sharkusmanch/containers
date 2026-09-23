@@ -749,8 +749,8 @@ def test_attach_sha_mismatch_fails(env):
 
 def test_guard9_restores_identity_fields_changed_by_scan(env):
     attach_target(env, lockedFields=["tags"], seriesName="Murderbot Diaries", seriesIndex="2",
-                  rel="Martha Wells/Murderbot Diaries/2. Artificial Condition",
-                  files=(("2. Artificial Condition.epub", b"e"),))
+                  rel="Martha Wells/Murderbot Diaries/02. Artificial Condition",
+                  files=(("02. Artificial Condition.epub", b"e"),))
 
     def clobber(fake, lib):
         b = fake.books[7001]
@@ -857,10 +857,10 @@ def test_create_book_locates_patches_and_renames(env):
     assert set(b["lockedFields"]) >= {"title", "subtitle", "description"}
     assert "seriesName" not in b["lockedFields"] and "seriesIndex" not in b["lockedFields"]
     # renamed into BookOrbit's pattern
-    assert b["folderPath"] == "/books/Library/Jane Author/Saga/2. New Book"
-    assert (env.books_root / "Library" / "Jane Author" / "Saga" / "2. New Book" / "2. New Book.m4b").is_file()
+    assert b["folderPath"] == "/books/Library/Jane Author/Saga/02. New Book"
+    assert (env.books_root / "Library" / "Jane Author" / "Saga" / "02. New Book" / "02. New Book.m4b").is_file()
     made = env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]"
-    final = env.books_root / "Library" / "Jane Author" / "Saga" / "2. New Book" / "2. New Book.m4b"
+    final = env.books_root / "Library" / "Jane Author" / "Saga" / "02. New Book" / "02. New Book.m4b"
     assert r.moves == [(arr["primary"], str(final), 5000)]
     assert not made.exists()                      # our emptied [lib-] dir removed after rename
     patch = env.fake.patches()
@@ -1335,7 +1335,7 @@ def test_rename_skipped_when_it_would_nest_inside_another_book(env):
 
 
 def test_rename_skipped_when_another_book_would_nest_inside_ours(env):
-    env.fake.add_book(71, 7, "Jane Author/Saga/2. New Book/Extras", "Extras", ["Jane Author"],
+    env.fake.add_book(71, 7, "Jane Author/Saga/02. New Book/Extras", "Extras", ["Jane Author"],
                       files=(("x.epub", b"x"),))
     arr = env.libation(asin="B0NEWBOOK1", title="New Book")
     ex = env.executor()

@@ -162,9 +162,15 @@ def _dossier_for_kids(*, stored_allow=(), stored_deny=(), fresh_series=None,
 # --- render_folder -------------------------------------------------------
 
 
-def test_render_folder_with_series_and_index():
+def test_render_folder_with_series_and_index_is_zero_padded():
+    # BookOrbit formatSeriesIndex pads the whole part to 2 digits (Task 9b probe)
     assert render_folder("Martha Wells", "Murderbot Diaries", 2.0, "Artificial Condition") == \
-        "Martha Wells/Murderbot Diaries/2. Artificial Condition"
+        "Martha Wells/Murderbot Diaries/02. Artificial Condition"
+
+
+def test_render_folder_probe_observed_output():
+    assert render_folder(["Librarian Probe Author"], "The Arcanaeum", "3", "Librarian Probe") == \
+        "Librarian Probe Author/The Arcanaeum/03. Librarian Probe"
 
 
 def test_render_folder_no_series_drops_segment_and_prefix():
@@ -176,11 +182,29 @@ def test_render_folder_series_without_index_has_no_prefix():
 
 
 def test_render_folder_fractional_index_keeps_decimal():
-    assert render_folder("A", "S", 2.5, "T") == "A/S/2.5. T"
+    assert render_folder("A", "S", 2.5, "T") == "A/S/02.5. T"
+    assert render_folder("A", "The Witcher", "0.5", "The Last Wish") == "A/The Witcher/00.5. The Last Wish"
 
 
 def test_render_folder_large_integer_index_no_scientific_notation():
     assert render_folder("A", "S", 1234567.0, "T") == "A/S/1234567. T"
+
+
+def test_render_folder_sanitizes_colon_like_bookorbit():
+    # real library: "The Mistborn Saga_ The Original Trilogy/03.5. Mistborn_ Secret History"
+    assert render_folder("Brandon Sanderson", "The Mistborn Saga: The Original Trilogy", "3.5",
+                         "Mistborn: Secret History") == \
+        "Brandon Sanderson/The Mistborn Saga_ The Original Trilogy/03.5. Mistborn_ Secret History"
+
+
+def test_render_folder_index_without_series_still_prefixes_like_bookorbit():
+    assert render_folder("A", None, "2", "T") == "A/02. T"
+
+
+def test_render_intent_folder_sends_no_index_without_a_series():
+    from app.policy import render_intent_folder
+    assert render_intent_folder({"authors": ["A", "B"], "title": "T", "seriesIndex": 2}) == "A/T"
+    assert render_intent_folder({"authors": ["A"], "title": "T", "series": "S", "seriesIndex": 2}) == "A/S/02. T"
 
 
 # --- KidsLists.load / C1: fail closed on malformed lists --------------------

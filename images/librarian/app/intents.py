@@ -44,7 +44,7 @@ whether or not its runs.jsonl record survived.
 import time
 
 from app import bookmeta
-from app.policy import check_intent, claims_for, render_folder, validate_shape
+from app.policy import check_intent, claims_for, render_intent_folder, validate_shape
 from app.states import (
     APPROVED,
     ATTACH,
@@ -587,9 +587,7 @@ def _would_do_create_book(intent: dict) -> list:
     metadata = intent["metadata"]
     library_name = _LIBRARY_NAME_FOR.get(intent["library"], intent["library"])
     library_id = _LIBRARY_IDS.get(library_name, "?")
-    rendered = render_folder(
-        metadata["authors"][0], metadata.get("series"), metadata.get("seriesIndex"), metadata["title"],
-    )
+    rendered = render_intent_folder(metadata)
     folder = f"{library_name}/{rendered}"
 
     return [
