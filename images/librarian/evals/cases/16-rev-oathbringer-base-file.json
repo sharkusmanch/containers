@@ -1,0 +1,93 @@
+{
+  "name": "rev-oathbringer-base-file",
+  "note": "REVIEWER CASE (scripted librarian). Silently picks the truncated 5.7 h base file of a two-m4b arrival.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B0OATHBR01",
+    "folder": "Oathbringer [B0OATHBR01]",
+    "files": [
+      {
+        "name": "Oathbringer.m4b",
+        "kind": "m4b",
+        "size": 3000,
+        "probe": {
+          "duration": 20412,
+          "tags": {
+            "title": "Oathbringer",
+            "album": "Oathbringer",
+            "artist": "Brandon Sanderson",
+            "album_artist": "Michael Kramer, Kate Reading",
+            "series": "The Stormlight Archive",
+            "series-part": "3",
+            "date": "2017",
+            "audible_asin": "B0OATHBR01"
+          },
+          "chapters": [
+            "Opening Credits",
+            "Prologue: To Weep",
+            "Part One"
+          ],
+          "chapter_count": 12
+        }
+      },
+      {
+        "name": "Oathbringer(1).m4b",
+        "kind": "m4b",
+        "size": 9000,
+        "probe": {
+          "duration": 199080,
+          "tags": {
+            "title": "Oathbringer",
+            "album": "Oathbringer",
+            "artist": "Brandon Sanderson",
+            "album_artist": "Michael Kramer, Kate Reading",
+            "series": "The Stormlight Archive",
+            "series-part": "3",
+            "date": "2017",
+            "audible_asin": "B0OATHBR01"
+          },
+          "chapters": [
+            "Opening Credits",
+            "Prologue: To Weep",
+            "Part One"
+          ],
+          "chapter_count": 136
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 801,
+      "title": "Oathbringer",
+      "authors": [
+        "Brandon Sanderson"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "3. Oathbringer.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "The Stormlight Archive",
+      "seriesIndex": 3,
+      "publishedYear": 2017
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "escalate"
+    ],
+    "escalate_origin": "reviewer",
+    "forbid": {
+      "book_id": 801
+    }
+  },
+  "scripted_intent": {
+    "kind": "attach",
+    "book_id": 801,
+    "readalong": true,
+    "reason": "Oathbringer by Brandon Sanderson, Stormlight Archive #3, matches #801 (EPUB only). Using Oathbringer.m4b (5.7 h) as the audiobook file."
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "name": "kindle-bare-asin",
+  "note": "The sidecar title is a bare ASIN placeholder; the OPF has the real title. Target is an audio-only book.",
+  "arrival": {
+    "source": "kindle",
+    "source_id": "B07ZQ4WD3N",
+    "sidecar": {
+      "title": "B07ZQ4WD3N",
+      "authors": []
+    },
+    "files": [
+      {
+        "name": "B07ZQ4WD3N.epub",
+        "kind": "epub",
+        "epub": {
+          "title": "Piranesi",
+          "creators": [
+            "Susanna Clarke"
+          ],
+          "chars": 404000,
+          "date": "2020-09-15"
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 1101,
+      "title": "Piranesi",
+      "authors": [
+        "Susanna Clarke"
+      ],
+      "files": [
+        {
+          "format": "m4b",
+          "filename": "Piranesi.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 29400
+        }
+      ],
+      "publishedYear": 2020,
+      "narrators": [
+        "Chiwetel Ejiofor"
+      ],
+      "providerIds": {
+        "audible": "B08FSQB1PQ"
+      }
+    },
+    {
+      "id": 1102,
+      "title": "Jonathan Strange & Mr Norrell",
+      "authors": [
+        "Susanna Clarke"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "Jonathan Strange & Mr Norrell.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "publishedYear": 2004
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "attach"
+    ],
+    "book_id": 1101,
+    "forbid": {
+      "book_id": 1102
+    }
+  }
+}

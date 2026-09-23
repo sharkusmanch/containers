@@ -1,0 +1,120 @@
+{
+  "name": "rev-hunger-games-null-index",
+  "note": "REVIEWER CASE (scripted librarian). Every library seriesIndex is null; Book 1 audio attached to Mockingjay because 'durations match'.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B0HUNGER01",
+    "folder": "The Hunger Games [B0HUNGER01]",
+    "files": [
+      {
+        "name": "The Hunger Games.m4b",
+        "kind": "m4b",
+        "size": 8000,
+        "probe": {
+          "duration": 40260,
+          "tags": {
+            "title": "The Hunger Games",
+            "album": "The Hunger Games",
+            "artist": "Suzanne Collins",
+            "album_artist": "Tatiana Maslany",
+            "series": "The Hunger Games",
+            "series-part": "1",
+            "date": "2018",
+            "audible_asin": "B0HUNGER01"
+          },
+          "chapters": [
+            "Opening Credits",
+            "Part I: The Tributes",
+            "Chapter 1"
+          ],
+          "chapter_count": 29
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 601,
+      "title": "The Hunger Games",
+      "authors": [
+        "Suzanne Collins"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "1. The Hunger Games.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "The Hunger Games",
+      "seriesIndex": null,
+      "publishedYear": 2008
+    },
+    {
+      "id": 602,
+      "title": "Catching Fire",
+      "authors": [
+        "Suzanne Collins"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "2. Catching Fire.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "The Hunger Games",
+      "seriesIndex": null,
+      "publishedYear": 2009
+    },
+    {
+      "id": 603,
+      "title": "The Hunger Games: Mockingjay",
+      "authors": [
+        "Suzanne Collins"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "3. Mockingjay.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "The Hunger Games",
+      "seriesIndex": null,
+      "publishedYear": 2010
+    },
+    {
+      "id": 604,
+      "title": "The Hunger Games: The Ballad of Songbirds and Snakes",
+      "authors": [
+        "Suzanne Collins"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "The Ballad of Songbirds and Snakes.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "The Hunger Games",
+      "seriesIndex": null,
+      "publishedYear": 2020
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "escalate"
+    ],
+    "escalate_origin": "reviewer",
+    "forbid": {
+      "book_id": 603
+    }
+  },
+  "scripted_intent": {
+    "kind": "attach",
+    "book_id": 603,
+    "readalong": true,
+    "reason": "The Hunger Games by Suzanne Collins; durations match."
+  }
+}

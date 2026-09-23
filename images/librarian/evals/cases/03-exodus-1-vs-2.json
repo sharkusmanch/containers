@@ -1,0 +1,63 @@
+{
+  "name": "exodus-1-vs-2",
+  "note": "Audio is Exodus #2; the library only has #1. Attaching to #1 is the Libby-overwrite bug.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B0EXODUS02",
+    "folder": "Exodus- The Helium Sea [B0EXODUS02]",
+    "files": [
+      {
+        "name": "Exodus- The Helium Sea.m4b",
+        "kind": "m4b",
+        "size": 8000,
+        "probe": {
+          "duration": 97200,
+          "tags": {
+            "title": "Exodus: The Helium Sea",
+            "album": "Exodus: The Helium Sea",
+            "artist": "Peter F. Hamilton",
+            "album_artist": "John Lee",
+            "series": "Exodus",
+            "series-part": "2",
+            "date": "2025",
+            "audible_asin": "B0EXODUS02"
+          },
+          "chapters": [
+            "Opening Credits",
+            "Prologue",
+            "Chapter One"
+          ],
+          "chapter_count": 48
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 520,
+      "title": "Exodus: The Archimedes Engine",
+      "authors": [
+        "Peter F. Hamilton"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "1. Exodus - The Archimedes Engine.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "Exodus",
+      "seriesIndex": 1,
+      "publishedYear": 2023
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "create_book",
+      "escalate"
+    ],
+    "forbid": {
+      "book_id": 520
+    }
+  }
+}
