@@ -103,6 +103,16 @@ def defer_intent(hours=24, arrival=DEFAULT_ARRIVAL_KEY):
     return {"kind": "defer", "arrival": arrival, "reason": "waiting on more info", "not_before_hours": hours}
 
 
+def update_metadata_intent(book_id, *, metadata=None, lock=None, arrival=DEFAULT_ARRIVAL_KEY,
+                            reason="fixing the series name"):
+    return {
+        "kind": "update_metadata", "arrival": arrival, "book_id": book_id,
+        "metadata": metadata if metadata is not None else {"series": "Murderbot Diaries"},
+        "lock": lock if lock is not None else [],
+        "reason": reason,
+    }
+
+
 def _kids_dir_lists(tmp_path, *, allow_series=(), deny_series=()):
     (tmp_path / "kids-allowlist.json").write_text(json.dumps({
         "series": list(allow_series), "asins": [], "authors": [],
@@ -260,7 +270,7 @@ def test_kids_signals_denylist_beats_allowlist_when_both_match(tmp_path):
 
 
 def test_validate_shape_rejects_unknown_kind():
-    ok, msg = validate_shape({"kind": "update_metadata", "arrival": "x"})
+    ok, msg = validate_shape({"kind": "reticulate_splines", "arrival": "x"})
     assert not ok
     assert "kind" in msg
 
@@ -396,6 +406,105 @@ def test_validate_shape_rejects_oversized_string():
     assert "reason" in msg
 
 
+# --- validate_shape: update_metadata ----------------------------------------
+
+
+def test_validate_shape_update_metadata_valid():
+    assert validate_shape(update_metadata_intent(2))[0]
+
+
+def test_validate_shape_update_metadata_requires_fields():
+    ok, msg = validate_shape({"kind": "update_metadata", "arrival": "x"})
+    assert not ok
+    assert "book_id" in msg and "metadata" in msg and "lock" in msg and "reason" in msg
+
+
+def test_validate_shape_update_metadata_book_id_must_be_int():
+    intent = update_metadata_intent(2)
+    intent["book_id"] = "2"
+    ok, msg = validate_shape(intent)
+    assert not ok
+
+
+def test_validate_shape_update_metadata_book_id_bool_rejected():
+    intent = update_metadata_intent(2)
+    intent["book_id"] = True
+    ok, msg = validate_shape(intent)
+    assert not ok
+
+
+def test_validate_shape_update_metadata_empty_metadata_rejected():
+    intent = update_metadata_intent(2, metadata={})
+    ok, msg = validate_shape(intent)
+    assert not ok
+    assert "metadata" in msg
+
+
+def test_validate_shape_update_metadata_does_not_require_title_or_authors():
+    # unlike create_book, a correction may touch only one field
+    assert validate_shape(update_metadata_intent(2, metadata={"title": "New Title"}))[0]
+    assert validate_shape(update_metadata_intent(2, metadata={"authors": ["Someone"]}))[0]
+
+
+def test_validate_shape_update_metadata_unknown_metadata_key_rejected():
+    intent = update_metadata_intent(2, metadata={"bogus": "x"})
+    ok, msg = validate_shape(intent)
+    assert not ok
+    assert "bogus" in msg
+
+
+def test_validate_shape_update_metadata_reuses_create_book_field_checks():
+    # title path-segment check
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": "A/B"}))
+    assert not ok
+    # authors[0] path-segment check
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"authors": [".."]}))
+    assert not ok
+    # series index must be a finite number
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"seriesIndex": "abc"}))
+    assert not ok
+    # published year must be a finite number
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"publishedYear": "2020"}))
+    assert not ok
+    # empty title rejected
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": ""}))
+    assert not ok
+    # empty authors list rejected
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"authors": []}))
+    assert not ok
+
+
+def test_validate_shape_update_metadata_lock_must_be_list():
+    intent = update_metadata_intent(2, lock="title")
+    ok, msg = validate_shape(intent)
+    assert not ok
+
+
+def test_validate_shape_update_metadata_lock_allows_title_subtitle_description():
+    assert validate_shape(update_metadata_intent(2, lock=["title", "subtitle", "description"]))[0]
+
+
+def test_validate_shape_update_metadata_lock_rejects_series_fields():
+    ok, msg = validate_shape(update_metadata_intent(2, lock=["seriesName"]))
+    assert not ok
+    assert "lock" in msg
+
+
+def test_validate_shape_update_metadata_lock_rejects_unknown_entry():
+    ok, msg = validate_shape(update_metadata_intent(2, lock=["bogus"]))
+    assert not ok
+
+
+def test_validate_shape_update_metadata_lock_empty_list_ok():
+    assert validate_shape(update_metadata_intent(2, lock=[]))[0]
+
+
+def test_validate_shape_update_metadata_reason_required():
+    intent = update_metadata_intent(2, reason="")
+    ok, msg = validate_shape(intent)
+    assert not ok
+
+
 # --- I5: folder-name-bound fields reject path-unsafe values ----------------
 
 
@@ -488,6 +597,28 @@ def test_check_intent_never_raises_arrival_wrong_type():
 
 def test_check_intent_never_raises_reason_none():
     _never_raises(lambda i: i.__setitem__("reason", None))
+
+
+def _never_raises_update_metadata(mutate) -> None:
+    intent = update_metadata_intent(2)
+    mutate(intent)
+    index = FakeIndex({})
+    dossier = make_dossier()
+    ok, msg = check_intent(intent, ctx(dossier, index))  # must not raise
+    assert ok is False
+    assert isinstance(msg, str) and msg
+
+
+def test_check_intent_never_raises_update_metadata_book_id_wrong_type():
+    _never_raises_update_metadata(lambda i: i.__setitem__("book_id", "nope"))
+
+
+def test_check_intent_never_raises_update_metadata_lock_wrong_type():
+    _never_raises_update_metadata(lambda i: i.__setitem__("lock", "title"))
+
+
+def test_check_intent_never_raises_update_metadata_metadata_wrong_type():
+    _never_raises_update_metadata(lambda i: i.__setitem__("metadata", "x"))
 
 
 # --- guard 1: id existence / candidate membership --------------------------
@@ -632,6 +763,70 @@ def test_guard5_attach_rejected_when_primary_missing():
     dossier = make_dossier(primary_kind=None, candidates=[candidate(2)])
     ok, msg = check_intent(attach_intent(2), ctx(dossier, index))
     assert not ok
+
+
+# --- update_metadata: book_id existence + library allowlist -----------------
+
+
+def test_update_metadata_book_id_not_in_index_rejected():
+    index = FakeIndex({})
+    ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
+    assert not ok
+
+
+def test_update_metadata_book_id_valid_target_accepted():
+    index = FakeIndex({2: make_book(2)})
+    ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
+    assert ok
+
+
+def test_update_metadata_target_comics_rejected():
+    index = FakeIndex({2: make_book(2, library="Comics")})
+    ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
+    assert not ok
+
+
+def test_update_metadata_target_unknown_library_rejected():
+    index = FakeIndex({2: make_book(2, library="Secret")})
+    ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
+    assert not ok
+
+
+# --- guard 7 applies to update_metadata's kids target too -------------------
+
+
+def test_update_metadata_kids_target_deny_rejected(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, msg = check_intent(update_metadata_intent(2), ctx(dossier, index, lists=lists))
+    assert not ok
+
+
+def test_update_metadata_kids_target_allow_accepted(tmp_path):
+    lists = _kids_dir_lists(tmp_path, allow_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, msg = check_intent(update_metadata_intent(2), ctx(dossier, index, lists=lists))
+    assert ok
+
+
+def test_update_metadata_kids_human_override_accepted(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, msg = check_intent(
+        update_metadata_intent(2), ctx(dossier, index, lists=lists, human_answer={"choice": "kids"}),
+    )
+    assert ok
+
+
+def test_update_metadata_adult_target_ignores_kids_signals(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Library")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, msg = check_intent(update_metadata_intent(2), ctx(dossier, index, lists=lists))
+    assert ok
 
 
 # --- guard 6: one filing intent per arrival / one arrival per (book,fmt) ---
@@ -965,6 +1160,32 @@ def test_guard8_collision_only_checked_within_target_library():
     assert ok
 
 
+# --- guard 8 amendment: two create_books in one run can't render the same --
+# --- folder, even before either is a real book in the index ----------------
+
+
+def test_guard8_same_run_folder_claim_collision_rejected():
+    claims = {("folder", "Library", "martha wells/artificial condition"): "run1:1"}
+    intent = create_book_intent(library="adult", title="Artificial Condition", authors=["Martha Wells"],
+                                 arrival="libation:Y:def456")
+    ok, msg = check_intent(intent, ctx(make_dossier(key="libation:Y:def456"), FakeIndex({}), run_claims=claims))
+    assert not ok
+
+
+def test_guard8_same_run_folder_claim_different_folder_accepted():
+    claims = {("folder", "Library", "someone else/different book"): "run1:1"}
+    intent = create_book_intent(library="adult", title="Artificial Condition", authors=["Martha Wells"])
+    ok, msg = check_intent(intent, ctx(make_dossier(), FakeIndex({}), run_claims=claims))
+    assert ok
+
+
+def test_guard8_same_run_folder_claim_different_library_ignored():
+    claims = {("folder", "Kids Audiobooks", "martha wells/artificial condition"): "run1:1"}
+    intent = create_book_intent(library="adult", title="Artificial Condition", authors=["Martha Wells"])
+    ok, msg = check_intent(intent, ctx(make_dossier(), FakeIndex({}), run_claims=claims))
+    assert ok
+
+
 # --- guard 10: series-index disagreement ------------------------------------
 
 
@@ -1071,4 +1292,16 @@ def test_claims_for_attach():
 def test_claims_for_create_book():
     dossier = make_dossier()
     claims = claims_for(create_book_intent(), dossier)
-    assert claims == [("arrival", dossier["key"])]
+    assert ("arrival", dossier["key"]) in claims
+
+
+def test_claims_for_create_book_includes_folder_claim():
+    dossier = make_dossier()
+    intent = create_book_intent(library="adult", title="Artificial Condition", authors=["Martha Wells"])
+    claims = claims_for(intent, dossier)
+    assert ("folder", "Library", "martha wells/artificial condition") in claims
+
+
+def test_claims_for_update_metadata_takes_no_claims():
+    dossier = make_dossier()
+    assert claims_for(update_metadata_intent(2), dossier) == []

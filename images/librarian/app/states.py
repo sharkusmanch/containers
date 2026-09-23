@@ -45,13 +45,16 @@ INTENT_STATES = frozenset({
     PROPOSED_I, APPROVED, REJECTED, GUARD_REJECTED, SIMULATED_I, EXECUTED, EXEC_FAILED,
 })
 
-# --- intent kinds (P1 set; update_metadata arrives in Plan 2) -------------
+# --- intent kinds -----------------------------------------------------------
 ATTACH = "attach"
 CREATE_BOOK = "create_book"
 ESCALATE = "escalate"
 DEFER = "defer"
+# Plan 2, Task 3: correct identity/series metadata on the book an arrival is
+# attached to, in the same run as that attach.
+UPDATE_METADATA = "update_metadata"
 
-INTENT_KINDS = frozenset({ATTACH, CREATE_BOOK, ESCALATE, DEFER})
+INTENT_KINDS = frozenset({ATTACH, CREATE_BOOK, ESCALATE, DEFER, UPDATE_METADATA})
 
 
 @dataclass

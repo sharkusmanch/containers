@@ -335,6 +335,14 @@ def intent_attach(arrival, book_id, iid="r1:1"):
             "payload": {"kind": "attach", "arrival": arrival["key"], "book_id": book_id, "reason": "x"}}
 
 
+def intent_update_metadata(arrival, book_id, iid="r1:1", metadata=None, lock=None):
+    md = metadata if metadata is not None else {"title": "Corrected Title"}
+    lk = lock if lock is not None else ["title"]
+    return {"intent_id": iid, "kind": "update_metadata", "arrival": arrival["key"],
+            "payload": {"kind": "update_metadata", "arrival": arrival["key"], "book_id": book_id,
+                        "metadata": md, "lock": lk, "reason": "correcting the series"}}
+
+
 def intent_create(arrival, library="adult", iid="r1:1", **meta):
     md = {"title": "New Book", "authors": ["Jane Author"], "series": "Saga", "seriesIndex": 2,
           "publishedYear": 2020, "language": "en"}
@@ -356,6 +364,107 @@ def test_new_states_exist():
     assert states.EXECUTING == "executing" and states.EXECUTING in states.ARRIVAL_STATES
     assert states.EXECUTED == "executed" and states.EXECUTED in states.INTENT_STATES
     assert states.EXEC_FAILED == "exec-failed" and states.EXEC_FAILED in states.INTENT_STATES
+
+
+# --- execute_update (Plan 2 Task 3) --------------------------------------------
+
+
+def test_execute_update_patches_metadata_and_merges_locks(env):
+    attach_target(env, lockedFields=["tags"])
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    intent = intent_update_metadata(arr, 7001, metadata={
+        "title": "Artificial Condition (Fixed)", "series": "Murderbot Diaries", "seriesIndex": 2,
+    }, lock=["title"])
+    r = ex.execute_update(intent, arr, 7001)
+
+    assert r.ok and r.state == "filed" and r.book_id == 7001, r.detail
+    b = env.fake.books[7001]
+    assert b["title"] == "Artificial Condition (Fixed)"
+    assert b["seriesName"] == "Murderbot Diaries" and b["seriesIndex"] == "2"
+    assert set(b["lockedFields"]) == {"tags", "title"}     # merged, not replaced
+    assert len(env.fake.patches()) == 1
+    assert env.fake.scans() == [] and r.moves == []        # no file moves
+
+
+def test_execute_update_waits_for_running_scan_before_patching(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.running_polls[7] = 3
+
+    r = ex.execute_update(intent_update_metadata(arr, 7001), arr, 7001)
+
+    assert r.ok, r.detail
+    assert env.clock.sleeps.count(15) >= 3
+    assert len(env.fake.patches()) == 1
+
+
+def test_execute_update_rejects_non_filing_library_target(env):
+    env.fake.books[9] = {
+        "id": 9, "libraryName": "Comics", "libraryId": 3, "title": "Comic", "subtitle": None,
+        "authors": [{"id": 1, "name": "X", "sortName": "X"}],
+        "seriesName": None, "seriesIndex": None, "publishedYear": None, "language": None,
+        "providerIds": {"audible": None}, "tags": [], "lockedFields": [],
+        "folderPath": "/books/Comics/x", "files": [], "updatedAt": "u0",
+    }
+    arr = env.libation(title="Whatever")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute_update(intent_update_metadata(arr, 9), arr, 9)
+
+    assert not r.ok and r.state == "failed"
+    assert "Comics" in r.detail
+    assert env.fake.patches() == []
+
+
+def test_execute_update_rejects_mismatched_book_id(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    # payload says book 7001; the caller (service) passes a different id
+    r = ex.execute_update(intent_update_metadata(arr, 7001), arr, 9999)
+
+    assert not r.ok and r.state == "failed"
+    assert "book_id" in r.detail
+    assert env.fake.patches() == []
+
+
+def test_execute_update_no_writable_fields_fails(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    # narrators has no confirmed PATCH key -- mapping it produces nothing
+    intent = intent_update_metadata(arr, 7001, metadata={"narrators": ["N"]}, lock=[])
+    r = ex.execute_update(intent, arr, 7001)
+
+    assert not r.ok and r.state == "failed"
+    assert env.fake.patches() == []
+
+
+def test_execute_update_read_back_mismatch_fails(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    def clobber(fake, b):
+        b["title"] = "Something The PATCH Never Asked For"
+    env.fake.on_patch = clobber
+
+    intent = intent_update_metadata(arr, 7001, metadata={"title": "Intended Title"}, lock=[])
+    r = ex.execute_update(intent, arr, 7001)
+
+    assert not r.ok and r.state == "failed"
+    assert "mismatch" in r.detail
 
 
 # --- attach -------------------------------------------------------------------

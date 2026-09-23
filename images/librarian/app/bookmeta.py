@@ -94,6 +94,33 @@ def create_metadata(md, arrival) -> dict:
     return {"fields": meta, "asin_tag": asin_tag}
 
 
+_UPDATE_METADATA_SIMPLE_FIELDS = ("title", "subtitle", "authors", "language", "audibleId")
+
+
+def update_metadata_fields(md: dict) -> dict:
+    """Map an update_metadata intent's LLM-facing metadata keys to
+    BookOrbit's PATCH body key names -- the same `series`/`seriesIndex`
+    mapping `create_metadata` uses, but with none of its arrival-derived
+    overrides (no Audible/Kindle-ASIN injection, no tag): update_metadata
+    corrects a book that already exists, it never derives identity from a
+    brand-new arrival's own file. `narrators` and `asinTag` are silently
+    dropped -- narrators has no confirmed PATCH key (see the module
+    docstring above) and an asin tag only makes sense for a NEW arrival's
+    own file, which update_metadata never has."""
+    meta = {}
+    for field_name in _UPDATE_METADATA_SIMPLE_FIELDS:
+        val = md.get(field_name)
+        if val is not None:
+            meta[field_name] = list(val) if field_name == "authors" else val
+    if md.get("series") is not None:
+        meta["seriesName"] = md["series"]
+    if md.get("seriesIndex") is not None:
+        meta["seriesIndex"] = norm_index(md["seriesIndex"])
+    if md.get("publishedYear") is not None:
+        meta["publishedYear"] = int(md["publishedYear"])
+    return meta
+
+
 def _norm_str(v):
     if v is None:
         return None

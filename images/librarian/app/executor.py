@@ -140,6 +140,62 @@ class Executor:
         with _SCAN_MUTEX:
             return self._resume_locked(self.arrivals.get(rec["key"]) or rec)
 
+    # --- update_metadata (Plan 2, Task 3) --------------------------------------
+    def execute_update(self, intent: dict, arrival_rec: dict, book_id: int) -> ExecResult:
+        """Patch identity/series metadata on `book_id` per an approved
+        `update_metadata` intent -- called by the service right after the
+        paired attach has filed successfully. No file moves, so none of the
+        attach/create_book crash-safety journal applies: `patch_metadata`
+        always re-GETs and merges the current `lockedFields` before writing
+        (Global "Locks merge, never replace"), and the read-back comparison
+        below is what decides success, so a re-run after a crash is simply
+        another call with the same effect (patching is naturally idempotent
+        here, unlike a file move).
+        """
+        payload = intent.get("payload") or intent
+        payload_book_id = payload.get("book_id")
+        if payload_book_id is not None and payload_book_id != book_id:
+            return ExecResult(False, "failed", book_id,
+                              f"update_metadata payload book_id {payload_book_id!r} does not match "
+                              f"the attached book {book_id!r}")
+
+        mapped = bookmeta.update_metadata_fields(payload.get("metadata") or {})
+        if not mapped:
+            return ExecResult(False, "failed", book_id,
+                              "update_metadata has no writable metadata fields after mapping")
+        lock = [f for f in (payload.get("lock") or []) if f in BASE_LOCKS]
+
+        try:
+            with _SCAN_MUTEX:
+                self._check_stop()
+                d = self.index.detail(book_id, fresh=True)
+                library = d.get("libraryName")
+                if library not in LIBRARY_IDS:
+                    return ExecResult(False, "failed", book_id,
+                                      f"book {book_id} is in library {library!r}, not a filing target")
+                self._guard2(LIBRARY_IDS[library])
+                self.writer.patch_metadata(book_id, mapped, lock)
+                after = self.index.detail(book_id, fresh=True)
+                got = bookmeta.norm_for_compare(bookmeta.identity(after))
+                want = bookmeta.norm_for_compare(mapped)
+                bad = [k for k in want if got.get(k) != want[k]]
+                if bad:
+                    return ExecResult(False, "failed", book_id,
+                                      f"update_metadata read-back mismatch on book {book_id}: "
+                                      f"{', '.join(bad)}")
+                missing = set(lock) - set(after.get("lockedFields") or [])
+                if missing:
+                    return ExecResult(False, "failed", book_id,
+                                      f"locks missing on book {book_id} after PATCH: "
+                                      f"{', '.join(sorted(missing))}")
+        except (_Stop, _Retry) as e:
+            return ExecResult(False, "retryable", book_id, str(e))
+        except Exception as e:
+            return ExecResult(False, "failed", book_id, f"{type(e).__name__}: {log_safe(e)}")
+
+        return ExecResult(True, "filed", book_id,
+                          f"patched metadata on book {book_id}: {', '.join(sorted(mapped))}")
+
     # --- journal ------------------------------------------------------------
     def _journal(self, ctx: dict, step: str | None = None) -> None:
         if step is not None:

@@ -58,6 +58,7 @@ from app.states import (
     REJECTED,
     SIMULATED,
     SIMULATED_I,
+    UPDATE_METADATA,
 )
 
 # BookOrbit's API never returns a numeric library id (only `libraryName`);
@@ -74,8 +75,9 @@ DEFER_LIMIT = 3
 DEFER_WINDOW = 7 * 86400
 DEFER_LIMIT_REASON = "defer limit reached — escalate"
 
-# Only filing intents are ever put before the reviewer (final review I1).
-_REVIEWABLE = frozenset({ATTACH, CREATE_BOOK})
+# Only filing intents (plus update_metadata, Plan 2 Task 3) are ever put
+# before the reviewer (final review I1).
+_REVIEWABLE = frozenset({ATTACH, CREATE_BOOK, UPDATE_METADATA})
 
 
 class IntentBook:
@@ -107,8 +109,8 @@ class IntentBook:
             kind = intent.get("kind") if isinstance(intent, dict) else None
 
             ok, reason = validate_shape(intent)
-            if ok and ("arrival", arrival) in run.claims:
-                ok, reason = False, "arrival already has an intent this run"
+            if ok:
+                ok, reason = self._arrival_slot_check(run, arrival, kind, intent)
 
             ctx = None
             if ok:
@@ -127,7 +129,10 @@ class IntentBook:
                 return {"intent_id": intent_id, "status": GUARD_REJECTED, "reason": reason}
 
             claims = set(claims_for(intent, ctx.dossier))
-            claims.add(("arrival", arrival))
+            if kind == UPDATE_METADATA:
+                claims.add(("meta", arrival))
+            else:
+                claims.add(("arrival", arrival))
             for claim in claims:
                 run.claims[claim] = intent_id
 
@@ -144,8 +149,34 @@ class IntentBook:
             elif kind == DEFER:
                 not_before = self.clock() + intent["not_before_hours"] * 3600
                 self.arrivals.record(arrival, DEFERRED, not_before=not_before)
+            # UPDATE_METADATA touches no arrival state of its own -- the
+            # paired attach it corrects already owns it.
 
             return {"intent_id": intent_id, "status": PROPOSED_I, "reason": reason}
+
+    def _arrival_slot_check(self, run, arrival, kind, intent) -> tuple[bool, str | None]:
+        """The wider one-intent-per-arrival-per-run rule (module docstring),
+        relaxed for exactly one pair (review amendment): update_metadata may
+        join an arrival that already has an ACCEPTED attach in this run --
+        i.e. `run.claims[("arrival", arrival)]` names an attach intent whose
+        own `book_id` matches -- as long as this run hasn't already used
+        update_metadata's own one-per-arrival slot (`("meta", arrival)`).
+        Every other kind keeps the original all-or-nothing rule.
+        """
+        if kind != UPDATE_METADATA:
+            if ("arrival", arrival) in run.claims:
+                return False, "arrival already has an intent this run"
+            return True, None
+
+        if ("meta", arrival) in run.claims:
+            return False, "arrival already has an update_metadata intent this run"
+        attach_id = run.claims.get(("arrival", arrival))
+        attach_rec = self.store.get(attach_id) if attach_id else None
+        if attach_rec is None or attach_rec.get("kind") != ATTACH:
+            return False, "update_metadata requires an accepted attach for this arrival in the same run"
+        if (attach_rec.get("payload") or {}).get("book_id") != intent.get("book_id"):
+            return False, "update_metadata's book_id must match this run's accepted attach for the arrival"
+        return True, None
 
     def _defer_allowed(self, arrival: str) -> tuple[bool, str | None]:
         """Final review I4: a model could otherwise defer the same arrival
@@ -225,10 +256,35 @@ class IntentBook:
                 self.store.record(intent_id, APPROVED, review={"verdict": "approve", "argument": argument})
                 return {"intent_id": intent_id, "status": APPROVED}
 
+            if rec.get("kind") == UPDATE_METADATA:
+                # Binding amendment: a reject of update_metadata just drops
+                # it -- no auto-escalation. The arrival's own filing
+                # (attach) already owns its escalation path if THAT gets
+                # rejected instead (see _cascade_reject_metadata below).
+                self.store.record(intent_id, REJECTED, review={"verdict": "reject", "argument": argument})
+                return {"intent_id": intent_id, "status": REJECTED}
+
             esc_id, _ = self._reject_and_escalate(
                 rec, argument=argument, question=f"The reviewer objected: {argument}",
             )
+            self._cascade_reject_metadata(rec)
             return {"intent_id": intent_id, "status": REJECTED, "escalation_id": esc_id}
+
+    def _cascade_reject_metadata(self, rec: dict) -> None:
+        """Binding amendment: rejecting an attach/create_book drops any
+        update_metadata this same run submitted for the same arrival too --
+        no separate auto-escalation (the filing's own escalation already
+        covers the arrival). Also catches an update_metadata a reviewer
+        already APPROVED before rejecting its attach: an approved
+        update_metadata whose attach was rejected must never execute, so
+        this demotes it back to REJECTED rather than leaving it approved.
+        """
+        for other in self.store.all():
+            if (other.get("run_id") == rec["run_id"] and other.get("arrival") == rec["arrival"]
+                    and other.get("kind") == UPDATE_METADATA
+                    and other.get("state") in (PROPOSED_I, APPROVED)):
+                self.store.record(other["intent_id"], REJECTED,
+                                  review={"verdict": "reject", "argument": "attach was rejected"})
 
     def _summary(self, rec: dict) -> str:
         """A one-line summary of a filing intent, for an escalation option."""
@@ -289,9 +345,25 @@ class IntentBook:
                             rec, argument="reviewer did not rule",
                             question="The reviewer did not rule on this proposal before the run ended.",
                         )
+                        self._cascade_reject_metadata(rec)
                         wd = would_do(esc_payload, index=index)
                         self.store.record(esc_id, SIMULATED_I, would_do=wd)
                         self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd)
+
+                elif kind == UPDATE_METADATA:
+                    # Re-read: an earlier iteration this same pass may have
+                    # already cascaded a reject from this arrival's attach
+                    # (attach is always submitted, hence stored, before its
+                    # update_metadata -- see IntentBook.submit).
+                    cur_state = (self.store.get(rec["intent_id"]) or {}).get("state")
+                    if cur_state == APPROVED:
+                        wd = would_do(rec["payload"], index=index)
+                        self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
+                    elif cur_state == PROPOSED_I:
+                        # Never ruled on: dropped silently, same as an
+                        # explicit reviewer reject -- no auto-escalation.
+                        self.store.record(rec["intent_id"], REJECTED,
+                                          review={"verdict": "reject", "argument": "reviewer did not rule"})
 
                 elif kind == ESCALATE and state == PROPOSED_I:
                     wd = would_do(rec["payload"], index=index)
@@ -324,6 +396,8 @@ def would_do(intent: dict, index=None) -> list:
         return _would_do_escalate(intent)
     if kind == DEFER:
         return _would_do_defer(intent)
+    if kind == UPDATE_METADATA:
+        return _would_do_update_metadata(intent)
     return []
 
 
@@ -378,3 +452,12 @@ def _would_do_escalate(intent: dict) -> list:
 
 def _would_do_defer(intent: dict) -> list:
     return [f"wait {intent['not_before_hours']}h before re-offering {intent['arrival']}"]
+
+
+def _would_do_update_metadata(intent: dict) -> list:
+    keys = sorted((intent.get("metadata") or {}).keys())
+    lock = intent.get("lock") or []
+    return [
+        f"patch metadata of book {intent['book_id']}: {', '.join(keys)}",
+        f"lock: {', '.join(lock)}",
+    ]

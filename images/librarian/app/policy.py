@@ -7,12 +7,14 @@ BookOrbit state), `ctx.run_claims` (this run's already-accepted intents),
 `ctx.lists` (the GitOps-reviewed kids allow/denylists) -- is data this
 module trusts, never the intent itself beyond its declared shape.
 `validate_shape` runs first and rejects anything that doesn't match the
-wire contract (including the `update_metadata` kind, which is out of scope
-for this plan) *and* type-checks every scalar so `check_intent` can never
+wire contract *and* type-checks every scalar so `check_intent` can never
 crash on adversarial or merely-malformed LLM input; `check_intent` then
-walks the numbered guards from spec section 3.4 that are in scope for this
-plan (1, 4, 5, 6, 7, 8, 10 -- guards 2/3/9 are execution-time checks that
-ship with the Plan 2 executor).
+walks the numbered guards from spec section 3.4 (1, 4, 5, 6, 7, 8, 10 --
+guards 2/3/9 are execution-time checks that ship with the Plan 2 executor).
+`update_metadata` (Plan 2 Task 3) reuses guards 1/4/7 against its own
+`book_id` -- the target-matches-this-run's-accepted-`attach` rule is
+enforced by `app.intents.IntentBook.submit`, not here, since it needs the
+intent store to find that attach's payload.
 
 Recording claims into `ctx.run_claims` is NOT this module's job (see
 `claims_for`) -- `check_intent` only reads `run_claims`, it never mutates it.
@@ -37,7 +39,7 @@ import json
 from dataclasses import dataclass, field
 
 from app.dossier import agreement
-from app.states import ATTACH, CREATE_BOOK, DEFER, ESCALATE, INTENT_KINDS
+from app.states import ATTACH, CREATE_BOOK, DEFER, ESCALATE, INTENT_KINDS, UPDATE_METADATA
 from app.titles import normalize
 
 GuardResult = tuple[bool, str]
@@ -53,6 +55,10 @@ _ALLOWED_TARGET_LIBRARY_NAMES = frozenset(_LIBRARY_NAMES.values())
 
 _MAX_STRING_LEN = 2000
 _MAX_LIST_LEN = 20
+
+# update_metadata's lock list (Global "Metadata locks"): series stays
+# unlocked, so only these three may ever be requested.
+_UPDATE_METADATA_LOCK_FIELDS = frozenset({"title", "subtitle", "description"})
 
 # NUL and other C0 control characters, plus DEL -- never legitimate in a
 # filesystem path segment and a classic injection vector if let through into
@@ -297,6 +303,7 @@ _KIND_FIELDS = {
     CREATE_BOOK: {"required": {"arrival", "library", "metadata", "reason"}, "optional": {"readalong"}},
     ESCALATE: {"required": {"arrival", "question", "options", "recommendation"}, "optional": set()},
     DEFER: {"required": {"arrival", "reason", "not_before_hours"}, "optional": set()},
+    UPDATE_METADATA: {"required": {"arrival", "book_id", "metadata", "lock", "reason"}, "optional": set()},
 }
 
 # metadata fields that must be a string when present (title is required and
@@ -347,37 +354,35 @@ def _validate_attach(intent: dict) -> str | None:
     return None
 
 
-def _validate_create_book(intent: dict) -> str | None:
-    if not isinstance(intent["library"], str):
-        return "create_book.library must be a string"
-    if not isinstance(intent["reason"], str) or not intent["reason"]:
-        return "create_book.reason must be a non-empty string"
-    if "readalong" in intent and not isinstance(intent["readalong"], bool):
-        return "create_book.readalong must be a bool"
-
-    metadata = intent["metadata"]
-    if not isinstance(metadata, dict):
-        return "create_book.metadata must be an object"
-    err = _fields_check(metadata, _METADATA_FIELDS, label="metadata")
+def _validate_metadata_body(metadata: dict, *, require_title_and_authors: bool) -> str | None:
+    """Field checks shared by create_book (title/authors required) and
+    update_metadata (every field optional, but at least one must be
+    present -- checked by the caller): same allowed key set either way,
+    only the required subset differs."""
+    all_fields = _METADATA_FIELDS["required"] | _METADATA_FIELDS["optional"]
+    required = _METADATA_FIELDS["required"] if require_title_and_authors else set()
+    err = _fields_check(metadata, {"required": required, "optional": all_fields - required}, label="metadata")
     if err:
         return err
 
-    if not isinstance(metadata.get("title"), str) or not metadata["title"]:
-        return "metadata.title must be a non-empty string"
-    err = _path_segment_error(metadata["title"], "metadata.title")
-    if err:
-        return err
+    if require_title_and_authors or "title" in metadata:
+        if not isinstance(metadata.get("title"), str) or not metadata.get("title"):
+            return "metadata.title must be a non-empty string"
+        err = _path_segment_error(metadata["title"], "metadata.title")
+        if err:
+            return err
 
-    authors = metadata.get("authors")
-    if not isinstance(authors, list) or not authors:
-        return "metadata.authors must be a non-empty list"
-    if len(authors) > _MAX_LIST_LEN:
-        return f"metadata.authors must have at most {_MAX_LIST_LEN} entries"
-    if not all(isinstance(a, str) and a for a in authors):
-        return "metadata.authors entries must all be non-empty strings"
-    err = _path_segment_error(authors[0], "metadata.authors[0]")
-    if err:
-        return err
+    if require_title_and_authors or "authors" in metadata:
+        authors = metadata.get("authors")
+        if not isinstance(authors, list) or not authors:
+            return "metadata.authors must be a non-empty list"
+        if len(authors) > _MAX_LIST_LEN:
+            return f"metadata.authors must have at most {_MAX_LIST_LEN} entries"
+        if not all(isinstance(a, str) and a for a in authors):
+            return "metadata.authors entries must all be non-empty strings"
+        err = _path_segment_error(authors[0], "metadata.authors[0]")
+        if err:
+            return err
 
     for field_name in _METADATA_STRING_FIELDS:
         val = metadata.get(field_name)
@@ -403,6 +408,46 @@ def _validate_create_book(intent: dict) -> str | None:
             return f"metadata.narrators must have at most {_MAX_LIST_LEN} entries"
         if not all(isinstance(n, str) and n for n in narrators):
             return "metadata.narrators entries must all be non-empty strings"
+
+    return None
+
+
+def _validate_create_book(intent: dict) -> str | None:
+    if not isinstance(intent["library"], str):
+        return "create_book.library must be a string"
+    if not isinstance(intent["reason"], str) or not intent["reason"]:
+        return "create_book.reason must be a non-empty string"
+    if "readalong" in intent and not isinstance(intent["readalong"], bool):
+        return "create_book.readalong must be a bool"
+
+    metadata = intent["metadata"]
+    if not isinstance(metadata, dict):
+        return "create_book.metadata must be an object"
+    return _validate_metadata_body(metadata, require_title_and_authors=True)
+
+
+def _validate_update_metadata(intent: dict) -> str | None:
+    if not isinstance(intent["book_id"], int) or isinstance(intent["book_id"], bool):
+        return "update_metadata.book_id must be an int"
+    if not isinstance(intent["reason"], str) or not intent["reason"]:
+        return "update_metadata.reason must be a non-empty string"
+
+    metadata = intent["metadata"]
+    if not isinstance(metadata, dict):
+        return "update_metadata.metadata must be an object"
+    if not metadata:
+        return "update_metadata.metadata must have at least one field"
+    err = _validate_metadata_body(metadata, require_title_and_authors=False)
+    if err:
+        return err
+
+    lock = intent["lock"]
+    if not isinstance(lock, list) or not all(isinstance(x, str) for x in lock):
+        return "update_metadata.lock must be a list of strings"
+    bad = sorted(set(lock) - _UPDATE_METADATA_LOCK_FIELDS)
+    if bad:
+        return (f"update_metadata.lock may only contain "
+                f"{sorted(_UPDATE_METADATA_LOCK_FIELDS)}: got {bad}")
 
     return None
 
@@ -443,6 +488,7 @@ _KIND_VALIDATORS = {
     CREATE_BOOK: _validate_create_book,
     ESCALATE: _validate_escalate,
     DEFER: _validate_defer,
+    UPDATE_METADATA: _validate_update_metadata,
 }
 
 
@@ -526,7 +572,7 @@ def _has_conflicting_format(book, primary_kind) -> bool:
 def _targets_kids(intent: dict, kind: str, ctx: "GuardContext") -> bool:
     if kind == CREATE_BOOK:
         return intent.get("library") == "kids"
-    if kind == ATTACH:
+    if kind in (ATTACH, UPDATE_METADATA):
         book = ctx.index.book(intent["book_id"])
         return bool(book) and book.get("libraryName") == _KIDS_LIBRARY_NAME
     return False
@@ -575,6 +621,18 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
         if book_id not in _candidate_ids(dossier) and book_id not in ctx.seen_ids:
             return False, f"book_id {book_id} is not a candidate for this arrival or an id seen this run"
 
+    # update_metadata's book_id must be a real book too -- unlike attach it
+    # was never offered as a dossier candidate (it's the arrival's OWN
+    # attach target), so there is no candidate/seen check here; the rule
+    # that it must equal THIS run's accepted attach for THIS arrival is
+    # enforced by app.intents.IntentBook.submit, which has the intent
+    # store this module does not.
+    if kind == UPDATE_METADATA:
+        book_id = intent["book_id"]
+        book = ctx.index.book(book_id)
+        if book is None:
+            return False, f"book_id {book_id} not found in the library index"
+
     # Guard 4: library must be adult|kids; CBZ arrivals may only escalate or
     # defer (no auto-filing for comics in this plan); an attach target must
     # be one of the two real filing libraries (an ALLOWLIST, not merely
@@ -583,7 +641,7 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
         return False, f"library must be 'adult' or 'kids', got {intent['library']!r}"
     if primary_kind == "cbz" and kind not in (ESCALATE, DEFER):
         return False, "cbz arrivals may only escalate or defer in this plan"
-    if kind == ATTACH:
+    if kind in (ATTACH, UPDATE_METADATA):
         book = ctx.index.book(intent["book_id"])
         lib_name = book.get("libraryName") if book else None
         if lib_name not in _ALLOWED_TARGET_LIBRARY_NAMES:
@@ -645,13 +703,19 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
             override_note = f" (human 'kids' choice overrides {' and '.join(reasons)})"
 
     # Guard 8: a new book's rendered folder name must not collide with an
-    # existing book already filed in the same target library.
+    # existing book already filed in the same target library, NOR with
+    # another create_book this same run already claimed the folder for
+    # (review amendment: `claims_for` records a `("folder", ...)` claim on
+    # every accepted create_book, so two create_books proposed in one run
+    # can't both render to the same folder before either is a real book).
     if kind == CREATE_BOOK:
         library_name = _LIBRARY_NAMES[intent["library"]]
         metadata = intent["metadata"]
         rendered = render_folder(
             metadata["authors"][0], metadata.get("series"), metadata.get("seriesIndex"), metadata["title"],
         )
+        if ("folder", library_name, rendered.casefold()) in ctx.run_claims:
+            return False, f"folder name {rendered!r} was already claimed by another create_book this run"
         for book in ctx.index.books():
             if book.get("libraryName") != library_name:
                 continue
@@ -692,7 +756,11 @@ def claims_for(intent: dict, dossier: dict) -> list:
 
     Only attach/create_book are filing intents (see guard 6): escalate and
     defer decide nothing about the book itself, so they take no claim and
-    can neither block nor be blocked by this guard. The caller (Task 8)
+    can neither block nor be blocked by this guard. update_metadata takes
+    no claim here either -- its own one-per-arrival ("meta", arrival) claim
+    and its attach-linkage check are recorded/enforced by
+    `app.intents.IntentBook.submit`, which needs the intent store (this
+    function only ever sees one intent + its dossier). The caller (Task 8)
     writes these keys into `run_claims` after a successful submit -- this
     function only computes which keys, never records anything itself.
     """
@@ -703,4 +771,11 @@ def claims_for(intent: dict, dossier: dict) -> list:
     claims = [("arrival", dossier["key"])]
     if kind == ATTACH:
         claims.append(("book_fmt", intent["book_id"], _primary_kind(dossier)))
+    if kind == CREATE_BOOK:
+        library_name = _LIBRARY_NAMES[intent["library"]]
+        metadata = intent["metadata"]
+        rendered = render_folder(
+            metadata["authors"][0], metadata.get("series"), metadata.get("seriesIndex"), metadata["title"],
+        )
+        claims.append(("folder", library_name, rendered.casefold()))
     return claims

@@ -19,6 +19,7 @@ from app.states import (
     Run,
     SIMULATED,
     SIMULATED_I,
+    UPDATE_METADATA,
 )
 from app.store import Store
 
@@ -30,7 +31,8 @@ OTHER_ARRIVAL = "libation:Y:def456"
 
 class FakeIndex:
     """Minimal LibraryIndex stand-in -- app.intents only ever calls .book(id)
-    and .local_path(path)."""
+    and .local_path(path); .books() is only exercised indirectly here via
+    app.policy.check_intent's guard 8 (create_book folder collisions)."""
 
     def __init__(self, books, prefix="/books", root="/media/books"):
         self._books = books
@@ -39,6 +41,9 @@ class FakeIndex:
 
     def book(self, book_id):
         return self._books.get(book_id)
+
+    def books(self):
+        return list(self._books.values())
 
     def local_path(self, path):
         return self._root + path[len(self._prefix):]
@@ -119,6 +124,16 @@ def escalate_intent(*, arrival=ARRIVAL, question="Which candidate is correct?"):
 
 def defer_intent(*, arrival=ARRIVAL, hours=24, reason="waiting on more info"):
     return {"kind": DEFER, "arrival": arrival, "reason": reason, "not_before_hours": hours}
+
+
+def update_metadata_intent(book_id, *, arrival=ARRIVAL, metadata=None, lock=None,
+                            reason="fixing the series name"):
+    return {
+        "kind": UPDATE_METADATA, "arrival": arrival, "book_id": book_id,
+        "metadata": metadata if metadata is not None else {"series": "Murderbot Diaries"},
+        "lock": lock if lock is not None else [],
+        "reason": reason,
+    }
 
 
 # --- submit: guard rejection ---------------------------------------------
@@ -547,3 +562,220 @@ def test_defer_limit_is_per_arrival(tmp_path):
     r = book.submit(run, defer_intent(arrival=OTHER_ARRIVAL),
                     ctx_factory_for(make_dossier(key=OTHER_ARRIVAL), FakeIndex({}), run))
     assert r["status"] == PROPOSED_I
+
+
+# --- Plan 2 Task 3: update_metadata pairs with the arrival's own attach ----
+
+
+def _submit_attach_and_update(book, run, dossier, index, *, book_id=412, update_book_id=None):
+    factory = ctx_factory_for(dossier, index, run)
+    attach = book.submit(run, attach_intent(book_id), factory)
+    update = book.submit(
+        run, update_metadata_intent(update_book_id if update_book_id is not None else book_id), factory,
+    )
+    return attach, update
+
+
+def test_update_metadata_accepted_alongside_matching_attach(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+
+    attach, update = _submit_attach_and_update(book, run, dossier, index)
+
+    assert attach["status"] == PROPOSED_I
+    assert update["status"] == PROPOSED_I
+    rec = intents_store.get(update["intent_id"])
+    assert rec["kind"] == UPDATE_METADATA and rec["state"] == PROPOSED_I
+    # it does not re-claim the arrival's own filing slot
+    assert arrivals_store.get(ARRIVAL)["state"] == PROPOSED
+
+
+def test_update_metadata_rejected_without_a_prior_attach_this_run(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+
+    result = book.submit(run, update_metadata_intent(412), ctx_factory_for(dossier, index, run))
+
+    assert result["status"] == GUARD_REJECTED
+    assert "attach" in result["reason"]
+
+
+def test_update_metadata_rejected_when_book_id_does_not_match_attach(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412), candidate(999)])
+    index = FakeIndex({412: make_book(412), 999: make_book(999)})
+
+    attach, update = _submit_attach_and_update(book, run, dossier, index, book_id=412, update_book_id=999)
+
+    assert attach["status"] == PROPOSED_I
+    assert update["status"] == GUARD_REJECTED
+    assert "book_id" in update["reason"]
+
+
+def test_second_update_metadata_for_same_arrival_rejected(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+    factory = ctx_factory_for(dossier, index, run)
+
+    book.submit(run, attach_intent(412), factory)
+    first = book.submit(run, update_metadata_intent(412), factory)
+    second = book.submit(run, update_metadata_intent(412, metadata={"title": "Other"}), factory)
+
+    assert first["status"] == PROPOSED_I
+    assert second["status"] == GUARD_REJECTED
+    assert "update_metadata" in second["reason"]
+
+
+def test_update_metadata_rejected_when_paired_intent_is_create_book(tmp_path):
+    # update_metadata only pairs with attach -- create_book sets its own
+    # metadata directly and takes the arrival's "arrival" claim the same as
+    # attach, but is never itself an ATTACH kind for the linkage check.
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier()
+    index = FakeIndex({})
+    factory = ctx_factory_for(dossier, index, run)
+
+    book.submit(run, create_book_intent(), factory)
+    result = book.submit(run, update_metadata_intent(412), factory)
+
+    assert result["status"] == GUARD_REJECTED
+    assert "attach" in result["reason"]
+
+
+# --- apply_review: update_metadata reject / cascade -------------------------
+
+
+def test_apply_review_reject_update_metadata_drops_it_with_no_escalation(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+
+    _attach, update = _submit_attach_and_update(book, run, dossier, index)
+    reviewer_run = make_run(run_id="review1", mode="reviewer", review_of=run.run_id)
+
+    result = book.apply_review(reviewer_run, update["intent_id"], "reject", "not evidenced")
+
+    assert result == {"intent_id": update["intent_id"], "status": REJECTED}
+    assert intents_store.get(update["intent_id"])["state"] == REJECTED
+    assert [r for r in intents_store.all() if r["kind"] == ESCALATE] == []
+
+
+def test_apply_review_reject_attach_cascades_to_pending_update_metadata(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+
+    attach, update = _submit_attach_and_update(book, run, dossier, index)
+    reviewer_run = make_run(run_id="review1", mode="reviewer", review_of=run.run_id)
+
+    result = book.apply_review(reviewer_run, attach["intent_id"], "reject", "wrong book")
+
+    assert result["status"] == REJECTED
+    assert intents_store.get(update["intent_id"])["state"] == REJECTED
+    # exactly one escalation (from the attach) -- update_metadata's own
+    # reject must not add a second one
+    escalations = [r for r in intents_store.all() if r["kind"] == ESCALATE]
+    assert len(escalations) == 1
+
+
+def test_apply_review_reject_attach_cascades_to_already_approved_update_metadata(tmp_path):
+    # "an approved update_metadata whose attach was rejected must never
+    # execute" -- the cascade must demote it even if a reviewer approved it
+    # before ruling on the attach.
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+
+    attach, update = _submit_attach_and_update(book, run, dossier, index)
+    reviewer_run = make_run(run_id="review1", mode="reviewer", review_of=run.run_id)
+    book.apply_review(reviewer_run, update["intent_id"], "approve", "looks right")
+    assert intents_store.get(update["intent_id"])["state"] == APPROVED
+
+    book.apply_review(reviewer_run, attach["intent_id"], "reject", "wrong book")
+
+    assert intents_store.get(update["intent_id"])["state"] == REJECTED
+
+
+# --- finalize_dry_run: update_metadata --------------------------------------
+
+
+def test_finalize_dry_run_approved_update_metadata_sets_simulated(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+
+    attach, update = _submit_attach_and_update(book, run, dossier, index)
+    reviewer_run = make_run(run_id="review1", mode="reviewer", review_of=run.run_id)
+    book.apply_review(reviewer_run, attach["intent_id"], "approve", "matches")
+    book.apply_review(reviewer_run, update["intent_id"], "approve", "good correction")
+
+    book.finalize_dry_run(run.run_id, index=index)
+
+    rec = intents_store.get(update["intent_id"])
+    assert rec["state"] == SIMULATED_I
+    assert any("book 412" in s for s in rec["would_do"])
+
+
+def test_finalize_dry_run_unreviewed_update_metadata_dropped_with_no_escalation(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+
+    attach, update = _submit_attach_and_update(book, run, dossier, index)
+    reviewer_run = make_run(run_id="review1", mode="reviewer", review_of=run.run_id)
+    book.apply_review(reviewer_run, attach["intent_id"], "approve", "matches")
+    # update_metadata never reviewed
+
+    book.finalize_dry_run(run.run_id, index=index)
+
+    rec = intents_store.get(update["intent_id"])
+    assert rec["state"] == REJECTED
+    escalations = [r for r in intents_store.all() if r["kind"] == ESCALATE]
+    assert escalations == []
+
+
+def test_finalize_dry_run_unreviewed_attach_cascades_to_update_metadata(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+
+    attach, update = _submit_attach_and_update(book, run, dossier, index)
+    # neither ever reviewed
+
+    book.finalize_dry_run(run.run_id, index=index)
+
+    assert intents_store.get(attach["intent_id"])["state"] == REJECTED
+    assert intents_store.get(update["intent_id"])["state"] == REJECTED
+    escalations = [r for r in intents_store.all() if r["kind"] == ESCALATE]
+    assert len(escalations) == 1        # only the attach's own auto-escalation
+
+
+# --- would_do: update_metadata ----------------------------------------------
+
+
+def test_would_do_update_metadata_lists_keys_and_lock():
+    intent = update_metadata_intent(412, metadata={"title": "New Title", "series": "Saga"},
+                                    lock=["title", "subtitle"])
+    steps = would_do(intent)
+    assert any("book 412" in s and "series" in s and "title" in s for s in steps)
+    assert any(s == "lock: title, subtitle" for s in steps)
+
+
+def test_would_do_update_metadata_empty_lock_shown():
+    intent = update_metadata_intent(412, lock=[])
+    steps = would_do(intent)
+    assert any(s == "lock: " for s in steps)

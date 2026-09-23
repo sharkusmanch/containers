@@ -21,7 +21,7 @@ from app.mcp_shim import build_mcp_config, build_server
 IMAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BOTH_TOOLS = {"list_arrivals", "get_arrival", "search_books", "get_book", "search_in_book"}
-LIBRARIAN_ONLY = {"attach", "create_book", "escalate", "defer"}
+LIBRARIAN_ONLY = {"attach", "create_book", "escalate", "defer", "update_metadata"}
 REVIEWER_ONLY = {"list_proposals", "review"}
 
 # Sentinel telling _StubHandler to send a zero-length body (as opposed to a
@@ -253,6 +253,27 @@ def test_defer_posts_flat_intent(stub_api):
     assert body == {
         "kind": "defer", "arrival": "a:1", "reason": "wait", "not_before_hours": 24,
     }
+
+
+def test_update_metadata_posts_flat_intent(stub_api):
+    stub_api.responses[("POST", "/intents")] = (200, {"intent_id": "i5"})
+    server = build_server("librarian", _api_url(stub_api), "tok")
+    metadata = {"title": "New Title", "series": "Saga"}
+    result = _call(server, "update_metadata", {
+        "arrival": "a:1", "book_id": 7, "metadata": metadata,
+        "lock": ["title"], "reason": "fixing series",
+    })
+    assert result == {"intent_id": "i5"}
+    body = stub_api.requests[-1]["body"]
+    assert body == {
+        "kind": "update_metadata", "arrival": "a:1", "book_id": 7,
+        "metadata": metadata, "lock": ["title"], "reason": "fixing series",
+    }
+
+
+def test_update_metadata_not_registered_in_reviewer_mode(stub_api):
+    server = build_server("reviewer", _api_url(stub_api), "tok")
+    assert "update_metadata" not in _tool_names(server)
 
 
 def test_list_proposals(stub_api):
