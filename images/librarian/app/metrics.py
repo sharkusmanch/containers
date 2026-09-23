@@ -67,12 +67,16 @@ def count_outcome(counter, source) -> None:
     counter.labels(source=source if source in _SOURCE_LABELS else "other").inc()
 
 
-def rebuild_escalations(arrivals, intents, asked, now: float | None = None) -> None:
+def rebuild_escalations(arrivals, intents, asked, now: float | None = None,
+                        live_since=None) -> None:
     """`librarian_escalations_open` / `..._oldest_age_seconds` from the
     durable stores: needs-decision arrivals for which `asked(rec)` is true
     (live sources -- non-live ones wait silently and must not page), aged
     from their latest escalation's record time (wall clock, like the
-    store's own `ts`)."""
+    store's own `ts`) -- or from the source's go-live (`live_since(source)`,
+    the live-since marker time) when that is later, so an escalation
+    recorded during the dry run does not page the moment its source goes
+    live."""
     now = time.time() if now is None else now
     open_n = 0
     oldest = 0.0
@@ -85,6 +89,12 @@ def rebuild_escalations(arrivals, intents, asked, now: float | None = None) -> N
         except Exception:          # a bad record must not cost the tick its metrics
             esc = None
         since = (esc or {}).get("ts") or rec.get("ts") or now
+        try:
+            went_live = live_since(rec.get("source")) if live_since is not None else None
+        except Exception:
+            went_live = None
+        if isinstance(went_live, (int, float)):
+            since = max(since, went_live)
         oldest = max(oldest, now - since)
     ESCALATIONS_OPEN.set(open_n)
     ESCALATION_OLDEST_AGE.set(max(0.0, oldest))

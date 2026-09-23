@@ -243,3 +243,89 @@ def test_non_live_duplicate_is_left_alone(tmp_path, wired, kw):
     assert fx.removed == []
     assert not svc.arrivals.get(key).get("dup_removed")
     assert (tmp_path / "intake" / "manual" / "copy.m4b").exists()
+
+
+# --- pre-merge fix 1: a duplicate whose intake copy is already gone is handled quietly ------
+
+
+def _recorded_duplicate(tmp_path, *, present: bool, source="manual"):
+    import hashlib
+    data = b"AUDIO" * 100
+    sha = hashlib.sha256(data).hexdigest()
+    manual = tmp_path / "intake" / "manual"
+    manual.mkdir(parents=True, exist_ok=True)
+    path = manual / "old-copy.m4b"
+    if present:
+        path.write_bytes(data)
+    key = f"{source}:old-copy.m4b:{sha[:12]}"
+    return key, dict(source=source, source_id="old-copy.m4b", sha256=sha, book_id=2,
+                     path=str(path), primary=str(path))
+
+
+def test_vanished_duplicate_copy_is_marked_gone_quietly(tmp_path, wired, caplog):
+    svc, fx, fake, clock = wired()
+    key, fields = _recorded_duplicate(tmp_path, present=False)
+    svc.arrivals.record(key, states.DUPLICATE, **fields)
+    with caplog.at_level(logging.INFO, logger="app"):
+        svc.tick()
+        svc.tick()
+    rec = svc.arrivals.get(key)
+    assert rec["state"] == states.DUPLICATE and rec["dup_removed"] == "gone"
+    assert not rec.get("dup_failed") and not rec.get("attention")
+    assert fx.removed == []                              # never handed to the executor
+    assert pushes(svc, "attention") == [] and fake.tasks == {}
+    assert not [p for p in pushes(svc, "summary") if p["msg_id"].startswith("late:")]
+    assert svc.intents.latest_escalation(key) is None
+    assert sum("already gone" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_recorded_duplicate_with_its_copy_present_is_removed(tmp_path, wired):
+    svc, fx, fake, clock = wired()
+    key, fields = _recorded_duplicate(tmp_path, present=True)
+    svc.arrivals.record(key, states.DUPLICATE, **fields)
+    svc.tick()
+    assert fx.removed == [key]
+    assert svc.arrivals.get(key)["dup_removed"] is True
+
+
+def test_vanished_copy_with_a_staging_dir_goes_to_the_executor(tmp_path, wired):
+    from app import fsops
+    svc, fx, fake, clock = wired()
+    key, fields = _recorded_duplicate(tmp_path, present=False)
+    sdir = fsops.staging_dir(str(tmp_path / "intake"), key)
+    import os
+    os.makedirs(sdir)
+    svc.arrivals.record(key, states.DUPLICATE, **fields)
+    svc.tick()
+    assert fx.removed == [key]
+
+
+# --- pre-merge fix 3: an interrupted duplicate removal is finished even when non-live -------
+
+
+def _staged_duplicate(tmp_path, svc, *, staged_dir: bool):
+    import os
+    from app import fsops
+    key, fields = _recorded_duplicate(tmp_path, present=False)
+    sdir = fsops.staging_dir(svc.settings.intake_root, key)
+    if staged_dir:
+        os.makedirs(sdir)
+    svc.arrivals.record(key, states.DUPLICATE, **fields,
+                        dup={"staging_dir": sdir, "staged": [[fields["path"], sdir + "/x"]],
+                             "src": sdir + "/x"})
+    return key
+
+
+def test_interrupted_duplicate_removal_resumes_after_its_source_left_live(tmp_path, wired):
+    svc, fx, fake, clock = wired(live_sources=frozenset({"libation"}))
+    key = _staged_duplicate(tmp_path, svc, staged_dir=True)
+    svc.tick()
+    assert fx.removed == [key]
+
+
+def test_unstaged_duplicate_journal_of_a_non_live_source_is_left_alone(tmp_path, wired):
+    svc, fx, fake, clock = wired(live_sources=frozenset({"libation"}))
+    key = _staged_duplicate(tmp_path, svc, staged_dir=False)
+    svc.tick()
+    assert fx.removed == []
+    assert not svc.arrivals.get(key).get("dup_removed")

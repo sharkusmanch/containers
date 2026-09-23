@@ -192,13 +192,34 @@ def _next_job(svc, prefer):
             return "update", key
         for rec in svc.arrivals.by_state(states.DUPLICATE):
             if (rec.get("dup_removed") or rec.get("dup_failed")
-                    or not is_live(svc.settings, rec.get("source"))):
+                    or not (is_live(svc.settings, rec.get("source")) or _dup_staged(svc, rec))):
                 continue
             at = rec.get("dup_retry_at")
             if isinstance(at, (int, float)) and at > now:
                 continue
             return "dup", rec["key"]
     return None
+
+
+def _dup_staged(svc, rec) -> bool:
+    """Pre-merge fix 3: a duplicate removal interrupted mid-way (its intake
+    copy staged under `.executing/`, journaled as `dup`) is finished by the
+    executor even after its source stopped being live -- like a filing whose
+    journal reached the library. Needs an executor, i.e. DRY_RUN=false."""
+    j = rec.get("dup")
+    return (not svc.settings.dry_run and isinstance(j, dict)
+            and os.path.lexists(fsops.staging_dir(svc.settings.intake_root, rec["key"])))
+
+
+def _dup_copy_gone(svc, rec) -> bool:
+    """Pre-merge fix 1: the intake copy no longer exists (e.g. a duplicate
+    recorded during the dry run and cleared by hand since) and nothing of it
+    is staged -- there is nothing left to remove."""
+    path = rec.get("path")
+    if not isinstance(path, str) or not path:
+        return False                       # unknown: let the executor decide (fails closed)
+    return (not os.path.lexists(path)
+            and not os.path.lexists(fsops.staging_dir(svc.settings.intake_root, rec["key"])))
 
 
 def remove_duplicate(svc, key: str) -> None:
@@ -210,6 +231,13 @@ def remove_duplicate(svc, key: str) -> None:
     with svc.lock:
         rec = svc.arrivals.get(key)
         if rec is None or rec.get("state") != states.DUPLICATE:
+            return
+        if _dup_copy_gone(svc, rec):
+            # quietly handled: no escalation, push, task or late summary
+            svc.arrivals.record(key, states.DUPLICATE, dup_removed="gone", dup_retry_at=None,
+                                detail="duplicate intake copy already gone")
+            logger.info("arrival %s: duplicate intake copy already gone; nothing to remove",
+                        log_safe(key))
             return
     try:
         res = svc.executor.remove_duplicate(rec)
@@ -539,6 +567,17 @@ def resume_executing(svc) -> None:
 
 def _marker(svc, source) -> str:
     return os.path.join(svc.settings.state_dir, f"live-since-{source}")
+
+
+def live_since(svc, source):
+    """The time `source` went live (its `live-since-<source>` marker), or None."""
+    if source not in SOURCES:
+        return None
+    try:
+        with open(_marker(svc, source), encoding="utf-8") as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return None
 
 
 def clear_stale_markers(svc) -> None:

@@ -86,3 +86,34 @@ def test_tick_rebuilds_escalation_gauges(tmp_path, live_factory):
     svc.intents.record_escalation("r1", "manual:a:1", "q?", reason="x")
     svc.tick()
     assert sample("librarian_escalations_open") == 1
+
+
+# --- pre-merge fix 2: a dry-run-era escalation ages from the source's go-live -----------
+
+
+def test_escalation_age_counts_from_the_source_going_live(tmp_path, live_factory):
+    svc = live_factory(FakeModel(), FakeExecutor())
+    svc.arrivals.record("manual:a:1", states.NEEDS_DECISION, source="manual")
+    svc.intents.record_escalation("r1", "manual:a:1", "q?", reason="x")
+    ts = svc.intents.latest_escalation("manual:a:1")["ts"]
+    metrics.rebuild_escalations(svc.arrivals, svc.intents, lambda rec: True,
+                                now=ts + 30 * 86400,
+                                live_since=lambda src: ts + 30 * 86400 - 60 if src == "manual" else None)
+    assert 59 <= sample("librarian_escalation_oldest_age_seconds") <= 60
+    metrics.rebuild_escalations(svc.arrivals, svc.intents, lambda rec: True, now=ts + 1000,
+                                live_since=lambda src: None)
+    assert 999 <= sample("librarian_escalation_oldest_age_seconds") <= 1000
+
+
+def test_tick_ages_escalations_from_the_live_since_marker(tmp_path, live_factory):
+    import os
+    svc = live_factory(FakeModel(), FakeExecutor())
+    svc.arrivals.record("manual:a:1", states.NEEDS_DECISION, source="manual")
+    svc.intents.record_escalation("r1", "manual:a:1", "q?", reason="x")
+    svc.tick()
+    marker = os.path.join(svc.settings.state_dir, "live-since-manual")
+    assert os.path.exists(marker)
+    with open(marker, "w") as f:
+        f.write("99999999999\n")                  # went live after the escalation
+    svc.tick()
+    assert sample("librarian_escalation_oldest_age_seconds") == 0

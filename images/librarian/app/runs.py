@@ -430,7 +430,7 @@ def _line(svc, rec, key, intent) -> str:
         what = "deferred" if live else "would defer"
     elif st == states.DUPLICATE:
         icon = "♻️"
-        what = "duplicate removed" if rec.get("dup_removed") else "duplicate"
+        what = "duplicate removed" if rec.get("dup_removed") is True else "duplicate"
     else:
         what = "no decision"
     return f"{icon} {hint} — {what}"

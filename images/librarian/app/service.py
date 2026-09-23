@@ -402,7 +402,8 @@ class Service:
             self.notifier.flush()
         metrics.rebuild_arrivals(self.arrivals)
         metrics.rebuild_escalations(self.arrivals, self.intents,
-                                    lambda rec: execution.is_live(self.settings, rec.get("source")))
+                                    lambda rec: execution.is_live(self.settings, rec.get("source")),
+                                    live_since=lambda source: execution.live_since(self, source))
         self._prune_transcripts()
         self._prune_outbox()
 
@@ -410,10 +411,13 @@ class Service:
         execution.clear_stale_markers(self)
         if self.executor is None:
             waiting = (len(self.arrivals.by_state(states.EXECUTING))
-                       + len([r for r in self.arrivals.by_state(states.RETRYABLE) if r.get("exec_intent")]))
+                       + len([r for r in self.arrivals.by_state(states.RETRYABLE) if r.get("exec_intent")])
+                       + len([r for r in self.arrivals.by_state(states.DUPLICATE)
+                              if isinstance(r.get("dup"), dict) and not r.get("dup_removed")
+                              and not r.get("dup_failed")]))
             if waiting:
-                logger.warning("DRY_RUN: %d queued/executing filing(s) are left untouched until "
-                               "DRY_RUN=false", waiting)
+                logger.warning("DRY_RUN: %d queued/executing filing(s) or journaled duplicate "
+                               "removal(s) are left untouched until DRY_RUN=false", waiting)
             return
         stranded = [r for r in self.arrivals.by_state(states.RETRYABLE)
                     if r.get("exec_intent") and not execution.is_live(self.settings, r.get("source"))
