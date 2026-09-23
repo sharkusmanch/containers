@@ -94,12 +94,14 @@
   "expect": {
     "kind_in": [
       "attach",
-      "create_book"
+      "create_book",
+      "escalate"
     ],
     "book_id": 1301,
     "library": "adult",
     "forbid": {
       "library": "kids"
-    }
+    },
+    "_note": "The case tests the Kids boundary: an allowlisted author's adult book must never go to Kids (forbid.library). #1301 is the Tenth Anniversary Edition, a longer text than the original the audio may follow, so escalating over that edition doubt is a safe, legitimate outcome (controller ruling, Plan 2 Task 7 fix round 1)."
   }
 }
