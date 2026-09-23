@@ -23,6 +23,15 @@ after the PATCH the executor polls until the folder settles and verifies
 it is exactly the rendered target. A mismatch is attention, never a failure:
 the file is filed either way. rename-files is kept only for attach.
 
+Task 11 (go-live canary): /media/books is an NFS mount, and guard 8's lookup
+of the not-yet-existing target folder leaves a cached negative entry that
+this pod keeps answering ENOENT from after BookOrbit (another NFS client)
+created the folder. So the on-disk check of a listed file polls for up to
+VERIFY_MAX s, re-listing the directories above it on every look
+(fsops.fresh_lstat), and a failed check made right after BookOrbit's move is
+parked (`unverified`) rather than noted: a later successful check of the
+same filing -- this run or a resume -- drops it.
+
 Crash safety (Global "Crash-safe execution"): before every side effect the
 arrival record is rewritten in state `executing` with an `exec` journal
 `{intent_id, step, src, dst, dst_dir, snapshot, scan_after_id, book_id, ...}`.
@@ -49,6 +58,7 @@ and `os.rmdir` of our OWN still-empty `[lib-<sha12>]` dir on a failed create.
 import errno
 import logging
 import os
+import re
 import stat
 import threading
 import time
@@ -90,6 +100,15 @@ FETCH_MAX = 90           # s
 # sanitisation setting (app.bo_render); re-check the live settings at most
 # this often and refuse every PATCH/rename while they differ.
 NAMING_CHECK_TTL = 600   # s
+# Task 11: a file BookOrbit lists but this pod's NFS client cannot see yet
+# (a cached negative lookup; acdirmax is 60 s) is looked for this long
+# before it counts as missing.
+VERIFY_POLL = 3          # s between looks
+VERIFY_MAX = 90          # s
+# The failed on-disk check exactly as images before Task 11 journaled it,
+# as an ordinary note (see Executor._adopt_legacy_unverified).
+_LEGACY_UNVERIFIED = re.compile(
+    r"BookOrbit lists .+ for book \S+ but it is missing or the wrong size on disk", re.DOTALL)
 
 # One scan mutex for the process: the executor is the only BookOrbit writer
 # and every filing sequence runs under it end to end.
@@ -668,6 +687,8 @@ class Executor:
             return None
         try:
             os.rmdir(d)                       # only succeeds when empty
+        except FileNotFoundError:
+            return None                       # already gone: a stale NFS view still showed it
         except OSError:
             return f"left non-empty {d}"
         return None
@@ -675,6 +696,7 @@ class Executor:
     # --- the post-move sequence ----------------------------------------------
     def _continue(self, ctx, from_step: str) -> ExecResult:
         steps = STEPS[STEPS.index(from_step):]
+        self._adopt_legacy_unverified(ctx)
         notes = list(ctx.get("notes") or [])
         summary = None
 
@@ -710,6 +732,9 @@ class Executor:
                                      f"{type(ce).__name__}: {log_safe(ce)}")
         except Exception as e:
             return self._after_move_error(ctx, e)
+        # a parked failed on-disk check no later check disproved (attach whose
+        # rename step returned early) is still a reason to look
+        notes += [ctx["unverified"]] if ctx.get("unverified") else []
         escalate = "; ".join(notes) if notes else None
         detail = f"filed {ctx['dst']} into book {ctx['book_id']}"
         if ctx.get("final_path"):
@@ -727,6 +752,19 @@ class Executor:
             detail += f"; ESCALATE: {escalate}"
         return self._close(ctx, ExecResult(True, "filed", ctx["book_id"], detail,
                                            self._moves(ctx), escalate))
+
+    @staticmethod
+    def _adopt_legacy_unverified(ctx) -> None:
+        """A journal written before Task 11 carries a failed on-disk check as
+        an ordinary `notes` entry (the go-live canary's did, and its
+        successful retry escalated it). Park it as `unverified` -- what the
+        check produces today -- so the re-verify that follows drops it."""
+        notes = ctx.get("notes") or []
+        stale = [n for n in notes if isinstance(n, str) and _LEGACY_UNVERIFIED.fullmatch(n)]
+        if stale:
+            ctx["notes"] = [n for n in notes if n not in stale]
+            parked = ([ctx["unverified"]] if ctx.get("unverified") else []) + stale
+            ctx["unverified"] = "; ".join(parked)
 
     def _supplement_id(self, ctx) -> str:
         sid = ctx.get("source_id")
@@ -766,13 +804,37 @@ class Executor:
         return (loose[0], True) if len(loose) == 1 else (None, False)
 
     def _verify_local(self, d, f, ctx, loose=False) -> str:
+        """The on-disk path of file `f` BookOrbit lists for book `d`: a
+        regular file (lstat -- never through a symlink) of the arrival's size
+        inside the library, and, matched only by size+extension (`loose`),
+        of the arrival's sha256.
+
+        Task 11: BookOrbit may have moved the book seconds ago, and this
+        pod's NFS client can still answer ENOENT for the new folder from a
+        cached negative lookup (guard 8 looked it up before the PATCH). So
+        the disk is polled for up to VERIFY_MAX s, VERIFY_POLL s apart
+        (beating, and honouring stop, via _sleep), every look re-listing the
+        directories above the file first (fsops.fresh_lstat), before the
+        file counts as missing or the wrong size."""
         folder = self._local_folder(d, ctx["library"])
         p = os.path.join(folder, f["filename"])
-        if not fsops.is_under(p, self._lib_root(ctx["library"])):
+        root = self._lib_root(ctx["library"])
+        if not fsops.is_under(p, root):
             raise _Fail(f"listed file {p} is outside the library")
-        if os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) != ctx["size"]:
-            raise _Fail(f"BookOrbit lists {p} for book {d.get('id')} but it is missing or the "
-                        f"wrong size on disk")
+        start = self.clock()
+        while True:
+            st = fsops.fresh_lstat(p, root)
+            if st is not None and stat.S_ISREG(st.st_mode) and st.st_size == ctx["size"]:
+                break
+            waited = self.clock() - start
+            if waited >= VERIFY_MAX:
+                raise _Fail(f"BookOrbit lists {p} for book {d.get('id')} but it is missing or the "
+                            f"wrong size on disk (looked for {waited:.0f} s)")
+            self._sleep(VERIFY_POLL)
+        if self.clock() > start:
+            logger.info("%s showed up on disk after %.0f s", log_safe(p), self.clock() - start)
+        if not fsops.is_under(p, root):          # again, now that the whole path resolves
+            raise _Fail(f"listed file {p} is outside the library")
         if loose and self._hash(p) != ctx["sha256"]:
             # matched only by size+extension (a rename happened): prove it's ours
             raise _Integrity(f"{p} matched by size only and its sha256 is not the arrival's")
@@ -791,6 +853,7 @@ class Executor:
             raise _Fail(f"book {d.get('id')} is in {d.get('libraryName')!r}, expected {ctx['library']!r}")
         ctx["book_id"] = d["id"]
         ctx["final_path"] = self._verify_local(d, f, ctx, loose)
+        ctx.pop("unverified", None)           # verified on disk now (see _placement_note)
         return d
 
     def _find_new_book(self, ctx):
@@ -1056,15 +1119,23 @@ class Executor:
         return None
 
     def _placement_note(self, ctx, d, plan) -> str | None:
-        """_placement_problem for a filing, then re-locate the file on disk
-        (final_path) wherever it ended up."""
+        """_placement_problem for a filing (returned: attention), then
+        re-locate the file on disk (final_path) wherever it ended up.
+
+        Task 11: a failed re-locate is NOT returned as a note. It is parked
+        in ctx["unverified"] (journaled with the rest of ctx) and the next
+        successful _locate -- the rename step's, or a resume's re-verify --
+        drops it, so a slow NFS view never outlives the check that
+        disproves it. A create_book always re-locates in its rename step
+        (still failing = retryable); only one still parked when a filing
+        completes escalates (_continue)."""
         problem = self._placement_problem(d, plan, self._want(ctx))
         try:
             self._locate(ctx)
         except _Integrity:
             raise
         except _Fail as e:
-            problem = f"{problem}; {e}" if problem else str(e)
+            ctx["unverified"] = str(e)
         return problem
 
     # --- rename-files (attach only) ---------------------------------------------

@@ -2123,3 +2123,342 @@ def test_create_payload_and_render_normalise_whitespace_like_bookorbit(env):
     body = env.fake.patch_bodies[0][2]["metadata"]
     assert body["authors"] == ["Jane Author"] and body["seriesName"] == "The Saga"
     assert env.fake.books[r.book_id]["folderPath"] == "/books/Library/Jane Author/The Saga/02. New Book"
+
+
+# --- Task 11: NFS lookup-cache lag after BookOrbit's move; stale placement notes --------------
+
+
+class StaleNfsView:
+    """The librarian pod's NFS client as the go-live canary met it.
+
+    A lookup the LIBRARIAN makes under the library root that finds nothing
+    caches a negative entry for the first missing path component -- guard
+    8's `lexists` of the folder BookOrbit is about to move the book into
+    does exactly that. Every later lookup through that component answers
+    ENOENT from the cache, although BookOrbit (another NFS client) has since
+    created it, until the component's parent directory is listed
+    (`listing_revalidates`: opening a directory forces a GETATTR, and a
+    changed directory drops its negative entries) or the entry is
+    `expire_after` s old on the FakeClock (the attribute-cache timeout;
+    None = never). The librarian's own mkdir/link replace an entry at once,
+    as they do on NFS. Filesystem calls made while the fake BookOrbit runs
+    (anything under its transport) are the other client: they see the
+    real disk and never touch the cache."""
+
+    def __init__(self, env, monkeypatch, *, listing_revalidates=True, expire_after=None):
+        self.root = str(env.books_root)
+        self.clock = env.clock
+        self.listing_revalidates = listing_revalidates
+        self.expire_after = expire_after
+        self.negative = {}            # path -> FakeClock time the miss was cached
+        self.recorded = []            # every entry ever cached, in order
+        self.revalidated = []         # directories whose listing dropped an entry
+        self.hidden = 0               # lookups answered ENOENT from the cache
+        self._server = 0
+        self._real = {n: getattr(os, n) for n in ("lstat", "stat", "listdir", "mkdir", "link")}
+        transport = env.fake.transport
+
+        def server_side(*a, **k):
+            self._server += 1
+            try:
+                return transport(*a, **k)
+            finally:
+                self._server -= 1
+
+        monkeypatch.setattr(env.fake, "transport", server_side)
+        monkeypatch.setattr(os, "lstat", self._lookup(self._real["lstat"]))
+        monkeypatch.setattr(os, "stat", self._lookup(self._real["stat"]))
+        monkeypatch.setattr(os, "listdir", self._listdir)
+        monkeypatch.setattr(os, "mkdir", self._create(self._real["mkdir"], 0))
+        monkeypatch.setattr(os, "link", self._create(self._real["link"], 1))
+
+    def _mine(self, path):
+        """`path` normalised if this client's view applies to it, else None."""
+        if self._server or isinstance(path, int):
+            return None
+        try:
+            p = os.fspath(path)
+        except TypeError:
+            return None
+        if not isinstance(p, str):
+            return None
+        p = os.path.normpath(p if os.path.isabs(p) else os.path.join(os.getcwd(), p))
+        return p if p.startswith(self.root + os.sep) else None
+
+    def _cached(self, p):
+        for n, t in list(self.negative.items()):
+            if self.expire_after is not None and self.clock() - t >= self.expire_after:
+                del self.negative[n]
+            elif p == n or p.startswith(n + os.sep):
+                return n
+        return None
+
+    def _remember_miss(self, p):
+        cur = self.root
+        for part in os.path.relpath(p, self.root).split(os.sep):
+            cur = os.path.join(cur, part)
+            try:
+                self._real["lstat"](cur)
+            except FileNotFoundError:
+                if cur not in self.negative:
+                    self.negative[cur] = self.clock()
+                    self.recorded.append(cur)
+                return
+            except OSError:
+                return
+
+    def _hide(self, path):
+        self.hidden += 1
+        raise FileNotFoundError(errno.ENOENT, "No such file or directory (NFS lookup cache)", path)
+
+    def _lookup(self, real_fn):
+        def fn(path, *a, **k):
+            p = self._mine(path)
+            if p is None:
+                return real_fn(path, *a, **k)
+            if self._cached(p) is not None:
+                self._hide(path)
+            try:
+                return real_fn(path, *a, **k)
+            except FileNotFoundError:
+                self._remember_miss(p)
+                raise
+        return fn
+
+    def _listdir(self, path="."):
+        p = self._mine(path)
+        if p is not None:
+            if self._cached(p) is not None:
+                self._hide(path)
+            if self.listing_revalidates:
+                dropped = [n for n in self.negative if os.path.dirname(n) == p]
+                for n in dropped:
+                    del self.negative[n]
+                if dropped:
+                    self.revalidated.append(p)
+        try:
+            return self._real["listdir"](path)
+        except FileNotFoundError:
+            if p is not None:
+                self._remember_miss(p)
+            raise
+
+    def _create(self, real_fn, dst_arg):
+        def fn(*a, **k):
+            out = real_fn(*a, **k)
+            p = self._mine(a[dst_arg]) if len(a) > dst_arg else None
+            if p is not None:
+                self.negative.pop(p, None)
+            return out
+        return fn
+
+
+def test_fresh_lstat_lists_every_level_top_down_before_the_lookup(tmp_path, monkeypatch):
+    """The cached miss lives in the deepest directory that already existed
+    (the author dir in the canary), so every level from the library root
+    down is listed -- the file's own parent may itself be the hidden name."""
+    from app import fsops
+    root = tmp_path / "Library"
+    (root / "A" / "S" / "B").mkdir(parents=True)
+    (root / "A" / "S" / "B" / "f.epub").write_bytes(b"x")
+    (root / "top.epub").write_bytes(b"tt")
+    seen = []
+    real = os.listdir
+    monkeypatch.setattr(os, "listdir", lambda d: seen.append(str(d)) or real(d))
+
+    assert fsops.fresh_lstat(str(root / "A" / "S" / "B" / "f.epub"), str(root)).st_size == 1
+    assert seen == [str(root), str(root / "A"), str(root / "A" / "S"), str(root / "A" / "S" / "B")]
+    seen.clear()
+    assert fsops.fresh_lstat(str(root / "A" / "X" / "B" / "f.epub"), str(root)) is None
+    assert seen == [str(root), str(root / "A"), str(root / "A" / "X")]   # stops at the first unlistable level
+    seen.clear()
+    assert fsops.fresh_lstat(str(root / "top.epub"), str(root)).st_size == 2
+    assert seen == [str(root)]
+
+
+def lose_the_file_when_bookorbit_moves_it(env, monkeypatch):
+    """BookOrbit lists the moved file, but the disk has nothing there (it is
+    parked outside the library; put it back with `restore(lost)`)."""
+    real = env.fake._rename_files
+    lost = {}
+
+    def rename_then_lose(bid):
+        real(bid)
+        b = env.fake.books[bid]
+        folder = env.fake._local(b["folderPath"])
+        for f in b["files"]:
+            p = os.path.join(folder, f["filename"])
+            if os.path.isfile(p):
+                lost[p] = str(env.tmp / f"lost-{len(lost)}-{f['filename']}")
+                os.rename(p, lost[p])
+    monkeypatch.setattr(env.fake, "_rename_files", rename_then_lose)
+    return lost
+
+
+def restore(lost):
+    for p, parked in lost.items():
+        os.rename(parked, p)
+
+
+def test_nfs_negative_lookup_is_revalidated_by_listing_and_files_at_once(env, monkeypatch, caplog):
+    """The go-live canary: guard 8's lexists cached ENOENT for the folder
+    BookOrbit then moved the book into; one stat of the file failed ->
+    retryable (+1 h) and a false attention task on the successful retry.
+    Listing the directories above the file drops the stale entry."""
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    nfs = StaleNfsView(env, monkeypatch)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    with caplog.at_level("INFO"):
+        r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed" and not r.escalate, r.detail
+    assert not [m for m in caplog.messages if "showed up on disk" in m]    # no wait was needed
+    author = str(env.books_root / "Library" / "Jane Author")
+    assert os.path.join(author, "Saga") in nfs.recorded          # guard 8 cached the miss ...
+    assert author in nfs.revalidated                             # ... the listing dropped it
+    final = env.books_root / "Library" / "Jane Author" / "Saga" / "02. New Book" / "02. New Book.m4b"
+    assert r.moves == [(arr["primary"], str(final), 5000)]
+    j = env.arrivals.get(arr["key"])["exec"]
+    assert not j.get("attempts") and not j.get("unverified") and not j.get("notes")
+
+
+def test_nfs_negative_lookup_listing_cannot_clear_is_polled_out(env, monkeypatch, caplog):
+    """Even when listing does not revalidate (e.g. a nocto mount), the disk
+    is polled until the cached miss expires -- within the 90 s budget."""
+    assert (executor_mod.VERIFY_MAX, executor_mod.VERIFY_POLL) == (90, 3)
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    nfs = StaleNfsView(env, monkeypatch, listing_revalidates=False, expire_after=30)
+    monkeypatch.setattr(executor_mod, "VERIFY_POLL", 2)       # tell its sleeps from the settle's
+    ex = env.executor()
+    env.snapshot_tree()
+
+    with caplog.at_level("INFO"):
+        r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed" and not r.escalate, r.detail
+    assert nfs.hidden and env.clock.sleeps.count(2) >= 3       # it waited the cached miss out
+    assert [m for m in caplog.messages if "02. New Book.m4b showed up on disk after" in m]
+    j = env.arrivals.get(arr["key"])["exec"]
+    assert not j.get("attempts") and not j.get("unverified")
+
+
+def test_file_really_missing_after_the_poll_budget_is_retryable_then_resume_files_clean(env, monkeypatch):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    lost = lose_the_file_when_bookorbit_moves_it(env, monkeypatch)
+    monkeypatch.setattr(executor_mod, "VERIFY_MAX", 9)        # small injected budget
+    monkeypatch.setattr(executor_mod, "VERIFY_POLL", 2)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.state == "retryable" and "missing or the wrong size on disk" in r.detail, r.detail
+    # two looks (the placement check, then the rename step), each at 0,2,..,10 s
+    assert env.clock.sleeps.count(2) == 10
+    j = env.arrivals.get(arr["key"])["exec"]
+    assert j["open"] and j["step"] == "renamed" and j["attempts"] == 1
+    assert "missing or the wrong size on disk" in j["unverified"]     # genuine: kept pending
+    assert not j.get("notes")
+
+    restore(lost)                                                    # the file turns up
+    r2 = ex.resume(env.arrivals.get(arr["key"]))
+
+    assert r2.ok and r2.state == "filed" and not r2.escalate, r2.detail
+    assert "ESCALATE" not in r2.detail
+    j = env.arrivals.get(arr["key"])["exec"]
+    assert not j.get("unverified") and j["outcome"]["escalate"] is None
+
+
+def test_resume_drops_a_legacy_journaled_placement_note_once_the_file_verifies(env, monkeypatch):
+    """The canary's own journal: the image before Task 11 journaled the
+    failed check as an ordinary `exec.notes` entry, and the successful retry
+    turned it into a false attention task. A genuine note next to it stays."""
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    lost = lose_the_file_when_bookorbit_moves_it(env, monkeypatch)
+    monkeypatch.setattr(executor_mod, "VERIFY_MAX", 3)
+    ex = env.executor()
+    env.snapshot_tree()
+    assert ex.execute(intent_create(arr), arr, {}).state == "retryable"
+    j = dict(env.arrivals.get(arr["key"])["exec"])
+    del j["unverified"]
+    stale = (f"BookOrbit lists {next(iter(lost))} for book {j['book_id']} but it is missing or the "
+             f"wrong size on disk")
+    genuine = (f"BookOrbit left book {j['book_id']} at '/books/Library/x' instead of moving it to "
+               f"'y' (rename skipped or still pending); its file stays filed there")
+    j["notes"] = [stale, genuine]
+    env.arrivals.record(arr["key"], states.EXECUTING, exec=j)
+    restore(lost)
+
+    r = ex.resume(env.arrivals.get(arr["key"]))
+
+    assert r.ok and r.state == "filed", r.detail
+    assert r.escalate == genuine
+
+
+def test_placement_check_disproved_later_in_the_same_run_leaves_no_note(env, monkeypatch):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    lost = lose_the_file_when_bookorbit_moves_it(env, monkeypatch)
+    monkeypatch.setattr(executor_mod, "VERIFY_MAX", 3)
+    real = Executor._placement_note
+    seen = []
+
+    def check_then_turn_up(self, ctx, d, plan):
+        out = real(self, ctx, d, plan)
+        seen.append((out, ctx.get("unverified")))
+        restore(lost)                                  # visible before the rename step looks
+        return out
+    monkeypatch.setattr(Executor, "_placement_note", check_then_turn_up)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert len(seen) == 1 and seen[0][0] is None                     # no placement problem ...
+    assert "missing or the wrong size on disk" in (seen[0][1] or "")  # ... the disk check failed
+    assert r.ok and r.state == "filed" and not r.escalate, r.detail
+    assert not env.arrivals.get(arr["key"])["exec"].get("attempts")
+
+
+def test_stop_while_polling_the_disk_is_retryable_and_not_an_attempt(env, monkeypatch):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    lose_the_file_when_bookorbit_moves_it(env, monkeypatch)
+    monkeypatch.setattr(executor_mod, "VERIFY_POLL", 2)
+    real_sleep = env.clock.sleep
+
+    def sleep(s):
+        real_sleep(s)
+        if s == 2:
+            env.stop = True
+    env.clock.sleep = sleep
+    ex = env.executor()
+    env.snapshot_tree()
+    beats = env.beats
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.state == "retryable" and "stopping" in r.detail, r.detail
+    assert env.clock.sleeps.count(2) == 1 and env.beats > beats
+    j = env.arrivals.get(arr["key"])["exec"]
+    assert j["open"] and not j.get("attempts")
+
+
+def test_own_lib_dir_already_gone_is_not_reported_left_behind(env, monkeypatch):
+    """A stale NFS view can still show our [lib-] dir right after BookOrbit
+    moved it away; rmdir then answers ENOENT -- gone, not "left non-empty"."""
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    made = env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]"
+    made.mkdir(parents=True)
+    env.snapshot_tree()
+    ctx = {"key": arr["key"], "dst_dir": str(made)}
+
+    def gone(p, *a, **k):
+        raise FileNotFoundError(errno.ENOENT, "No such file or directory", p)
+    monkeypatch.setattr(executor_mod.os, "rmdir", gone)
+    assert ex._rmdir_own(ctx) is None
+    monkeypatch.undo()
+    (made / "x.m4b").write_bytes(b"x")
+    assert ex._rmdir_own(ctx) == f"left non-empty {made}"
+
