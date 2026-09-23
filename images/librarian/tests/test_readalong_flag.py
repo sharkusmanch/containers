@@ -60,3 +60,14 @@ def test_field_id_by_key_and_missing_is_an_error():
         assert FIELD_KEY in str(e)
     else:
         raise AssertionError("expected RuntimeError")
+
+
+def test_a_book_deleted_since_the_listing_does_not_stop_the_sync():
+    class Gone(Lib):
+        def detail(self, book_id):
+            if book_id == 5:
+                raise RuntimeError("GET /books/5 -> HTTP 404: gone")
+            return super().detail(book_id)
+    lib = Gone(details={6: {"id": 6, "libraryId": 7}})
+    assert sync_flags(lib, [rec(5, False), rec(6, True)], 2, libraries=(7, 8), dry_run=False) == (1, 1)
+    assert lib.set == [(6, 2, True)]

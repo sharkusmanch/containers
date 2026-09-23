@@ -36,7 +36,7 @@ def test_select_funnel_and_order(tmp_path):
     st.refuse(5, (51, 100, 52, 200), "D", ["grade D"], now=1)
     st.refuse(6, (61, 100, 62, 200), "D", ["grade D"], now=1)
     for _ in range(ERROR_LIMIT):
-        st.add_error(7, (71, 100, 72, 200), "boom", now=1)
+        st.add_error(7, (71, 100, 72, 200), "boom", now=NOW - 3600)
     books = [
         book(1, PAIR, updated="2026-09-22T10:00:00.000Z"),
         book(2, [f(21, "epub", 1, False), f(22, "m4b", 2)], updated="2026-09-23T20:00:00.000Z"),
@@ -66,3 +66,16 @@ def test_an_unparseable_timestamp_counts_as_too_recent(tmp_path):
     st = State.load(str(tmp_path / "s.json"))
     chosen, funnel = select([book(1, PAIR, updated="yesterday-ish")], st, NOW, quiet_hours=2)
     assert chosen == [] and funnel["too_recent"] == 1
+
+
+def test_a_give_up_expires(tmp_path):
+    """Errors can be transient: after GIVE_UP_DAYS a given-up book gets one more try."""
+    from app.readalong.state import GIVE_UP_DAYS
+    st = State.load(str(tmp_path / "s.json"))
+    for _ in range(ERROR_LIMIT):
+        st.add_error(1, (1, 100, 2, 200), "boom", now=NOW - GIVE_UP_DAYS * 86400 - 60)
+    chosen, funnel = select([book(1, PAIR)], st, NOW, quiet_hours=2)
+    assert [b["id"] for b in chosen] == [1]
+    st.add_error(1, (1, 100, 2, 200), "boom again", now=NOW)      # one more failure: given up again
+    chosen, funnel = select([book(1, PAIR)], st, NOW, quiet_hours=2)
+    assert chosen == [] and funnel["error_limit"] == 1

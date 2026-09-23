@@ -9,6 +9,8 @@ import copy
 import os
 import zipfile
 
+from app.readalong.job import BookGone
+
 OVERLAY = b"OVERLAY"
 
 
@@ -87,9 +89,16 @@ class FakeLibrary:
         return [self._books[k] for k in sorted(self._books)]
 
     def set_flag(self, book_id, fid, value):
+        if book_id not in self._books:
+            raise BookGone(book_id)
         self._books[book_id]["customMetadata"] = [{"fieldId": fid, "key": "read_along", "value": value}]
 
+    def remove_book(self, bid):
+        del self._books[bid]
+
     def detail(self, bid):
+        if bid not in self._books:
+            raise BookGone(bid)                 # what the job's BookOrbit adapter raises on a 404
         b = copy.deepcopy(self._books[bid])
         for f in b["files"]:
             f.pop("_ino", None)
@@ -121,6 +130,8 @@ class FakeLibrary:
             kept = []
             for name in on_disk:
                 p = os.path.join(folder, name)
+                if not os.path.isfile(p):            # a sub-folder is not one of the book's files
+                    continue
                 st = os.stat(p)
                 rec = by_name.get(name)
                 if rec is None:                      # unknown path: inode, if its old path is gone

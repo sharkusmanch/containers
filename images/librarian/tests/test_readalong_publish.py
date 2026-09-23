@@ -4,7 +4,7 @@ import os
 
 import pytest
 
-from app.readalong.publish import PublishConflict, PublishError, _problem, publish
+from app.readalong.publish import FilesChanged, PublishConflict, PublishError, _problem, publish
 from tests.readalong_fakes import OVERLAY, FakeLibrary
 
 FOLDER = "Author/Series/01. Title"
@@ -112,13 +112,14 @@ def test_a_foreign_file_at_the_ebook_name_stops_everything(env):
 
 def test_a_file_landing_at_the_plain_name_before_the_rename_scan_stops_safely(env):
     """BookOrbit rebinds the plain EPUB's record to whatever sits at its old
-    path, so the pair no longer matches: stop, overwrite nothing."""
+    path, so the book no longer holds one EPUB + one m4b: stop (the job
+    abandons the alignment), overwrite nothing."""
     lib, folder, staged, run, _ = env
 
     def stray(fake):
         (folder / "01. Title.epub").write_bytes(b"STRAY")
     lib.hook_before_scan = stray
-    with pytest.raises(PublishError, match="not recorded the renames"):
+    with pytest.raises(FilesChanged):
         run()
     assert (folder / "01. Title.epub").read_bytes() == b"STRAY"
     assert (folder / "01. Title (ebook).epub").read_bytes() == b"PLAIN-EPUB"
@@ -221,3 +222,28 @@ def test_paths_outside_the_roots_are_refused(env):
     with pytest.raises(PublishError, match="not under"):
         publish(lib, 111, "/etc/passwd", (11, 10, 12, 50), media_books=str(folder.parents[2]),
                 staging_dir=str(staged.parent), sleep=clock.sleep, clock=clock)
+
+
+def test_a_file_attached_during_alignment_is_files_changed_not_published(env):
+    """Review I3: a second m4b filed by the librarian while Storyteller aligned."""
+    lib, folder, staged, run, _ = env
+    (folder / "Title (Unabridged).m4b").write_bytes(b"OTHER AUDIO")
+    lib.scan(7)
+    with pytest.raises(FilesChanged):
+        run()
+    assert names(folder) == ["01. Title.epub", "Title (Unabridged).m4b", "Title [B0X].m4b"]
+    assert staged.exists()
+
+
+def test_a_book_moved_during_the_publish_stops_before_the_link(env):
+    lib, folder, staged, run, _ = env
+
+    def move(fake):                                  # BookOrbit renamed the book mid-publish (disk + record)
+        os.rename(folder, folder.parent / "01. Renamed")
+        fake._books[111]["folderPath"] = "/books/Author/Series/01. Renamed"
+    lib.hook_before_scan = move
+    with pytest.raises(PublishError, match="moved"):
+        run()
+    moved = folder.parent / "01. Renamed"
+    assert not any(os.path.samefile(staged, moved / n) for n in os.listdir(moved))
+    assert staged.exists()

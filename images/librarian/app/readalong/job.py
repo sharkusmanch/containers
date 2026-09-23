@@ -1,37 +1,48 @@
 """The nightly read-along run.
 
 One book at a time through Storyteller: import -> align -> download -> gate
--> publish -> verify -> clean up. New books start only in the first
-START_HOURS of the run (and only if their estimated alignment fits the run);
-polling stops at RUN_HOURS or on SIGTERM and the run exits. Storyteller keeps
-aligning, and the next run picks the book up from the state file. Every step
-re-derives the truth from BookOrbit, Storyteller and the disk; the stage of a
-book is read from the disk BEFORE anything is downloaded or linked.
+-> (release Storyteller's copy) -> publish -> verify. New books start only in
+the first START_HOURS of the run and only if their estimated alignment fits;
+polling stops at RUN_HOURS or on SIGTERM, and no publish begins in the last
+FINISH_HOURS. Storyteller keeps aligning; the next run picks the book up from
+the state file. Every step re-derives the truth from BookOrbit, Storyteller
+and the disk, and a book's stage is read from the disk BEFORE anything is
+downloaded or linked.
 
-Outcomes a person hears about (one push per run, only when something
-happened; code sends it, never a model): published; refused (only for a real
-grade the gate rejects -- remembered for that exact file pair); blocked (a
-file that is not the book's holds a name we need: told once, retried every
-run until it is gone); failed (retried the next run, given up after
-ERROR_LIMIT tries on the same pair); abandoned (the book's files changed under
-us); stuck (a book of ours, or someone else's, has held Storyteller for more
-than STUCK_HOURS).
+Once a read-along passes the gate and is staged (fsync'ed, on the library's
+filesystem), Storyteller's copy is cancelled and deleted: publishing needs
+only the staged file. Only a Storyteller book this job created (or provably
+adopted after a kill) is ever cancelled or deleted.
+
+What a person hears (one push per run, only when something happened; code
+sends it, never a model; an undelivered push is re-sent by the next run):
+published; refused (a real grade the gate rejects -- remembered for that exact
+file pair); blocked (a file BookOrbit does not list holds a name we need:
+parked, told after a day and weekly after that); failed (counted once a
+night, given up after ERROR_LIMIT); abandoned (the files changed, a
+read-along appeared from elsewhere, the book was deleted or opted out);
+stuck (Storyteller has held a book for over STUCK_HOURS). A run that cannot
+work at all exits 1: the Job retries in the same window, then fails and
+alerts.
 """
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
 from app.readalong import gate, patch, smil
-from app.readalong.candidates import ERROR_LIMIT, is_readalong_file, pair_key, select
+from app.readalong.candidates import OPT_OUT_TAG, is_readalong_file, opted_out, pair_key, select
 from app.readalong.flag import field_id, sync_flags
-from app.readalong.publish import PublishConflict, PublishError, local_path, publish
-from app.readalong.state import State
+from app.readalong.publish import (FilesChanged, PublishConflict, PublishError, local_path, publish, rekey,
+                                   targets)
+from app.readalong.state import ERROR_LIMIT, State
+from app.readalong.storyteller import StorytellerHTTPError
 
 logger = logging.getLogger(__name__)
 
@@ -40,22 +51,31 @@ QUERY_PAGE = 100
 # CPU Storyteller (4 cores, CTC): ~3-5 min per audio-hour, measured on the pilot.
 MINUTES_PER_AUDIO_HOUR = 6
 EARLY_START_HOURS = 0.25          # a book too long for any night still starts at the top of a run
+FINISH_HOURS = 1.0                # a publish can take an hour (scan waits, verify): none begins later
+ERROR_INTERVAL = 6 * 3600         # count at most one failure per book per night (the Job's retry pods)
+ADOPT_SLACK = 120                 # seconds of clock skew allowed when adopting an import
+BLOCKED_TELL_AFTER = 20 * 3600    # a blocker often clears by itself (a scan, BookOrbit's own rename)
+RETELL_BLOCKED = 7 * 86400
 
 
 class JobError(Exception):
     """The run cannot do its job at all (exit 1)."""
 
 
+class BookGone(Exception):
+    """BookOrbit answers 404 for the book."""
+
+
 # --- Storyteller status -----------------------------------------------------------
-# beta.38: `readaloud.status` (QUEUED / PROCESSING / ALIGNED, the bulk run's
-# contract) and, while a job exists, `processingJob.status` (QUEUED / RUNNING /
-# PAUSED / DONE / ERROR / CANCELED; null once finished).
-RUNNING, PAUSED, DONE, FAILED = "running", "paused", "done", "failed"
+# beta.38: `readaloud.status` (CREATED / QUEUED / PROCESSING / ALIGNED / ERROR /
+# STOPPED) and, while a job exists, `processingJob.status` (QUEUED / RUNNING /
+# PAUSED / DONE / ERROR / CANCELED; null once finished or failed).
+RUNNING, PAUSED, DONE, FAILED, NOT_STARTED = "running", "paused", "done", "failed", "not-started"
 
 
 def phase(book):
-    """The job's own status wins while a job exists: a PAUSED job still shows
-    `readaloud.status` PROCESSING and would otherwise be waited on forever."""
+    """The job's own status wins while a job exists: a PAUSED job shows
+    `readaloud.status` STOPPED/PROCESSING and would otherwise be misread."""
     job = book.get("processingJob") if isinstance(book.get("processingJob"), dict) else {}
     ra = book.get("readaloud") if isinstance(book.get("readaloud"), dict) else {}
     js, rs = str(job.get("status") or "").upper(), str(ra.get("status") or "").upper()
@@ -68,10 +88,35 @@ def phase(book):
             return DONE
         if rs in ("QUEUED", "PROCESSING"):
             return RUNNING
-    return FAILED                     # ERROR, CANCELED, or anything unknown: never a refusal
+        if rs in ("", "CREATED") and not js:
+            return NOT_STARTED                # imported, never processed (a run died in between)
+    return FAILED                     # ERROR, STOPPED, CANCELED, or anything unknown: never a refusal
+
+
+def st_created(book):
+    """Storyteller writes `2026-09-22 07:53:21`: UTC, with no zone marker."""
+    try:
+        dt = datetime.fromisoformat(str(book.get("createdAt")).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _norm(s):
+    return re.sub(r"[^0-9a-z]+", " ", (s or "").casefold()).strip()
+
+
+def titles_match(a, b):
+    a, b = _norm(a), _norm(b)
+    return bool(a and b) and (a in b or b in a)
 
 
 # --- BookOrbit adapter (the librarian's allowlisted client/writer) ------------------
+
+_DETAIL_404 = re.compile(r"GET /books/\d+ -> HTTP 404:")
+
 
 class Bookorbit:
     def __init__(self, client, writer, *, scan_timeout=1800):
@@ -90,7 +135,12 @@ class Bookorbit:
             page += 1
 
     def detail(self, book_id):
-        return self.client.get(f"/books/{book_id}")
+        try:
+            return self.client.get(f"/books/{book_id}")
+        except RuntimeError as e:        # the client's message starts with "GET <path> -> HTTP <status>:"
+            if _DETAIL_404.match(str(e)):
+                raise BookGone(book_id) from None
+            raise
 
     def scan_running(self, library_id):
         return self.writer.scan_running(library_id)
@@ -125,13 +175,6 @@ def send_push(url, title, body, *, post=requests.post, sleep=time.sleep):
     return False
 
 
-def _st_created(book):
-    try:
-        return datetime.fromisoformat(str(book.get("createdAt")).replace("Z", "+00:00")).timestamp()
-    except ValueError:
-        return None
-
-
 # --- the run -------------------------------------------------------------------------
 
 class Job:
@@ -139,11 +182,17 @@ class Job:
                  duration=m4b_seconds):
         self.s, self.bo, self.st, self._push = settings, bo, st, push
         self.clock, self.sleep, self.duration = clock, sleep, duration
-        self.t0 = clock()
         self.stopping = False
         self.lines, self.published, self.refused = [], 0, 0
         self.handled = set()
         self.state = State.load(os.path.join(settings.state_dir, "readalong.json"))
+        self.t0 = clock()
+        started = self.state.run.get("started")
+        # a retry pod of the same Job continues its night's window rather than opening a new one
+        self.resumed_window = (not settings.dry_run and isinstance(started, (int, float))
+                               and 0 <= self.t0 - started < settings.run_hours * 3600)
+        if self.resumed_window:
+            self.t0 = started
 
     def on_sigterm(self, *_):
         logger.warning("SIGTERM: stopping at the next safe point")
@@ -156,6 +205,10 @@ class Job:
     def must_stop(self):
         return self.stopping or self.elapsed_hours() >= self.s.run_hours
 
+    def late(self):
+        """No publish begins now: it could outlast the run and be killed half-way."""
+        return self.stopping or self.elapsed_hours() > self.s.run_hours - FINISH_HOURS
+
     def fits(self, seconds):
         """Start a book only if its estimated alignment ends inside this run --
         except at the very top of a run, so a book too long for any one night
@@ -165,7 +218,28 @@ class Job:
         estimate = (seconds / 3600) * MINUTES_PER_AUDIO_HOUR / 60 + 10 / 60
         return self.elapsed_hours() < EARLY_START_HOURS or self.elapsed_hours() + estimate <= self.s.run_hours
 
-    # helpers ------------------------------------------------------------------------
+    # Storyteller calls -------------------------------------------------------------------
+    def _st(self, fn, *a):
+        """One retry after re-authenticating on a 401 -- a request refused for
+        its token was never executed, so even create_book is safe to repeat."""
+        try:
+            return fn(*a)
+        except StorytellerHTTPError as e:
+            if e.status != 401:
+                raise
+            self.st.relogin()
+            return fn(*a)
+
+    def _st_book(self, uuid):
+        """None when Storyteller answers 404: the book is gone."""
+        try:
+            return self._st(self.st.book, uuid)
+        except StorytellerHTTPError as e:
+            if e.status == 404:
+                return None
+            raise
+
+    # bookkeeping -----------------------------------------------------------------------
     def _save(self):
         self.state.save()
 
@@ -173,89 +247,137 @@ class Job:
         return (detail or {}).get("title") or fl.get("title") or f"book {fl['book']}"
 
     def _staged(self, fl):
-        return os.path.join(self.s.staging_dir, f"{fl['book']}-{fl['uuid']}.epub")
+        return fl.get("staged") or os.path.join(self.s.staging_dir, f"{fl['book']}-{fl['uuid']}.epub")
 
     def _drop_staged(self, fl):
-        """Our staging names only; a staged read-along already linked into the
+        """Our staging names only: a staged read-along already linked into the
         library keeps its library name."""
-        for p in (self._staged(fl), self._staged(fl) + ".part", self._staged(fl) + ".patched"):
+        if not fl.get("uuid") and not fl.get("staged"):
+            return
+        base = self._staged(fl)
+        for p in (base, base + ".part", base + ".patched"):
             if os.path.lexists(p):
                 os.unlink(p)
 
-    def _st(self, fn, *a, **k):
-        try:
-            return fn(*a, **k)
-        except RuntimeError as e:
-            if "401" not in str(e):
-                raise
-            self.st.relogin()
-            return fn(*a, **k)
-
-    def _close(self, fl, outcome, detail):
-        """The Storyteller book is ours (its uuid is in our state): delete it."""
-        self.handled.add(fl["book"])
-        if fl.get("uuid"):
+    def _release(self, fl):
+        """Free our Storyteller book: cancel first (a DELETE does not stop an
+        alignment), then delete. 404s are fine: already gone."""
+        if fl.get("uuid") and not fl.get("st_released"):
+            self._st(self.st.cancel_processing, fl["uuid"])
             self._st(self.st.delete_book, fl["uuid"])
-            self._drop_staged(fl)
+            fl["st_released"] = True
+            self._save()
+
+    def _close(self, fl, outcome, detail, line=None):
+        """Finish with a book, telling `line`. Marked first (with its line), so
+        a run killed half-way through is completed -- and told -- by the next."""
+        self.handled.add(fl["book"])
+        if fl.get("closing") != outcome:
+            fl["closing"], fl["closing_line"] = outcome, line
+            self._save()
+        self._release(fl)
+        self._drop_staged(fl)
         self.state.record(outcome, fl["book"], detail, now=self.clock())
-        self.state.in_flight = None
+        if self.state.in_flight is fl:
+            self.state.in_flight = None
+        self.state.blocked.pop(str(fl["book"]), None)
         self._save()
+        self.published += outcome == "published"
+        self.refused += outcome == "refused"
+        if line:
+            self.lines.append(line)
 
     def _fail(self, fl, why, d=None):
-        self.handled.add(fl["book"])            # one attempt per book per run
-        n = self.state.add_error(fl["book"], fl["pair"], why, now=self.clock())
+        """One counted failure per book per night; given up at ERROR_LIMIT."""
+        self.handled.add(fl["book"])
+        n = self.state.add_error(fl["book"], fl["pair"], why, now=self.clock(), min_interval=ERROR_INTERVAL)
         if n >= ERROR_LIMIT:
-            self._close(fl, "gave-up", why)
-            self.lines.append(f"⚠️ {self._title(fl, d)} — gave up after {n} tries: {why[:120]}")
+            self._close(fl, "gave-up", {"uuid": fl.get("uuid"), "why": why},
+                        f"⚠️ {self._title(fl, d)} — gave up after {n} tries: {why[:120]}")
         else:
             self._save()
             self.lines.append(f"⚠️ {self._title(fl, d)} — failed ({why[:120]}); retrying next run")
 
-    def _linked(self, fl, d):
-        """True when the staged read-along is already in the library (a run was
-        killed after the link): never download or gate it again."""
+    def _guard(self, fl, step):
+        """One book's step. A deleted book is closed; any other unexpected
+        error counts against that book and never stops the run."""
+        try:
+            step(fl)
+        except BookGone:
+            self._close(fl, "abandoned", {"uuid": fl.get("uuid"), "why": "book deleted"},
+                        f"🗑️ {self._title(fl)} — deleted from BookOrbit; its alignment is dropped")
+        except Exception as e:
+            logger.exception("book %s", fl["book"])
+            self._fail(fl, f"{type(e).__name__}: {e}")
+
+    # where a book stands ---------------------------------------------------------------
+    def _stage(self, fl, d):
+        """linked (our read-along is in the library), foreign (a read-along we
+        did not make), changed (not the aligned pair any more), or pending."""
         staged = self._staged(fl)
         try:
             if os.lstat(staged).st_nlink > 1:
-                return True
+                return "linked"
         except FileNotFoundError:
             pass
-        return any(is_readalong_file(f) for f in d.get("files") or [])
+        files = d.get("files") or []
+        ra = [f for f in files if is_readalong_file(f)]
+        if ra:
+            ours = (len(ra) == 1 and ra[0].get("filename") == targets(d)["clean"]
+                    and int(ra[0].get("sizeBytes") or -1) == fl.get("staged_bytes"))
+            return "linked" if ours else "foreign"
+        pk = pair_key(files)
+        if pk is None or (pk != tuple(fl["pair"]) and rekey(d, fl["pair"], targets(d)) is None):
+            return "changed"
+        return "pending"
 
-    # the in-flight book -------------------------------------------------------------------
-    def drive(self):
-        """Advance state.in_flight as far as possible. Returns when this run is
-        done with it (the book may still be in flight: kept for the next run
-        while aligning, after a failure, or while blocked)."""
-        fl = self.state.in_flight
+    def _moot(self, fl, d, stage):
+        """Close a book whose alignment no longer applies. True when closed."""
+        if stage == "foreign":
+            why, told = "a read-along appeared from elsewhere", "a read-along appeared from elsewhere; mine is dropped"
+        elif stage == "changed":
+            why, told = "files changed", "its files changed during alignment; it will be looked at again"
+        elif opted_out(d):
+            why, told = "opted out", f"tagged {OPT_OUT_TAG}; its alignment is dropped"
+        else:
+            return False
+        self._close(fl, "abandoned", {"uuid": fl.get("uuid"), "why": why}, f"↩️ {self._title(fl, d)} — {told}")
+        return True
+
+    # a tracked book (in flight, or blocked) ----------------------------------------------
+    def advance(self, fl):
+        """Move one tracked book as far as it goes in this run. An in-flight
+        book may stay in flight: still aligning, failed and kept, or done too
+        late in the run to publish."""
+        if fl.get("closing"):
+            self._close(fl, fl["closing"], {"uuid": fl.get("uuid"), "resumed": True}, fl.get("closing_line"))
+            return
         if not fl.get("uuid"):
             return self._adopt(fl)
-        try:
-            d = self.bo.detail(fl["book"])
-        except Exception as e:
-            if "404" in str(e):
-                self._close(fl, "abandoned", "book deleted")
-                self.lines.append(f"🗑️ {self._title(fl)} — book was deleted; alignment dropped")
-                return
-            raise
-        if self._linked(fl, d):
-            return self.finish(fl, d)
-        if pair_key(d.get("files") or []) != tuple(fl["pair"]):
-            self._close(fl, "abandoned", "files changed")
-            self.lines.append(f"↩️ {self._title(fl, d)} — files changed during alignment; "
-                              f"it will be looked at again")
+        d = self.bo.detail(fl["book"])
+        stage = self._stage(fl, d)
+        if stage != "linked" and self._moot(fl, d, stage):
             return
+        if stage == "linked" or fl.get("gated"):
+            return self.finish(fl)             # gated: the staged copy is all it needs
         resumed = False
         while True:
-            p = phase(self._st(self.st.book, fl["uuid"]))
+            b = self._st_book(fl["uuid"])
+            if b is None:
+                fl["st_released"] = True        # deleted by someone: nothing left to free
+                self._close(fl, "abandoned", {"uuid": fl["uuid"], "why": "Storyteller book deleted"},
+                            f"↩️ {self._title(fl, d)} — its Storyteller book was deleted; "
+                            f"it will be looked at again")
+                return
+            p = phase(b)
             if p == DONE:
-                break
+                return self.finish(fl)
             if p == FAILED:
                 self._fail(fl, "Storyteller could not align it", d)
-                if self.state.in_flight:        # not given up: have Storyteller try again
+                if self.state.in_flight is fl:  # not given up: Storyteller tries again, polled next run
                     self._st(self.st.process, fl["uuid"])
                 return
-            if p == PAUSED and not resumed:
+            if p in (PAUSED, NOT_STARTED) and not resumed:
                 self._st(self.st.process, fl["uuid"])
                 resumed = True
             if self.must_stop():
@@ -266,69 +388,115 @@ class Job:
                     self.lines.append(f"⏳ {self._title(fl, d)} — still aligning after {hours:.0f} h")
                 return
             self.sleep(self.s.poll_seconds)
-        return self.finish(fl, d)
 
     def _adopt(self, fl):
-        """A run died between recording the import and learning its uuid: find
-        the Storyteller book it created, or conclude that none was created."""
-        known = {h["detail"].get("uuid") for h in self.state.history if isinstance(h.get("detail"), dict)}
-        mine = [b for b in self._st(self.st.books) or []
-                if (_st_created(b) or 0) >= fl["started"] - 120 and b.get("uuid") not in known]
+        """A run died between recording the import and learning its uuid. Adopt
+        only a Storyteller book absent from the snapshot taken just before the
+        import, created since, whose title matches. Anything else is left
+        alone: it may be someone else's."""
+        known = set(fl.get("known_uuids") or [])
+        new = [b for b in self._st(self.st.books) or []
+               if b.get("uuid") not in known and (st_created(b) or 0) >= fl["started"] - ADOPT_SLACK]
+        mine = [b for b in new if titles_match(b.get("title"), fl.get("title"))]
         if len(mine) == 1:
             fl["uuid"] = mine[0]["uuid"]
+            fl["staged"] = os.path.join(self.s.staging_dir, f"{fl['book']}-{fl['uuid']}.epub")
             self._save()
             logger.info("adopted Storyteller book %s for book %s", fl["uuid"], fl["book"])
-            return self.drive()
-        if not mine:
-            self.state.in_flight = None
-            self._save()
-            return
-        self.handled.add(fl["book"])
-        self.lines.append(f"⚠️ {self._title(fl)} — its import is ambiguous in Storyteller; left for a human")
+            return self.advance(fl)
+        self.state.in_flight = None
+        self._save()
+        if new:
+            self.lines.append(f"⚠️ {self._title(fl)} — cannot tell which new Storyteller book is its import "
+                              f"({', '.join(str(b.get('title')) for b in new)[:120]}); left alone, "
+                              f"the book will be started again")
 
-    def finish(self, fl, d):
-        staged = self._staged(fl)
+    def finish(self, fl):
+        """Gate, release Storyteller, publish, verify, flag. Re-reads the book
+        first: its files may have changed during hours of alignment."""
+        if self.late():
+            return
+        d = self.bo.detail(fl["book"])
+        stage = self._stage(fl, d)
+        if stage != "linked" and self._moot(fl, d, stage):
+            return
         try:
-            if not self._linked(fl, d):
-                verdict, summary = self._gate(fl, staged)
+            if stage != "linked" and not fl.get("gated"):
+                verdict, summary = self._gate(fl)
                 if summary.grade is None:
                     self._fail(fl, "Storyteller gave no alignment report", d)
                     return
                 if not verdict.passed:
                     self.state.refuse(fl["book"], fl["pair"], summary.grade, verdict.reasons, now=self.clock())
-                    self.refused += 1
+                    self._save()                # recorded before anything is deleted
                     self._close(fl, "refused", {"uuid": fl["uuid"], "grade": summary.grade,
-                                                "reasons": verdict.reasons})
-                    self.lines.append(f"❌ {self._title(fl, d)} — refused: grade {summary.grade}; "
-                                      f"{verdict.reasons[0][:100]}. Retried only if a file changes")
+                                                "reasons": verdict.reasons},
+                                f"❌ {self._title(fl, d)} — refused: grade {summary.grade}; "
+                                f"{verdict.reasons[0][:100]}. Retried only if a file changes")
                     return
+                fl["gated"] = True              # passed and staged, fsync'ed: kept whatever happens next
+                self._save()
+            self._release(fl)                   # Storyteller's copy is not needed any more
+            staged = self._staged(fl)
+            if stage != "linked" and not os.path.exists(staged):
+                self._close(fl, "abandoned", {"uuid": fl["uuid"], "why": "staged read-along lost"},
+                            f"↩️ {self._title(fl, d)} — its staged read-along is gone; it will be aligned again")
+                return
             done, pair = publish(self.bo, fl["book"], staged, fl["pair"], media_books=self.s.media_books,
                                  books_prefix=self.s.books_prefix, staging_dir=self.s.staging_dir,
                                  sleep=self.sleep)
+        except FilesChanged as e:
+            self._close(fl, "abandoned", {"uuid": fl.get("uuid"), "why": str(e)},
+                        f"↩️ {self._title(fl, d)} — {e}; it will be looked at again")
+            return
         except PublishConflict as e:
-            self.handled.add(fl["book"])
-            if fl.get("blocked") != e.path:     # tell once per blocker; retried every run
-                fl["blocked"] = e.path
-                self.lines.append(f"🚧 {self._title(fl, d)} — waiting: {e.path} is in the way "
-                                  f"(not one of the book's files); remove or rename it")
-            self._save()
+            self._block(fl, e.path)
             return
         except PublishError as e:
             self._fail(fl, str(e), d)
             return
         fl["pair"] = list(pair)
         ra = next(f for f in done["files"] if is_readalong_file(f))
-        self.bo.set_flag(fl["book"], self._fid, True)
+        try:
+            self.bo.set_flag(fl["book"], self._fid, True)
+        except Exception as e:                  # published all the same; the next run's flag sync repairs it
+            logger.warning("Read-Along flag on book %s: %s", fl["book"], e)
         self.state.clear_error(fl["book"])
         grade = fl.get("grade") or "?"
-        self._close(fl, "published", {"uuid": fl["uuid"], "grade": grade, "file": ra["id"]})
-        self.published += 1
-        self.lines.append(f"📖🎧 {self._title(fl, d)} — read-along published (grade {grade})")
+        self._close(fl, "published", {"uuid": fl["uuid"], "grade": grade, "file": ra["id"]},
+                    f"📖🎧 {self._title(fl, d)} — read-along published (grade {grade})")
 
-    def _gate(self, fl, staged):
+    def _block(self, fl, path):
+        """Park a gated, staged read-along whose name is taken. It holds no
+        Storyteller book, so the queue moves on; every run retries it. Told
+        only about a file BookOrbit does not list for the book, once it has
+        held for a day, and weekly after that."""
+        self.handled.add(fl["book"])
+        now = self.clock()
+        fl.setdefault("blocked_since", now)
+        if self.state.in_flight is fl:
+            self.state.in_flight = None
+        self.state.blocked[str(fl["book"])] = fl
+        self._save()
+        d = self.bo.detail(fl["book"])
+        name = os.path.basename(path)
+        if any((f.get("filename") or "").casefold() == name.casefold() for f in d.get("files") or []):
+            return                              # the book's own file, mid-rename: just retry
+        if now - fl["blocked_since"] < BLOCKED_TELL_AFTER:
+            return
+        if fl.get("blocked_told") == path and now - fl.get("blocked_told_at", 0) < RETELL_BLOCKED:
+            return
+        fl["blocked_told"], fl["blocked_told_at"] = path, now
+        self._save()
+        self.lines.append(f"🚧 {self._title(fl, d)} — read-along ready, but {path} is in the way "
+                          f"(BookOrbit does not list it for this book). Check it and move it out of the "
+                          f"folder; the next run publishes")
+
+    def _gate(self, fl):
         """Download (unless a previous run already did) to a fresh .part, patch,
         then move it into place in our staging dir -- an existing staged name is
         never opened for writing (it may be linked into the library)."""
+        staged = self._staged(fl)
         os.makedirs(self.s.staging_dir, exist_ok=True)
         view = self._st(self.st.alignment_report, fl["uuid"])
         summary = gate.summarize_report(view)
@@ -348,6 +516,7 @@ class Job:
                 part = staged + ".patched"
                 logger.info("patched %d zero-length clips for book %s", n, fl["book"])
             os.rename(part, staged)             # staged is absent here: rename cannot replace anything
+            fl["staged"] = staged
             fl["staged_bytes"] = os.path.getsize(staged)
             self._save()
         verdict = gate.decide(summary, smil.inspect_epub(staged), fl["m4b_seconds"])
@@ -357,15 +526,20 @@ class Job:
 
     # starting a book ---------------------------------------------------------------
     def start(self, rec):
-        if rec["id"] in self.handled:           # finished, refused or failed earlier this run
+        """True when a book was imported. An exception after the import was
+        recorded leaves `in_flight` set (uuid or None): the caller stops, and
+        the next run adopts or resumes it -- never a second import."""
+        if rec["id"] in self.handled or str(rec["id"]) in self.state.blocked:
             return False
-        d = self.bo.detail(rec["id"])
-        if d.get("libraryId") not in self.s.libraries:
+        try:
+            d = self.bo.detail(rec["id"])
+        except BookGone:
+            return False
+        if d.get("libraryId") not in self.s.libraries or opted_out(d):
             return False
         pair = pair_key(d.get("files") or [])
         # re-checked here: the candidate list is from the start of the run
-        if pair is None or self.state.is_refused(d["id"], pair) \
-                or self.state.error_count(d["id"], pair) >= ERROR_LIMIT:
+        if pair is None or self.state.is_refused(d["id"], pair) or self.state.gave_up(d["id"], pair, self.clock()):
             return False
         plain = next(f for f in d["files"] if f["id"] == pair[0])
         m4b = next(f for f in d["files"] if f["id"] == pair[2])
@@ -378,12 +552,13 @@ class Job:
 
         def st_path(f):
             return self.s.storyteller_library + folder[len(self.s.books_prefix):] + "/" + f["filename"]
+        known = sorted(b["uuid"] for b in self._st(self.st.books) or [] if b.get("uuid"))
         # recorded BEFORE the import: a run killed right after it can find its book again
         self.state.in_flight = {"book": d["id"], "title": d.get("title"), "uuid": None, "pair": list(pair),
-                                "started": self.clock(), "m4b_seconds": seconds}
+                                "started": self.clock(), "m4b_seconds": seconds, "known_uuids": known}
         self._save()
         uuid = self._st(self.st.create_book, st_path(plain), st_path(m4b))
-        self.state.in_flight["uuid"] = uuid
+        self.state.in_flight.update(uuid=uuid, staged=os.path.join(self.s.staging_dir, f"{d['id']}-{uuid}.epub"))
         self._save()
         self._st(self.st.process, uuid)
         logger.info("started book %s (%s) as Storyteller %s", d["id"], d.get("title"), uuid)
@@ -424,7 +599,7 @@ class Job:
         changed, failed = sync_flags(self.bo, books, self._fid, libraries=self.s.libraries,
                                      dry_run=self.s.dry_run)
         logger.info("Read-Along flags: %d set, %d failed", changed, failed)
-        logger.info("candidates: %s", json.dumps(funnel, sort_keys=True))
+        logger.info("candidates: %s; blocked: %s", json.dumps(funnel, sort_keys=True), sorted(self.state.blocked))
         self.st.login(self.s.storyteller_user, self.s.storyteller_pass)
         if self.s.dry_run:
             st_books = self._st(self.st.books) or []
@@ -435,10 +610,17 @@ class Job:
             if self.state.in_flight:
                 logger.info("in flight: %s", self.state.in_flight)
             return 0
+        if not self.resumed_window:
+            self.state.run = {"started": self.t0}
+        self._save()
         try:
+            for key in list(self.state.blocked):
+                fl = self.state.blocked.get(key)
+                if fl and not self.late():
+                    self._guard(fl, self.advance)
             if self.state.in_flight:
-                self.drive()
-                if self.state.in_flight:         # still aligning, blocked, or failed and kept
+                self._guard(self.state.in_flight, self.advance)
+                if self.state.in_flight:         # still aligning, failed and kept, or too late to publish
                     return self.report()
             started = 0
             queue = [b for b in chosen if b["id"] != (self.state.in_flight or {}).get("book")]
@@ -452,38 +634,52 @@ class Job:
                 try:
                     if not self.start(rec):
                         continue
-                except Exception as e:           # this book could not even start: count it, try the next
+                except Exception as e:
+                    fl = self.state.in_flight
+                    if fl and fl["book"] == rec["id"]:
+                        # the import may exist: kept (uuid or None) so the next run resumes or adopts it
+                        logger.exception("start of book %s failed after its import was recorded", rec["id"])
+                        self._fail(fl, f"start: {type(e).__name__}: {e}")
+                        break
+                    logger.exception("start of book %s failed", rec["id"])
                     pair = pair_key(rec.get("files") or [])
-                    if self.state.in_flight and not self.state.in_flight.get("uuid"):
-                        self.state.in_flight = None     # nothing was created
                     if pair is not None:
-                        self.state.add_error(rec["id"], pair, f"start: {e}", now=self.clock())
-                    self._save()
+                        self.state.add_error(rec["id"], pair, f"start: {e}", now=self.clock(),
+                                             min_interval=ERROR_INTERVAL)
+                        self._save()
                     self.lines.append(f"⚠️ {rec.get('title')} — could not start: {str(e)[:120]}")
                     continue
                 started += 1
-                self.drive()
+                self._guard(self.state.in_flight, self.advance)
                 if self.state.in_flight:         # one book at a time: never orphan the kept one
                     break
-        except Exception as e:                   # unexpected: keep what we have, report, exit 1
+        except Exception as e:                   # not one book's failure (Storyteller or BookOrbit down)
             logger.exception("read-along run failed")
-            fl = self.state.in_flight
-            if fl and fl.get("pair"):
-                self.state.add_error(fl["book"], fl["pair"], f"{type(e).__name__}: {e}", now=self.clock())
-                self._save()
-            self.lines.append(f"⚠️ run failed: {type(e).__name__}: {str(e)[:150]}")
+            if not self.state.run.get("failure_told"):
+                self.state.run["failure_told"] = True
+                self.lines.append(f"⚠️ run failed: {type(e).__name__}: {str(e)[:150]}")
             self.report()
             return 1
         return self.report()
 
     def report(self):
-        if not self.lines:
+        pending = self.state.pending_push
+        if not self.lines and not pending:
             logger.info("nothing to report")
             return 0
         title = f"Read-along: {self.published} published · {self.refused} refused"
         body = "\n".join(self.lines)
+        if pending:
+            title = title if self.lines else pending["title"]
+            body = "\n".join(x for x in (pending["body"], body) if x)
         logger.info("%s\n%s", title, body)
-        return 0 if self._push(self.s.apprise_url, title, body) else 1
+        if self._push(self.s.apprise_url, title, body):
+            self.state.pending_push = None
+            self._save()
+            return 0
+        self.state.pending_push = {"title": title, "body": body[-1500:]}
+        self._save()
+        return 1
 
 
 def install_sigterm(job):

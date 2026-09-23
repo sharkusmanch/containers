@@ -30,7 +30,6 @@ class Settings:
     storyteller_user: str
     storyteller_pass: str
     apprise_url: str
-    bookorbit_public_url: str = ""
     state_dir: str = "/state"
     media_books: str = "/media/books"          # this pod's view of BookOrbit's /books
     books_prefix: str = "/books"
@@ -51,7 +50,7 @@ class Settings:
         if missing:
             raise ValueError(f"missing required environment: {', '.join(missing)}")
         kw = {k.lower(): env[k] for k in _REQUIRED}
-        opt = {"BOOKORBIT_PUBLIC_URL": "bookorbit_public_url", "STATE_DIR": "state_dir",
+        opt = {"STATE_DIR": "state_dir",
                "MEDIA_BOOKS": "media_books", "BOOKS_PREFIX": "books_prefix",
                "STORYTELLER_LIBRARY": "storyteller_library", "STAGING_DIR": "staging_dir"}
         for k, attr in opt.items():

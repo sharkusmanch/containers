@@ -192,3 +192,22 @@ def test_stream_to_file_flushes_dirty_pages_as_it_writes(tmp_path, monkeypatch):
     assert n == 1200
     assert (tmp_path / "out.epub").read_bytes() == b"a" * 400 + b"b" * 400 + b"c" * 400
     assert len(synced) == 2                   # once past 700 bytes, once at the end
+
+
+def test_http_errors_carry_their_status_and_cancel_tolerates_404():
+    from app.readalong.storyteller import StorytellerHTTPError
+    t = FakeTransport([(404, b"{}"), (204, b""), (404, b"{}"), (500, b"x")])
+    c = StorytellerClient("http://st:8001", token="abc", transport=t)
+    try:
+        c.book("u-404-ish")
+    except StorytellerHTTPError as e:
+        assert e.status == 404
+    else:
+        raise AssertionError("expected StorytellerHTTPError")
+    c.cancel_processing("u1")
+    c.cancel_processing("u2")                    # no job: fine
+    try:
+        c.cancel_processing("u3")
+    except StorytellerHTTPError as e:
+        assert e.status == 500
+    assert t.calls[1]["method"] == "DELETE" and t.calls[1]["url"].endswith("/api/v2/books/u1/process")

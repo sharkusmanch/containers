@@ -14,6 +14,8 @@ import json
 import os
 
 HISTORY_MAX = 200
+ERROR_LIMIT = 3                  # failed attempts on the same file pair before giving up
+GIVE_UP_DAYS = 30                # a give-up is not forever: errors can be transient
 
 
 def _pair(pair):
@@ -29,6 +31,11 @@ class State:
         self.history = data.get("history", [])
         self.foreign_busy_since = data.get("foreign_busy_since")   # another client holding Storyteller
         self.foreign_told = bool(data.get("foreign_told"))
+        # gated, staged read-alongs waiting for a stray file to go (no Storyteller book held)
+        self.blocked = data.get("blocked", {})
+        self.pending_push = data.get("pending_push")                # a push that was not delivered
+        # tonight's run window, shared with the Job's retry pods: {"started", "failure_told"}
+        self.run = data.get("run") or {}
 
     @classmethod
     def load(cls, path) -> "State":
@@ -46,7 +53,8 @@ class State:
     def save(self) -> None:
         data = {"in_flight": self.in_flight, "refused": self.refused, "errors": self.errors,
                 "history": self.history[-HISTORY_MAX:], "foreign_busy_since": self.foreign_busy_since,
-                "foreign_told": self.foreign_told}
+                "foreign_told": self.foreign_told, "blocked": self.blocked, "pending_push": self.pending_push,
+                "run": self.run}
         d = os.path.dirname(self.path) or "."
         tmp = f"{self.path}.tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -69,17 +77,30 @@ class State:
         return bool(r) and r.get("pair") == _pair(pair)
 
     # errors ----------------------------------------------------------------------
-    def add_error(self, book, pair, message, *, now) -> int:
+    def add_error(self, book, pair, message, *, now, min_interval=0) -> int:
+        """Count a failed attempt; within `min_interval` seconds of the last
+        counted one only the message is updated (a Job's retry pods must not
+        triple-count one night)."""
         e = self.errors.get(str(book))
         if not e or e.get("pair") != _pair(pair):
             e = {"pair": _pair(pair), "count": 0}
-        e.update(count=e["count"] + 1, last=str(message)[:300], at=now)
+        if e["count"] and now - e.get("at", 0) < min_interval:
+            e["last"] = str(message)[:300]
+        else:
+            e.update(count=e["count"] + 1, last=str(message)[:300], at=now)
         self.errors[str(book)] = e
         return e["count"]
 
     def error_count(self, book, pair) -> int:
         e = self.errors.get(str(book))
         return e["count"] if e and e.get("pair") == _pair(pair) else 0
+
+    def gave_up(self, book, pair, now) -> bool:
+        """ERROR_LIMIT failures on this exact pair, the last within GIVE_UP_DAYS:
+        after that the book gets one more try (and one failure gives up again)."""
+        e = self.errors.get(str(book))
+        return bool(e) and e.get("pair") == _pair(pair) and e["count"] >= ERROR_LIMIT \
+            and now - e.get("at", 0) < GIVE_UP_DAYS * 86400
 
     def clear_error(self, book) -> None:
         self.errors.pop(str(book), None)

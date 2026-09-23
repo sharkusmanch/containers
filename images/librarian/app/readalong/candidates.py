@@ -4,8 +4,9 @@ proved rather than assumed)."""
 from collections import Counter
 from datetime import datetime
 
+from app.readalong.state import ERROR_LIMIT  # noqa: F401  (re-exported)
+
 OPT_OUT_TAG = "no-readalong"     # set in BookOrbit's UI to keep a book out for good
-ERROR_LIMIT = 3                  # failed attempts on the same file pair before giving up
 
 
 def _fmt(f):
@@ -36,6 +37,10 @@ def _tags(b):
     return out
 
 
+def opted_out(b) -> bool:
+    return OPT_OUT_TAG in _tags(b)
+
+
 def _updated_epoch(b):
     try:
         return datetime.fromisoformat(str(b.get("updatedAt")).replace("Z", "+00:00")).timestamp()
@@ -58,13 +63,13 @@ def select(books, state, now, *, quiet_hours, only=frozenset()):
         if pair is None:
             funnel["no_pair"] += 1
             continue
-        if OPT_OUT_TAG in _tags(b):
+        if opted_out(b):
             funnel["tagged_no_readalong"] += 1
             continue
         if state.is_refused(b["id"], pair):
             funnel["refused_same_files"] += 1
             continue
-        if state.error_count(b["id"], pair) >= ERROR_LIMIT:
+        if state.gave_up(b["id"], pair, now):
             funnel["error_limit"] += 1
             continue
         updated = _updated_epoch(b)

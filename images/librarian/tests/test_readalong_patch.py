@@ -78,3 +78,21 @@ def test_the_patched_copy_is_flushed_as_it_is_written(tmp_path, monkeypatch):
     monkeypatch.setattr(p, "FLUSH_EVERY", 1000)
     assert p.patch_zero_length_clips(str(src), str(tmp_path / "out.epub")) == 1
     assert len(synced) >= 2                                   # during the write, and at close
+
+
+def test_the_patched_copy_keeps_every_entrys_compression(tmp_path, monkeypatch):
+    """Real read-alongs store their audio uncompressed in <=44 MiB tracks; the
+    copy must stay a valid EPUB with `mimetype` first and stored entries stored."""
+    import os
+    from app.readalong import patch as p
+    monkeypatch.setattr(p, "FLUSH_EVERY", 1 << 20)
+    src, dst = tmp_path / "s.epub", tmp_path / "d.epub"
+    with zipfile.ZipFile(src, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("OEBPS/s.smil", '<par><audio clipBegin="5s" clipEnd="5s"/></par>', compress_type=zipfile.ZIP_DEFLATED)
+        for i in range(4):
+            z.writestr(f"OEBPS/t{i}.mp4", os.urandom(3 << 20), compress_type=zipfile.ZIP_STORED)
+    assert p.patch_zero_length_clips(str(src), str(dst)) == 1
+    with zipfile.ZipFile(dst) as z:
+        assert z.testzip() is None and z.infolist()[0].filename == "mimetype"
+        assert [i.compress_type for i in z.infolist()] == [0, 8, 0, 0, 0, 0]

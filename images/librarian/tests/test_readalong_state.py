@@ -95,3 +95,29 @@ def test_a_second_run_exits_while_the_first_holds_the_lock(tmp_path):
     held = open(state / "readalong.lock", "w")
     fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
     assert main({**ENV, "STATE_DIR": str(state)}) == 1       # never reaches the network
+
+
+
+def test_errors_count_once_per_interval_and_new_fields_round_trip(tmp_path):
+    st = State.load(str(tmp_path / "s.json"))
+    assert st.add_error(1, (1, 1, 2, 2), "a", now=0, min_interval=3600) == 1
+    assert st.add_error(1, (1, 1, 2, 2), "b", now=100, min_interval=3600) == 1      # same night
+    assert st.errors["1"]["last"] == "b"
+    assert st.add_error(1, (1, 1, 2, 2), "c", now=4000, min_interval=3600) == 2
+    st.blocked["5"] = {"book": 5}
+    st.pending_push = {"title": "t", "body": "b"}
+    st.save()
+    again = State.load(str(tmp_path / "s.json"))
+    assert again.blocked == {"5": {"book": 5}} and again.pending_push == {"title": "t", "body": "b"}
+
+
+def test_the_run_window_and_blocked_books_survive_a_reload(tmp_path):
+    st = State.load(str(tmp_path / "s.json"))
+    st.run = {"started": 123.0, "failure_told": True}
+    st.blocked["111"] = {"book": 111, "blocked_since": 5}
+    st.pending_push = {"title": "t", "body": "b"}
+    st.save()
+    again = State.load(str(tmp_path / "s.json"))
+    assert again.run == {"started": 123.0, "failure_told": True}
+    assert again.blocked == {"111": {"book": 111, "blocked_since": 5}}
+    assert again.pending_push == {"title": "t", "body": "b"}

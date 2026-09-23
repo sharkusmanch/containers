@@ -141,6 +141,16 @@ def init_admin(base_url, username, password, email, transport=_http):
         raise RuntimeError(f"/init action reported failure: {raw[:300]!r}")
 
 
+class StorytellerHTTPError(RuntimeError):
+    """vendored + (2026-09-23): a non-OK HTTP answer, with its status -- callers
+    compare `.status`, never a substring of the message (a uuid or a book id
+    can contain "404")."""
+
+    def __init__(self, message, status):
+        super().__init__(message)
+        self.status = status
+
+
 class StorytellerClient:
     def __init__(self, base_url, token=None, transport=None):
         self.base = base_url.rstrip("/")
@@ -161,7 +171,7 @@ class StorytellerClient:
         st, raw = self._t(method, self.base + path, body,
                           self._headers({"Content-Type": "application/json"} if body else None))
         if st not in ok:
-            raise RuntimeError(f"{method} {path} -> {st}: {raw[:300]!r}")
+            raise StorytellerHTTPError(f"{method} {path} -> {st}: {raw[:300]!r}", st)
         return json.loads(raw) if raw else {}
 
     def login(self, username, password):
@@ -169,7 +179,7 @@ class StorytellerClient:
         st, raw = self._t("POST", self.base + "/api/v2/token", body,
                           {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
         if st != 200:
-            raise RuntimeError(f"token -> {st}: {raw[:200]!r}")
+            raise StorytellerHTTPError(f"token -> {st}: {raw[:200]!r}", st)
         self.token = json.loads(raw)["access_token"]
         # Captured so relogin() can re-authenticate unattended after a token
         # expiry during the 12h wait_all poll. Never logged.
@@ -213,18 +223,25 @@ class StorytellerClient:
         if st == 404:
             return None
         if st != 200:
-            raise RuntimeError(f"alignment-report -> {st}: {raw[:200]!r}")
+            raise StorytellerHTTPError(f"alignment-report -> {st}: {raw[:200]!r}", st)
         return json.loads(raw)
+
+    def cancel_processing(self, uuid):
+        """vendored + (2026-09-23): deleting a book does not stop its alignment
+        (the DELETE route only removes the book and its assets). 404 = no job."""
+        st, raw = self._t("DELETE", f"{self.base}/api/v2/books/{uuid}/process", None, self._headers())
+        if st not in (200, 202, 204, 404):
+            raise StorytellerHTTPError(f"cancel {uuid} -> {st}: {raw[:200]!r}", st)
 
     def delete_book(self, uuid):
         """vendored + (2026-09-23). 404 = already gone."""
         st, raw = self._t("DELETE", f"{self.base}/api/v2/books/{uuid}", None, self._headers())
         if st not in (200, 202, 204, 404):
-            raise RuntimeError(f"delete {uuid} -> {st}: {raw[:200]!r}")
+            raise StorytellerHTTPError(f"delete {uuid} -> {st}: {raw[:200]!r}", st)
 
     def download_readaloud(self, uuid, dest_path):
         st, n = self._t("GET", f"{self.base}/api/v2/books/{uuid}/files?format=readaloud", None,
                         self._headers({"Accept": "*/*"}), stream_to=dest_path)
         if st != 200:
-            raise RuntimeError(f"download -> {st}")
+            raise StorytellerHTTPError(f"download -> {st}", st)
         return n

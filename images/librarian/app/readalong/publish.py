@@ -33,6 +33,11 @@ class PublishError(Exception):
     """This book stops for tonight; the next run resumes it."""
 
 
+class FilesChanged(PublishError):
+    """The book no longer holds exactly the aligned EPUB + m4b pair: the
+    alignment no longer applies (the caller abandons it)."""
+
+
 class PublishConflict(PublishError):
     """A file that is not this book's holds a name we need. Nothing was moved."""
 
@@ -105,7 +110,7 @@ def _scan(lib, library_id):
         raise PublishError(f"scan of library {library_id}: {e}") from e
 
 
-def _rekey(d, pair, t):
+def rekey(d, pair, t):
     """Match the pair's two files in `d` by id, or -- after a foreign scan
     landed between our link() and unlink() and gave a file a new record -- by
     its final name and unchanged size. Returns the (possibly new) pair."""
@@ -142,6 +147,26 @@ def _check_names(folder, t, own_names, expected):
         raise PublishConflict(f"{path} is not one of the book's files", path)
 
 
+def _current(lib, book_id, pair, media_books, books_prefix):
+    """Fresh detail, its layout names and local folder, and the pair -- re-keyed
+    by final name and size when a foreign scan gave a file a new id, but only
+    while the book still holds exactly one plain EPUB and one m4b."""
+    d = lib.detail(book_id)
+    files = d.get("files") or []
+    t = targets(d)
+    folder = local_path(media_books, books_prefix, t["folder"])
+    if any(is_readalong_file(f) for f in files):
+        return d, t, folder, pair
+    if pair_key(files) is None:
+        raise FilesChanged("the book no longer holds exactly one plain EPUB and one m4b")
+    if pair_key(files) != tuple(pair):
+        rekeyed = rekey(d, pair, t)
+        if rekeyed is None:
+            raise FilesChanged("the book's files changed since alignment")
+        pair = rekeyed
+    return d, t, folder, pair
+
+
 def publish(lib, book_id, staged, pair, *, media_books="/media/books", books_prefix="/books",
             staging_dir=None, sleep=time.sleep, clock=time.monotonic):
     """Put `staged` (the gated read-along, on the library's filesystem) into
@@ -149,19 +174,14 @@ def publish(lib, book_id, staged, pair, *, media_books="/media/books", books_pre
     pair re-keyed when a foreign scan gave one of its files a new id."""
     if staging_dir:
         _under(staged, staging_dir, "staged read-along")
-    d = lib.detail(book_id)
-    files = d.get("files") or []
-    t = targets(d)
-    folder = local_path(media_books, books_prefix, t["folder"])
+    d, t, folder, pair = _current(lib, book_id, pair, media_books, books_prefix)
     linked = _same_inode(staged, os.path.join(folder, t["clean"]))
-    if not linked and not any(is_readalong_file(f) for f in files):
-        if pair_key(files) != tuple(pair):
-            rekeyed = _rekey(d, pair, t)
-            if rekeyed is None:
-                raise PublishError("the book's files changed since alignment")
-            pair = rekeyed
+    if not linked and not any(is_readalong_file(f) for f in d.get("files") or []):
         lib_id = d["libraryId"]
         wait_idle(lib, lib_id, sleep=sleep, clock=clock)
+        # re-read after the wait: BookOrbit may have renamed or moved the book meanwhile
+        d, t, folder, pair = _current(lib, book_id, pair, media_books, books_prefix)
+        files = d.get("files") or []
         _check_names(folder, t, {f.get("filename") for f in files},
                      {t["ebook"]: pair[1], t["m4b_name"]: pair[3]})
 
@@ -184,13 +204,11 @@ def publish(lib, book_id, staged, pair, *, media_books="/media/books", books_pre
         for attempt in (1, 2):
             if moved:
                 _scan(lib, lib_id)
-            d = lib.detail(book_id)
-            names = {f["id"]: f.get("filename") for f in d.get("files") or []}
-            rekeyed = _rekey(d, pair, t)
-            if rekeyed is not None:
-                pair = rekeyed
-            ready = (rekeyed is not None and names.get(pair[0]) == t["ebook"]
-                     and names.get(pair[2]) == t["m4b_name"]
+            d2, t2, folder2, pair = _current(lib, book_id, pair, media_books, books_prefix)
+            if folder2 != folder:
+                raise PublishError(f"the book moved to {t2['folder']} during the publish")
+            names = {f["id"]: f.get("filename") for f in d2.get("files") or []}
+            ready = (names.get(pair[0]) == t["ebook"] and names.get(pair[2]) == t["m4b_name"]
                      and not any((n or "").casefold() == t["clean"].casefold() for n in names.values()))
             if ready:
                 break
@@ -201,8 +219,14 @@ def publish(lib, book_id, staged, pair, *, media_books="/media/books", books_pre
         if os.path.lexists(clean):
             raise PublishConflict(f"{clean} already exists and is not the read-along", clean)
         wait_idle(lib, lib_id, sleep=sleep, clock=clock)
-        os.link(staged, clean, follow_symlinks=False)
+        try:
+            os.link(staged, clean, follow_symlinks=False)
+        except FileExistsError:
+            raise PublishConflict(f"{clean} appeared just before the link", clean) from None
+        except FileNotFoundError as e:
+            raise PublishError(f"link failed: {e}") from None
         linked = True
+        d = d2
     if linked and not any(is_readalong_file(f) and f.get("filename") == t["clean"]
                           for f in lib.detail(book_id).get("files") or []):
         _scan(lib, d["libraryId"])          # linked, but BookOrbit has not seen it yet

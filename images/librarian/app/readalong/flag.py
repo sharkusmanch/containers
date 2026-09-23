@@ -34,16 +34,15 @@ def sync_flags(lib, books, fid, *, libraries, dry_run):
         present, value = _current(b, fid)
         if present and value is want:
             continue
-        if not present and lib.detail(b["id"]).get("libraryId") not in libraries:
-            continue
-        changed += 1
-        if dry_run:
-            logger.info("would set Read-Along=%s on book %s", want, b["id"])
-            continue
-        try:
-            lib.set_flag(b["id"], fid, want)
-        except Exception as e:  # one book never stops the sync
+        try:                    # one book (deleted since the listing, a failed PATCH) never stops the sync
+            if not present and lib.detail(b["id"]).get("libraryId") not in libraries:
+                continue
+            if dry_run:
+                logger.info("would set Read-Along=%s on book %s", want, b["id"])
+            else:
+                lib.set_flag(b["id"], fid, want)
+            changed += 1
+        except Exception as e:
             failed += 1
-            changed -= 1
             logger.warning("Read-Along flag on book %s: %s", b["id"], e)
     return changed, failed
