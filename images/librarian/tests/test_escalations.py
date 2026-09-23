@@ -680,3 +680,39 @@ def test_repeating_per_arrival_error_is_logged_once(env, monkeypatch, caplog):
     svc.tick()
     svc.tick()
     assert len([r for r in caplog.records if "escalation sync failed" in r.getMessage()]) == 1
+
+
+# --- fix round 3 ----------------------------------------------------------------------------
+
+
+def test_outage_stamps_and_fallback_pushes_every_arrival_with_one_http_call_per_tick(env):
+    clock = Clock()
+    svc, fake = env(clock=clock)
+    iids = [escalate(svc, key=f"manual:x{i}:1", n=i + 1) for i in range(3)]
+    fake.fail = "raise"
+    for _ in range(8):
+        n = len(fake.calls)
+        svc.tick()
+        assert len(fake.calls) - n == 1                  # the halt still bounds each tick
+        clock.t += 600
+    for i in range(3):
+        assert svc.arrivals.get(f"manual:x{i}:1")["vikunja_create_failed_since"] is not None
+    ids = sorted(r["msg_id"] for r in outbox(svc) if r["kind"] == "escalation")
+    assert ids == sorted(f"escalation:manual:x{i}:1:{iids[i]}:fallback" for i in range(3))
+
+
+def test_attach_to_a_book_missing_from_the_index_is_flagged_unknown():
+    class Idx:
+        def book(self, i):
+            return None
+    assert escalations.describe_action(dict(ATTACH2), Idx()).startswith(
+        "⚠ UNKNOWN LIBRARY — attach this arrival to BookOrbit book 2")
+    assert escalations.describe_action(
+        {"kind": "update_metadata", "book_id": 9}, None).startswith("⚠ UNKNOWN LIBRARY — ")
+
+
+def test_attach_to_an_adult_book_is_not_flagged():
+    class Idx:
+        def book(self, i):
+            return {"id": i, "title": "T", "authors": [], "libraryName": "Library"}
+    assert escalations.describe_action(dict(ATTACH2), Idx()).startswith("attach this arrival")

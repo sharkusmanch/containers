@@ -63,6 +63,12 @@ Fix round 1:
     (`...:task:<new id>`);
   * one arrival's unexpected error is logged and skipped (`_each`).
 
+Fix rounds 2-3: every inserted value goes through `_clean`; the Kids (or
+UNKNOWN LIBRARY, when the target isn't in the index) flag leads the action
+bracket; the first transport error halts the tick's HTTP work, after which
+a no-HTTP pass (`_stamp`) still stamps every task-less needs-decision
+arrival and pushes its `:fallback` once due.
+
 With no Vikunja client (VIKUNJA_ENABLED false, or incompletely configured)
 the escalation push is sent right away instead, once per escalation
 (`escalation_notified` on the arrival).
@@ -103,6 +109,7 @@ HOUR = 3600
 MAX_CREATE_FAILURES_PER_HOUR = 3     # non-transport create failures per arrival
 FALLBACK_AFTER_FAILURES = 6
 _KIDS_FLAG = "\u26a0 KIDS \u2014 "   # FIRST inside the bracket: nothing can push it out of view
+_UNKNOWN_FLAG = "\u26a0 UNKNOWN LIBRARY \u2014 "   # target not in the index: could be Kids
 _NO_ACTION = "no automatic action \u2014 the librarian will ask again"
 
 
@@ -166,7 +173,12 @@ def describe_action(intent, index=None) -> str:
             what = f" (\"{_clean(book.get('title'))}\"{' by ' + _clean(authors) if authors else ''}" \
                    f", {_clean(book.get('libraryName'))})"
         verb = "attach this arrival to" if kind == states.ATTACH else "update the metadata of"
-        flag = _KIDS_FLAG if (book or {}).get("libraryName") == _LIBRARY_NAMES["kids"] else ""
+        if not book:
+            flag = _UNKNOWN_FLAG          # fix round 3: never unflagged when we can't tell
+        elif book.get("libraryName") == _LIBRARY_NAMES["kids"]:
+            flag = _KIDS_FLAG
+        else:
+            flag = ""
         return f"{flag}{verb} BookOrbit book {book_id}{what}"
     if kind == states.CREATE_BOOK:
         md = intent.get("metadata") if isinstance(intent.get("metadata"), dict) else {}
@@ -343,6 +355,11 @@ def sync(svc) -> None:
         return
     budget = _Budget(MAX_WRITES_PER_TICK)
     _each(svc, svc.arrivals.by_state(states.NEEDS_DECISION), lambda rec: _open(svc, rec, budget), budget)
+    if budget.halted:
+        # fix round 3: the halt must not starve the others' fallback -- a
+        # no-HTTP pass stamps every task-less arrival and pushes its
+        # link-less fallback once due, so an outage silences nobody
+        _each(svc, svc.arrivals.by_state(states.NEEDS_DECISION), lambda rec: _stamp(svc, rec))
 
     def close(rec):
         if (rec.get("vikunja_task_id") and not rec.get("vikunja_closed")
@@ -386,6 +403,21 @@ def _maybe_fallback(svc, rec, esc, now) -> None:
     svc.notify_escalation(rec, esc, suffix=":fallback", tail=("The Vikunja task could not be created (the librarian keeps "
                                           "retrying); answer via the librarian's state."))
     _annotate(svc, rec["key"], vikunja_fallback_pushed=esc["intent_id"])
+
+
+def _stamp(svc, rec) -> None:
+    """No-HTTP half of a failed create, for arrivals a halted tick never
+    reached: stamp `vikunja_create_failed_since` (if unset) and push the
+    fallback once it is due. Arrivals with an open task are left alone."""
+    if rec.get("vikunja_task_id") and not rec.get("vikunja_closed"):
+        return
+    esc = svc.intents.latest_escalation(rec["key"])
+    if esc is None:
+        return
+    now = svc.clock()
+    if not isinstance(rec.get("vikunja_create_failed_since"), (int, float)):
+        rec = _annotate(svc, rec["key"], vikunja_create_failed_since=now) or rec
+    _maybe_fallback(svc, rec, esc, now)
 
 
 def _create(svc, rec, esc, budget, *, recreate: bool) -> None:
