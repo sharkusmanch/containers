@@ -1,0 +1,69 @@
+{
+  "name": "rev-hp-attach-prose",
+  "note": "REVIEWER CASE (scripted librarian). Full-cast audio attached to the prose ebook with read-along on.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B0HPFCAST1",
+    "folder": "Harry Potter and the Sorcerer's Stone (Full-Cast Edition) [B0HPFCAST1]",
+    "files": [
+      {
+        "name": "Harry Potter and the Sorcerer's Stone (Full-Cast Edition).m4b",
+        "kind": "m4b",
+        "size": 8000,
+        "probe": {
+          "duration": 34200,
+          "tags": {
+            "title": "Harry Potter and the Sorcerer's Stone (Full-Cast Edition)",
+            "album": "Harry Potter and the Sorcerer's Stone (Full-Cast Edition)",
+            "artist": "J.K. Rowling",
+            "album_artist": "Hugh Laurie, Riz Ahmed, Michelle Gomez, full cast",
+            "series": "Harry Potter",
+            "series-part": "1",
+            "date": "2025",
+            "audible_asin": "B0HPFCAST1"
+          },
+          "chapters": [
+            "Opening Credits",
+            "Chapter 1: The Boy Who Lived",
+            "Chapter 2: The Vanishing Glass"
+          ],
+          "chapter_count": 19
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 901,
+      "title": "Harry Potter and the Sorcerer's Stone",
+      "authors": [
+        "J.K. Rowling"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "1. Harry Potter and the Sorcerer's Stone.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "Harry Potter",
+      "seriesIndex": 1,
+      "publishedYear": 1997
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "escalate"
+    ],
+    "escalate_origin": "reviewer",
+    "forbid": {
+      "book_id": 901
+    }
+  },
+  "scripted_intent": {
+    "kind": "attach",
+    "book_id": 901,
+    "readalong": true,
+    "reason": "Same work: Harry Potter and the Sorcerer's Stone by J.K. Rowling, Harry Potter #1, series index agrees; book #901 has only the EPUB."
+  }
+}

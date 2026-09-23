@@ -1,6 +1,6 @@
 {
   "name": "adult-by-allowlisted-author",
-  "note": "Author is on the kids allowlist for one series only (whole_author false). Their adult novel belongs in the adult library.",
+  "note": "Author is on the kids allowlist for one series only (whole_author false). Their adult novel belongs in the adult library. The allowlist covers his kids series (Coraline) only.",
   "arrival": {
     "source": "libation",
     "source_id": "B0AMGODS01",
@@ -67,12 +67,16 @@
         }
       ],
       "libraryName": "Kids Audiobooks",
-      "publishedYear": 2002
+      "publishedYear": 2002,
+      "seriesName": "Coraline",
+      "seriesIndex": 1
     }
   ],
   "kids_lists": {
     "allow": {
-      "series": [],
+      "series": [
+        "Coraline"
+      ],
       "asins": [],
       "authors": [
         {

@@ -201,13 +201,17 @@ def _score(detail, *, audible_asin, kindle_asin, isbn, title_key_set, surname_se
 
     if title_key_set:
         cand_keys = title_keys(detail.get("title") or "", detail.get("subtitle"))
-        cand_keys |= _file_title_keys(detail)
         overlap = title_key_set & cand_keys
-        if overlap:
+        # keys found only in the book's file names are reported separately
+        # ("file-key:") so the model can weigh them as weaker evidence
+        file_overlap = (title_key_set & _file_title_keys(detail)) - overlap
+        if overlap or file_overlap:
             cand_surnames = surnames(_names(detail.get("authors")))
             has_surname = bool(surname_set & cand_surnames)
             for k in sorted(overlap):
                 reasons.append(f"title-key:{k}")
+            for k in sorted(file_overlap):
+                reasons.append(f"file-key:{k}")
             if has_surname:
                 for s in sorted(surname_set & cand_surnames):
                     reasons.append(f"surname:{s}")

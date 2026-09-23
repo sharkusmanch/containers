@@ -1,0 +1,84 @@
+{
+  "name": "rev-piranesi-wrong-book",
+  "note": "REVIEWER CASE (scripted librarian). Piranesi ebook attached to an audio-only Jonathan Strange decoy (same author, no series, not guard-blocked).",
+  "arrival": {
+    "source": "kindle",
+    "source_id": "B07ZQ4WD3N",
+    "sidecar": {
+      "title": "B07ZQ4WD3N",
+      "authors": []
+    },
+    "files": [
+      {
+        "name": "B07ZQ4WD3N.epub",
+        "kind": "epub",
+        "epub": {
+          "title": "Piranesi",
+          "creators": [
+            "Susanna Clarke"
+          ],
+          "chars": 404000,
+          "date": "2020-09-15"
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 1101,
+      "title": "Piranesi",
+      "authors": [
+        "Susanna Clarke"
+      ],
+      "files": [
+        {
+          "format": "m4b",
+          "filename": "Piranesi.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 29400
+        }
+      ],
+      "publishedYear": 2020,
+      "narrators": [
+        "Chiwetel Ejiofor"
+      ],
+      "providerIds": {
+        "audible": "B08FSQB1PQ"
+      }
+    },
+    {
+      "id": 1102,
+      "title": "Jonathan Strange & Mr Norrell",
+      "authors": [
+        "Susanna Clarke"
+      ],
+      "files": [
+        {
+          "format": "m4b",
+          "filename": "Jonathan Strange & Mr Norrell.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 117000
+        }
+      ],
+      "publishedYear": 2004,
+      "narrators": [
+        "Simon Prebble"
+      ]
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "escalate"
+    ],
+    "escalate_origin": "reviewer",
+    "forbid": {
+      "book_id": 1102
+    }
+  },
+  "scripted_intent": {
+    "kind": "attach",
+    "book_id": 1102,
+    "readalong": true,
+    "reason": "Kindle ebook by Susanna Clarke; book #1102 by Susanna Clarke is audio-only, so the ebook completes it."
+  }
+}

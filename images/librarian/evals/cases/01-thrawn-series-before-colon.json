@@ -1,6 +1,6 @@
 {
   "name": "thrawn-series-before-colon",
-  "note": "Audio titled just 'Thrawn'; the library ebook is 'Star Wars: Thrawn' (series before the colon). A #2 decoy shares the key.",
+  "note": "Audio titled just 'Thrawn'; the library ebook is 'Star Wars: Thrawn' (series before the colon). A #2 decoy shares the key. Treason (#3) has no series index, so no guard blocks it.",
   "arrival": {
     "source": "libation",
     "source_id": "B0THRAWN01",
@@ -67,6 +67,23 @@
       "seriesName": "Star Wars: Thrawn",
       "seriesIndex": 2,
       "publishedYear": 2018
+    },
+    {
+      "id": 309,
+      "title": "Thrawn: Treason",
+      "authors": [
+        "Timothy Zahn"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "Thrawn - Treason.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "Star Wars: Thrawn",
+      "seriesIndex": null,
+      "publishedYear": 2019
     }
   ],
   "expect": {
@@ -75,7 +92,10 @@
     ],
     "book_id": 307,
     "forbid": {
-      "book_id": 308
+      "book_id": [
+        308,
+        309
+      ]
     }
   }
 }

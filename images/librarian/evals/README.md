@@ -30,10 +30,24 @@ The graded outcome is the arrival's state **after review**:
 | `deferred` | `defer` |
 | anything else | `none` — always a FAIL |
 
+A run whose librarian or reviewer phase did not end `ok` (crash, timeout, containment)
+is a FAIL, as is an escalation produced by "reviewer did not rule". The `got` column
+shows the escalation origin (`escalate[librarian]`, `escalate[reviewer]`) and the
+reviewer's verdicts; the `guard-rejects` column lists intents the guards refused.
+
 `expect.kind_in` must contain the graded kind. `book_id` is checked for `attach`;
 `library`, `title_contains` (case/punctuation-insensitive) and `readalong` for
-`create_book`; `forbid.book_id` / `forbid.library` always apply (an attach's library is
-the target book's). Change the prompts to fix a failure, never the expectations.
+`create_book`; `forbid.book_id` (an id or a list) / `forbid.library` apply to the outcome AND to every
+intent the model submitted, including guard-rejected ones — trying a forbidden target is a
+FAIL even if a guard stopped it (an attach's library is the target book's).
+`expect.escalate_origin: "reviewer"` requires the escalation to come from a reviewer
+rejection.
+
+**Reviewer cases** (`rev-*`) carry a `scripted_intent`: the librarian phase is replaced by
+a scripted runner that submits exactly that (wrong) intent through the internal API with
+the run token (calling `get_book` first so guard 1 accepts it); the reviewer phase is the
+real `claude -p`. They expect `escalate` by `reviewer`. The ten filing cases are the
+controls: the same reviewer must still approve them. Change the prompts to fix a failure, never the expectations.
 
 ## Case format
 
@@ -55,8 +69,8 @@ the target book's). Change the prompts to fix a failure, never the expectations.
     ]
   },
   "library": [ {BookOrbit GET /books/{id} detail; authors/narrators may be plain strings,
-                missing fields are defaulted; a file with "text_chars" gets a real EPUB
-                so search_in_book works} ],
+                missing fields are defaulted; every epub file gets a real EPUB
+                (`text_chars` sets its length, default 3000) so search_in_book works} ],
   "kids_lists": {"allow": {"series": [], "asins": [], "authors": [{"name": "…", "whole_author": false}]},
                  "deny": {…}},
   "expect": {"kind_in": ["attach"], "book_id": 307, "forbid": {"book_id": 308}}

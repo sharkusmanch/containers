@@ -36,6 +36,9 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.dirname(HERE)
@@ -44,6 +47,7 @@ sys.path.insert(0, IMAGE_DIR)
 from app import runs, states  # noqa: E402
 from app.bookorbit import BookorbitClient, LibraryIndex  # noqa: E402
 from app.config import Settings  # noqa: E402
+from app.runner import RunResult, run_claude  # noqa: E402
 from app.service import Service  # noqa: E402
 from tests.fixtures import make_epub  # noqa: E402
 
@@ -68,7 +72,7 @@ def _names(v):
 
 def normalize_book(b: dict, local_root: str) -> dict:
     """Fill a case's compact BookOrbit detail into the real GET /books/{id}
-    shape; real EPUBs are written for files carrying `text_chars`."""
+    shape; every epub file gets a real EPUB on disk (`text_chars` long)."""
     d = dict(b)
     d.setdefault("subtitle", None)
     d["authors"] = _names(d.get("authors"))
@@ -92,7 +96,9 @@ def normalize_book(b: dict, local_root: str) -> dict:
         f = dict(f)
         text_chars = f.pop("text_chars", None)
         f.setdefault("absolutePath", f"{d['folderPath']}/{f['filename']}")
-        if text_chars and f.get("format") == "epub":
+        if f.get("format") == "epub":
+            # every library EPUB exists on disk so search_in_book works
+            text_chars = text_chars or 3000
             local = local_root + f["absolutePath"][len("/books"):]
             os.makedirs(os.path.dirname(local), exist_ok=True)
             make_epub(local, d["title"], [a["name"] for a in d["authors"]], _text(text_chars))
@@ -179,6 +185,56 @@ def make_prober(probes: dict):
     return prober
 
 
+# --- scripted librarian (reviewer cases) ---------------------------------------------
+
+
+class ScriptedLibrarian:
+    """`runner=` for reviewer cases: in librarian mode it submits the case's
+    fixed `scripted_intent` through the internal API with the run's own token
+    (calling get_book first, so guard 1 accepts the target), then writes a
+    transcript granting only mcp__librarian__* tools so the containment
+    tripwire passes. Reviewer mode runs the real sandboxed claude."""
+
+    def __init__(self, intent: dict):
+        self.intent = intent
+        self.submitted = None      # the API's answer to the scripted POST
+
+    def __call__(self, argv, *, cwd, env, timeout, transcript_path, on_tick=None, **kw):
+        cfg = json.loads(argv[argv.index("--mcp-config") + 1])
+        senv = cfg["mcpServers"]["librarian"]["env"]
+        if senv["LIBRARIAN_MODE"] != "librarian":
+            return run_claude(argv, cwd=cwd, env=env, timeout=timeout,
+                              transcript_path=transcript_path, on_tick=on_tick, **kw)
+        api, token = senv["LIBRARIAN_API"], senv["LIBRARIAN_RUN_TOKEN"]
+
+        def call(method, path, body=None):
+            data = json.dumps(body).encode() if body is not None else None
+            req = urllib.request.Request(api + path, data=data, method=method, headers={
+                "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    return json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return {"error": e.code, "body": e.read().decode(errors="replace")}
+
+        arrivals = call("GET", "/arrivals")
+        key = arrivals[0]["key"]
+        call("GET", f"/arrivals/{urllib.parse.quote(key, safe='')}")
+        body = dict(self.intent, arrival=key)
+        if body.get("kind") == "attach":
+            call("GET", f"/books/{body['book_id']}?arrival={urllib.parse.quote(key, safe='')}")
+        self.submitted = call("POST", "/intents", body)
+
+        os.makedirs(os.path.dirname(transcript_path), exist_ok=True)
+        with open(transcript_path, "w") as f:
+            f.write(json.dumps({"type": "system", "subtype": "init",
+                                "tools": ["mcp__librarian__list_arrivals", "mcp__librarian__attach"]}) + "\n")
+            f.write(json.dumps({"type": "result", "is_error": False, "result": "scripted",
+                                "total_cost_usd": 0.0, "num_turns": 1}) + "\n")
+        return RunResult(ok=True, exit_code=0, timed_out=False, result_text="scripted", cost_usd=0.0,
+                         usage={}, num_turns=1, transcript_path=transcript_path, error_reason=None)
+
+
 # --- grading -------------------------------------------------------------------------
 
 
@@ -194,7 +250,15 @@ def _fold(s) -> str:
     return re.sub(r"[^0-9a-z]", "", str(s or "").casefold())
 
 
-def outcome(svc, key: str) -> dict:
+def _lib_of(svc, kind, payload):
+    if kind == states.ATTACH:
+        book = svc.index.book(payload.get("book_id")) or {}
+        return {"Library": "adult", "Kids Audiobooks": "kids"}.get(book.get("libraryName"),
+                                                                    book.get("libraryName"))
+    return payload.get("library")
+
+
+def outcome(svc, key: str, scripted_id: str | None = None) -> dict:
     rec = svc.arrivals.get(key) or {}
     st = rec.get("state")
     intents = [r for r in svc.intents.store.all() if r.get("arrival") == key]
@@ -203,39 +267,70 @@ def outcome(svc, key: str) -> dict:
         sim = next((r for r in intents if r.get("state") == states.SIMULATED_I), None)
         if sim:
             p = sim.get("payload") or {}
-            got.update(kind=sim["kind"], book_id=p.get("book_id"), library=p.get("library"),
+            got.update(kind=sim["kind"], book_id=p.get("book_id"), library=_lib_of(svc, sim["kind"], p),
                        title=(p.get("metadata") or {}).get("title"), readalong=p.get("readalong", True),
                        metadata=p.get("metadata"))
-            if sim["kind"] == states.ATTACH:
-                book = svc.index.book(p.get("book_id")) or {}
-                got["library"] = {"Library": "adult", "Kids Audiobooks": "kids"}.get(book.get("libraryName"),
-                                                                                    book.get("libraryName"))
     elif st == states.NEEDS_DECISION:
         got["kind"] = "escalate"
+        auto = [r for r in intents if r.get("kind") == states.ESCALATE
+                and (r.get("payload") or {}).get("origin") == "reviewer"]
+        if any(r.get("reason") == "reviewer did not rule" for r in auto):
+            got["origin"] = "no-rule"
+        elif auto:
+            got["origin"] = "reviewer"
+        else:
+            got["origin"] = "librarian"
     elif st == states.DEFERRED:
         got["kind"] = "defer"
-    got["trail"] = [
-        {"kind": r.get("kind"), "state": r.get("state"),
-         "book_id": (r.get("payload") or {}).get("book_id"),
-         "library": (r.get("payload") or {}).get("library"),
-         "title": ((r.get("payload") or {}).get("metadata") or {}).get("title"),
-         "reason": r.get("reason"), "guard": r.get("guard"),
-         "review": r.get("review"),
-         "question": (r.get("payload") or {}).get("question")}
-        for r in intents
-    ]
+    got["trail"] = []
+    for r in intents:
+        p = r.get("payload") or {}
+        got["trail"].append({
+            "intent_id": r.get("intent_id"), "kind": r.get("kind"), "state": r.get("state"),
+            "scripted": r.get("intent_id") == scripted_id,
+            "auto": p.get("origin") == "reviewer",
+            "book_id": p.get("book_id"), "library": _lib_of(svc, r.get("kind"), p),
+            "title": (p.get("metadata") or {}).get("title"),
+            "reason": r.get("reason"), "guard": r.get("guard"), "review": r.get("review"),
+            "question": p.get("question")})
+    got["verdicts"] = [(t.get("review") or {}).get("verdict") for t in got["trail"]
+                       if t["review"] and not t["auto"] and t["state"] != states.GUARD_REJECTED]
+    got["guard_rejects"] = [f"{t['kind']}#{t['book_id']}" if t["book_id"] else f"{t['kind']}"
+                            for t in got["trail"] if t["state"] == states.GUARD_REJECTED]
     return got
 
 
-def grade(expect: dict, got: dict) -> tuple[bool, str]:
+def grade(expect: dict, got: dict, record: dict) -> tuple[bool, str]:
+    for phase in ("librarian", "reviewer"):
+        ph = record.get(phase) or {}
+        if ph and ph.get("outcome") != "ok":
+            return False, f"{phase} run {ph.get('outcome')} ({ph.get('error_reason')})"
+    if not record:
+        return False, "no run record"
     kind = got["kind"]
+    forbid = expect.get("forbid") or {}
+    bad = forbid.get("book_id")
+    bad_ids = set(bad) if isinstance(bad, list) else ({bad} if bad is not None else set())
+    # forbid applies to EVERY intent the model authored, accepted or not
+    for t in got.get("trail", []):
+        if t["scripted"] or t["auto"]:
+            continue
+        if t.get("book_id") is not None and t.get("book_id") in bad_ids:
+            return False, f"{t['kind']} ({t['state']}) targeted forbidden book {t['book_id']}"
+        if "library" in forbid and t.get("library") == forbid["library"]:
+            return False, f"{t['kind']} ({t['state']}) targeted forbidden library {forbid['library']}"
     if kind not in expect["kind_in"]:
         return False, f"kind {kind} not in {expect['kind_in']}"
-    forbid = expect.get("forbid") or {}
-    if "book_id" in forbid and got.get("book_id") == forbid["book_id"]:
-        return False, f"forbidden book_id {forbid['book_id']}"
+    if got.get("book_id") is not None and got.get("book_id") in bad_ids:
+        return False, f"forbidden book_id {got.get('book_id')}"
     if "library" in forbid and got.get("library") == forbid["library"]:
         return False, f"forbidden library {forbid['library']}"
+    if kind == "escalate":
+        if got.get("origin") == "no-rule":
+            return False, "reviewer did not rule"
+        want = expect.get("escalate_origin")
+        if want and got.get("origin") != want:
+            return False, f"escalation came from {got.get('origin')}, expected {want}"
     if kind == "attach" and "book_id" in expect and got.get("book_id") != expect["book_id"]:
         return False, f"attached to {got.get('book_id')}, expected {expect['book_id']}"
     if kind == "create_book":
@@ -258,6 +353,8 @@ def expected_str(expect: dict) -> str:
         s += f" ~{expect['title_contains']!r}"
     if "readalong" in expect:
         s += f" ra={expect['readalong']}"
+    if expect.get("escalate_origin"):
+        s += f" by {expect['escalate_origin']}"
     if expect.get("forbid"):
         s += " !" + ",".join(f"{k}={v}" for k, v in expect["forbid"].items())
     return s
@@ -266,10 +363,16 @@ def expected_str(expect: dict) -> str:
 def got_str(got: dict) -> str:
     k = got["kind"]
     if k == "attach":
-        return f"attach #{got.get('book_id')}"
-    if k == "create_book":
-        return f"create_book {got.get('library')} {got.get('title')!r} ra={got.get('readalong')}"
-    return k
+        out = f"attach #{got.get('book_id')}"
+    elif k == "create_book":
+        out = f"create_book {got.get('library')} {got.get('title')!r} ra={got.get('readalong')}"
+    elif k == "escalate":
+        out = f"escalate[{got.get('origin')}]"
+    else:
+        out = k
+    if got.get("verdicts"):
+        out += " (rev: " + ",".join(str(v) for v in got["verdicts"]) + ")"
+    return out
 
 
 # --- one case ---------------------------------------------------------------------------
@@ -305,7 +408,9 @@ def run_case(case: dict, args, out_root: str) -> dict:
         index.refresh(now=0, force=True)
 
         clock = Clock()
-        svc = Service(settings, index=index, prober=make_prober(probes), clock=clock)
+        scripted = ScriptedLibrarian(case["scripted_intent"]) if case.get("scripted_intent") else None
+        svc_kw = {"runner": scripted} if scripted else {}
+        svc = Service(settings, index=index, prober=make_prober(probes), clock=clock, **svc_kw)
         started = time.time()
         try:
             for _ in range(6):
@@ -321,7 +426,8 @@ def run_case(case: dict, args, out_root: str) -> dict:
             if len(recs) != 1:
                 got = {"kind": "none", "error": f"{len(recs)} arrivals recorded", "trail": []}
             else:
-                got = outcome(svc, recs[0]["key"])
+                sid = (scripted.submitted or {}).get("intent_id") if scripted else None
+                got = outcome(svc, recs[0]["key"], sid)
         finally:
             svc.stop()
 
@@ -330,9 +436,9 @@ def run_case(case: dict, args, out_root: str) -> dict:
             c = (record.get(phase) or {}).get("cost_usd")
             if isinstance(c, (int, float)):
                 cost += c
-        ok, why = grade(case["expect"], got)
-        if record.get("outcome") not in (None, "ok"):
-            why += f" (run outcome {record.get('outcome')})"
+        ok, why = grade(case["expect"], got, record)
+        if scripted and (scripted.submitted or {}).get("status") != "proposed":
+            ok, why = False, f"scripted intent not accepted: {scripted.submitted}"
 
         dest = os.path.join(out_root, case["name"])
         os.makedirs(dest, exist_ok=True)
@@ -345,6 +451,7 @@ def run_case(case: dict, args, out_root: str) -> dict:
             if os.path.exists(p):
                 shutil.copy(p, dest)
         result = {"name": case["name"], "expected": expected_str(case["expect"]), "got": got_str(got),
+                  "guard_rejects": got.get("guard_rejects", []),
                   "pass": ok, "why": why, "cost": round(cost, 4), "seconds": round(time.time() - started),
                   "run": record, "detail": got}
         with open(os.path.join(dest, "result.json"), "w") as f:
@@ -401,19 +508,20 @@ def main(argv=None) -> int:
         if total > args.budget:
             print(f"budget ${args.budget:.2f} exceeded (${total:.2f}); skipping {c['name']}", flush=True)
             results.append({"name": c["name"], "expected": expected_str(c["expect"]), "got": "skipped",
-                            "pass": False, "why": "budget", "cost": 0.0})
+                            "guard_rejects": [], "pass": False, "why": "budget", "cost": 0.0})
             continue
         r = run_case(c, args, out_root)
         total += r["cost"]
         results.append(r)
-        print(f"{r['name']:32} {'PASS' if r['pass'] else 'FAIL'}  ${r['cost']:.2f}  {r['got']}  ({r['why']})",
-              flush=True)
+        print(f"{r['name']:36} {'PASS' if r['pass'] else 'FAIL'}  ${r['cost']:.2f}  {r['got']}  "
+              f"guard-rejects={r['guard_rejects']}  ({r['why']})", flush=True)
 
     print()
-    print("| case | expected | got | result | cost |")
-    print("|---|---|---|---|---|")
+    print("| case | expected | got | guard-rejects | result | cost |")
+    print("|---|---|---|---|---|---|")
     for r in results:
-        print(f"| {r['name']} | {r['expected']} | {r['got']} | {'PASS' if r['pass'] else 'FAIL'} "
+        gr = ", ".join(r.get("guard_rejects") or []) or "-"
+        print(f"| {r['name']} | {r['expected']} | {r['got']} | {gr} | {'PASS' if r['pass'] else 'FAIL'} "
               f"| ${r['cost']:.2f} |")
     n = sum(1 for r in results if r["pass"])
     print(f"\n{n}/{len(results)} PASS, total cost ${total:.2f}; artifacts in {out_root}")

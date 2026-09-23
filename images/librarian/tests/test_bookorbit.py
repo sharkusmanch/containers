@@ -214,7 +214,7 @@ def test_candidates_match_real_title_in_file_name_of_placeholder_book(tmp_path):
     idx = make(tmp_path, [], books=books); idx.refresh(now=0, force=True)
     top, reasons = idx.candidates(titles=["The Sins of Our Fathers"], authors=["James S. A. Corey"])[0]
     assert top["id"] == 5
-    assert "title-key:sins of our fathers" in reasons and "surname:corey" in reasons
+    assert "file-key:sins of our fathers" in reasons and "surname:corey" in reasons
     # search_books passes only the query as a title: still found (title-only score)
     assert [d["id"] for d, _ in idx.candidates(titles=["Sins of Our Fathers"])] == [5]
 
@@ -225,3 +225,22 @@ def test_file_name_index_prefix_is_stripped_for_title_keys(tmp_path):
     # stop the file name contributing the key "thrawn"
     from app.bookorbit import _file_title_keys
     assert "thrawn" in _file_title_keys(idx.book(1))
+
+
+def test_generic_file_key_with_other_author_stays_title_only_and_is_suppressed(tmp_path):
+    books = dict(BOOKS)
+    books[6] = {"id": 6, "title": "Some Other Book", "subtitle": None,
+                "authors": [{"id": 6, "name": "Jane Doe", "sortName": "Doe, Jane"}],
+                "providerIds": {}, "tags": [], "isbn13": None, "isbn10": None,
+                "libraryName": "Library", "seriesName": None, "seriesIndex": None,
+                "publishedYear": 2001, "readAloudSync": {"state": "unavailable"},
+                "folderPath": "/books/Library/Jane Doe/Some Other Book",
+                "files": [{"format": "m4b", "filename": "Part 01.m4b", "sizeBytes": 5}],
+                "updatedAt": "t6"}
+    idx = make(tmp_path, [], books=books); idx.refresh(now=0, force=True)
+    # alone, the generic file key only earns a title-only (score 20) match
+    only = idx.candidates(titles=["Part 01"], authors=["Timothy Zahn"])
+    assert [(d["id"], r) for d, r in only] == [(6, ["file-key:part 01"])]
+    # with a real title+surname match present it is suppressed entirely
+    ids = [d["id"] for d, _ in idx.candidates(titles=["Part 01", "Thrawn"], authors=["Timothy Zahn"])]
+    assert ids == [1]

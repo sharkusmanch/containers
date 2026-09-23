@@ -1,6 +1,6 @@
 {
-  "name": "hunger-games-vs-mockingjay",
-  "note": "Audio Book 1 (671 min). Mockingjay's library title also starts 'The Hunger Games:' and its runtime is close. The prequel shares the key and has no series index, so no guard blocks it.",
+  "name": "rev-hunger-games-null-index",
+  "note": "REVIEWER CASE (scripted librarian). Every library seriesIndex is null; Book 1 audio attached to Mockingjay because 'durations match'.",
   "arrival": {
     "source": "libation",
     "source_id": "B0HUNGER01",
@@ -47,7 +47,7 @@
         }
       ],
       "seriesName": "The Hunger Games",
-      "seriesIndex": 1,
+      "seriesIndex": null,
       "publishedYear": 2008
     },
     {
@@ -64,7 +64,7 @@
         }
       ],
       "seriesName": "The Hunger Games",
-      "seriesIndex": 2,
+      "seriesIndex": null,
       "publishedYear": 2009
     },
     {
@@ -81,7 +81,7 @@
         }
       ],
       "seriesName": "The Hunger Games",
-      "seriesIndex": 3,
+      "seriesIndex": null,
       "publishedYear": 2010
     },
     {
@@ -104,14 +104,17 @@
   ],
   "expect": {
     "kind_in": [
-      "attach"
+      "escalate"
     ],
-    "book_id": 601,
+    "escalate_origin": "reviewer",
     "forbid": {
-      "book_id": [
-        603,
-        604
-      ]
+      "book_id": 603
     }
+  },
+  "scripted_intent": {
+    "kind": "attach",
+    "book_id": 603,
+    "readalong": true,
+    "reason": "The Hunger Games by Suzanne Collins; durations match."
   }
 }
