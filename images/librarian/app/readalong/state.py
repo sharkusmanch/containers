@@ -33,8 +33,11 @@ class State:
         self.foreign_told = bool(data.get("foreign_told"))
         # gated, staged read-alongs waiting for a stray file to go (no Storyteller book held)
         self.blocked = data.get("blocked", {})
-        self.pending_push = data.get("pending_push")                # a push that was not delivered
-        # tonight's run window, shared with the Job's retry pods: {"started", "failure_told"}
+        # this run's push, persisted line by line so a kill loses none: {"lines", "published", "refused"}
+        self.pending_push = data.get("pending_push")
+        # uuids of our own Storyteller books whose delete failed: retried every run
+        self.to_release = data.get("to_release", {})
+        # this Job's run window, shared with its retry pods: {"job", "started", "failure_told"}
         self.run = data.get("run") or {}
 
     @classmethod
@@ -54,7 +57,7 @@ class State:
         data = {"in_flight": self.in_flight, "refused": self.refused, "errors": self.errors,
                 "history": self.history[-HISTORY_MAX:], "foreign_busy_since": self.foreign_busy_since,
                 "foreign_told": self.foreign_told, "blocked": self.blocked, "pending_push": self.pending_push,
-                "run": self.run}
+                "run": self.run, "to_release": self.to_release}
         d = os.path.dirname(self.path) or "."
         tmp = f"{self.path}.tmp"
         with open(tmp, "w", encoding="utf-8") as fh:

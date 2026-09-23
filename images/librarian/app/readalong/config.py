@@ -38,11 +38,13 @@ class Settings:
     libraries: tuple = (7, 8)
     start_hours: float = 3.5                   # no new book starts later than this into the run
     run_hours: float = 5.5                     # stop polling and exit (Storyteller keeps working)
+    finish_hours: float = 1.0                  # no publish begins in the run's last FINISH_HOURS
     quiet_hours: float = 2.0                   # skip books updated more recently than this
     max_books: int = 3                         # new books started per night
     poll_seconds: int = 60
     dry_run: bool = False
     only: frozenset = field(default_factory=frozenset)
+    job_name: str = ""                         # the Kubernetes Job (downward API): its retry pods share a window
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Settings":
@@ -56,9 +58,11 @@ class Settings:
         for k, attr in opt.items():
             if env.get(k):
                 kw[attr] = env[k]
-        for k in ("START_HOURS", "RUN_HOURS"):
+        for k in ("START_HOURS", "RUN_HOURS", "FINISH_HOURS"):
             if env.get(k):
                 kw[k.lower()] = float(env[k])
+        if env.get("JOB_NAME"):
+            kw["job_name"] = env["JOB_NAME"]
         if env.get("LIBRARIES"):
             kw["libraries"] = _ints(env["LIBRARIES"])
         if env.get("QUIET_HOURS"):
@@ -72,4 +76,7 @@ class Settings:
         s = Settings(**kw)
         if not 0 < s.start_hours <= s.run_hours:
             raise ValueError(f"need 0 < START_HOURS <= RUN_HOURS, got {s.start_hours}, {s.run_hours}")
+        if not 0 <= s.finish_hours < s.run_hours:
+            # else no publish could ever begin -- and nothing would say so
+            raise ValueError(f"need 0 <= FINISH_HOURS < RUN_HOURS, got {s.finish_hours}, {s.run_hours}")
         return s

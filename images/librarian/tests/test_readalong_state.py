@@ -121,3 +121,15 @@ def test_the_run_window_and_blocked_books_survive_a_reload(tmp_path):
     assert again.run == {"started": 123.0, "failure_told": True}
     assert again.blocked == {"111": {"book": 111, "blocked_since": 5}}
     assert again.pending_push == {"title": "t", "body": "b"}
+
+
+def test_settings_refuse_a_window_with_no_room_to_publish():
+    import pytest
+    from app.readalong.config import Settings
+    base = {"BOOKORBIT_URL": "u", "BOOKORBIT_USER": "u", "BOOKORBIT_PASS": "p", "STORYTELLER_URL": "s",
+            "STORYTELLER_USER": "u", "STORYTELLER_PASS": "p", "APPRISE_URL": "a"}
+    with pytest.raises(ValueError, match="FINISH_HOURS"):
+        Settings.from_env({**base, "RUN_HOURS": "1", "START_HOURS": "1"})       # the default finish is 1 h
+    s = Settings.from_env({**base, "RUN_HOURS": "1", "START_HOURS": "1", "FINISH_HOURS": "0.5",
+                           "JOB_NAME": "librarian-readalong-1"})
+    assert s.finish_hours == 0.5 and s.job_name == "librarian-readalong-1"

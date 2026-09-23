@@ -88,11 +88,13 @@ class FakeStoryteller:
         return {k: v for k, v in b.items() if k != "left"}
 
     def books(self):
-        return [self.book(u) for u in list(self.books_)] + self.foreign
+        """A listing is a snapshot: it does not move an alignment along."""
+        return [{k: v for k, v in b.items() if k != "left"} for b in self.books_.values()] + self.foreign
 
     def alignment_report(self, uuid):
-        self._get(uuid)
-        return None if self.report_missing else {"grade": self.grade}
+        if uuid not in self.books_ or self.report_missing:    # the real client answers None on a 404
+            return None
+        return {"grade": self.grade}
 
     def download_readaloud(self, uuid, dest):
         self._get(uuid)
@@ -125,6 +127,7 @@ ENV = {"BOOKORBIT_URL": "http://b/api/v1", "BOOKORBIT_USER": "u", "BOOKORBIT_PAS
        "STORYTELLER_URL": "http://st:8001", "STORYTELLER_USER": "su", "STORYTELLER_PASS": "sp",
        "APPRISE_URL": "http://apprise/notify/librarian"}
 DAY = 24 * 3600
+SHORT = {"RUN_HOURS": "1", "START_HOURS": "1", "FINISH_HOURS": "0.5"}    # a run that ends mid-alignment
 
 
 @pytest.fixture
@@ -144,7 +147,7 @@ def env(tmp_path):
                                "STAGING_DIR": str(tmp_path / "staging"), **extra})
         os.makedirs(s.state_dir, exist_ok=True)
         return Job(s, bo=lib, st=st, push=lambda url, t, b: pushes.append((t, b)) or True,
-                   clock=clock, sleep=clock.sleep, duration=lambda path: 40.0)
+                   clock=clock, sleep=clock.sleep, monotonic=clock, duration=lambda path: 40.0)
     return lib, st, clock, pushes, make, tmp_path
 
 
@@ -251,7 +254,7 @@ def test_no_new_book_starts_after_start_hours(env):
 def test_unfinished_alignment_is_kept_for_the_next_run(env):
     lib, st, clock, pushes, make, tmp = env
     st.polls_until_done = 10 ** 6
-    assert make(RUN_HOURS="1", START_HOURS="1").run() == 0
+    assert make(**SHORT).run() == 0
     state = state_of(tmp)
     assert state["in_flight"]["uuid"] == "u1" and pushes == []
     assert st.books_["u1"]["readaloud"]["status"] == "PROCESSING"
@@ -302,15 +305,48 @@ def test_a_book_too_long_for_the_rest_of_the_run_waits(env):
     assert creates(st) == 1
 
 
-def test_a_retry_pod_continues_the_nights_window(env):
+def test_a_retry_pod_continues_its_jobs_window(env):
     lib, st, clock, pushes, make, tmp = env
-    first = make()
+    first = make(JOB_NAME="readalong-1")
     first._push = lambda url, t, b: False            # exit 1: the Job starts a retry pod
     assert first.run() == 1
     clock.t += 2 * 3600
-    assert make().t0 == first.t0                     # not a fresh 3.5 h to start books in
-    clock.t += DAY
-    assert make().t0 == clock.t                      # the next night is a new window
+    assert make(JOB_NAME="readalong-1").t0 == first.t0          # not a fresh 3.5 h to start books in
+    assert make(JOB_NAME="readalong-2").t0 == clock.t           # another Job is another window
+    assert make().t0 == clock.t
+
+
+def test_an_evening_manual_run_does_not_eat_the_nightly_window(env):
+    lib, st, clock, pushes, make, tmp = env
+    manual = make(JOB_NAME="readalong-manual-1")     # the owner runs it by hand at ~20:00
+    assert manual.run() == 0 and has_readalong(lib, 111)
+    add_other(lib)
+    clock.t = manual.t0 + 4.5 * 3600                 # the CronJob's own Job at 00:30
+    assert make(JOB_NAME="librarian-readalong-29801234").run() == 0
+    assert has_readalong(lib, 222)
+
+
+def test_a_retry_pod_after_a_full_run_only_finishes_up(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    real_report = st.alignment_report
+    st.alignment_report = lambda uuid: {"grade": "D"} if uuid == "u1" else real_report(uuid)   # 111: refused
+    real_process = st.process
+
+    def process(uuid):                               # 222 still aligning at RUN_HOURS
+        real_process(uuid)
+        if uuid == "u2":
+            st.books_[uuid]["left"] = 10 ** 6
+    st.process = process
+    first = make(JOB_NAME="j")
+    first._push = lambda url, t, b: False            # the end-of-run push fails -> exit 1 -> a retry pod
+    assert first.run() == 1
+    clock.t += 10
+    st.books_["u2"]["left"] = 1                      # 222 finishes just as the retry pod starts
+    retry = make(JOB_NAME="j")
+    assert retry.run() == 0
+    assert retry.t0 == first.t0 and not has_readalong(lib, 222)  # past the window: no publish begins
+    assert "1 refused" in pushes[-1][0] and "grade D" in pushes[-1][1]        # but the news goes out
 
 
 # --- Storyteller ------------------------------------------------------------------------
@@ -413,10 +449,10 @@ def test_a_401_is_retried_once_after_relogin(env):
 def test_a_storyteller_book_deleted_while_aligning_is_abandoned(env):
     lib, st, clock, pushes, make, tmp = env
     st.polls_until_done = 10 ** 6
-    make(RUN_HOURS="1", START_HOURS="1").run()
+    make(**SHORT).run()
     st.books_.pop("u1")                               # the owner cleans Storyteller up in its UI
     clock.t += DAY
-    assert make(RUN_HOURS="1", START_HOURS="1").run() == 0
+    assert make(**SHORT).run() == 0
     assert "its Storyteller book was deleted" in pushes[-1][1]
     assert not any(c == ("cancel", "u1") or c == ("delete", "u1") for c in st.calls)
     st.polls_until_done = 2
@@ -526,9 +562,12 @@ def test_a_book_made_before_the_import_is_never_adopted_or_touched(env, monkeypa
             make().run()
         st.create_book = real_create
         clock.t += 60
-        assert make().run() == 0
-        assert not any(c[0] in ("cancel", "delete") and c[1] == "manual-1" for c in st.calls)
-        assert "manual-1" in st.books_ and has_readalong(lib, 111)
+        assert make().run() == 0                     # the import may still be landing: wait, never import again
+        assert creates(st) == 0 and state_of(tmp)["in_flight"]["uuid"] is None
+        clock.t += DAY
+        assert make().run() == 0                     # nothing landed within the hour: started afresh
+        assert not any(c[1] == "manual-1" for c in st.calls if c[0] in ("process", "cancel", "delete"))
+        assert "manual-1" in st.books_ and has_readalong(lib, 111) and creates(st) == 1
     finally:
         monkeypatch.delenv("TZ")
         time.tzset()
@@ -548,9 +587,12 @@ def test_a_new_book_with_another_title_is_left_alone_and_told(env):
         make().run()
     st.create_book = real_create
     clock.t += 60
+    assert make().run() == 0 and creates(st) == 0    # within the hour: ours may still be landing
+    clock.t += DAY
     assert make().run() == 0
-    assert "cannot tell which new Storyteller book" in pushes[-1][1]
-    assert "other" in st.books_ and not any(c[0] in ("cancel", "delete") and c[1] == "other" for c in st.calls)
+    assert "is certainly its own" in pushes[-1][1] and "Another Book" in pushes[-1][1]
+    assert "other" in st.books_
+    assert not any(c[1] == "other" for c in st.calls if c[0] in ("process", "cancel", "delete"))
     assert has_readalong(lib, 111)                   # started again, under its own import
 
 
@@ -620,7 +662,7 @@ def test_a_failed_flag_update_is_not_a_failed_book(env):
 def test_files_changing_during_alignment_abandon_it(env):
     lib, st, clock, pushes, make, tmp = env
     st.polls_until_done = 10 ** 6
-    make(RUN_HOURS="1", START_HOURS="1").run()
+    make(**SHORT).run()
     (folder(tmp) / "01. A Little Hatred.m4b").write_bytes(b"NEW AUDIO" * 50)   # a better m4b was filed
     lib.scan(7)
     clock.t += DAY
@@ -649,7 +691,7 @@ def test_a_file_attached_during_alignment_abandons_it(env):
 def test_a_read_along_from_elsewhere_abandons_ours(env):
     lib, st, clock, pushes, make, tmp = env
     st.polls_until_done = 10 ** 6
-    make(RUN_HOURS="1", START_HOURS="1").run()
+    make(**SHORT).run()
     (folder(tmp) / "01. A Little Hatred (readaloud).epub").write_bytes(OVERLAY + b" made by hand")
     lib.scan(7)
     clock.t += DAY
@@ -662,7 +704,7 @@ def test_a_read_along_from_elsewhere_abandons_ours(env):
 def test_opting_out_during_alignment_abandons_it(env):
     lib, st, clock, pushes, make, tmp = env
     st.polls_until_done = 10 ** 6
-    make(RUN_HOURS="1", START_HOURS="1").run()
+    make(**SHORT).run()
     lib._books[111]["tags"] = [{"id": 9, "name": "no-readalong"}]
     clock.t += DAY
     assert make().run() == 0
@@ -677,7 +719,7 @@ def test_a_book_deleted_from_bookorbit_is_closed(env):
     lib.add_book(333, "Solo/01. Solo", [(31, "01. Solo.epub", b"E")], title="Solo",   # the library isn't empty
                  updatedAt="2026-09-19T10:00:00.000Z", customMetadata=[{"fieldId": 2, "value": False}])
     st.polls_until_done = 10 ** 6
-    make(RUN_HOURS="1", START_HOURS="1").run()
+    make(**SHORT).run()
     lib.remove_book(111)
     clock.t += DAY
     assert make().run() == 0
@@ -783,7 +825,7 @@ def test_an_undelivered_push_fails_the_run_and_is_resent(env):
     job = make()
     job._push = lambda url, t, b: False
     assert job.run() == 1
-    assert "A Little Hatred" in state_of(tmp)["pending_push"]["body"]
+    assert any("A Little Hatred" in line for line in state_of(tmp)["pending_push"]["lines"])
     clock.t += DAY
     assert make().run() == 0                         # nothing new tonight, but the old news goes out
     assert len(pushes) == 1 and "1 published" in pushes[0][0] and "A Little Hatred" in pushes[0][1]
@@ -797,9 +839,9 @@ def test_a_run_failure_is_told_once_per_window(env):
     def down():
         raise ConnectionError("storyteller is down")
     st.books = down
-    assert make().run() == 1
+    assert make(JOB_NAME="j").run() == 1
     clock.t += 600
-    assert make().run() == 1                         # the retry pod: same failure, not told again
+    assert make(JOB_NAME="j").run() == 1             # the retry pod: same failure, not told again
     assert len([b for _t, b in pushes if "run failed" in b]) == 1
     st.books = real_books
 
@@ -837,7 +879,7 @@ def test_phase_reads_the_job_before_the_readaloud():
     assert phase({"readaloud": {"status": "ALIGNED"}, "processingJob": {"status": "DONE"}}) == DONE
     assert phase({"readaloud": {"status": "PROCESSING"}, "processingJob": None}) == RUNNING
     assert phase({"readaloud": {"status": "CREATED"}, "processingJob": None}) == NOT_STARTED
-    assert phase({}) == NOT_STARTED
+    assert phase({}) == FAILED                       # an unreadable shape is counted, never waited on
     assert phase({"readaloud": {"status": "ERROR"}, "processingJob": None}) == FAILED
     assert phase({"readaloud": {"status": "STOPPED"}, "processingJob": None}) == FAILED
     assert phase({"readaloud": {"status": "ALIGNED"}, "processingJob": {"status": "ERROR"}}) == FAILED
@@ -913,5 +955,244 @@ def test_the_bookorbit_adapter_scans_and_flags_through_the_writer():
     bo = Bookorbit(None, w)
     bo.scan(7)
     bo.set_flag(111, 2, True)
-    assert w.calls == [("scan", 7, 1800), ("wait", 7, 41, 1800),
+    assert w.calls == [("scan", 7, 900), ("wait", 7, 41, 900),
                        ("patch", 111, {"customMetadata": [{"fieldId": 2, "value": True}]}, [])]
+
+
+# --- second review round: regressions ---------------------------------------------------------
+
+def utc(t):
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def add_dune(lib):
+    lib.add_book(333, "Frank Herbert/Dune/01. Dune",
+                 [(31, "01. Dune.epub", b"PLAIN3"), (32, "01. Dune.m4b", b"AUDIO3" * 20)],
+                 title="Dune", updatedAt="2026-09-21T10:00:00.000Z", customMetadata=[{"fieldId": 2, "value": False}])
+
+
+def test_a_storyteller_book_that_cannot_be_freed_never_holds_the_queue(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    real_delete = st.delete_book
+
+    def delete(uuid):                                # Storyteller's DELETE keeps failing for this one book
+        if uuid == "u1":
+            raise StorytellerHTTPError(f"DELETE /api/v2/books/{uuid} -> 500: b'EBUSY'", 500)
+        return real_delete(uuid)
+    st.delete_book = delete
+    codes = []
+    for _ in range(5):
+        clock.t += DAY
+        codes.append(make().run())
+    assert codes == [0] * 5 and has_readalong(lib, 111) and has_readalong(lib, 222)
+    assert list(state_of(tmp)["to_release"]) == ["u1"]           # still parked, retried every run
+    assert len([b for _t, b in pushes if "cannot be deleted" in b]) == 1
+    st.delete_book = real_delete
+    clock.t += DAY
+    make().run()
+    assert state_of(tmp)["to_release"] == {} and "u1" not in st.books_
+
+
+def test_a_cancelled_alignment_is_waited_for_before_the_delete(env):
+    """A cancel only signals the worker; deleting under it races its shutdown."""
+    lib, st, clock, pushes, make, tmp = env
+    st.polls_until_done = 10 ** 6
+    make(**SHORT).run()
+    stops_after = {"polls": 2}
+    real_book, seen = st.book, []
+
+    def cancel(uuid):                                # the job keeps running for a couple of polls
+        st.calls.append(("cancel", uuid))
+
+    def book(uuid):
+        b = real_book(uuid)
+        if ("cancel", uuid) in st.calls:
+            stops_after["polls"] -= 1
+            if stops_after["polls"] <= 0:
+                st.books_[uuid].update(readaloud={"status": "STOPPED"}, processingJob=None)
+            seen.append(st.books_[uuid]["processingJob"])
+        return real_book(uuid) if stops_after["polls"] <= 0 else b
+    st.cancel_processing, st.book = cancel, book
+    lib._books[111]["tags"] = ["no-readalong"]       # abandon: release u1 while it aligns
+    clock.t += DAY
+    make().run()
+    assert ("delete", "u1") in st.calls and seen[-1] is None     # deleted only once it had stopped
+
+
+def test_a_read_along_from_elsewhere_during_the_publish_is_never_joined(env):
+    lib, st, clock, pushes, make, tmp = env
+
+    def foreign_arrives(_fake):                      # lands while our rename phase is being scanned
+        (folder(tmp) / "01. A Little Hatred (readaloud).epub").write_bytes(OVERLAY + b" made by hand")
+    lib.hook_before_scan = foreign_arrives
+    make().run()
+    ras = [f["filename"] for f in lib.detail(111)["files"] if f["mediaOverlay"]["available"]]
+    assert ras == ["01. A Little Hatred (readaloud).epub"]        # ours was not linked beside it
+    assert "from elsewhere" in pushes[-1][1] and state_of(tmp)["in_flight"] is None
+
+
+def test_the_owners_later_import_of_a_series_mate_is_never_adopted(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_dune(lib)
+
+    def lost(epub, audio):                           # our import's fate is unknown (a reset, not a refusal)
+        raise ConnectionError("connection reset by peer")
+    real_create = st.create_book
+    st.create_book = lost
+    night1 = make(ONLY="333")
+    night1.duration = lambda path: 21 * 3600.0
+    assert night1.run() == 0 and state_of(tmp)["in_flight"]["uuid"] is None
+    st.create_book = real_create
+    clock.t += 12 * 3600                             # next day the owner imports the sequel by hand
+    for uuid, title in (("owner-1", "02. Dune Messiah"), ("owner-2", "01. Dune")):
+        st.books_[uuid] = {"uuid": uuid, "title": title, "createdAt": utc(clock.t),
+                           "readaloud": {"status": "ALIGNED"}, "processingJob": None, "left": None}
+    clock.t += 12 * 3600
+    assert make(ONLY="333").run() == 0               # (the fake's alignment is 40 s: fits Dune's fake m4b)
+    touched = [c for c in st.calls if c[0] in ("process", "cancel", "delete") and c[1].startswith("owner")]
+    assert touched == [] and sorted(u for u in st.books_) == ["owner-1", "owner-2"]
+    assert creates(st) == 1 and has_readalong(lib, 333)          # its own, fresh import instead
+    assert state_of(tmp)["refused"] == {}
+
+
+def test_a_kill_later_in_the_run_loses_no_line(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    job = make()
+    real_sleep = job.sleep
+
+    def sleep(s):                                    # OOM-kill / node loss while 222 aligns
+        if has_readalong(lib, 111) and creates(st) == 2:
+            raise KeyboardInterrupt
+        real_sleep(s)
+    job.sleep = sleep
+    with pytest.raises(KeyboardInterrupt):
+        job.run()
+    assert pushes == []
+    clock.t += DAY
+    make().run()
+    assert any("A Little Hatred" in b and "published" in b for _t, b in pushes)
+
+
+def test_one_failure_one_line(env):
+    lib, st, clock, pushes, make, tmp = env
+    real_process = st.process
+    n = {"calls": 0}
+
+    def process(uuid):
+        n["calls"] += 1
+        if n["calls"] == 1:
+            real_process(uuid)
+            st.fail(uuid)                            # the alignment errors out
+            return
+        raise StorytellerHTTPError(f"POST /api/v2/books/{uuid}/process -> 409: b'busy'", 409)
+    st.process = process
+    make().run()
+    assert len([ln for ln in pushes[-1][1].splitlines() if "A Little Hatred" in ln]) == 1
+    assert state_of(tmp)["errors"]["111"]["count"] == 1
+
+
+def test_a_systemic_start_error_charges_no_book(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    add_dune(lib)
+    for _ in range(3):
+        clock.t += DAY
+        job = make()
+
+        def no_ffprobe(path):
+            raise FileNotFoundError("[Errno 2] No such file or directory: 'ffprobe'")
+        job.duration = no_ffprobe
+        job.run()
+    assert state_of(tmp)["errors"] == {}
+    assert len([b for _t, b in pushes if "nothing counted" in b]) == 3
+
+
+def test_a_book_specific_start_error_is_charged_and_the_queue_moves_on(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    job = make()
+
+    def duration(path):
+        if "Hatred" in path:
+            raise FileNotFoundError(f"[Errno 2] No such file or directory: '{path}'")
+        return 40.0
+    job.duration = duration
+    assert job.run() == 0
+    assert state_of(tmp)["errors"]["111"]["count"] == 1 and has_readalong(lib, 222)
+    assert "could not start" in pushes[-1][1]
+
+
+def test_an_import_storyteller_refused_does_not_hold_the_queue(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    real_create = st.create_book
+
+    def create(epub, audio):                         # a definitive answer: nothing was imported
+        if "Hatred" in epub:
+            raise StorytellerHTTPError("POST /api/v2/books -> 405: b'Unable to create book'", 405)
+        return real_create(epub, audio)
+    st.create_book = create
+    assert make().run() == 0
+    s = state_of(tmp)
+    assert has_readalong(lib, 222) and s["errors"]["111"]["count"] == 1 and s["in_flight"] is None
+    assert list(st.books_) == []                     # nothing orphaned
+
+
+def test_an_unknown_status_shape_is_counted_and_given_up(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    real_book = st.book
+
+    def renamed(uuid):                               # e.g. a Storyteller upgrade renames `readaloud`
+        b = dict(real_book(uuid))
+        b["readAloud"] = b.pop("readaloud")
+        b.pop("processingJob", None)
+        return b
+    st.book = renamed
+    for _ in range(4):
+        clock.t += DAY
+        make().run()
+    assert "gave up after 3 tries" in "\n".join(b for _t, b in pushes)
+    assert creates(st) == 2                          # the queue moved on to 222
+
+
+def test_an_import_landing_after_the_retry_pod_is_adopted_not_duplicated(env):
+    lib, st, clock, pushes, make, tmp = env
+    t_request = []
+
+    def killed_mid_request(epub, audio):             # the server is still copying the m4b when the pod dies
+        t_request.append(clock.t)
+        raise KeyboardInterrupt
+    real_create = st.create_book
+    st.create_book = killed_mid_request
+    with pytest.raises(KeyboardInterrupt):
+        make().run()
+    st.create_book = real_create
+    clock.t += 30                                    # the Job's retry pod, before the import has landed
+    assert make().run() == 0 and creates(st) == 0
+    st.books_["u-late"] = {"uuid": "u-late", "title": "01. A Little Hatred", "createdAt": utc(t_request[0] + 45),
+                           "readaloud": {"status": "CREATED"}, "processingJob": None, "left": None}
+    clock.t += DAY
+    assert make().run() == 0
+    assert creates(st) == 0 and has_readalong(lib, 111) and st.books_ == {}   # the late import, adopted
+
+
+def test_the_books_own_file_in_the_way_is_never_reported(env, monkeypatch):
+    """BookOrbit's own rename can put the book's file back at a name mid-publish: retry, never tell."""
+    lib, st, clock, pushes, make, tmp = env
+    from app.readalong import job as jobmod
+    from app.readalong.publish import PublishConflict
+    real_publish, n = jobmod.publish, {"calls": 0}
+
+    def publish(*a, **k):
+        n["calls"] += 1
+        if n["calls"] <= 2:
+            raise PublishConflict("in the way", str(folder(tmp) / "01. A Little Hatred.epub"))
+        return real_publish(*a, **k)
+    monkeypatch.setattr(jobmod, "publish", publish)
+    for _ in range(3):
+        clock.t += DAY
+        make().run()
+    assert not any("in the way" in b for _t, b in pushes) and has_readalong(lib, 111)

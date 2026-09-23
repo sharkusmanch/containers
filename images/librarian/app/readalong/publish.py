@@ -147,6 +147,12 @@ def _check_names(folder, t, own_names, expected):
         raise PublishConflict(f"{path} is not one of the book's files", path)
 
 
+def _no_readalong(d):
+    """Before our link, any read-along in the book is someone else's."""
+    if any(is_readalong_file(f) for f in d.get("files") or []):
+        raise FilesChanged("a read-along from elsewhere is in the book")
+
+
 def _current(lib, book_id, pair, media_books, books_prefix):
     """Fresh detail, its layout names and local folder, and the pair -- re-keyed
     by final name and size when a foreign scan gave a file a new id, but only
@@ -176,11 +182,15 @@ def publish(lib, book_id, staged, pair, *, media_books="/media/books", books_pre
         _under(staged, staging_dir, "staged read-along")
     d, t, folder, pair = _current(lib, book_id, pair, media_books, books_prefix)
     linked = _same_inode(staged, os.path.join(folder, t["clean"]))
-    if not linked and not any(is_readalong_file(f) for f in d.get("files") or []):
+    # Not linked and no staged copy: the caller has already seen our read-along
+    # in BookOrbit (a run killed after the verified unlink); only verify is left.
+    if not linked and os.path.exists(staged):
+        _no_readalong(d)
         lib_id = d["libraryId"]
         wait_idle(lib, lib_id, sleep=sleep, clock=clock)
         # re-read after the wait: BookOrbit may have renamed or moved the book meanwhile
         d, t, folder, pair = _current(lib, book_id, pair, media_books, books_prefix)
+        _no_readalong(d)
         files = d.get("files") or []
         _check_names(folder, t, {f.get("filename") for f in files},
                      {t["ebook"]: pair[1], t["m4b_name"]: pair[3]})
@@ -205,6 +215,7 @@ def publish(lib, book_id, staged, pair, *, media_books="/media/books", books_pre
             if moved:
                 _scan(lib, lib_id)
             d2, t2, folder2, pair = _current(lib, book_id, pair, media_books, books_prefix)
+            _no_readalong(d2)
             if folder2 != folder:
                 raise PublishError(f"the book moved to {t2['folder']} during the publish")
             names = {f["id"]: f.get("filename") for f in d2.get("files") or []}
