@@ -8,6 +8,7 @@ drive tools the same way Claude Code would: `asyncio.run(server.call_tool(...))`
 """
 import asyncio
 import json
+import os
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +17,8 @@ import pytest
 
 import app.mcp_shim as mcp_shim
 from app.mcp_shim import build_mcp_config, build_server
+
+IMAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 BOTH_TOOLS = {"list_arrivals", "get_arrival", "search_books", "get_book", "search_in_book"}
 LIBRARIAN_ONLY = {"attach", "create_book", "escalate", "defer"}
@@ -350,8 +353,17 @@ def test_build_mcp_config_exact_shape():
                     "LIBRARIAN_API": "http://127.0.0.1:9000",
                     "LIBRARIAN_RUN_TOKEN": "tok123",
                     "LIBRARIAN_MODE": "librarian",
-                    "PYTHONPATH": "/app",
+                    "PYTHONPATH": IMAGE_ROOT,
                 },
             }
         }
     }
+
+
+def test_build_mcp_config_pythonpath_is_the_package_parent():
+    import app
+    import app.mcp_shim
+    cfg = build_mcp_config("/usr/bin/python3", "http://127.0.0.1:9000", "t", "reviewer")
+    root = cfg["mcpServers"]["librarian"]["env"]["PYTHONPATH"]
+    assert os.path.isfile(os.path.join(root, "app", "mcp_shim.py"))
+    assert os.path.dirname(os.path.dirname(os.path.abspath(app.mcp_shim.__file__))) == root

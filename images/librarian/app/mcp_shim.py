@@ -293,6 +293,12 @@ def build_server(mode: str, api: str, token: str) -> FastMCP:
     return server
 
 
+# The directory holding the `app` package (final review minor 12): /app in
+# the image, the checkout's images/librarian locally -- so the eval harness
+# and the lockdown probe need no PYTHONPATH override.
+_PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def build_mcp_config(python: str, api: str, token: str, mode: str) -> dict:
     """The `--mcp-config` JSON for launching this shim as `claude -p`'s
     only MCP server (see the plan's `claude -p` lockdown argv)."""
@@ -305,7 +311,7 @@ def build_mcp_config(python: str, api: str, token: str, mode: str) -> dict:
                     "LIBRARIAN_API": api,
                     "LIBRARIAN_RUN_TOKEN": token,
                     "LIBRARIAN_MODE": mode,
-                    "PYTHONPATH": "/app",
+                    "PYTHONPATH": _PACKAGE_PARENT,
                 },
             },
         },

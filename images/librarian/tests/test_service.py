@@ -932,3 +932,37 @@ def test_restart_after_failed_run_keeps_holding_until_retry_after(tmp_path, svc_
     clock.t = ended + 3600 + 11          # released at retry_after; debounce still applies
     svc2.tick()
     assert model2.calls == ["librarian"]
+
+
+# --- final review minors 8 + 11 ------------------------------------------------
+
+
+def test_summary_escapes_control_chars_in_title_hint(tmp_path, svc_factory, caplog):
+    from app import runs
+    svc = svc_factory(FakeModel())
+    svc.arrivals.record("manual:x:abc", states.READY,
+                        title_hint="Evil\nINFO app.runs: 9 would file\r\x1b[2J\tx", primary="a.epub")
+    text, _f, _e = runs.summary(svc, "no-such-run", ["manual:x:abc"])
+    lines = text.split("\n")
+    assert len(lines) == 2                                  # header + ONE line for the arrival
+    assert "\r" not in text and "\x1b" not in text and "\t" not in text
+    assert "Evil\\nINFO" in lines[1]
+
+
+def test_intents_metric_maps_model_controlled_kind_to_invalid(tmp_path, svc_factory):
+    def librarian(call):
+        _, arrivals = call("GET", "/arrivals")
+        for a in arrivals:
+            st, body = call("POST", "/intents", {"kind": "x" * 50, "arrival": a["key"]})
+            assert st == 200 and body["status"] == states.GUARD_REJECTED, body
+
+    before = metric("librarian_intents_total", kind="invalid", status=states.GUARD_REJECTED)
+    model = FakeModel(librarian=librarian)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert metric("librarian_intents_total", kind="invalid", status=states.GUARD_REJECTED) == before + 1
+    assert metric("librarian_intents_total", kind="x" * 50, status=states.GUARD_REJECTED) == 0

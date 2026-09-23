@@ -375,7 +375,7 @@ def test_run_claude_timeout_kills_process_group(tmp_path, monkeypatch):
     assert ticks == []
 
 
-def test_run_claude_returns_promptly_with_real_pipe_reader_never_stops(tmp_path):
+def test_run_claude_returns_promptly_with_real_pipe_reader_never_stops(tmp_path, monkeypatch):
     """Fix round 2, Important (regression): a prior version of run_claude
     force-closed proc.stdout from the main thread to unstick a wedged
     reader. Closing a REAL pipe's read end while the reader thread is
@@ -385,6 +385,7 @@ def test_run_claude_returns_promptly_with_real_pipe_reader_never_stops(tmp_path)
     within its own deadline (plus one bounded reader-join) by abandoning
     the daemon reader thread instead, even with a genuinely-blocked real
     pipe."""
+    monkeypatch.setattr(runner_mod, "_READER_JOIN_TIMEOUT", 0.05)   # keep the suite fast
     read_fd, write_fd = os.pipe()  # write end intentionally never closed/written
 
     class _RealPipeNeverExitsProc:

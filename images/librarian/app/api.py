@@ -571,7 +571,9 @@ class ApiServer:
     def start(self) -> int:
         handler = _build_handler(self._core)
         self._httpd = http.server.ThreadingHTTPServer((self._host, self._port), handler)
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        # a short poll interval keeps stop() (shutdown) fast -- final review minor 14
+        self._thread = threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.05},
+                                        daemon=True)
         self._thread.start()
         return self._httpd.server_address[1]
 

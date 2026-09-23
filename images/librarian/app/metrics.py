@@ -10,7 +10,7 @@ legitimate gap between beats -- the service passes
 """
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 
@@ -70,9 +70,11 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
 
-def serve(port: int, stale_after: int | None = None) -> HTTPServer:
+def serve(port: int, stale_after: int | None = None) -> ThreadingHTTPServer:
+    """Threaded (final review minor 10): a hung or slow scrape must never
+    block the kubelet's /healthz probe behind it."""
     if stale_after is not None:
         _Handler.stale_after = stale_after
-    srv = HTTPServer(("0.0.0.0", port), _Handler)
+    srv = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
     threading.Thread(target=srv.serve_forever, daemon=True, name="metrics").start()
     return srv

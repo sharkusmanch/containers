@@ -427,7 +427,6 @@ class Service:
             return self.runner(argv, on_tick=metrics.beat, **kw)
         finally:
             self._in_runner = False
-        self._lists_error: str | None = None
 
     # --- housekeeping --------------------------------------------------------
 

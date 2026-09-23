@@ -147,9 +147,9 @@ def main() -> None:
         port = api.start()
         try:
             mcp_config = build_mcp_config(sys.executable, f"http://127.0.0.1:{port}", run.token, "librarian")
-            # Local probe: the shim runs from this checkout, not the image's
-            # /app -- point PYTHONPATH at it so `import app.mcp_shim` resolves.
-            mcp_config["mcpServers"]["librarian"]["env"]["PYTHONPATH"] = image_dir
+            # build_mcp_config derives PYTHONPATH from the package location,
+            # so the shim resolves from this checkout with no override.
+            assert mcp_config["mcpServers"]["librarian"]["env"]["PYTHONPATH"] == image_dir
 
             prompt = (
                 "You are being tested in a locked-down sandbox with exactly one MCP "

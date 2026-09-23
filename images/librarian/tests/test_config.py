@@ -62,3 +62,10 @@ def test_missing_required_field_raises():
 def test_runs_root_default_and_override():
     assert Settings.from_env(BASE).runs_root == "/tmp/runs"
     assert Settings.from_env({**BASE, "RUNS_ROOT": "/var/run/librarian"}).runs_root == "/var/run/librarian"
+
+
+def test_repr_does_not_leak_bookorbit_password():
+    from app.config import Settings
+    s = Settings(bookorbit_url="http://b/api/v1", bookorbit_user="u", bookorbit_pass="hunter2-secret")
+    assert "hunter2-secret" not in repr(s)
+    assert "hunter2-secret" not in str(s)

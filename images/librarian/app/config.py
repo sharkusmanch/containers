@@ -6,7 +6,7 @@ rename or delete anything under /media, or call a BookOrbit/Storyteller/
 Vikunja/Apprise write. Live mode ships in a later plan.
 """
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 def _get(env: Mapping[str, str], name: str) -> str:
@@ -53,7 +53,7 @@ class Settings:
     # required -- no sane default exists for the BookOrbit credentials.
     bookorbit_url: str
     bookorbit_user: str
-    bookorbit_pass: str
+    bookorbit_pass: str = field(repr=False)   # never in a repr/log line
 
     intake_root: str = "/media/library_intake"
     local_books_root: str = "/media/books"

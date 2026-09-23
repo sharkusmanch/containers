@@ -174,6 +174,14 @@ def discard(svc, run_id: str, pre: dict, reason: str) -> None:
                                 detail=f"run {run_id} discarded: {reason}")
 
 
+def _log_safe(text: str) -> str:
+    """Escape control characters (C0, DEL, and every other non-printable
+    code point) in attacker-influenced text before it is logged, so a title
+    hint cannot forge log lines or emit terminal escapes (final review
+    minor 11)."""
+    return "".join(ch if ch.isprintable() else repr(ch)[1:-1] for ch in text)
+
+
 def summary(svc, run_id: str, keys: list[str]) -> tuple[str, int, int]:
     """The text Plan 2 will push: header + one line per offered arrival."""
     simulated = {}
@@ -186,7 +194,7 @@ def summary(svc, run_id: str, keys: list[str]) -> tuple[str, int, int]:
     for key in keys:
         rec = svc.arrivals.get(key) or {}
         icon = "🎧" if str(rec.get("primary", "")).lower().endswith(".m4b") else "📖"
-        hint = rec.get("title_hint") or key
+        hint = _log_safe(str(rec.get("title_hint") or key))
         st = rec.get("state")
         if st == states.SIMULATED:
             n_file += 1
@@ -284,7 +292,9 @@ def _cycle(svc, keys, pre, lib_run, lib_prompt, rev_prompt, record) -> bool:
 
     for rec in svc.intents.store.all():
         if rec.get("run_id") == lib_run.run_id:
-            metrics.INTENTS.labels(kind=str(rec.get("kind")), status=str(rec.get("state"))).inc()
+            kind = rec.get("kind")
+            kind = kind if kind in states.INTENT_KINDS else "invalid"   # model-controlled label
+            metrics.INTENTS.labels(kind=kind, status=str(rec.get("state"))).inc()
 
     text, n_file, n_esc = summary(svc, lib_run.run_id, keys)
     record.update(outcome=outcome, failed=failed, ended=svc.clock(), ended_ts=time.time(),

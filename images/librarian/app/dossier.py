@@ -42,8 +42,12 @@ def _name_hash(name: str) -> str:
     return hashlib.sha256(name.encode("utf-8", "surrogateescape")).hexdigest()[:12]
 
 
-def _short_reason(exc: Exception) -> str:
-    return str(exc)[:_UNTRUSTED_STRING_CAP] or exc.__class__.__name__
+# `trusted.files[].error` is a CLOSED vocabulary (final review minor 6): an
+# exception's text can echo an attacker-chosen filename or tag (ffprobe
+# does), and nothing under `trusted` may carry untrusted text.
+ERR_UNREADABLE_EPUB = "unreadable_epub"
+ERR_PROBE_FAILED = "probe_failed"
+ERR_UNREADABLE_FILE = "unreadable_file"
 
 
 def title_from_folder(c) -> str:
@@ -129,12 +133,15 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
     for f in c.files:
         name = os.path.basename(f)
         kind = _kind_of(name)
+        size_error = False
         try:
             size = os.path.getsize(f)
         except OSError:
-            size = None
+            size, size_error = None, True
         is_primary = f == pf
         entry = {"name_hash": _name_hash(name), "kind": kind, "size": size, "primary": is_primary}
+        if size_error:
+            entry["error"] = ERR_UNREADABLE_FILE
 
         if kind == "m4b":
             m4b_count += 1
@@ -144,8 +151,8 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
         if kind == "m4b":
             try:
                 audio = probe_audio(f, prober)
-            except Exception as e:  # ffprobe failure -- never crash the dossier
-                entry["error"] = _short_reason(e)
+            except Exception:  # ffprobe failure -- never crash the dossier
+                entry["error"] = ERR_PROBE_FAILED
                 untrusted_files.append({"name": name})
             else:
                 untrusted_files.append({
@@ -179,8 +186,8 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
         elif kind == "epub":
             try:
                 epub = read_epub(f)
-            except (ValueError, OSError, zipfile.BadZipFile) as e:  # unreadable EPUB -- never crash the dossier
-                entry["error"] = _short_reason(e)
+            except (ValueError, OSError, zipfile.BadZipFile):  # unreadable EPUB -- never crash the dossier
+                entry["error"] = ERR_UNREADABLE_EPUB
                 untrusted_files.append({"name": name})
             else:
                 text_sources.append(epub.title)
@@ -340,7 +347,18 @@ def _shrink_to_budget(dossier: dict) -> None:
     if _size(dossier) <= SIZE_BUDGET_BYTES:
         return
 
-    _truncate_strings(untrusted, _UNTRUSTED_STRING_CAP)
+    # kids_inputs is exempt (final review minor 15): guard 7 recomputes the
+    # kids allow/deny signals from these exact strings, and a truncated
+    # author or series name would silently stop matching a denylist entry
+    # -- a fail-OPEN. They are short by construction (names, not prose).
+    for k, v in untrusted.items():
+        if k == "kids_inputs":
+            continue
+        if isinstance(v, str):
+            if len(v) > _UNTRUSTED_STRING_CAP:
+                untrusted[k] = v[:_UNTRUSTED_STRING_CAP]
+        else:
+            _truncate_strings(v, _UNTRUSTED_STRING_CAP)
     if _size(dossier) <= SIZE_BUDGET_BYTES:
         return
 

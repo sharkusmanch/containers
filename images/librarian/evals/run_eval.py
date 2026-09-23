@@ -44,7 +44,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 IMAGE_DIR = os.path.dirname(HERE)
 sys.path.insert(0, IMAGE_DIR)
 
-from app import runs, states  # noqa: E402
+from app import states  # noqa: E402
 from app.bookorbit import BookorbitClient, LibraryIndex  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.runner import RunResult, run_claude  # noqa: E402
@@ -463,17 +463,6 @@ def run_case(case: dict, args, out_root: str) -> dict:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _patch_shim_pythonpath():
-    """In the image the shim is importable from /app; here it is IMAGE_DIR."""
-    orig = runs.build_mcp_config
-
-    def build(python, api, token, mode):
-        cfg = orig(python, api, token, mode)
-        cfg["mcpServers"]["librarian"]["env"]["PYTHONPATH"] = IMAGE_DIR
-        return cfg
-    runs.build_mcp_config = build
-
-
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--prompts", required=True, help="dir holding librarian.md and reviewer.md")
@@ -492,7 +481,6 @@ def main(argv=None) -> int:
         if not os.path.isfile(os.path.join(args.prompts, name)):
             print(f"missing {name} in {args.prompts}", file=sys.stderr)
             return 2
-    _patch_shim_pythonpath()
 
     cases = []
     for p in sorted(glob.glob(os.path.join(HERE, "cases", "*.json"))):
