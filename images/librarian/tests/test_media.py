@@ -154,3 +154,22 @@ def test_read_epub_decodes_percent_encoded_manifest_href(tmp_path):
         zf.writestr("OEBPS/content.opf", opf)
         zf.writestr("OEBPS/chapter 1.xhtml", xhtml)
     assert "hello there" in epub_text(str(p))
+
+
+# --- Task 11 fix round 1 (M5): which dc:date dates the publication -------------------
+
+
+@pytest.mark.parametrize("dates, want", [
+    ([("modification", "2019-05-01"), ("publication", "1851")], "1851"),
+    ([("creation", "2018-01-01"), (None, "1999-04-01")], "1999-04-01"),
+    ([("modification", "2019-05-01"), ("original-publication", "1603")], "1603"),
+    ([("Publication", "1851")], "1851"),                                  # event names case-insensitive
+    ([("creation", "2018-01-01"), ("modification", "2019-05-01")], None),  # file dates only: none
+    ([(None, "2020"), ("publication", "1851")], "2020"),                   # first publication-like wins
+])
+def test_read_epub_date_prefers_a_publication_date_over_file_dates(tmp_path, dates, want):
+    """The OPF's dc:date feeds create_book's publishedYear; EPUB2 allows
+    several, and a creation/modification date dates the FILE, not the book."""
+    p = str(tmp_path / "b.epub")
+    make_epub(p, "T", ["A"], "text", dates=dates)
+    assert read_epub(p).date == want

@@ -131,20 +131,44 @@ def test_render_identity_keeps_the_stored_series_index_string():
 # --- Task 11: language / publishedYear from the arrival's EPUB OPF ----------------
 
 
-@pytest.mark.parametrize("value", ["en", "en-US", "fr", "zh-Hant", "eng", "English", "Français",
-                                   "Old English", "x" * 20])
-def test_opf_language_accepts_codes_and_plain_names(value):
-    from app.bookmeta import opf_language
-    assert opf_language(value) == value
-    assert opf_language(f"  {value} ") == value
+@pytest.mark.parametrize("value", ["en", "en-US", "fr", "zh-Hant", "sr-Latn-RS", "es-419", "eng",
+                                   "English", "Old English", "x" * 20])
+def test_plausible_language_accepts_codes_and_plain_names(value):
+    from app.bookmeta import plausible_language
+    assert plausible_language(value) == value
+    assert plausible_language(f"  {value} ") == value
 
 
-@pytest.mark.parametrize("value", [None, 5, ["en"], "", "   ", "x" * 21, "en_US", "es-419", "<b>en</b>",
-                                   "en;fr", "en--US", "en-", "-", "\u200ben", "en\nUS",
-                                   "und", "UND"])      # "und" = BCP-47 "undetermined": no language
-def test_opf_language_rejects_junk(value):
-    from app.bookmeta import opf_language
-    assert opf_language(value) is None
+@pytest.mark.parametrize("value, normalised", [("en_US", "en-US"), (" en_GB ", "en-GB"),
+                                               ("zh_Hant_TW", "zh-Hant-TW")])
+def test_plausible_language_normalises_underscores_to_hyphens(value, normalised):
+    """Fix round 1 (I1): "_" -> "-" first -- en_US is the same tag as en-US."""
+    from app.bookmeta import plausible_language
+    assert plausible_language(value) == normalised
+
+
+@pytest.mark.parametrize("value", [
+    None, 5, ["en"], "", "   ", "a", "x" * 21, "<b>en</b>", "en;fr", "en--US", "en-", "-",
+    "\u200ben", "en\nUS",
+    "419", "en_", "_en", "en__US",               # fix round 1 (I1)
+    "und", "UND", "und-Latn",                    # primary subtag "und" = BCP-47 "undetermined"
+    "en\u00b2", "\u2167", "Fran\u00e7ais",       # ASCII only: superscript two, Roman numeral eight, a non-ASCII name
+])
+def test_plausible_language_rejects_junk(value):
+    from app.bookmeta import plausible_language
+    assert plausible_language(value) is None
+
+
+@pytest.mark.parametrize("value, year", [(2011, 2011), (1999.0, 1999), (1000, 1000), (2200, 2200)])
+def test_plausible_year_takes_a_number_in_range(value, year):
+    from app.bookmeta import plausible_year
+    assert plausible_year(value) == year
+
+
+@pytest.mark.parametrize("value", [None, True, "2011", 0, 999, 2201, -5, 20200, float("nan"), float("inf")])
+def test_plausible_year_rejects_everything_else(value):
+    from app.bookmeta import plausible_year
+    assert plausible_year(value) is None
 
 
 @pytest.mark.parametrize("value, year", [
@@ -178,9 +202,30 @@ def test_create_metadata_fills_absent_language_and_year_from_the_opf():
 
 def test_create_metadata_intent_values_beat_the_opf():
     from app.bookmeta import create_metadata
-    f = create_metadata({"title": "T", "authors": ["A"], "language": "fr", "publishedYear": 1999.0},
-                        {"source": "manual"}, {"language": "en", "date": "2011"})["fields"]
-    assert (f["language"], f["publishedYear"]) == ("fr", 1999)
+    out = create_metadata({"title": "T", "authors": ["A"], "language": "fr", "publishedYear": 1999.0},
+                          {"source": "manual"}, {"language": "en", "date": "2011"})
+    assert (out["fields"]["language"], out["fields"]["publishedYear"]) == ("fr", 1999)
+    assert out["dropped"] == []
+
+
+def test_create_metadata_validates_the_intents_language_and_year_too():
+    """Fix round 1 (M6): the intent's own language/year pass the same checks.
+    A plausible one is normalised; an implausible one is dropped (reported in
+    `dropped` for the executor to log -- a filing never fails over it) and
+    the OPF value, or nothing, is used instead."""
+    from app.bookmeta import create_metadata
+    out = create_metadata({"title": "T", "authors": ["A"], "language": "en_US", "publishedYear": 2011},
+                          {"source": "manual"})
+    assert (out["fields"]["language"], out["fields"]["publishedYear"]) == ("en-US", 2011)
+    assert out["dropped"] == []
+    out = create_metadata({"title": "T", "authors": ["A"], "language": "<b>en</b>", "publishedYear": 20200},
+                          {"source": "manual"}, {"language": "fr", "date": "1851"})
+    assert (out["fields"]["language"], out["fields"]["publishedYear"]) == ("fr", 1851)
+    assert out["dropped"] == ["language '<b>en</b>'", "publishedYear 20200"]
+    out = create_metadata({"title": "T", "authors": ["A"], "language": "und", "publishedYear": 0},
+                          {"source": "manual"})
+    assert "language" not in out["fields"] and "publishedYear" not in out["fields"]
+    assert out["dropped"] == ["language 'und'", "publishedYear 0"]
 
 
 @pytest.mark.parametrize("epub", [

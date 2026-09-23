@@ -15,6 +15,7 @@ and EXDEV (a different filesystem) fails instead of degrading to a copy.
 """
 import hashlib
 import os
+import stat
 
 # Libation leftovers that are safe to delete once the book is verified filed:
 # cover art, the chapter cue sheet and Libation's JSON sidecars. Anything else
@@ -209,8 +210,10 @@ def fresh_lstat(path: str, root: str):
     (close-to-open GETATTR; a changed directory drops its negative entries).
     The entry sits in the deepest directory that already existed -- above
     the file's own parent when the move created a new book or series
-    folder -- hence every level from `root` down. A level that cannot be
-    listed ends the walk: everything below it is out of sight anyway."""
+    folder -- hence every level from `root` down. Each level is lstat'ed
+    first and the walk ends at one that is not a real directory -- never
+    listing through a symlink (fix round 1, M4) -- or cannot be listed:
+    everything below it is out of sight anyway."""
     root = os.path.abspath(root)
     parent = os.path.dirname(os.path.abspath(path))
     levels = []
@@ -222,6 +225,8 @@ def fresh_lstat(path: str, root: str):
                 levels.append(os.path.join(levels[-1], part))
     for d in levels:
         try:
+            if not stat.S_ISDIR(os.lstat(d).st_mode):
+                break
             os.listdir(d)
         except OSError:
             break

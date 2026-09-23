@@ -2275,9 +2275,30 @@ def test_fresh_lstat_lists_every_level_top_down_before_the_lookup(tmp_path, monk
     assert seen == [str(root), str(root / "A"), str(root / "A" / "S"), str(root / "A" / "S" / "B")]
     seen.clear()
     assert fsops.fresh_lstat(str(root / "A" / "X" / "B" / "f.epub"), str(root)) is None
-    assert seen == [str(root), str(root / "A"), str(root / "A" / "X")]   # stops at the first unlistable level
+    assert seen == [str(root), str(root / "A")]        # stops at the first level it cannot see
     seen.clear()
     assert fsops.fresh_lstat(str(root / "top.epub"), str(root)).st_size == 2
+    assert seen == [str(root)]
+
+
+def test_fresh_lstat_never_lists_through_a_symlinked_level(tmp_path, monkeypatch):
+    """Fix round 1 (M4): each level is lstat'ed first; the walk stops at
+    anything that is not a real directory, so it never lists through a
+    symlink (a symlinked folder escaping the library is refused by the
+    caller's is_under check, after the lookup)."""
+    from app import fsops
+    root = tmp_path / "Library"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    (outside / "S").mkdir(parents=True)
+    (outside / "S" / "f.epub").write_bytes(b"x")
+    os.symlink(outside, root / "A")
+    seen = []
+    real = os.listdir
+    monkeypatch.setattr(os, "listdir", lambda d: seen.append(str(d)) or real(d))
+
+    fsops.fresh_lstat(str(root / "A" / "S" / "f.epub"), str(root))
+
     assert seen == [str(root)]
 
 
@@ -2360,12 +2381,16 @@ def test_file_really_missing_after_the_poll_budget_is_retryable_then_resume_file
     r = ex.execute(intent_create(arr), arr, {})
 
     assert r.state == "retryable" and "missing or the wrong size on disk" in r.detail, r.detail
-    # two looks (the placement check, then the rename step), each at 0,2,..,10 s
-    assert env.clock.sleeps.count(2) == 10
+    # fix round 1 (M2): the placement check polls at 0,2,..,10 s; the rename
+    # step's check shares this call's spent budget -- one look, not 10 s more
+    assert env.clock.sleeps.count(2) == 5
     j = env.arrivals.get(arr["key"])["exec"]
     assert j["open"] and j["step"] == "renamed" and j["attempts"] == 1
-    assert "missing or the wrong size on disk" in j["unverified"]     # genuine: kept pending
+    final = env.books_root / "Library" / "Jane Author" / "Saga" / "02. New Book" / "02. New Book.m4b"
+    assert "missing or the wrong size on disk" in j["unverified"]["note"]     # genuine: kept pending
+    assert j["unverified"]["path"] == str(final)                             # (M3) where it looked
     assert not j.get("notes")
+    assert not [k for k in j if k.startswith("_")]          # the per-call budget is never journaled
 
     restore(lost)                                                    # the file turns up
     r2 = ex.resume(env.arrivals.get(arr["key"]))
@@ -2376,10 +2401,13 @@ def test_file_really_missing_after_the_poll_budget_is_retryable_then_resume_file
     assert not j.get("unverified") and j["outcome"]["escalate"] is None
 
 
-def test_resume_drops_a_legacy_journaled_placement_note_once_the_file_verifies(env, monkeypatch):
+@pytest.mark.parametrize("shape", ["separate", "combined"])
+def test_resume_drops_a_legacy_journaled_placement_note_once_the_file_verifies(env, monkeypatch, shape):
     """The canary's own journal: the image before Task 11 journaled the
     failed check as an ordinary `exec.notes` entry, and the successful retry
-    turned it into a false attention task. A genuine note next to it stays."""
+    turned it into a false attention task. A genuine note next to it stays --
+    also when the old code joined both into one "<problem>; <check>" note
+    (fix round 1 nit: the stale tail is split off, the problem kept)."""
     arr = env.libation(asin="B0NEWBOOK1", title="New Book")
     lost = lose_the_file_when_bookorbit_moves_it(env, monkeypatch)
     monkeypatch.setattr(executor_mod, "VERIFY_MAX", 3)
@@ -2392,7 +2420,7 @@ def test_resume_drops_a_legacy_journaled_placement_note_once_the_file_verifies(e
              f"wrong size on disk")
     genuine = (f"BookOrbit left book {j['book_id']} at '/books/Library/x' instead of moving it to "
                f"'y' (rename skipped or still pending); its file stays filed there")
-    j["notes"] = [stale, genuine]
+    j["notes"] = [stale, genuine] if shape == "separate" else [f"{genuine}; {stale}"]
     env.arrivals.record(arr["key"], states.EXECUTING, exec=j)
     restore(lost)
 
@@ -2421,7 +2449,7 @@ def test_placement_check_disproved_later_in_the_same_run_leaves_no_note(env, mon
     r = ex.execute(intent_create(arr), arr, {})
 
     assert len(seen) == 1 and seen[0][0] is None                     # no placement problem ...
-    assert "missing or the wrong size on disk" in (seen[0][1] or "")  # ... the disk check failed
+    assert "missing or the wrong size on disk" in (seen[0][1] or {}).get("note", "")  # ... the disk check failed
     assert r.ok and r.state == "filed" and not r.escalate, r.detail
     assert not env.arrivals.get(arr["key"])["exec"].get("attempts")
 
@@ -2467,6 +2495,139 @@ def test_own_lib_dir_already_gone_is_not_reported_left_behind(env, monkeypatch):
     (made / "x.m4b").write_bytes(b"x")
     assert ex._rmdir_own(ctx) == f"left non-empty {made}"
 
+
+
+def test_a_failed_check_is_kept_when_the_file_then_verifies_somewhere_else(env, monkeypatch):
+    """Fix round 1 (M3): a later successful locate clears the parked check
+    only at the path that check looked at. Verified at ANOTHER path means the
+    book moved again after the check -- kept, and it escalates with where the
+    file turned up."""
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    lost = lose_the_file_when_bookorbit_moves_it(env, monkeypatch)
+    monkeypatch.setattr(executor_mod, "VERIFY_MAX", 3)
+    real = Executor._placement_note
+    elsewhere = env.books_root / "Library" / "Jane Author" / "Elsewhere"
+
+    def check_then_relocate(self, ctx, d, plan):
+        out = real(self, ctx, d, plan)
+        (parked,) = lost.values()
+        elsewhere.mkdir()
+        os.rename(parked, elsewhere / "02. New Book.m4b")
+        env.fake.books[ctx["book_id"]]["folderPath"] = "/books/Library/Jane Author/Elsewhere"
+        return out
+    monkeypatch.setattr(Executor, "_placement_note", check_then_relocate)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    assert r.escalate and "missing or the wrong size on disk" in r.escalate, r.detail
+    assert f"verified at {elsewhere / '02. New Book.m4b'}" in r.escalate
+    assert r.moves[0][1] == str(elsewhere / "02. New Book.m4b")
+
+
+def test_a_disk_check_that_needs_no_wait_does_not_log_on_a_real_clock(env, caplog):
+    """Fix round 1 (M1): time.time advances during the lookup itself, so a
+    check that found the file at once logged "showed up on disk after 0 s"
+    every time. Only a check that actually slept logs."""
+    ex = env.executor()
+    folder = env.books_root / "Library" / "A" / "B"
+    folder.mkdir(parents=True)
+    (folder / "b.m4b").write_bytes(b"x" * 10)
+    env.snapshot_tree()
+    ticks = iter(range(1, 10 ** 6))
+    ex.clock = lambda: 1_000_000.0 + next(ticks) / 100          # moves on every read
+    ctx = {"library": "Library", "size": 10, "sha256": "unused"}
+
+    with caplog.at_level("INFO"):
+        p = ex._verify_local({"id": 5, "folderPath": "/books/Library/A/B"}, {"filename": "b.m4b"}, ctx)
+
+    assert p == str(folder / "b.m4b")
+    assert not [m for m in caplog.messages if "showed up on disk" in m]
+
+
+def update_moves_the_book(env, ex, filed_arrival):
+    """execute_update sets a series on book 7001, so BookOrbit moves it to
+    Martha Wells/Murderbot Diaries/02. Artificial Condition -- after guard 8
+    looked that folder up (a cached miss under StaleNfsView)."""
+    r = ex.execute_update(intent_update_metadata(
+        filed_arrival, 7001, metadata={"series": "Murderbot Diaries", "seriesIndex": 2}, lock=[]),
+        filed_arrival, 7001)
+    assert r.ok and r.state == "updated", r.detail
+    return env.books_root / "Library" / "Martha Wells" / "Murderbot Diaries" / "02. Artificial Condition"
+
+
+def manual_m4b(env, name="second.m4b", data=b"M" * 4000):
+    src = env.intake / "manual" / name
+    src.write_bytes(data)
+    return env._arrival("manual", os.path.splitext(name)[0], src, src)
+
+
+def test_attach_to_a_book_execute_update_just_moved_files_despite_the_stale_lookup(env, monkeypatch):
+    """Fix round 1 (I2): guard 3's plain isdir read the moved folder through
+    the cached miss -> a permanent failure before the move (exec-failed,
+    failure push, task). It re-lists the way the post-move check does."""
+    attach_target(env)
+    first = mark_filed(env, env.libation(title="Artificial Condition"), 7001)
+    nfs = StaleNfsView(env, monkeypatch)
+    ex = env.executor()
+    env.snapshot_tree()
+    moved = update_moves_the_book(env, ex, first)
+    assert str(moved.parent) in nfs.recorded                     # guard 8 cached the miss
+    second = manual_m4b(env)
+
+    r = ex.execute(intent_attach(second, 7001, iid="r2:1"), second, {})
+
+    assert r.ok and r.state == "filed" and not r.escalate, r.detail
+    assert (moved / "02. Artificial Condition.m4b").stat().st_size == 4000
+
+
+def test_book_folder_still_not_visible_before_the_move_is_retryable_not_failed(env, monkeypatch):
+    """Fix round 1 (I2): a folder even the re-listing cannot show is retried
+    later (bounded by the service's max_attempts), never exec-failed. Nothing
+    moved; the arrival is back in the intake."""
+    attach_target(env)
+    first = mark_filed(env, env.libation(title="Artificial Condition"), 7001)
+    StaleNfsView(env, monkeypatch, listing_revalidates=False)
+    ex = env.executor()
+    env.snapshot_tree()
+    update_moves_the_book(env, ex, first)
+    second = manual_m4b(env)
+
+    r = ex.execute(intent_attach(second, 7001, iid="r2:1"), second, {})
+
+    assert r.state == "retryable" and "not visible" in r.detail, r.detail
+    assert os.path.isfile(second["primary"]) and r.moves == []
+
+
+def test_duplicate_of_a_book_execute_update_just_moved_is_removed(env, monkeypatch):
+    """Fix round 1 (I2): _library_copy re-lists too."""
+    rec = _duplicate(env)                                  # 7001 holds the arrival's exact bytes
+    other = mark_filed(env, env.kindle(), 7001)
+    StaleNfsView(env, monkeypatch)
+    ex = env.executor()
+    env.snapshot_tree()
+    update_moves_the_book(env, ex, other)
+
+    r = ex.remove_duplicate(env.arrivals.get(rec["key"]))
+
+    assert r.state == "removed", r.detail
+    assert not os.path.exists(rec["path"])
+
+
+def test_duplicate_whose_library_copy_is_not_visible_is_retryable_not_failed(env, monkeypatch):
+    rec = _duplicate(env)
+    other = mark_filed(env, env.kindle(), 7001)
+    StaleNfsView(env, monkeypatch, listing_revalidates=False)
+    ex = env.executor()
+    env.snapshot_tree()
+    update_moves_the_book(env, ex, other)
+
+    r = ex.remove_duplicate(env.arrivals.get(rec["key"]))
+
+    assert r.state == "retryable" and "not visible" in r.detail, r.detail
+    assert os.path.isfile(rec["primary"])
 
 # --- Task 11: create_book language / publishedYear from the arrival's EPUB OPF ----------------
 
@@ -2575,3 +2736,22 @@ def test_resumed_create_uses_the_metadata_journaled_before_the_move(env):
     assert r.ok and r.state == "filed", r.detail
     body = env.fake.patch_bodies[-1][2]["metadata"]
     assert (body["language"], body["publishedYear"]) == ("en", 2026)
+
+
+def test_create_book_drops_an_implausible_intent_language_and_year_with_a_warning(env, caplog):
+    """Fix round 1 (M6): the intent's own language/year pass the same checks
+    as the OPF's; implausible ones are logged and dropped -- the OPF's value
+    (or nothing) is written -- rather than failing a filing over them."""
+    arr = manual_epub(env)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    with caplog.at_level("WARNING"):
+        r = ex.execute(intent_create(arr, language="english (probably)", publishedYear=20200),
+                       arr, epub_dossier(arr, language="en", date="1851"))
+
+    assert r.ok and r.state == "filed" and not r.escalate, r.detail
+    body = env.fake.patch_bodies[0][2]["metadata"]
+    assert (body["language"], body["publishedYear"]) == ("en", 1851)
+    dropped = [m for m in caplog.messages if "dropped" in m]
+    assert any("english (probably)" in m for m in dropped) and any("20200" in m for m in dropped)
