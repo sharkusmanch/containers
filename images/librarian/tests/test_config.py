@@ -9,9 +9,26 @@ def test_defaults():
     assert s.dry_run is True and s.quiet_period == 600 and s.intake_root == "/media/library_intake"
 
 
-def test_live_mode_refused():
-    with pytest.raises(SystemExit):
-        Settings.from_env({**BASE, "DRY_RUN": "false"})
+def test_live_mode_is_a_real_switch():
+    # Plan 2 Task 4: the P1 refusal is gone; DRY_RUN still defaults to true
+    s = Settings.from_env({**BASE, "DRY_RUN": "false"})
+    assert s.dry_run is False
+
+
+def test_live_sources_default_and_parsing():
+    assert Settings.from_env(BASE).live_sources == frozenset({"manual", "libation"})
+    s = Settings.from_env({**BASE, "LIVE_SOURCES": " manual , kindle,, "})
+    assert s.live_sources == frozenset({"manual", "kindle"})
+    assert Settings.from_env({**BASE, "LIVE_SOURCES": "none"}).live_sources == frozenset()
+    with pytest.raises(ValueError):
+        Settings.from_env({**BASE, "LIVE_SOURCES": "manual,audible"})
+
+
+def test_attempt_and_tick_limits():
+    s = Settings.from_env(BASE)
+    assert s.max_attempts == 5 and s.max_exec_per_tick == 5
+    s = Settings.from_env({**BASE, "MAX_ATTEMPTS": "3", "MAX_EXEC_PER_TICK": "2"})
+    assert s.max_attempts == 3 and s.max_exec_per_tick == 2
 
 
 def test_int_parsing():
@@ -40,8 +57,7 @@ def test_all_defaults_match_spec():
 
 def test_dry_run_accepts_1_and_0():
     assert Settings.from_env({**BASE, "DRY_RUN": "1"}).dry_run is True
-    with pytest.raises(SystemExit):
-        Settings.from_env({**BASE, "DRY_RUN": "0"})
+    assert Settings.from_env({**BASE, "DRY_RUN": "0"}).dry_run is False
 
 
 def test_only_set_from_env():

@@ -1,9 +1,11 @@
 """Runtime configuration, entirely from the environment.
 
-DRY_RUN is hard-wired for this plan (see global constraints): the service
-refuses to start with DRY_RUN=false. No code in this plan may move, write,
-rename or delete anything under /media, or call a BookOrbit/Storyteller/
-Vikunja/Apprise write. Live mode ships in a later plan.
+DRY_RUN is a real switch since Plan 2 Task 4 but still defaults to true;
+rollback is setting it back to true. With DRY_RUN=false only arrivals whose
+source is in LIVE_SOURCES (default `manual,libation`) execute for real --
+every other arrival is finalized exactly as in dry-run. The executor
+(app/executor.py) is the only code that writes; app/main.py constructs it,
+and its writable BookOrbit client, only when DRY_RUN=false.
 """
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -48,6 +50,24 @@ def _b(env: Mapping[str, str], name: str, default: bool) -> bool:
     raise ValueError(f"{name}={v!r} is not a boolean (expected true/false/1/0)")
 
 
+SOURCES = frozenset({"manual", "libation", "kindle"})
+DEFAULT_LIVE_SOURCES = frozenset({"manual", "libation"})
+
+
+def _sources(env: Mapping[str, str], name: str, default: frozenset) -> frozenset:
+    """Comma list of arrival sources; blank = default, `none` = no source."""
+    v = _get(env, name)
+    if not v:
+        return default
+    if v.lower() == "none":
+        return frozenset()
+    out = frozenset(p.strip().lower() for p in v.split(",") if p.strip())
+    unknown = out - SOURCES
+    if unknown:
+        raise ValueError(f"{name}: unknown source(s) {sorted(unknown)}; expected any of {sorted(SOURCES)}")
+    return out
+
+
 @dataclass(frozen=True, kw_only=True)
 class Settings:
     # required -- no sane default exists for the BookOrbit credentials.
@@ -73,6 +93,10 @@ class Settings:
     claude_bin: str = "claude"
     retry_after: int = 3600
     dry_run: bool = True
+    # Plan 2 Task 4: sources that execute live when dry_run is False
+    live_sources: frozenset = DEFAULT_LIVE_SOURCES
+    max_attempts: int = 5          # service-level executions before failed + escalation
+    max_exec_per_tick: int = 5     # MAX_EXEC_PER_TICK (Global "Liveness")
     only: str | None = None
     # Every claude -p run's HOME/CLAUDE_CONFIG_DIR must live strictly under
     # this directory (app/runner.py's child_env enforces it) -- the fence
@@ -81,13 +105,7 @@ class Settings:
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Settings":
-        # DRY_RUN is checked first and raises before touching anything else --
-        # a missing BOOKORBIT_URL should not mask a live-mode attempt, and
-        # vice versa the live-mode guard must fire even if other env is fine.
         dry_run = _b(env, "DRY_RUN", True)
-        if not dry_run:
-            raise SystemExit("live mode ships in plan P2")
-
         only = _get(env, "ONLY") or None
 
         return Settings(
@@ -112,6 +130,9 @@ class Settings:
             claude_bin=_s(env, "CLAUDE_BIN", "claude"),
             retry_after=_i(env, "RETRY_AFTER", 3600),
             dry_run=dry_run,
+            live_sources=_sources(env, "LIVE_SOURCES", DEFAULT_LIVE_SOURCES),
+            max_attempts=_i(env, "MAX_ATTEMPTS", 5),
+            max_exec_per_tick=_i(env, "MAX_EXEC_PER_TICK", 5),
             only=only,
             runs_root=_s(env, "RUNS_ROOT", "/tmp/runs"),
         )

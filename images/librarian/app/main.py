@@ -1,8 +1,10 @@
 """Entrypoint: `python -m app.main`.
 
-Settings.from_env (refuses DRY_RUN=false) -> BookOrbit client -> library
-index -> Service (which starts its own loopback ApiServer) -> metrics ->
-serve_forever. SIGTERM/SIGINT stop the loop; if a `claude -p` child is
+Settings.from_env -> read-only BookOrbit client -> library index -> (only
+when DRY_RUN=false) a SEPARATE writable BookOrbit client, its
+BookorbitWriter and an Executor factory -> Service (which starts its own
+loopback ApiServer) -> metrics -> serve_forever. In dry-run nothing
+constructs a writable client. SIGTERM/SIGINT stop the loop; if a `claude -p` child is
 running, `Stopping` is raised into the runner so run_claude's cleanup kills
 the child's process group and the cycle is discarded (its arrivals are
 re-offered after restart). Exit code 0.
@@ -14,8 +16,9 @@ import sys
 import time
 
 from app import metrics
-from app.bookorbit import AUTH_RETRY_SECONDS, BookorbitClient, LibraryIndex
+from app.bookorbit import AUTH_RETRY_SECONDS, BookorbitClient, BookorbitWriter, LibraryIndex
 from app.config import Settings
+from app.executor import Executor
 from app.service import Service, Stopping
 
 log = logging.getLogger("librarian")
@@ -65,9 +68,26 @@ def main() -> int:
     index = LibraryIndex(client, state_path=os.path.join(settings.state_dir, "library-index.json"),
                          path_prefix=settings.bookorbit_path_prefix,
                          local_root=settings.local_books_root)
-    service = Service(settings, index=index)
-    log.info("librarian started (dry-run), api on 127.0.0.1:%s, metrics on :%s",
-             service.api_port, settings.metrics_port)
+    executor = None
+    if not settings.dry_run:
+        wclient = BookorbitClient(
+            settings.bookorbit_url, settings.bookorbit_user, settings.bookorbit_pass,
+            cookie_path=os.path.join(settings.state_dir, "bookorbit-writer-cookies.txt"),
+            writable=True)
+        if not authenticate(wclient, stop):
+            return 0
+        writer = BookorbitWriter(wclient)
+
+        def make_executor(svc):
+            # built by the Service so it shares the service's arrivals Store
+            return Executor(settings, writer, svc.index, svc.arrivals, stopping=svc.stopping)
+
+        executor = make_executor
+
+    service = Service(settings, index=index, executor=executor)
+    mode = "dry-run" if settings.dry_run else f"LIVE for {','.join(sorted(settings.live_sources)) or 'no source'}"
+    log.info("librarian started (%s), api on 127.0.0.1:%s, metrics on :%s",
+             mode, service.api_port, settings.metrics_port)
 
     def on_signal(signum, _frame):
         log.info("signal %s: stopping", signum)

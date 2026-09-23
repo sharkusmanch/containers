@@ -6,8 +6,14 @@
 Run orchestration (launch, containment tripwire, review, finalize, summary)
 lives in app/runs.py to keep this module to the loop itself.
 
-DRY_RUN is hard-wired for this plan: `__init__` refuses `dry_run=False`
-(tests and evals build `Settings` directly, bypassing `from_env`'s guard).
+DRY_RUN (Plan 2 Task 4) is a real switch. With `dry_run=False` the service
+needs an `executor` (an Executor, or a factory called with the service --
+the Executor must share this service's arrivals Store); approved filings of
+LIVE_SOURCES arrivals then execute (app/execution.py). In dry-run no
+executor is ever built or used, whatever is passed. On the first live tick
+the service settles arrivals a crash left `executing` (`Executor.resume`)
+and re-offers each newly-live source's simulated arrivals (once per source,
+`<state>/live-since-<source>`).
 
 Debounce / "changed since last run" (brief step 3, 5): the service keeps an
 in-memory per-arrival change marker (`_changed[key] = when`). A key is
@@ -33,7 +39,7 @@ import os
 import threading
 import time
 
-from app import intake, metrics, states
+from app import execution, intake, metrics, states
 from app.api import ApiServer
 from app.dossier import build_dossier, title_from_folder
 from app.intents import IntentBook
@@ -47,6 +53,8 @@ from app.store import Store, append_record, read_records
 logger = logging.getLogger(__name__)
 
 TRANSCRIPT_MAX_AGE = 30 * 86400
+# arrival states whose APPROVED intents the executor owns (never "recovered")
+_EXEC_OWNED = frozenset({states.RETRYABLE, states.EXECUTING, states.FILED})
 
 
 def dossier_name(key: str) -> str:
@@ -55,9 +63,9 @@ def dossier_name(key: str) -> str:
 
 class Service:
     def __init__(self, settings, *, index, api_factory=ApiServer, runner=run_claude,
-                 prober=ffprobe_json, clock=time.time):
-        if not settings.dry_run:
-            raise SystemExit("live mode ships in plan P2")
+                 prober=ffprobe_json, clock=time.time, executor=None, notifier=None, vikunja=None):
+        if not settings.dry_run and executor is None:
+            raise ValueError("DRY_RUN=false needs an executor")
         self.settings = settings
         self.index = index
         self.runner = runner
@@ -87,8 +95,16 @@ class Service:
         self._stop = threading.Event()
         self._in_runner = False
         self._lists_error: str | None = None
+        self.notifier = notifier            # Plan 2 Task 5
+        self.vikunja = vikunja              # Plan 2 Task 6
+        self.exec_budget = 0                # executions left this tick (max_exec_per_tick)
+        self._live_started = False
+        self.executor = None
+        if not settings.dry_run:
+            self.executor = executor if hasattr(executor, "execute") else executor(self)
 
         runs = read_records(self.runs_path)   # StoreCorrupt halts, like the stores
+        self._complete_finalize(runs)
         held = self._recover_interrupted(runs)
         self._seed_debounce(runs, held)
 
@@ -108,6 +124,9 @@ class Service:
             return None
 
     # --- lifecycle ---------------------------------------------------------------
+
+    def stopping(self) -> bool:
+        return self._stop.is_set()
 
     def stop(self) -> None:
         self._stop.set()
@@ -129,6 +148,31 @@ class Service:
                 logger.exception("tick failed")
             self._stop.wait(self.settings.poll_interval)
 
+    def _complete_finalize(self, runs: list[dict]) -> None:
+        """Plan 2: a cycle writes its end record BEFORE finalizing (so a
+        crash during execution never makes recovery reject its intents). A
+        crash between the two leaves a finished run whose filing intents
+        are still proposed/approved and their arrivals `proposed` -- finish
+        that finalize now (live arrivals are only queued here; the first
+        tick executes them)."""
+        ended = {r.get("run_id") for r in runs
+                 if "outcome" in r and not r.get("failed", r.get("outcome") != "ok")}
+        pending: dict[str, set] = {}
+        for rec in self.intents.store.all():
+            if (rec.get("run_id") in ended and rec.get("kind") in execution.FILING
+                    and rec.get("state") in (states.PROPOSED_I, states.APPROVED)
+                    and (self.arrivals.get(rec.get("arrival")) or {}).get("state") == states.PROPOSED):
+                pending.setdefault(rec["run_id"], set()).add(rec["arrival"])
+        for run_id, keys in sorted(pending.items()):
+            logger.warning("run %s ended but was not finalized; finalizing %d arrival(s) now",
+                           log_safe(run_id), len(keys))
+            live, other = execution.split_live(self, sorted(keys))
+            if other:
+                self.intents.finalize_dry_run(run_id, index=self.index, only_arrivals=set(other))
+            if live:
+                self.intents.finalize_live(run_id, index=self.index, only_arrivals=set(live),
+                                           now=self.clock())
+
     def _recover_interrupted(self, runs: list[dict]) -> set:
         """Discard the partial effects of a run the process died in the middle
         of (OOM, SIGKILL, node loss) -- the same treatment a failed run gets.
@@ -144,7 +188,13 @@ class Service:
         NEEDS_DECISION / DEFERRED) go back to READY. A lost or torn end record
         therefore can no longer undo a completed run's escalations. Any
         PROPOSED arrival is also reset -- nothing ever offers that state
-        again."""
+        again.
+
+        Plan 2: an APPROVED intent whose arrival is queued, executing or
+        filed (`retryable`/`executing`/`filed`) belongs to the executor --
+        the run's end record was written before it was queued, so it is
+        never a crashed run's partial effect even if that record was torn
+        -- and is left alone, as are those arrivals."""
         done = {r.get("run_id") for r in runs if "outcome" in r}
         held = set()
         interrupted = []
@@ -160,6 +210,9 @@ class Service:
                 if rec.get("run_id") in done:
                     continue
                 if rec.get("state") not in (states.PROPOSED_I, states.APPROVED):
+                    continue
+                if rec.get("state") == states.APPROVED and (
+                        (self.arrivals.get(rec.get("arrival")) or {}).get("state") in _EXEC_OWNED):
                     continue
                 self.intents.store.record(rec["intent_id"], states.REJECTED,
                                           review={"verdict": "reject", "argument": reason})
@@ -187,7 +240,7 @@ class Service:
                    "librarian": None, "reviewer": None,
                    "outcome": "interrupted", "failed": True,
                    "ended": self.clock(), "ended_ts": time.time(),
-                   "counts": {"would_file": 0, "would_escalate": 0, "offered": len(keys)}}
+                   "counts": {"offered": len(keys)}}
             append_record(self.runs_path, rec)
             runs.append(rec)
             metrics.RUNS.labels(mode="librarian", outcome="interrupted").inc()
@@ -245,6 +298,7 @@ class Service:
 
     def tick(self) -> None:
         metrics.beat()
+        self.exec_budget = self.settings.max_exec_per_tick
         now = self.clock()
         try:
             self.index.refresh(now)
@@ -259,6 +313,11 @@ class Service:
             logger.info("kids lists valid again")
         self._lists_error = err
 
+        if not self._live_started:
+            self._live_started = True
+            self._start_live()
+        if self._stop.is_set():
+            return
         self._intake(now)
         if self._stop.is_set():
             return
@@ -266,8 +325,21 @@ class Service:
         keys = self._due(now)
         if keys:
             self._run_cycle(keys)
+        if self.executor is not None and not self._stop.is_set():
+            execution.run_due(self)     # queued + retryable filings, within the tick budget
         metrics.rebuild_arrivals(self.arrivals)
         self._prune_transcripts()
+
+    def _start_live(self) -> None:
+        if self.executor is None:
+            waiting = (len(self.arrivals.by_state(states.EXECUTING))
+                       + len([r for r in self.arrivals.by_state(states.RETRYABLE) if r.get("exec_intent")]))
+            if waiting:
+                logger.warning("DRY_RUN: %d queued/executing filing(s) are left untouched until "
+                               "DRY_RUN=false", waiting)
+            return
+        execution.resume_executing(self)
+        execution.go_live(self)
 
     # --- intake --------------------------------------------------------------
 

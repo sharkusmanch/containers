@@ -857,3 +857,93 @@ def test_would_do_update_metadata_uses_mapped_bookorbit_key_names():
     intent = update_metadata_intent(412, metadata={"title": "New Title", "series": "Saga"}, lock=[])
     steps = would_do(intent)
     assert any(s == "patch metadata of book 412: seriesName, title" for s in steps)
+
+
+# --- Plan 2 Task 4: split finalize (dry-run vs live) ---------------------------
+
+
+def _two_approved_attaches(book, index):
+    run = make_run()
+    for key in (ARRIVAL, OTHER_ARRIVAL):
+        dossier = make_dossier(key=key, candidates=[candidate(412 if key == ARRIVAL else 413)])
+        book.submit(run, attach_intent(412 if key == ARRIVAL else 413, arrival=key),
+                    ctx_factory_for(dossier, index, run))
+    reviewer = make_run(run_id="review1", mode="reviewer", review_of=run.run_id)
+    for p in book.proposals(run.run_id):
+        book.apply_review(reviewer, p["intent_id"], "approve", "ok")
+    return run
+
+
+def test_finalize_dry_run_only_arrivals_leaves_the_others_alone(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    index = FakeIndex({412: make_book(412), 413: make_book(413)})
+    run = _two_approved_attaches(book, index)
+
+    book.finalize_dry_run(run.run_id, index=index, only_arrivals={OTHER_ARRIVAL})
+
+    assert arrivals_store.get(OTHER_ARRIVAL)["state"] == SIMULATED
+    assert arrivals_store.get(ARRIVAL)["state"] == PROPOSED
+    mine = {r["arrival"]: r["state"] for r in intents_store.all() if r["kind"] == ATTACH}
+    assert mine == {ARRIVAL: APPROVED, OTHER_ARRIVAL: SIMULATED_I}
+
+
+def test_finalize_live_queues_approved_filings_for_execution(tmp_path):
+    from app.states import RETRYABLE
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    index = FakeIndex({412: make_book(412), 413: make_book(413)})
+    run = _two_approved_attaches(book, index)
+
+    queued = book.finalize_live(run.run_id, index=index, only_arrivals={ARRIVAL}, now=500.0)
+
+    assert queued == [ARRIVAL]
+    rec = arrivals_store.get(ARRIVAL)
+    assert rec["state"] == RETRYABLE
+    assert rec["attempts"] == 0 and rec["retry_at"] == 500.0
+    attach = intents_store.get(rec["exec_intent"])
+    assert attach["kind"] == ATTACH and attach["state"] == APPROVED   # executes later
+    assert arrivals_store.get(OTHER_ARRIVAL)["state"] == PROPOSED     # not live: untouched
+
+
+def test_finalize_live_keeps_approved_update_metadata_and_escalates_unruled(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+    attach, update = _submit_attach_and_update(book, run, dossier, index)
+    reviewer = make_run(run_id="review1", mode="reviewer", review_of=run.run_id)
+    book.apply_review(reviewer, attach["intent_id"], "approve", "ok")
+    book.apply_review(reviewer, update["intent_id"], "approve", "ok")
+    # an escalation for the other arrival, never ruled on by anyone
+    other = make_dossier(key=OTHER_ARRIVAL, candidates=[candidate(412)])
+    run2_factory = ctx_factory_for(other, index, run)
+    book.submit(run, escalate_intent(arrival=OTHER_ARRIVAL), run2_factory)
+
+    book.finalize_live(run.run_id, index=index, only_arrivals={ARRIVAL, OTHER_ARRIVAL}, now=1.0)
+
+    assert intents_store.get(update["intent_id"])["state"] == APPROVED
+    assert arrivals_store.get(OTHER_ARRIVAL)["state"] == NEEDS_DECISION
+    esc = [r for r in intents_store.all() if r["kind"] == ESCALATE]
+    assert [r["state"] for r in esc] == [SIMULATED_I]
+
+
+def test_finalize_live_unruled_filing_is_rejected_and_escalated(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+    sub = book.submit(run, attach_intent(412), ctx_factory_for(dossier, index, run))
+
+    assert book.finalize_live(run.run_id, index=index, only_arrivals={ARRIVAL}, now=1.0) == []
+
+    assert intents_store.get(sub["intent_id"])["state"] == REJECTED
+    assert arrivals_store.get(ARRIVAL)["state"] == NEEDS_DECISION
+
+
+def test_record_escalation_is_a_terminal_executor_escalation(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    esc_id = book.record_escalation("run1", ARRIVAL, "Filing failed: /a -> /b", reason="exec failed")
+    rec = intents_store.get(esc_id)
+    assert rec["kind"] == ESCALATE and rec["state"] == SIMULATED_I
+    assert rec["payload"]["origin"] == "executor"
+    assert "/a -> /b" in rec["payload"]["question"]
+    assert rec["would_do"]

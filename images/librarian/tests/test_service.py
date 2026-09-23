@@ -483,12 +483,6 @@ def test_empty_granted_tools_is_containment_failure(tmp_path, svc_factory):
 # --- misc -----------------------------------------------------------------
 
 
-def test_refuses_live_mode(tmp_path):
-    with pytest.raises(SystemExit):
-        Service(make_settings(tmp_path, dry_run=False), index=make_index(tmp_path),
-                runner=FakeModel(), prober=fake_prober)
-
-
 def test_missing_prompt_skips_run(tmp_path, svc_factory, caplog):
     model = FakeModel()
     clock = Clock()

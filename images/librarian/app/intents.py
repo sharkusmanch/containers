@@ -57,6 +57,7 @@ from app.states import (
     PROPOSED,
     PROPOSED_I,
     REJECTED,
+    RETRYABLE,
     SIMULATED,
     SIMULATED_I,
     UPDATE_METADATA,
@@ -338,71 +339,132 @@ class IntentBook:
         )
         return esc_id, payload
 
-    # --- dry-run finalize --------------------------------------------------------
+    # --- executor escalations (Plan 2 Task 4) ------------------------------------
 
-    def finalize_dry_run(self, run_id: str, index=None) -> None:
+    def record_escalation(self, run_id: str, arrival: str, question: str, *, reason: str,
+                          options: list | None = None) -> str:
+        """File a code-authored escalation for a human (the executor failed,
+        a pre-execution guard refused, a filing needs a look). Terminal at
+        once (`simulated`: the "would do" is recorded) exactly like the
+        escalations `finalize_dry_run` files, so startup recovery never
+        mistakes it for a crashed run's partial effect. The caller holds
+        `self.lock` and sets the arrival's own state."""
+        payload = {
+            "kind": ESCALATE, "arrival": arrival, "question": question,
+            "options": options or [{"label": "Leave it for me"}],
+            "recommendation": "decide", "origin": "executor",
+        }
+        esc_id = self._next_id(run_id)
+        self.store.record(esc_id, SIMULATED_I, run_id=run_id, arrival=arrival, kind=ESCALATE,
+                          payload=payload, reason=reason, guard=None, review=None,
+                          would_do=would_do(payload))
+        return esc_id
+
+    def reject_paired_metadata(self, rec: dict, argument: str) -> None:
+        """A filing that did not execute takes its same-run update_metadata
+        with it (caller holds `self.lock`)."""
+        for other in self.store.all():
+            if (other.get("run_id") == rec.get("run_id") and other.get("arrival") == rec.get("arrival")
+                    and other.get("kind") == UPDATE_METADATA
+                    and other.get("state") in (PROPOSED_I, APPROVED)):
+                self.store.record(other["intent_id"], REJECTED,
+                                  review={"verdict": "reject", "argument": argument})
+
+    # --- finalize --------------------------------------------------------------
+
+    def finalize_dry_run(self, run_id: str, index=None, only_arrivals=None) -> None:
         """Turn this run's accepted intents into arrival-visible "would do"
         plans. `index` is the LibraryIndex snapshot used to resolve an
         attach's target folder -- safe to reuse the run's own index since
         DRY_RUN never writes to BookOrbit, so nothing has changed underneath
-        it since the run started.
+        it since the run started. `only_arrivals` (Plan 2 Task 4) limits the
+        pass to those arrival keys -- the live finalize handles the rest.
         """
         with self.lock:
-            for rec in [r for r in self.store.all() if r.get("run_id") == run_id]:
-                kind = rec.get("kind")
-                state = rec.get("state")
+            self._finalize(run_id, index, only_arrivals, live=False, now=None)
 
-                if kind in (ATTACH, CREATE_BOOK):
-                    if state == APPROVED:
-                        wd = would_do(rec["payload"], index=index)
+    def finalize_live(self, run_id: str, index=None, only_arrivals=None, now=None) -> list:
+        """The live counterpart of `finalize_dry_run` for arrivals whose
+        source executes for real. Everything but an APPROVED filing is
+        finalized exactly as in dry-run (escalations, deferrals, unruled
+        proposals -- "as P1"). An approved attach/create_book is QUEUED: its
+        arrival becomes `retryable` with `attempts=0`, `retry_at=now` and
+        `exec_intent` naming the intent, which stays `approved` until the
+        service executes it (app/execution.py) -- never re-offered to the
+        LLM. An approved update_metadata whose attach will file also stays
+        `approved`: it runs right after that filing. Returns the queued keys.
+        """
+        with self.lock:
+            return self._finalize(run_id, index, only_arrivals, live=True,
+                                  now=self.clock() if now is None else now)
+
+    def _finalize(self, run_id, index, only_arrivals, *, live, now) -> list:
+        queued = []
+        for rec in [r for r in self.store.all() if r.get("run_id") == run_id]:
+            if only_arrivals is not None and rec.get("arrival") not in only_arrivals:
+                continue
+            kind = rec.get("kind")
+            state = rec.get("state")
+
+            if kind in (ATTACH, CREATE_BOOK):
+                if state == APPROVED:
+                    wd = would_do(rec["payload"], index=index)
+                    if live:
+                        self.arrivals.record(rec["arrival"], RETRYABLE, exec_intent=rec["intent_id"],
+                                             attempts=0, retry_at=now, would_do=wd,
+                                             detail="queued for execution")
+                        queued.append(rec["arrival"])
+                    else:
                         self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
                         self.arrivals.record(rec["arrival"], SIMULATED, would_do=wd)
-                    elif state == PROPOSED_I:
-                        esc_id, esc_payload = self._reject_and_escalate(
-                            rec, argument="reviewer did not rule",
-                            question="The reviewer did not rule on this proposal before the run ended.",
-                        )
-                        self._cascade_reject_metadata(rec)
-                        wd = would_do(esc_payload, index=index)
-                        self.store.record(esc_id, SIMULATED_I, would_do=wd)
-                        self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd)
-
-                elif kind == UPDATE_METADATA:
-                    # Re-read: an earlier iteration this same pass may have
-                    # already cascaded a reject from this arrival's attach
-                    # (attach is always submitted, hence stored, before its
-                    # update_metadata -- see IntentBook.submit).
-                    cur_state = (self.store.get(rec["intent_id"]) or {}).get("state")
-                    if cur_state == APPROVED:
-                        # Fix round 1, Minor #6: don't just trust that the
-                        # cascade above already ran (which relies on
-                        # iteration order) -- explicitly require the SAME
-                        # arrival's SAME-run attach to itself be
-                        # APPROVED/SIMULATED_I (i.e. it will, or already
-                        # did, actually file) before simulating the patch.
-                        if self._attach_ok_for(rec):
-                            wd = would_do(rec["payload"], index=index)
-                            self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
-                        else:
-                            self.store.record(rec["intent_id"], REJECTED, review={
-                                "verdict": "reject", "argument": "paired attach is not approved",
-                            })
-                    elif cur_state == PROPOSED_I:
-                        # Never ruled on: dropped silently, same as an
-                        # explicit reviewer reject -- no auto-escalation.
-                        self.store.record(rec["intent_id"], REJECTED,
-                                          review={"verdict": "reject", "argument": "reviewer did not rule"})
-
-                elif kind == ESCALATE and state == PROPOSED_I:
-                    wd = would_do(rec["payload"], index=index)
-                    self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
+                elif state == PROPOSED_I:
+                    esc_id, esc_payload = self._reject_and_escalate(
+                        rec, argument="reviewer did not rule",
+                        question="The reviewer did not rule on this proposal before the run ended.",
+                    )
+                    self._cascade_reject_metadata(rec)
+                    wd = would_do(esc_payload, index=index)
+                    self.store.record(esc_id, SIMULATED_I, would_do=wd)
                     self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd)
 
-                elif kind == DEFER and state == PROPOSED_I:
-                    # the arrival was already recorded DEFERRED with its
-                    # not_before at submit time -- only the intent moves.
-                    wd = would_do(rec["payload"], index=index)
-                    self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
+            elif kind == UPDATE_METADATA:
+                # Re-read: an earlier iteration this same pass may have
+                # already cascaded a reject from this arrival's attach
+                # (attach is always submitted, hence stored, before its
+                # update_metadata -- see IntentBook.submit).
+                cur_state = (self.store.get(rec["intent_id"]) or {}).get("state")
+                if cur_state == APPROVED:
+                    # Fix round 1, Minor #6: don't just trust that the
+                    # cascade above already ran (which relies on
+                    # iteration order) -- explicitly require the SAME
+                    # arrival's SAME-run attach to itself be
+                    # APPROVED/SIMULATED_I (i.e. it will, or already
+                    # did, actually file) before simulating the patch.
+                    if not self._attach_ok_for(rec):
+                        self.store.record(rec["intent_id"], REJECTED, review={
+                            "verdict": "reject", "argument": "paired attach is not approved",
+                        })
+                    elif not live:
+                        wd = would_do(rec["payload"], index=index)
+                        self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
+                    # live: stays APPROVED; executed after its attach files
+                elif cur_state == PROPOSED_I:
+                    # Never ruled on: dropped silently, same as an
+                    # explicit reviewer reject -- no auto-escalation.
+                    self.store.record(rec["intent_id"], REJECTED,
+                                      review={"verdict": "reject", "argument": "reviewer did not rule"})
+
+            elif kind == ESCALATE and state == PROPOSED_I:
+                wd = would_do(rec["payload"], index=index)
+                self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
+                self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd)
+
+            elif kind == DEFER and state == PROPOSED_I:
+                # the arrival was already recorded DEFERRED with its
+                # not_before at submit time -- only the intent moves.
+                wd = would_do(rec["payload"], index=index)
+                self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
+        return queued
 
 
 # --- would_do ------------------------------------------------------------------
