@@ -161,8 +161,8 @@ class FakeBookorbit:
                      if page == 0 else [])
             return 200, json.dumps({"items": items, "total": len(self.books)})
         if path.startswith("/scanner/libraries/"):
-            lib = int(path.split("/")[3])
-            if path.endswith("/scan-history"):
+            lib = int(path.split("?")[0].split("/")[3])
+            if "/scan-history" in path:
                 return 200, json.dumps(self._history(lib))
             if path.endswith("/scan") and method == "POST":
                 if any(h["status"] == "running" for h in self.history[lib]):

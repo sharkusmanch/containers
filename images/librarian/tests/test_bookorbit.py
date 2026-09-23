@@ -394,7 +394,7 @@ def test_scan_running_reflects_latest_history_entry(tmp_path):
         def t(method, url, body, headers):
             if url.endswith("/auth/login"):
                 return 200, json.dumps({"accessToken": "tok"})
-            if url.endswith("/scan-history"):
+            if "/scan-history" in url:
                 return 200, json.dumps([_history_entry(5, status)])
             raise AssertionError((method, url))
         return t
@@ -412,7 +412,7 @@ def test_scan_when_idle_returns_max_id_and_triggers(tmp_path):
         calls.append((method, url))
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             return 200, json.dumps([_history_entry(4, "completed"), _history_entry(3, "failed")])
         if url.endswith("/scanner/libraries/7/scan"):
             return 200, json.dumps({})
@@ -434,7 +434,7 @@ def test_scan_waits_for_already_running_scan_then_triggers(tmp_path):
     def t(method, url, body, headers):
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             history_calls["n"] += 1
             status = "completed" if history_calls["n"] >= 3 else "running"
             return 200, json.dumps([_history_entry(5, status)])
@@ -461,7 +461,7 @@ def test_scan_409_race_waits_then_retries(tmp_path):
     def t(method, url, body, headers):
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             history_calls["n"] += 1
             # call 1: scan_running() check -> idle. call 2: max_id before
             # first trigger attempt -> still idle (race not yet visible).
@@ -489,7 +489,7 @@ def test_scan_times_out_waiting_for_existing_scan(tmp_path):
     def t(method, url, body, headers):
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             return 200, json.dumps([_history_entry(5, "running")])   # never finishes
         raise AssertionError((method, url))
 
@@ -511,7 +511,7 @@ def test_scan_non_409_error_from_trigger_is_reraised(tmp_path):
     def t(method, url, body, headers):
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             return 200, json.dumps([_history_entry(4, "completed")])
         if url.endswith("/scanner/libraries/7/scan"):
             return 403, "forbidden"
@@ -533,7 +533,7 @@ def test_scan_second_409_on_retry_raises_scan_error(tmp_path):
     def t(method, url, body, headers):
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             # never reports "running" -- the 409s below are the only signal
             # that something is scanning, simulating server-side flakiness
             # rather than a wait-observable running scan.
@@ -568,7 +568,7 @@ def test_scan_shares_one_deadline_across_both_waits(tmp_path):
     def t(method, url, body, headers):
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             return 200, json.dumps([_history_entry(5, next(history_responses))])
         if url.endswith("/scanner/libraries/7/scan"):
             scan_posts["n"] += 1
@@ -591,7 +591,7 @@ def test_wait_scan_picks_first_entry_with_id_greater_than_after_id(tmp_path):
     def t(method, url, body, headers):
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             history_calls["n"] += 1
             if history_calls["n"] == 1:
                 # not there yet
@@ -617,7 +617,7 @@ def test_wait_scan_raises_scan_error_on_failed_status(tmp_path):
     def t(method, url, body, headers):
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             return 200, json.dumps([_history_entry(5, "failed", error="disk full")])
         raise AssertionError((method, url))
 
@@ -630,7 +630,7 @@ def test_wait_scan_times_out(tmp_path):
     def t(method, url, body, headers):
         if url.endswith("/auth/login"):
             return 200, json.dumps({"accessToken": "tok"})
-        if url.endswith("/scan-history"):
+        if "/scan-history" in url:
             return 200, json.dumps([_history_entry(5, "running")])
         raise AssertionError((method, url))
 
@@ -766,3 +766,20 @@ def test_patch_metadata_rejects_non_int_book_id(tmp_path):
     _c, w = _writer(tmp_path, fake_transport([]))
     with pytest.raises(TypeError):
         w.patch_metadata("4", {"title": "x"}, ["title"])
+
+
+def test_scan_history_requests_the_larger_page(tmp_path):
+    """Task 9c (e): the default page is only 5 entries (BookOrbit
+    scanner.controller DefaultValuePipe(5)); ask for more -- the server
+    clamps to its SCAN_HISTORY_LIMIT (10 in 3.0.0)."""
+    urls = []
+
+    def t(method, url, body, headers):
+        urls.append(url)
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        return 200, json.dumps([_history_entry(5, "completed")])
+
+    _c, w = _writer(tmp_path, t)
+    w.scan_running(7)
+    assert urls[-1] == "http://b/api/v1/scanner/libraries/7/scan-history?limit=20"

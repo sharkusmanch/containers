@@ -262,6 +262,7 @@ def _write_path_allowed(method, path):
 _TERMINAL_SCAN_STATUSES = frozenset({"completed", "failed"})
 
 _WRITER_LIBRARY_IDS = frozenset({7, 8})
+SCAN_HISTORY_PAGE = 20
 
 
 class BookorbitWriter:
@@ -287,7 +288,12 @@ class BookorbitWriter:
                 f"library_id must be one of {sorted(_WRITER_LIBRARY_IDS)}: {library_id!r}")
 
     def _scan_history(self, library_id):
-        return self._client.get(f"/scanner/libraries/{library_id}/scan-history")
+        # Task 9c (e): the default page is the newest 5 (scanner.controller.js
+        # `DefaultValuePipe(5)`); BookOrbit 3.0.0 clamps `limit` to its
+        # SCAN_HISTORY_LIMIT (10, scanner.service.js). Ids are global and the
+        # list is newest-first, so a bigger page keeps our own scan visible
+        # while other scans of the library finish.
+        return self._client.get(f"/scanner/libraries/{library_id}/scan-history?limit={SCAN_HISTORY_PAGE}")
 
     def _max_history_id(self, library_id):
         history = self._scan_history(library_id)
