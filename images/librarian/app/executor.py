@@ -52,6 +52,12 @@ names the exact paths; files are never moved back automatically).
 but reports `updated`, never `filed`, on success -- a metadata-only PATCH
 files nothing.
 
+Another account's delivery (2026-09-23): fs.protected_hardlinks refuses to
+link a file this account neither owns nor can write -- an SFTP drop into
+`manual/` (uid 1000, 0644). Right after staging, such a primary is replaced
+inside the staging dir by a verified copy this account owns (fsops.adopt,
+within the `staged` step), and the move below stays link + unlink.
+
 Never deletes under /media/books: the only library-side calls are
 `os.makedirs(author dir, exist_ok=True)`, an exclusive `os.mkdir`, `os.link`,
 and `os.rmdir` of our OWN still-empty `[lib-<sha12>]` dir on a failed create.
@@ -478,6 +484,25 @@ class Executor:
         """sha256 of a (possibly multi-GB) file, beating the heartbeat."""
         return fsops.hash_file(path, self.beat, HASH_BEAT_BYTES)
 
+    def _adopt(self, ctx: dict) -> None:
+        """The staged primary belongs to another account and link(2) would be
+        refused (fs.protected_hardlinks): replace it, inside the staging dir,
+        with a verified copy this account owns (fsops.adopt), then file that
+        the usual way. Runs within the `staged` step, so a crash restores the
+        arrival like any interrupted stage, discarding an unfinished copy."""
+        owner = os.lstat(ctx["src"]).st_uid
+        try:
+            fsops.adopt(ctx["src"], ctx["staging_dir"], self.intake_root, ctx["sha256"],
+                        self.beat, HASH_BEAT_BYTES)
+        except fsops.SourceChanged as e:
+            raise _Fail(str(e)) from None
+        except fsops.CopyMismatch as e:
+            raise _Retry(str(e)) from None
+        ctx["adopted_from_uid"] = owner
+        self._journal(ctx)
+        logger.info("%s was delivered by uid %d and cannot be hard-linked; filing a verified "
+                    "copy owned by this account", log_safe(ctx["src"]), owner)
+
     # --- liveness -----------------------------------------------------------
     def _sleep(self, s):
         self.beat()
@@ -558,7 +583,9 @@ class Executor:
                 # final review M2: never hash/link THROUGH a symlink -- its
                 # target (anywhere) would be linked into the library
                 raise _Fail(f"staged primary {ctx['src']} is not a regular file (symlink?)")
-            if self._hash(ctx["src"]) != ctx["sha256"]:
+            if fsops.link_refused(ctx["src"]):
+                self._adopt(ctx)                    # verifies the sha256 itself
+            elif self._hash(ctx["src"]) != ctx["sha256"]:
                 raise _Fail(f"sha256 of {ctx['src']} no longer matches the arrival record")
             ctx["size"] = os.path.getsize(ctx["src"])
             self._check_stop()
@@ -691,6 +718,8 @@ class Executor:
                 notes.append(f"empty author dir {author_dir} left in the library (created by "
                              f"this attempt; not removed)")
         if staged:
+            if fsops.discard_adopt_copy(ctx["staging_dir"], self.intake_root):
+                notes.append("an unfinished copy of the arrival was discarded")
             err = fsops.unstage(ctx["staging_dir"], ctx["staged"], self.intake_root)
             if err:
                 state = "failed"

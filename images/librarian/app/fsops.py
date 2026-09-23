@@ -12,6 +12,9 @@ read-only.
 Moves use `os.link` + `os.unlink` (never `os.rename` onto a path that might
 exist): `link` fails atomically with EEXIST instead of silently replacing,
 and EXDEV (a different filesystem) fails instead of degrading to a copy.
+The one copy is `adopt`: a staged file another account delivered, which
+link(2) would refuse, is replaced -- inside the staging dir -- by a verified
+copy this account owns, so the library side stays link-only.
 """
 import hashlib
 import os
@@ -121,6 +124,106 @@ def unstage(sdir: str, items: list[list[str]], intake_root: str) -> str | None:
     except OSError:
         return f"restored the arrival files, but {sdir} was not empty"
     return None
+
+
+# --- another account's delivery (2026-09-23) -----------------------------------
+# fs.protected_hardlinks=1 (the kernel default) lets link(2) pin a file only for
+# its owner, or for a caller that can both read and write it. A file delivered
+# read-only by another account -- an SFTP drop into `manual/` lands as the NAS
+# user, uid 1000, mode 0644 -- cannot be linked into the library: EPERM.
+
+ADOPT_SUFFIX = ".adopt"
+
+
+class SourceChanged(RuntimeError):
+    """The staged file no longer hashes to the arrival's sha256."""
+
+
+class CopyMismatch(RuntimeError):
+    """The adopted copy did not read back identical."""
+
+
+def link_refused(path: str) -> bool:
+    """True when protected_hardlinks will refuse link(2) of `path`: another
+    account owns it and this one cannot both read and write it."""
+    return os.lstat(path).st_uid != os.geteuid() and not os.access(path, os.R_OK | os.W_OK)
+
+
+def adopt_path(sdir: str) -> str:
+    """Beside the staging dir, never in it: an unfinished copy must not sit
+    among the arrival's own files (unstage would carry it back)."""
+    return sdir + ADOPT_SUFFIX
+
+
+def discard_adopt_copy(sdir: str, intake_root: str) -> bool:
+    """Remove an unfinished `adopt` copy; True when there was one."""
+    tmp = adopt_path(sdir)
+    require_under(tmp, os.path.join(intake_root, EXECUTING_DIR), "adopt copy")
+    try:
+        st = os.lstat(tmp)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        raise UnsafePath(f"adopt copy {tmp!r} is not a regular file")
+    os.unlink(tmp)
+    return True
+
+
+def _flush_and_drop(fh) -> None:
+    """Write the dirty pages to the server and drop them from the page cache:
+    a multi-GB copy must not fill the pod's memory limit with NFS page cache,
+    and the read-back must come from the server, not from this client."""
+    fh.flush()
+    os.fsync(fh.fileno())
+    os.posix_fadvise(fh.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+
+
+def adopt(src: str, sdir: str, intake_root: str, sha256: str, beat, beat_every: int) -> None:
+    """Replace the staged file `src` with a byte-identical copy this account
+    owns, so it can be linked into the library like any other arrival.
+
+    The copy is created exclusively at adopt_path(sdir), after discarding an
+    unfinished one. The source is hashed as it is read and must still match
+    the arrival (SourceChanged); the copy is flushed, dropped from the page
+    cache and read back (CopyMismatch). Only then does rename(2), inside the
+    librarian's own staging dir, put it in place of the original, keeping the
+    original's times. An ordinary failure removes the copy and leaves the
+    original untouched; a crash leaves the copy for discard_adopt_copy on
+    resume. Nothing here touches the library."""
+    require_under(sdir, os.path.join(intake_root, EXECUTING_DIR), "staging dir")
+    require_under(src, sdir, "adopted file")
+    st = os.lstat(src)
+    if not stat.S_ISREG(st.st_mode):
+        raise UnsafePath(f"adopted file {src!r} is not a regular file")
+    discard_adopt_copy(sdir, intake_root)
+    tmp = adopt_path(sdir)
+    try:
+        h = hashlib.sha256()
+        since = 0
+        with open(src, "rb") as fin, \
+                os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644), "wb") as fout:
+            while True:
+                buf = fin.read(8 << 20)
+                if not buf:
+                    break
+                h.update(buf)
+                fout.write(buf)
+                since += len(buf)
+                if since >= beat_every:
+                    _flush_and_drop(fout)
+                    os.posix_fadvise(fin.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+                    beat()
+                    since = 0
+            _flush_and_drop(fout)
+        if h.hexdigest() != sha256:
+            raise SourceChanged(f"sha256 of {src} no longer matches the arrival record")
+        if hash_file(tmp, beat, beat_every) != sha256:
+            raise CopyMismatch(f"the copy of {src} did not read back identical")
+        os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+        os.rename(tmp, src)
+    except Exception:
+        discard_adopt_copy(sdir, intake_root)
+        raise
 
 
 def _move_no_clobber(src: str, dst: str) -> bool:

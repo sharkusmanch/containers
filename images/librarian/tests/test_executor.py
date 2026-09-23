@@ -2755,3 +2755,217 @@ def test_create_book_drops_an_implausible_intent_language_and_year_with_a_warnin
     assert (body["language"], body["publishedYear"]) == ("en", 1851)
     dropped = [m for m in caplog.messages if "dropped" in m]
     assert any("english (probably)" in m for m in dropped) and any("20200" in m for m in dropped)
+
+
+# --- another account's delivery (fs.protected_hardlinks, 2026-09-23) -----------
+# link(2) refuses a file this account neither owns nor can write -- an SFTP drop
+# into manual/ lands as the NAS user (uid 1000, 0644). The executor files a
+# verified copy it owns instead, made inside the staging dir; the library side
+# stays link-only.
+
+from app import fsops  # noqa: E402
+
+
+def _foreign(monkeypatch, path):
+    """Make `path` behave like another account's read-only delivery, by inode:
+    link_refused says so and link(2) refuses it with EPERM, as the kernel
+    would -- a copy this account makes is linkable."""
+    ino = os.lstat(path).st_ino
+    real_link = os.link
+
+    def link(src, dst, *a, **k):
+        if os.lstat(src).st_ino == ino:
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        return real_link(src, dst, *a, **k)
+    monkeypatch.setattr(executor_mod.os, "link", link)
+    monkeypatch.setattr(fsops, "link_refused", lambda p: os.lstat(p).st_ino == ino)
+    return ino
+
+
+def _library_files(env, suffix=".m4b"):
+    return [os.path.join(d, f) for d, _s, fs in os.walk(env.books_root) for f in fs
+            if f.endswith(suffix)]
+
+
+def _staging(env, arr):
+    """The arrival's staging dir, asserting no unfinished copy is left beside it."""
+    sdir = env.intake / ".executing" / sha12(arr["key"])
+    assert not os.path.lexists(str(sdir) + fsops.ADOPT_SUFFIX)
+    return sdir
+
+
+def test_create_book_files_a_verified_copy_of_another_accounts_delivery(env, monkeypatch):
+    arr = manual_m4b(env, name="A Little Hatred.m4b", data=b"H" * 3000)
+    orig = _foreign(monkeypatch, arr["primary"])
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    filed = _library_files(env)
+    assert len(filed) == 1 and open(filed[0], "rb").read() == b"H" * 3000
+    assert os.lstat(filed[0]).st_ino != orig             # the original was never linked
+    assert not os.path.exists(arr["primary"])
+    assert not _staging(env, arr).exists()
+    assert "adopted_from_uid" in env.arrivals.get(arr["key"])["exec"]
+
+
+def test_attach_files_a_verified_copy_of_another_accounts_delivery(env, monkeypatch):
+    attach_target(env)
+    arr = manual_m4b(env, name="Artificial Condition.m4b", data=b"C" * 3000)
+    orig = _foreign(monkeypatch, arr["primary"])
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    filed = _library_files(env)
+    assert len(filed) == 1 and open(filed[0], "rb").read() == b"C" * 3000
+    assert os.path.dirname(filed[0]).endswith(os.path.join("Martha Wells", "Artificial Condition"))
+    assert os.lstat(filed[0]).st_ino != orig
+    assert not os.path.exists(arr["primary"])
+    assert not _staging(env, arr).exists()
+
+
+def test_a_delivery_this_account_can_link_is_moved_never_copied(env, monkeypatch):
+    arr = manual_m4b(env, name="Own.m4b", data=b"O" * 3000)
+    ino = os.lstat(arr["primary"]).st_ino
+    monkeypatch.setattr(fsops, "adopt", lambda *a, **k: pytest.fail("copied a linkable file"))
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    assert [os.lstat(p).st_ino for p in _library_files(env)] == [ino]
+
+
+def test_adopting_a_delivery_that_changed_fails_and_restores_the_original(env, monkeypatch):
+    arr = manual_m4b(env, name="Changed.m4b", data=b"X" * 3000)
+    with open(arr["primary"], "r+b") as f:               # changed after the arrival was hashed
+        f.write(b"Y")
+    orig = _foreign(monkeypatch, arr["primary"])
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert not r.ok and r.state == "failed" and "no longer matches" in r.detail, r.detail
+    assert os.lstat(arr["primary"]).st_ino == orig       # the original, back in the intake
+    assert not _staging(env, arr).exists()
+    assert _library_files(env) == []
+
+
+def test_a_copy_that_reads_back_wrong_is_retryable_and_keeps_the_original(env, monkeypatch):
+    arr = manual_m4b(env, name="Flaky.m4b", data=b"F" * 3000)
+    orig = _foreign(monkeypatch, arr["primary"])
+    real_hash = fsops.hash_file
+    monkeypatch.setattr(fsops, "hash_file", lambda p, *a: "0" * 64
+                        if p.endswith(fsops.ADOPT_SUFFIX) else real_hash(p, *a))
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert not r.ok and r.state == "retryable" and "read back" in r.detail, r.detail
+    assert os.lstat(arr["primary"]).st_ino == orig
+    assert open(arr["primary"], "rb").read() == b"F" * 3000
+    assert not _staging(env, arr).exists()
+    assert _library_files(env) == []
+
+
+def test_crash_during_the_copy_resumes_by_discarding_it_and_restoring(env, monkeypatch):
+    arr = manual_m4b(env, name="Crashy.m4b", data=b"K" * 3000)
+    orig = _foreign(monkeypatch, arr["primary"])
+    ex = env.executor()
+    env.snapshot_tree()
+
+    def crash(fh):
+        raise Crash()                                    # process death mid-copy: no cleanup
+    monkeypatch.setattr(fsops, "_flush_and_drop", crash)
+    with pytest.raises(Crash):
+        ex.execute(intent_create(arr), arr, {})
+    monkeypatch.undo()
+
+    rec = env.arrivals.get(arr["key"])
+    assert rec["exec"]["step"] == "staged"
+    sdir = env.intake / ".executing" / sha12(arr["key"])
+    assert os.path.exists(str(sdir) + fsops.ADOPT_SUFFIX)
+
+    r = env.executor().resume(rec)
+
+    assert r.state == "retryable", r.detail
+    assert os.lstat(arr["primary"]).st_ino == orig
+    assert not _staging(env, arr).exists()
+    assert _library_files(env) == []
+
+
+def test_crash_after_adopting_restores_the_copy_and_the_retry_files_it(env, monkeypatch):
+    arr = manual_m4b(env, name="Later.m4b", data=b"L" * 3000)
+    orig = _foreign(monkeypatch, arr["primary"])
+    ex = env.executor()
+    env.snapshot_tree()
+    real_journal = Executor._journal
+
+    def journal(self, ctx, step=None):
+        if step == "linked":
+            raise Crash()                                # adopted, died before the move
+        return real_journal(self, ctx, step)
+    monkeypatch.setattr(Executor, "_journal", journal)
+    with pytest.raises(Crash):
+        ex.execute(intent_create(arr), arr, {})
+    monkeypatch.undo()
+
+    rec = env.arrivals.get(arr["key"])
+    assert rec["exec"]["step"] == "staged" and "adopted_from_uid" in rec["exec"]
+    r = env.executor().resume(rec)
+    assert r.state == "retryable", r.detail
+    assert open(arr["primary"], "rb").read() == b"L" * 3000
+    assert os.lstat(arr["primary"]).st_ino != orig       # our verified copy went back
+
+    r = env.executor().execute(intent_create(arr, iid="r1:2"), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    assert len(_library_files(env)) == 1
+    assert not _staging(env, arr).exists()
+
+
+def test_adopt_flushes_as_it_copies_and_keeps_the_times(tmp_path, monkeypatch):
+    intake = tmp_path / "intake"
+    sdir = intake / ".executing" / "0123456789ab"
+    sdir.mkdir(parents=True)
+    src = sdir / "a.m4b"
+    data = os.urandom(50_000)
+    src.write_bytes(data)
+    os.utime(src, ns=(1_000_000_000, 2_000_000_000))
+    ino = os.lstat(src).st_ino
+    flushes, beats = [], []
+    real = fsops._flush_and_drop
+    monkeypatch.setattr(fsops, "_flush_and_drop", lambda fh: (flushes.append(1), real(fh)))
+
+    fsops.adopt(str(src), str(sdir), str(intake), hashlib.sha256(data).hexdigest(),
+                lambda: beats.append(1), 10_000)
+
+    assert src.read_bytes() == data and os.lstat(src).st_ino != ino
+    assert os.lstat(src).st_mtime_ns == 2_000_000_000
+    assert not os.path.lexists(str(sdir) + fsops.ADOPT_SUFFIX)
+    assert len(flushes) >= 2 and beats
+    (sdir / "link").symlink_to(src)
+    with pytest.raises(fsops.UnsafePath):
+        fsops.adopt(str(sdir / "link"), str(sdir), str(intake), "0" * 64, lambda: None, 10_000)
+    with pytest.raises(fsops.UnsafePath):
+        fsops.adopt(str(tmp_path / "elsewhere.m4b"), str(sdir), str(intake), "0" * 64,
+                    lambda: None, 10_000)
+
+
+def test_link_refused_matches_protected_hardlinks(tmp_path, monkeypatch):
+    f = tmp_path / "x.m4b"
+    f.write_bytes(b"x")
+    assert fsops.link_refused(str(f)) is False           # this account's own file
+    monkeypatch.setattr(fsops.os, "geteuid", lambda: os.getuid() + 1)
+    assert fsops.link_refused(str(f)) is False           # another account's, writable by this one
+    f.chmod(0o444)
+    if os.getuid() != 0:
+        assert fsops.link_refused(str(f)) is True        # another account's, read-only
