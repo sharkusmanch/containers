@@ -197,3 +197,31 @@ def test_title_only_match_kept_when_nothing_better(tmp_path):
     results = idx.candidates(titles=["Thrawn"], authors=["Timothy Zahn"])
     ids = [d["id"] for d, _ in results]
     assert ids == [3]   # only a title-only (20) match exists -- kept
+
+
+def test_candidates_match_real_title_in_file_name_of_placeholder_book(tmp_path):
+    books = {
+        5: {"id": 5, "title": "New James S. A. Corey Novella #1", "subtitle": None,
+            "authors": [{"id": 5, "name": "James S. A. Corey", "sortName": "Corey, James S. A."}],
+            "providerIds": {}, "tags": [], "isbn13": None, "isbn10": None,
+            "libraryName": "Library", "seriesName": None, "seriesIndex": None,
+            "publishedYear": 2022, "readAloudSync": {"state": "unavailable"},
+            "folderPath": "/books/Library/James S. A. Corey/New James S. A. Corey Novella #1",
+            "files": [{"format": "epub", "filename": "The Sins of Our Fathers (The Expanse) (2022).epub",
+                       "sizeBytes": 10}],
+            "updatedAt": "t5"},
+    }
+    idx = make(tmp_path, [], books=books); idx.refresh(now=0, force=True)
+    top, reasons = idx.candidates(titles=["The Sins of Our Fathers"], authors=["James S. A. Corey"])[0]
+    assert top["id"] == 5
+    assert "title-key:sins of our fathers" in reasons and "surname:corey" in reasons
+    # search_books passes only the query as a title: still found (title-only score)
+    assert [d["id"] for d, _ in idx.candidates(titles=["Sins of Our Fathers"])] == [5]
+
+
+def test_file_name_index_prefix_is_stripped_for_title_keys(tmp_path):
+    idx = make(tmp_path, []); idx.refresh(now=0, force=True)
+    # book 1's file is "1. Thrawn.epub" -- the "1. " rename prefix must not
+    # stop the file name contributing the key "thrawn"
+    from app.bookorbit import _file_title_keys
+    assert "thrawn" in _file_title_keys(idx.book(1))

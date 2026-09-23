@@ -20,6 +20,7 @@ import http.cookiejar
 import json
 import os
 import pathlib
+import re
 import time
 import urllib.error
 import urllib.request
@@ -159,6 +160,28 @@ def _names(entries):
     return out
 
 
+# BookOrbit's rename pattern prefixes a series index ("1. Thrawn.epub").
+_FILE_INDEX_PREFIX_RE = re.compile(r"^\s*\d+(?:\.\d+)?\.\s+")
+
+
+def _file_title_keys(detail) -> set[str]:
+    """Title keys from the book's own file names. A book whose metadata
+    title is a placeholder ("New James S. A. Corey Novella #1") often still
+    carries the real title in its file name ("The Sins of Our Fathers (The
+    Expanse) (2022).epub"); without these keys neither the dossier's
+    candidate search nor `search_books` can ever surface it (Task 13 eval
+    `sins-placeholder-title`)."""
+    keys: set[str] = set()
+    for f in detail.get("files") or []:
+        name = f.get("filename") if isinstance(f, dict) else None
+        if not isinstance(name, str) or not name:
+            continue
+        stem = os.path.splitext(os.path.basename(name))[0]
+        stem = _FILE_INDEX_PREFIX_RE.sub("", stem)
+        keys |= title_keys(stem)
+    return keys
+
+
 def _score(detail, *, audible_asin, kindle_asin, isbn, title_key_set, surname_set):
     """Return (score, reasons) for one candidate, or (0, []) for no match."""
     reasons = []
@@ -178,6 +201,7 @@ def _score(detail, *, audible_asin, kindle_asin, isbn, title_key_set, surname_se
 
     if title_key_set:
         cand_keys = title_keys(detail.get("title") or "", detail.get("subtitle"))
+        cand_keys |= _file_title_keys(detail)
         overlap = title_key_set & cand_keys
         if overlap:
             cand_surnames = surnames(_names(detail.get("authors")))
