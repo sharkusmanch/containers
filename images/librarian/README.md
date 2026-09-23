@@ -59,6 +59,30 @@ From `app/config.py`. A blank value counts as unset.
 | `9090` | all interfaces | Prometheus `/metrics`, liveness/readiness `/healthz` |
 | `8081` | `127.0.0.1` only | internal API for the MCP shim; never expose it |
 
+## Metrics and alerts
+
+`:9090/metrics` (besides the heartbeat, run and notify series):
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `librarian_arrivals{state}` | gauge | arrivals per state, rebuilt from the store every tick |
+| `librarian_filed_total{source}` | counter | arrivals the executor filed (every source label starts at 0) |
+| `librarian_exec_failed_total{source}` | counter | filings the executor gave up on (arrival `failed`, a push + Vikunja task went out) |
+| `librarian_escalations_open` | gauge | `needs-decision` arrivals of live sources, i.e. questions a human is being asked |
+| `librarian_escalation_oldest_age_seconds` | gauge | age of the oldest open question (since its escalation was recorded); 0 when none |
+
+Intended alerts (the PrometheusRule lives with the deployment manifests):
+
+```yaml
+- alert: LibrarianFailed            # a filing needs a human
+  expr: sum(increase(librarian_exec_failed_total[1h])) > 0
+- alert: LibrarianEscalationStale   # a question has waited more than 7 days
+  expr: max(librarian_escalation_oldest_age_seconds) > 7 * 86400
+```
+
+Non-live `needs-decision` arrivals (DRY_RUN, or a source outside `LIVE_SOURCES`) are
+not counted: nobody has been asked about them yet, so they must not page.
+
 ## Image
 
 - Base `python:3.14-slim` (Debian/glibc). The build is **amd64 only**

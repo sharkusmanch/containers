@@ -399,6 +399,8 @@ class Service:
             # Gated on the stop flag like execution.run_due (fix round 1).
             self.notifier.flush()
         metrics.rebuild_arrivals(self.arrivals)
+        metrics.rebuild_escalations(self.arrivals, self.intents,
+                                    lambda rec: execution.is_live(self.settings, rec.get("source")))
         self._prune_transcripts()
         self._prune_outbox()
 

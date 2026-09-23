@@ -303,6 +303,7 @@ def record_result(svc, key: str, intent: dict | None, res: ExecResult) -> None:
                                 detail=res.detail, retry_at=None,
                                 moves=[list(m) for m in res.moves])
             logger.info("arrival %s filed into book %s", log_safe(key), res.book_id)
+            metrics.count_outcome(metrics.FILED, rec.get("source"))
             note_outcome(svc, key)
             if res.escalate:
                 text = f"Filed into book {res.book_id}, but needs a look: {res.escalate}"
@@ -386,6 +387,7 @@ def _failed(svc, rec, intent, detail) -> None:
     svc.notify_failure(rec, intent, detail)   # Plan 2 Task 5: one push per failed filing
     # final review I1: + a Vikunja task (the failure push above is the push)
     flag_attention(svc, key, _intent_id(intent, rec), esc_id, f"Filing failed: {detail}", push=False)
+    metrics.count_outcome(metrics.EXEC_FAILED, rec.get("source"))
     note_outcome(svc, key)
     logger.error("arrival %s failed: %s", log_safe(key), log_safe(detail))
 
