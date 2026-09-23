@@ -10,8 +10,8 @@ truth from BookOrbit, Storyteller and the disk, and a book's stage is read
 from the disk BEFORE anything is downloaded or linked.
 
 Only a Storyteller book this job created -- or provably adopted after a kill:
-unprocessed, created within the hour after our request, titled exactly as
-our import would be -- is ever processed, cancelled or deleted.
+unprocessed, created within the hour after our request, holding an EPUB of
+exactly our EPUB's size -- is ever processed, cancelled or deleted.
 
 What a person hears (one push per run, only when something happened; code
 sends it, never a model; lines are persisted as they happen, so a killed run
@@ -83,7 +83,10 @@ RUNNING, PAUSED, DONE, FAILED, NOT_STARTED = "running", "paused", "done", "faile
 
 def phase(book):
     """The job's own status wins while a job exists: a PAUSED job shows
-    `readaloud.status` STOPPED/PROCESSING and would otherwise be misread."""
+    `readaloud.status` STOPPED/PROCESSING and would otherwise be misread.
+    Imported but never processed reads `readaloud: null` (seen on beta.38);
+    a MISSING `readaloud` is an unknown shape and fails (counted, never
+    waited on)."""
     job = book.get("processingJob") if isinstance(book.get("processingJob"), dict) else {}
     ra = book.get("readaloud") if isinstance(book.get("readaloud"), dict) else {}
     js, rs = str(job.get("status") or "").upper(), str(ra.get("status") or "").upper()
@@ -96,7 +99,7 @@ def phase(book):
             return DONE
         if rs in ("QUEUED", "PROCESSING"):
             return RUNNING
-        if rs == "CREATED" and not js:
+        if not js and (rs == "CREATED" or ("readaloud" in book and book["readaloud"] is None)):
             return NOT_STARTED                # imported, never processed (a run died in between)
     return FAILED                     # ERROR, STOPPED, CANCELED, or anything unknown: never a refusal
 
@@ -451,14 +454,20 @@ class Job:
         """A run died between recording the import and learning its uuid. Adopt
         only a Storyteller book absent from the snapshot taken just before the
         import, never processed, created within ADOPT_WINDOW of the request,
-        and titled exactly as our import (the EPUB's file name). Until the
+        whose EPUB is exactly our EPUB's size (Storyteller's `ebook.fileSize`;
+        its title comes from the EPUB's metadata, not our file name). Until the
         window has passed the import may still be landing: wait, never import
         again. Anything else is left alone -- it may be someone else's."""
         known = set(fl.get("known_uuids") or [])
         lo, hi = fl["started"] - ADOPT_SLACK, fl["started"] + ADOPT_WINDOW
         new = [b for b in self._st(self.st.books) or []
                if b.get("uuid") and b["uuid"] not in known and lo <= (st_created(b) or 0) <= hi]
-        mine = [b for b in new if phase(b) == NOT_STARTED and b.get("title") == fl.get("st_title")]
+        mine = []
+        for b in new:
+            full = self._st_book(b["uuid"]) or {}
+            ebook = full.get("ebook") if isinstance(full.get("ebook"), dict) else {}
+            if phase(full) == NOT_STARTED and ebook.get("fileSize") == fl["pair"][1]:
+                mine.append(full)
         if len(mine) == 1:
             fl["uuid"] = mine[0]["uuid"]
             fl["staged"] = os.path.join(self.s.staging_dir, f"{fl['book']}-{fl['uuid']}.epub")
@@ -618,8 +627,7 @@ class Job:
         known = sorted(b["uuid"] for b in self._st(self.st.books) or [] if b.get("uuid"))
         # recorded BEFORE the import: a run killed right after it can find its book again
         self.state.in_flight = {"book": d["id"], "title": d.get("title"), "uuid": None, "pair": list(pair),
-                                "started": self.clock(), "m4b_seconds": seconds, "known_uuids": known,
-                                "st_title": os.path.splitext(plain["filename"])[0]}
+                                "started": self.clock(), "m4b_seconds": seconds, "known_uuids": known}
         self._save()
         try:
             uuid = self._st(self.st.create_book, st_path(plain), st_path(m4b))

@@ -29,15 +29,17 @@ def make_readalong(path, zero_clip=False):
 
 
 class FakeStoryteller:
-    """Speaks beta.38's shape. After the import `readaloud.status` is CREATED
-    and there is no job; `process` gives QUEUED/PROCESSING -> ALIGNED with
-    `processingJob` RUNNING, null once it ends. A failure is readaloud ERROR or
-    STOPPED with no job; a pause is readaloud STOPPED with the job PAUSED.
-    `createdAt` is UTC with no zone, and an unknown uuid is a 404 -- all as
-    the real server and client do."""
+    """Speaks beta.38's shape (probed on the live server 2026-09-23). After the
+    import `readaloud` is null and there is no job; the title comes from the
+    EPUB's metadata and `ebook.fileSize` is the imported EPUB's size; `process`
+    gives QUEUED/PROCESSING -> ALIGNED with `processingJob` RUNNING, null once
+    it ends. A failure is readaloud ERROR or STOPPED with no job; a pause is
+    readaloud STOPPED with the job PAUSED. `createdAt` is UTC with no zone, and
+    an unknown uuid is a 404 -- all as the real server and client do."""
 
-    def __init__(self, clock, polls_until_done=2, grade="S"):
+    def __init__(self, clock, polls_until_done=2, grade="S", library_root=None):
         self.clock = clock
+        self.library_root = library_root          # this test's view of Storyteller's /library
         self.books_ = {}
         self.polls_until_done, self.grade = polls_until_done, grade
         self.calls = []
@@ -61,9 +63,11 @@ class FakeStoryteller:
         self.imports += 1
         uuid = f"u{self.imports}"
         made = datetime.fromtimestamp(self.clock(), timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        self.books_[uuid] = {"uuid": uuid, "title": os.path.splitext(os.path.basename(epub))[0],
-                             "createdAt": made, "readaloud": {"status": "CREATED"}, "processingJob": None,
-                             "left": None}
+        size = os.path.getsize(os.path.join(self.library_root, epub[len("/library/"):])) if self.library_root else None
+        stem = os.path.splitext(os.path.basename(epub))[0]
+        self.books_[uuid] = {"uuid": uuid, "title": stem.split(". ", 1)[-1],       # the EPUB's own title
+                             "createdAt": made, "readaloud": None, "processingJob": None,
+                             "ebook": {"fileSize": size}, "left": None}
         self.calls.append(("create", epub, audio))
         return uuid
 
@@ -139,7 +143,7 @@ def env(tmp_path):
                  title="A Little Hatred", updatedAt="2026-09-20T10:00:00.000Z",
                  customMetadata=[{"fieldId": 2, "value": False}])
     clock = Clock()
-    st = FakeStoryteller(clock)
+    st = FakeStoryteller(clock, library_root=books)
     pushes = []
 
     def make(**extra):
@@ -497,7 +501,7 @@ def test_an_import_whose_uuid_was_never_recorded_is_adopted_and_processed(env):
     st.create_book = killed_after_the_import
     with pytest.raises(KeyboardInterrupt):
         make().run()
-    assert state_of(tmp)["in_flight"]["uuid"] is None and st.books_["u1"]["readaloud"]["status"] == "CREATED"
+    assert state_of(tmp)["in_flight"]["uuid"] is None and st.books_["u1"]["readaloud"] is None
     st.create_book = real_create
     clock.t += 60                                    # the Job's retry pod
     assert make().run() == 0
@@ -579,7 +583,8 @@ def test_a_new_book_with_another_title_is_left_alone_and_told(env):
     def someone_elses_import_then_killed(epub, audio):
         st.books_["other"] = {"uuid": "other", "title": "Another Book", "createdAt":
                               datetime.fromtimestamp(clock.t, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                              "readaloud": {"status": "CREATED"}, "processingJob": None, "left": None}
+                              "readaloud": None, "processingJob": None, "ebook": {"fileSize": 999},
+                              "left": None}
         raise KeyboardInterrupt
     real_create = st.create_book
     st.create_book = someone_elses_import_then_killed
@@ -879,7 +884,9 @@ def test_phase_reads_the_job_before_the_readaloud():
     assert phase({"readaloud": {"status": "ALIGNED"}, "processingJob": {"status": "DONE"}}) == DONE
     assert phase({"readaloud": {"status": "PROCESSING"}, "processingJob": None}) == RUNNING
     assert phase({"readaloud": {"status": "CREATED"}, "processingJob": None}) == NOT_STARTED
+    assert phase({"readaloud": None, "processingJob": None}) == NOT_STARTED    # beta.38 right after the import
     assert phase({}) == FAILED                       # an unreadable shape is counted, never waited on
+    assert phase({"readAloud": None, "processingJob": None}) == FAILED
     assert phase({"readaloud": {"status": "ERROR"}, "processingJob": None}) == FAILED
     assert phase({"readaloud": {"status": "STOPPED"}, "processingJob": None}) == FAILED
     assert phase({"readaloud": {"status": "ALIGNED"}, "processingJob": {"status": "ERROR"}}) == FAILED
@@ -1172,8 +1179,9 @@ def test_an_import_landing_after_the_retry_pod_is_adopted_not_duplicated(env):
     st.create_book = real_create
     clock.t += 30                                    # the Job's retry pod, before the import has landed
     assert make().run() == 0 and creates(st) == 0
-    st.books_["u-late"] = {"uuid": "u-late", "title": "01. A Little Hatred", "createdAt": utc(t_request[0] + 45),
-                           "readaloud": {"status": "CREATED"}, "processingJob": None, "left": None}
+    st.books_["u-late"] = {"uuid": "u-late", "title": "A Little Hatred", "createdAt": utc(t_request[0] + 45),
+                           "readaloud": None, "processingJob": None, "ebook": {"fileSize": len(b"PLAIN")},
+                           "left": None}
     clock.t += DAY
     assert make().run() == 0
     assert creates(st) == 0 and has_readalong(lib, 111) and st.books_ == {}   # the late import, adopted
