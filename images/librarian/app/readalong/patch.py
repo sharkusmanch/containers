@@ -8,8 +8,36 @@ Only the `<n>s` timecount clock form is rewritten (that is the only form
 Storyteller v3 emits); any other clock form found in a .smil after patching
 raises ValueError rather than silently leaving it unpatched.
 """
+import io
+import os
 import re
 import zipfile
+
+FLUSH_EVERY = 64 << 20
+
+
+class _FlushingFile(io.FileIO):
+    """vendored + (2026-09-23): the patched copy is written to NFS, whose dirty
+    pages count against the pod's memory limit -- fsync and drop them every
+    FLUSH_EVERY bytes, as the download does."""
+
+    def __init__(self, path, flush_every=None):
+        super().__init__(path, "w")
+        self._since, self._every = 0, flush_every or FLUSH_EVERY
+
+    def write(self, b):
+        n = super().write(b)
+        self._since += n or 0
+        if self._since >= self._every:
+            os.fsync(self.fileno())
+            os.posix_fadvise(self.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+            self._since = 0
+        return n
+
+    def close(self):
+        if not self.closed:
+            os.fsync(self.fileno())
+        super().close()
 
 # clipBegin="12.500s" clipEnd="12.500s" (or any clipEnd <= clipBegin)
 _CLIP_PAIR = re.compile(r'clipBegin="(\d+(?:\.\d+)?)s"\s+clipEnd="(\d+(?:\.\d+)?)s"')
@@ -28,7 +56,7 @@ def patch_zero_length_clips(src_path, dst_path, epsilon=0.001):
     entries are copied byte-for-byte.
     """
     patched = 0
-    with zipfile.ZipFile(src_path) as src, zipfile.ZipFile(dst_path, "w") as dst:
+    with zipfile.ZipFile(src_path) as src, _FlushingFile(dst_path) as out, zipfile.ZipFile(out, "w") as dst:
         names = src.namelist()
 
         mimetype_info = src.getinfo("mimetype") if "mimetype" in names else None

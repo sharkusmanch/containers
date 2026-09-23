@@ -60,3 +60,21 @@ def test_patch_raises_on_non_timecount_clock_form(tmp_path):
 
     with pytest.raises(ValueError, match="non-timecount"):
         patch_zero_length_clips(str(src), str(dst))
+
+
+
+def test_the_patched_copy_is_flushed_as_it_is_written(tmp_path, monkeypatch):
+    """vendored + (2026-09-23): the copy lands on NFS; dirty pages are fsync'ed
+    and dropped every FLUSH_EVERY bytes, not held until close."""
+    import os
+    from app.readalong import patch as p
+    src = tmp_path / "in.epub"
+    with zipfile.ZipFile(src, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("OEBPS/audio.m4a", b"A" * 5000)
+        z.writestr("OEBPS/s1.smil", '<par><audio src="a" clipBegin="1.0s" clipEnd="1.0s"/></par>')
+    synced = []
+    monkeypatch.setattr(p.os, "fsync", lambda fd: synced.append(fd))
+    monkeypatch.setattr(p, "FLUSH_EVERY", 1000)
+    assert p.patch_zero_length_clips(str(src), str(tmp_path / "out.epub")) == 1
+    assert len(synced) >= 2                                   # during the write, and at close

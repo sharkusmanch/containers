@@ -102,7 +102,7 @@ RUN set -eux; \
     rm -rf "$tmp"; \
     ffprobe -version >/dev/null; \
     tini --version; \
-    python -c "import app.main, app.mcp_shim"; \
+    python -c "import app.main, app.mcp_shim, app.readalong.job, app.readalong.__main__"; \
     python -c "from app import mcp_shim; p = mcp_shim._PACKAGE_PARENT; assert p == '/app', p; print('shim PYTHONPATH', p)"
 
 EXPOSE 9090

@@ -14,19 +14,19 @@ ENV = {"BOOKORBIT_URL": "http://b/api/v1", "BOOKORBIT_USER": "u", "BOOKORBIT_PAS
 
 def test_settings_require_the_credentials_and_urls():
     s = Settings.from_env(ENV)
-    assert (s.libraries, s.start_before, s.stop_at, s.max_books, s.dry_run) == ((7, 8), "04:00", "06:00", 3, False)
+    assert (s.libraries, s.start_hours, s.run_hours, s.max_books, s.dry_run) == ((7, 8), 3.5, 5.5, 3, False)
     for key in ENV:
         with pytest.raises(ValueError, match=key):
             Settings.from_env({k: v for k, v in ENV.items() if k != key})
 
 
 def test_settings_parse_only_dry_run_and_window():
-    s = Settings.from_env({**ENV, "ONLY": "111, 292", "DRY_RUN": "true", "START_BEFORE": "03:30",
-                           "STOP_AT": "05:45", "LIBRARIES": "7"})
+    s = Settings.from_env({**ENV, "ONLY": "111, 292", "DRY_RUN": "true", "START_HOURS": "3",
+                           "RUN_HOURS": "5", "LIBRARIES": "7"})
     assert s.only == frozenset({111, 292}) and s.dry_run and s.libraries == (7,)
-    assert (s.start_before, s.stop_at) == ("03:30", "05:45")
-    with pytest.raises(ValueError, match="START_BEFORE"):
-        Settings.from_env({**ENV, "START_BEFORE": "25:00"})
+    assert (s.start_hours, s.run_hours) == (3.0, 5.0)
+    with pytest.raises(ValueError, match="START_HOURS"):
+        Settings.from_env({**ENV, "START_HOURS": "6", "RUN_HOURS": "5"})
 
 
 def test_missing_state_file_is_empty(tmp_path):
@@ -84,3 +84,14 @@ def test_history_is_capped(tmp_path):
     for i in range(250):
         st.record("published", i, "S", now=i)
     assert len(st.history) == 200 and st.history[0]["book"] == 50
+
+
+
+def test_a_second_run_exits_while_the_first_holds_the_lock(tmp_path):
+    import fcntl
+    from app.readalong.__main__ import main
+    state = tmp_path / "state"
+    state.mkdir()
+    held = open(state / "readalong.lock", "w")
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    assert main({**ENV, "STATE_DIR": str(state)}) == 1       # never reaches the network

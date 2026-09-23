@@ -27,6 +27,8 @@ class State:
         self.refused = data.get("refused", {})
         self.errors = data.get("errors", {})
         self.history = data.get("history", [])
+        self.foreign_busy_since = data.get("foreign_busy_since")   # another client holding Storyteller
+        self.foreign_told = bool(data.get("foreign_told"))
 
     @classmethod
     def load(cls, path) -> "State":
@@ -43,7 +45,8 @@ class State:
 
     def save(self) -> None:
         data = {"in_flight": self.in_flight, "refused": self.refused, "errors": self.errors,
-                "history": self.history[-HISTORY_MAX:]}
+                "history": self.history[-HISTORY_MAX:], "foreign_busy_since": self.foreign_busy_since,
+                "foreign_told": self.foreign_told}
         d = os.path.dirname(self.path) or "."
         tmp = f"{self.path}.tmp"
         with open(tmp, "w", encoding="utf-8") as fh:

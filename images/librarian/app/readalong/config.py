@@ -1,12 +1,10 @@
 """Settings for the read-along job, from the environment (see the librarian
 HelmRelease's `readalong` controller)."""
-import re
 from dataclasses import dataclass, field
 from typing import Mapping
 
 _REQUIRED = ("BOOKORBIT_URL", "BOOKORBIT_USER", "BOOKORBIT_PASS",
              "STORYTELLER_URL", "STORYTELLER_USER", "STORYTELLER_PASS", "APPRISE_URL")
-_CLOCK = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
 def _bool(v: str | None, default: bool) -> bool:
@@ -39,8 +37,8 @@ class Settings:
     storyteller_library: str = "/library"      # Storyteller's view of /media/books
     staging_dir: str = "/media/library_intake/.readalong"
     libraries: tuple = (7, 8)
-    start_before: str = "04:00"                # no new book starts at or after this (local time)
-    stop_at: str = "06:00"                     # stop polling and exit (Storyteller keeps working)
+    start_hours: float = 3.5                   # no new book starts later than this into the run
+    run_hours: float = 5.5                     # stop polling and exit (Storyteller keeps working)
     quiet_hours: float = 2.0                   # skip books updated more recently than this
     max_books: int = 3                         # new books started per night
     poll_seconds: int = 60
@@ -59,11 +57,9 @@ class Settings:
         for k, attr in opt.items():
             if env.get(k):
                 kw[attr] = env[k]
-        for k in ("START_BEFORE", "STOP_AT"):
+        for k in ("START_HOURS", "RUN_HOURS"):
             if env.get(k):
-                if not _CLOCK.match(env[k]):
-                    raise ValueError(f"{k} must be HH:MM, got {env[k]!r}")
-                kw[k.lower()] = env[k]
+                kw[k.lower()] = float(env[k])
         if env.get("LIBRARIES"):
             kw["libraries"] = _ints(env["LIBRARIES"])
         if env.get("QUIET_HOURS"):
@@ -74,4 +70,7 @@ class Settings:
             kw["poll_seconds"] = int(env["POLL_SECONDS"])
         kw["dry_run"] = _bool(env.get("DRY_RUN"), False)
         kw["only"] = frozenset(_ints(env.get("ONLY")))
-        return Settings(**kw)
+        s = Settings(**kw)
+        if not 0 < s.start_hours <= s.run_hours:
+            raise ValueError(f"need 0 < START_HOURS <= RUN_HOURS, got {s.start_hours}, {s.run_hours}")
+        return s
