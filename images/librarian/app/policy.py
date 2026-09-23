@@ -41,6 +41,7 @@ guard.
 import math
 import os
 import json
+import unicodedata
 from dataclasses import dataclass, field
 
 from app.dossier import agreement
@@ -636,13 +637,29 @@ def _same_id(a, b) -> bool:
             and isinstance(b, int) and not isinstance(b, bool) and a == b)
 
 
+def _norm_text(v) -> str:
+    return " ".join(unicodedata.normalize("NFKC", str(v)).casefold().split())
+
+
+def _book_identity(intent: dict):
+    """(title, first author) of a create_book intent, normalised (NFKC,
+    casefolded, whitespace collapsed); None when either is missing."""
+    md = intent.get("metadata") if isinstance(intent.get("metadata"), dict) else {}
+    title = md.get("title")
+    authors = md.get("authors") if isinstance(md.get("authors"), list) else []
+    if not isinstance(title, str) or not authors or not isinstance(authors[0], str):
+        return None
+    t, a = _norm_text(title), _norm_text(authors[0])
+    return (t, a) if t and a else None
+
+
 def human_answer_matches(intent: dict, human_answer) -> bool:
     """Plan 2 Task 6 (Global "Human answer shape"): a human answer unlocks
     guards 7 and 10 ONLY for the exact intent the human selected -- the
     submitted intent must equal `human_answer["option_intent"]` on kind,
     book_id and library (only the keys the option carries; a create_book
-    compares kind + library, an attach/update_metadata must name its
-    book_id). If the option names an arrival it must be this one.
+    compares kind + library + normalised title and first author -- final
+    review M5 --, an attach/update_metadata must name its book_id). If the option names an arrival it must be this one.
 
     Anything else never overrides a guard: None, a non-dict, a pre-Plan-2
     `{"choice": ...}` answer, a free-text reply or an option without an
@@ -667,7 +684,11 @@ def human_answer_matches(intent: dict, human_answer) -> bool:
     if okind != kind:
         return False
     if kind == CREATE_BOOK:
-        return oi.get("library") == intent.get("library")
+        # final review M5: the human selected a specific new book -- title
+        # and first author (normalised) must match, not just the library
+        return (oi.get("library") == intent.get("library")
+                and _book_identity(oi) is not None
+                and _book_identity(oi) == _book_identity(intent))
     if kind in (ATTACH, UPDATE_METADATA):
         if not _same_id(oi.get("book_id"), intent.get("book_id")):
             return False

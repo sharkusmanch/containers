@@ -57,6 +57,8 @@ class FakeExecutor:
         self.calls = []        # (intent_id, key, arrival state at call time)
         self.resumed = []
         self.updates = []
+        self.removed = []
+        self.dup_result = ExecResult(True, "removed", 2, "removed the intake copy")
 
     def execute(self, intent, arrival_rec, dossier=None):
         self.calls.append((intent["intent_id"], arrival_rec["key"], arrival_rec["state"]))
@@ -67,6 +69,10 @@ class FakeExecutor:
     def resume(self, rec):
         self.resumed.append(rec["key"])
         return self.resume_result
+
+    def remove_duplicate(self, rec):
+        self.removed.append(rec["key"])
+        return self.dup_result
 
     def execute_update(self, intent, arrival_rec, book_id):
         self.updates.append((intent["intent_id"], arrival_rec["key"], book_id))

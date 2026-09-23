@@ -162,6 +162,8 @@ def run_due(svc, prefer=()) -> int:
         kind, key = job
         if kind == "file":
             execute_arrival(svc, key)
+        elif kind == "dup":
+            remove_duplicate(svc, key)
         else:
             run_updates(svc, key)
     return done
@@ -188,7 +190,56 @@ def _next_job(svc, prefer):
             return "file", min(due)[3]
         for key in _pending_update_keys(svc, now):
             return "update", key
+        for rec in svc.arrivals.by_state(states.DUPLICATE):
+            if (rec.get("dup_removed") or rec.get("dup_failed")
+                    or not is_live(svc.settings, rec.get("source"))):
+                continue
+            at = rec.get("dup_retry_at")
+            if isinstance(at, (int, float)) and at > now:
+                continue
+            return "dup", rec["key"]
     return None
+
+
+def remove_duplicate(svc, key: str) -> None:
+    """Final review M3: a live duplicate's intake copy is removed by the
+    executor once the identical file is proven in the library; the tick's
+    late summary lists it ("♻️ duplicate removed"). Retryable -> backoff
+    like a filing; failed (or out of attempts) -> the copy stays and the
+    human gets an attention push + task."""
+    with svc.lock:
+        rec = svc.arrivals.get(key)
+        if rec is None or rec.get("state") != states.DUPLICATE:
+            return
+    try:
+        res = svc.executor.remove_duplicate(rec)
+    except Exception as e:
+        logger.exception("remove_duplicate raised for arrival %s", log_safe(key))
+        res = ExecResult(False, "retryable", rec.get("book_id"), f"{type(e).__name__}: {log_safe(e)}")
+    with svc.lock:
+        cur = svc.arrivals.get(key) or rec
+        if res.state == "removed":
+            svc.arrivals.record(key, states.DUPLICATE, dup_removed=True, dup_retry_at=None,
+                                detail=res.detail)
+            note_outcome(svc, key)
+            logger.info("arrival %s: duplicate intake copy removed", log_safe(key))
+            return
+        detail = res.detail
+        if res.state == "retryable":
+            if svc.stopping():
+                svc.arrivals.record(key, states.DUPLICATE, dup_retry_at=svc.clock(), detail=detail)
+                return
+            attempts = int(cur.get("dup_attempts") or 0) + 1
+            if attempts < svc.settings.max_attempts:
+                svc.arrivals.record(key, states.DUPLICATE, dup_attempts=attempts,
+                                    dup_retry_at=svc.clock() + _backoff(svc, attempts), detail=detail)
+                return
+            detail = f"gave up after {attempts} attempts; last: {detail}"
+        svc.arrivals.record(key, states.DUPLICATE, dup_failed=detail, dup_retry_at=None, detail=detail)
+        text = f"Duplicate of book {cur.get('book_id')}, but its intake copy was not removed: {detail}"
+        esc_id = svc.intents.record_escalation("executor", key, text, reason="duplicate removal failed")
+        flag_attention(svc, key, "duplicate", esc_id, text)
+        logger.error("arrival %s: %s", log_safe(key), log_safe(text))
 
 
 def _pending_update_keys(svc, now) -> list:

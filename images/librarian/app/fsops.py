@@ -123,7 +123,7 @@ def unstage(sdir: str, items: list[list[str]], intake_root: str) -> str | None:
 
 def _move_no_clobber(src: str, dst: str) -> bool:
     try:
-        os.link(src, dst)
+        os.link(src, dst, follow_symlinks=False)
     except FileExistsError:
         return False
     os.unlink(src)

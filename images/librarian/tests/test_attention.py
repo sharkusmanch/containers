@@ -191,3 +191,55 @@ def test_live_summary_counts_exclude_simulated_and_would_escalate(tmp_path, live
     svc.arrivals.record("manual:y:abc", states.FILED, source="manual", primary="y.m4b", book_id=2)
     _text, n_filed, n_esc = runs.summary(svc, "none", ["libation:X:abc", "libation:Z:abc", "manual:y:abc"])
     assert (n_filed, n_esc) == (1, 0)
+
+
+# --- final review M3: live duplicates are removed from the intake ------------------------------
+
+
+def _manual_duplicate(tmp_path, svc, clock):
+    import hashlib
+    data = b"AUDIO" * 100
+    sha = hashlib.sha256(data).hexdigest()
+    svc.arrivals.record(f"libation:B0OLDCOPY0:{sha[:12]}", states.FILED, sha256=sha, book_id=2,
+                        source="libation")
+    manual = tmp_path / "intake" / "manual"
+    manual.mkdir(parents=True, exist_ok=True)
+    (manual / "copy.m4b").write_bytes(data)
+    drive(svc, clock, (0, 1))
+    [dup] = [r for r in svc.arrivals.all() if r["state"] == states.DUPLICATE]
+    return dup["key"]
+
+
+def test_live_duplicate_is_removed_and_reported(tmp_path, wired):
+    svc, fx, fake, clock = wired()
+    key = _manual_duplicate(tmp_path, svc, clock)
+    assert fx.removed == [key]
+    assert svc.arrivals.get(key)["dup_removed"] is True
+    late = [p for p in pushes(svc, "summary") if p["msg_id"].startswith("late:")]
+    assert len(late) == 1 and "♻️" in late[0]["body"] and "duplicate removed" in late[0]["body"]
+    assert "1 duplicate(s) removed" in late[0]["title"]
+    svc.tick()
+    assert fx.removed == [key]                          # once
+
+
+def test_failed_duplicate_removal_tells_the_human(tmp_path, wired):
+    svc, fx, fake, clock = wired()
+    fx.dup_result = ExecResult(False, "failed", 2, "duplicate intake copy kept: no file matches")
+    key = _manual_duplicate(tmp_path, svc, clock)
+    rec = svc.arrivals.get(key)
+    assert rec["state"] == states.DUPLICATE and "no file matches" in rec["dup_failed"]
+    [p] = pushes(svc, "attention")
+    assert p["msg_id"] == f"attention:{key}:duplicate"
+    [task] = fake.tasks.values()
+    assert "no file matches" in task["description"]
+    svc.tick()
+    assert fx.removed == [key]                          # not retried
+
+
+@pytest.mark.parametrize("kw", [{"dry_run": True}, {"live_sources": frozenset({"libation"})}])
+def test_non_live_duplicate_is_left_alone(tmp_path, wired, kw):
+    svc, fx, fake, clock = wired(**kw)
+    key = _manual_duplicate(tmp_path, svc, clock)
+    assert fx.removed == []
+    assert not svc.arrivals.get(key).get("dup_removed")
+    assert (tmp_path / "intake" / "manual" / "copy.m4b").exists()

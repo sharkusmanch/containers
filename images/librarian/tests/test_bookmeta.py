@@ -55,3 +55,16 @@ def test_update_metadata_fields_none_values_omitted():
 def test_update_metadata_fields_fractional_series_index_kept():
     out = update_metadata_fields({"seriesIndex": 2.5})
     assert out == {"seriesIndex": "2.5"}
+
+
+def test_policy_mapped_fields_equal_the_keys_update_metadata_fields_maps():
+    """Final review M7: policy._UPDATE_METADATA_MAPPED_FIELDS is kept in
+    lockstep with bookmeta.update_metadata_fields by hand -- pin it."""
+    from app import bookmeta as bm
+    from app import policy
+    samples = {"authors": ["A. Author"], "seriesIndex": 1, "publishedYear": 2020}
+    candidates = (set(policy._UPDATE_METADATA_MAPPED_FIELDS) | set(policy._UPDATE_METADATA_REJECTED_KEYS)
+                  | set(bm._UPDATE_METADATA_SIMPLE_FIELDS)
+                  | {"description", "isbn", "tags", "genres", "publisher", "seriesName", "narrator"})
+    mapped = {k for k in candidates if bm.update_metadata_fields({k: samples.get(k, "x")})}
+    assert mapped == set(policy._UPDATE_METADATA_MAPPED_FIELDS)

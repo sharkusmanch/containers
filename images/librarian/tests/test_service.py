@@ -363,9 +363,39 @@ def test_kindle_sidecar_mismatch_fails_arrival(tmp_path, svc_factory):
     svc.tick()
     clock.t += 1
     svc.tick()
+    # final review M1: not ready (not failed) for an hour -- kindle-ingest
+    # may still repair the sidecar
+    assert svc.arrivals.all() == []
+    clock.t += 3599
+    svc.tick()
+    assert svc.arrivals.all() == []
+    clock.t += 1                                     # an hour after it was first seen wrong
+    svc.tick()
     rec = only_key(svc)
     assert svc.arrivals.get(rec)["state"] == states.FAILED
     assert "mismatch" in svc.arrivals.get(rec)["error"]
+
+
+def test_kindle_sidecar_repaired_within_the_grace_becomes_ready(tmp_path, svc_factory):
+    import hashlib
+    clock = Clock()
+    svc = svc_factory(FakeModel(), clock)
+    k = tmp_path / "intake" / "kindle"
+    k.mkdir(parents=True)
+    data = b"not really an epub"
+    (k / "B0KINDLE01.epub").write_bytes(data)
+    (k / "B0KINDLE01.json").write_text(json.dumps({"sha256": "0" * 64, "asin": "B0KINDLE01"}))
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    assert svc.arrivals.all() == []
+    (k / "B0KINDLE01.json").write_text(json.dumps({"sha256": hashlib.sha256(data).hexdigest(),
+                                                   "asin": "B0KINDLE01"}))
+    clock.t += 1800
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    assert svc.arrivals.get(only_key(svc))["state"] == states.READY
 
 
 def test_dossier_error_leaves_candidate_unrecorded_and_retries(tmp_path, svc_factory):

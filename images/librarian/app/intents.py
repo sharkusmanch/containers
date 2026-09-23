@@ -358,7 +358,17 @@ class IntentBook:
         self.store.record(esc_id, SIMULATED_I, run_id=run_id, arrival=arrival, kind=ESCALATE,
                           payload=payload, reason=reason, guard=None, review=None,
                           would_do=would_do(payload))
+        self._clear_answer(arrival)
         return esc_id
+
+    def _clear_answer(self, arrival: str) -> None:
+        """Final review M4: a newer escalation supersedes the human answer
+        to the previous one -- it must never unlock guards 7/10 for (or be
+        read by the LLM as the answer to) a question it did not answer.
+        Keeps the arrival's current state."""
+        cur = self.arrivals.get(arrival)
+        if cur is not None and cur.get("human_answer") is not None:
+            self.arrivals.record(arrival, cur["state"], human_answer=None)
 
     def latest_escalation(self, arrival: str) -> dict | None:
         """The arrival's most recent FINALIZED escalation (state
@@ -430,7 +440,7 @@ class IntentBook:
                     wd = would_do(e["payload"], index=index)
                     if e.get("state") == PROPOSED_I:
                         self.store.record(e["intent_id"], SIMULATED_I, would_do=wd)
-                self.arrivals.record(key, NEEDS_DECISION, would_do=wd)
+                self.arrivals.record(key, NEEDS_DECISION, would_do=wd, human_answer=None)
 
     def finalize_dry_run(self, run_id: str, index=None, only_arrivals=None) -> None:
         """Turn this run's accepted intents into arrival-visible "would do"
@@ -485,7 +495,7 @@ class IntentBook:
                     self._cascade_reject_metadata(rec)
                     wd = would_do(esc_payload, index=index)
                     self.store.record(esc_id, SIMULATED_I, would_do=wd)
-                    self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd)
+                    self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd, human_answer=None)
 
             elif kind == UPDATE_METADATA:
                 # Re-read: an earlier iteration this same pass may have
@@ -517,7 +527,7 @@ class IntentBook:
             elif kind == ESCALATE and state == PROPOSED_I:
                 wd = would_do(rec["payload"], index=index)
                 self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
-                self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd)
+                self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd, human_answer=None)
 
             elif kind == DEFER and state == PROPOSED_I:
                 # the arrival was already recorded DEFERRED with its

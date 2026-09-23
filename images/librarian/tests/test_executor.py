@@ -630,6 +630,47 @@ def test_attach_happy_path_files_scans_renames_and_cleans(env):
     assert env.beats > 0
 
 
+def test_staged_primary_symlink_is_refused_and_never_linked(env):
+    """Final review M2: the staged primary must itself be a regular file
+    (lstat) -- a symlink in the intake could otherwise have its TARGET
+    hard-linked into the library."""
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    outside = env.tmp / "outside.m4b"
+    os.rename(arr["primary"], outside)
+    os.symlink(outside, arr["primary"])              # same bytes, via a symlink
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.state == "failed", r.detail
+    assert "regular file" in r.detail
+    folder = env.books_root / "Library" / "Martha Wells" / "Artificial Condition"
+    assert not (folder / "Artificial Condition.m4b").exists()
+    assert os.path.islink(arr["primary"])            # restored to the intake
+    assert env.fake.scans() == []
+
+
+def test_link_into_the_library_never_follows_symlinks(env, monkeypatch):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+    seen = []
+    real = os.link
+
+    def link(src, dst, **kw):
+        seen.append(kw)
+        return real(src, dst, **kw)
+    monkeypatch.setattr(executor_mod.os, "link", link)
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.state == "filed", r.detail
+    assert seen and seen[0].get("follow_symlinks") is False
+
+
 def test_attach_destination_collision_fails_without_moving(env):
     attach_target(env, files=(("Artificial Condition.epub", b"e"), ("Artificial Condition.m4b", b"old")))
     arr = env.libation(title="Artificial Condition")
@@ -1497,3 +1538,72 @@ def test_attach_snapshot_is_taken_after_the_guard2_wait(env):
     assert r.state == "filed", r.detail
     assert env.fake.patches() == []                   # the human's edit is not reverted
     assert env.fake.books[7001]["subtitle"] == "Murderbot 2"
+
+
+# --- final review M3: duplicate arrivals -------------------------------------------------------
+
+
+def _duplicate(env, *, library_bytes=b"A" * 5000):
+    attach_target(env, files=(("Artificial Condition.m4b", library_bytes),))
+    arr = env.libation(title="Artificial Condition")          # m4b = b"A" * 5000
+    rec = env.arrivals.record(arr["key"], states.DUPLICATE, book_id=7001)
+    return rec
+
+
+def test_duplicate_intake_copy_removed_after_library_copy_verified(env):
+    rec = _duplicate(env)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.remove_duplicate(rec)
+
+    assert r.state == "removed", r.detail
+    assert not os.path.exists(rec["path"])
+    assert not os.path.exists(env.intake / ".executing" / sha12(rec["key"]))
+    assert sorted(os.listdir(env.intake / "_supplements" / "B0LIBATION")) == ["Guide.pdf"]
+    assert env.fake.scans() == [] and env.fake.patches() == []
+    # replay is a no-op
+    env.arrivals.record(rec["key"], states.DUPLICATE, dup_removed=True)
+    assert ex.remove_duplicate(env.arrivals.get(rec["key"])).state == "removed"
+
+
+def test_duplicate_whose_library_file_differs_is_kept(env):
+    rec = _duplicate(env, library_bytes=b"B" * 5000)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.remove_duplicate(rec)
+
+    assert r.state == "failed", r.detail
+    assert os.path.isfile(rec["primary"]) and os.path.isfile(os.path.join(rec["path"], "cover.jpg"))
+    assert not os.path.exists(env.intake / ".executing" / sha12(rec["key"]))
+
+
+def test_duplicate_whose_intake_copy_changed_is_kept(env):
+    rec = _duplicate(env)
+    with open(rec["primary"], "ab") as f:
+        f.write(b"changed")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.remove_duplicate(rec)
+
+    assert r.state == "failed", r.detail
+    assert os.path.isfile(rec["primary"])
+    assert not os.path.exists(env.intake / ".executing" / sha12(rec["key"]))
+
+
+def test_duplicate_removal_resumes_a_staged_copy(env, monkeypatch):
+    rec = _duplicate(env)
+    ex = env.executor()
+    env.snapshot_tree()
+    _crash_unlink_of(monkeypatch, ".executing")
+    with pytest.raises(Crash):
+        ex.remove_duplicate(rec)
+    monkeypatch.undo()
+    assert os.path.isdir(env.intake / ".executing" / sha12(rec["key"]))
+
+    r = env.executor().remove_duplicate(env.arrivals.get(rec["key"]))
+
+    assert r.state == "removed", r.detail
+    assert not os.path.exists(env.intake / ".executing" / sha12(rec["key"]))

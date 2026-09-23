@@ -17,10 +17,11 @@ BookOrbit library, and has a sandboxed `claude -p` run propose and a second
   allowlisted environment. After each run the core checks the tools the run
   was actually granted, and discards the run if any extra tool shows up.
 
-**This release is DRY_RUN only.** The service refuses to start with
-`DRY_RUN=false`. It never moves, writes or deletes anything under `/media`, and
-never writes to BookOrbit. Mount the media volume read-only. Live mode comes in
-a later release.
+**`DRY_RUN` defaults to `true`.** In dry-run nothing under `/media` is moved,
+written or deleted and nothing is written to BookOrbit; approved intents are
+recorded as "would do". With `DRY_RUN=false` only arrivals whose source is in
+`LIVE_SOURCES` are filed for real, by the executor (`app/executor.py`), the only
+code that writes. Rollback is `DRY_RUN=true`.
 
 ## Environment variables
 
@@ -31,7 +32,8 @@ From `app/config.py`. A blank value counts as unset.
 | `BOOKORBIT_URL` | *required* | API base **including** `/api/v1`, e.g. `http://bookorbit.media.svc.cluster.local:3000/api/v1` |
 | `BOOKORBIT_USER` / `BOOKORBIT_PASS` | *required* | read-only use; login is throttled, so a failed login waits 300 s |
 | `CLAUDE_CODE_OAUTH_TOKEN` | *required for runs* | passed through to `claude -p` (the only secret the child sees) |
-| `DRY_RUN` | `true` | `false` exits: "live mode ships in plan P2" |
+| `DRY_RUN` | `true` | `false` files approved intents of `LIVE_SOURCES` arrivals for real |
+| `LIVE_SOURCES` | `manual,libation` | sources that execute live when `DRY_RUN=false`; the rest stay simulated, and their escalations wait without a Vikunja task or push |
 | `INTAKE_ROOT` | `/media/library_intake` | contains `libation/`, `kindle/`, `manual/` |
 | `LOCAL_BOOKS_ROOT` | `/media/books` | where BookOrbit's `/books/...` paths are mounted in this pod |
 | `BOOKORBIT_PATH_PREFIX` | `/books` | BookOrbit's container path prefix, mapped to `LOCAL_BOOKS_ROOT` |
@@ -49,8 +51,23 @@ From `app/config.py`. A blank value counts as unset.
 | `API_PORT` | `8081` | internal API, bound to 127.0.0.1 only |
 | `CLAUDE_BIN` | `claude` | path to the Claude Code binary |
 | `RUNS_ROOT` | `/tmp/runs` | per-run cwd, `HOME` and `CLAUDE_CONFIG_DIR` (use an emptyDir) |
-| `ONLY` | *(unset)* | restrict to one `source_id` or one full arrival key (debugging) |
+| `ONLY` | *(unset)* | debugging: restrict **intake and run offers** to one `source_id` or one full arrival key (see below) |
 | `LOG_LEVEL` | `INFO` | Python logging level |
+
+### `ONLY` scope
+
+`ONLY` limits exactly two things: which intake candidates are hashed and recorded,
+and which arrivals are offered to a librarian run. It does **not** limit anything
+that acts on arrivals already in the state store:
+
+- the dry-run to live re-offer of simulated arrivals (`go_live`);
+- the execution queue (`run_due`): queued and retrying filings, pending
+  `update_metadata` corrections, duplicate removal;
+- the startup resume of arrivals left `executing`;
+- escalation sync (Vikunja tasks, replies, closes, pushes).
+
+It does not imply `DRY_RUN` either: with `DRY_RUN=false`, those keep running
+for every arrival.
 
 ## Ports
 

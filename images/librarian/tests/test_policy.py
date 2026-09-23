@@ -1487,16 +1487,46 @@ def test_guard7_adult_option_does_not_unlock_kids_create(tmp_path):
     assert not ok
 
 
-def test_guard7_kids_create_matches_on_kind_and_library_only(tmp_path):
+def test_guard7_kids_create_with_another_title_does_not_unlock(tmp_path):
+    """Final review M5: a kids create_book answer unlocks only the book the
+    human saw -- title and first author (normalised) must match too."""
     lists = _kids_dir_lists(tmp_path, deny_series=("x",))
     dossier = _dossier_for_kids(fresh_series="x")
     ha = answer(create_book_intent(library="kids", title="Some Other Title"))
     assert ha["choice"] == "kids"
-    ok, msg = check_intent(create_book_intent(library="kids", title="The Real Title"),
+    ok, _ = check_intent(create_book_intent(library="kids", title="The Real Title"),
+                         ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
+    assert not ok
+
+
+def test_guard7_kids_create_with_another_first_author_does_not_unlock(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ha = answer(create_book_intent(library="kids", authors=["Someone Else", "Martha Wells"]))
+    ok, _ = check_intent(create_book_intent(library="kids", authors=["Martha Wells"]),
+                         ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
+    assert not ok
+
+
+def test_guard7_kids_create_matches_title_and_author_normalised(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ha = answer(create_book_intent(library="kids", title="  the REAL  title ",
+                                   authors=["martha  WELLS", "Co Author"]))
+    ok, msg = check_intent(create_book_intent(library="kids", title="The Real Title",
+                                              authors=["Martha Wells"]),
                            ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
-    assert ok
+    assert ok, msg
     assert "human" in msg
 
+
+def test_guard7_kids_create_option_without_metadata_does_not_unlock(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ha = answer({"kind": "create_book", "library": "kids"})
+    ok, _ = check_intent(create_book_intent(library="kids"),
+                         ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
+    assert not ok
 
 def test_guard7_attach_option_for_another_kids_book_does_not_unlock(tmp_path):
     lists = _kids_dir_lists(tmp_path, deny_series=("x",))

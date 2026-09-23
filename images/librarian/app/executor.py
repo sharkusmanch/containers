@@ -66,8 +66,9 @@ _SCAN_MUTEX = threading.Lock()
 @dataclass
 class ExecResult:
     ok: bool
-    state: str                      # "filed" | "updated" | "retryable" | "failed"
-                                     # ("updated" only from execute_update)
+    state: str                      # "filed" | "updated" | "removed" | "retryable" | "failed"
+                                     # ("updated" only from execute_update, "removed"
+                                     # only from remove_duplicate)
     book_id: int | None
     detail: str
     moves: list = field(default_factory=list)   # [(src, dst, size)]
@@ -257,6 +258,92 @@ class Executor:
         return ExecResult(True, "updated", book_id,
                           f"patched metadata on book {book_id}: {', '.join(sorted(mapped))}")
 
+    # --- duplicates (final review M3) -------------------------------------------
+    def remove_duplicate(self, arrival_rec: dict) -> ExecResult:
+        """Remove the intake copy of a `duplicate` arrival (Global: the
+        executor may remove intake copies of duplicate arrivals) -- only
+        after a file of its book, in a filing library, is proven on disk to
+        be a regular file with the arrival's sha256. Never touches the
+        library. The arrival is staged into `.executing/<sha12>/` first
+        (journaled as `dup` on the record); the staged primary is re-hashed
+        before its unlink, and the leftovers go the way a filing's do
+        (`fsops.cleanup`). Outcomes: `removed`, `retryable` (nothing
+        removed), `failed` (intake copy kept -- restored if it was staged)."""
+        key = arrival_rec["key"]
+        with _SCAN_MUTEX:
+            cur = self.arrivals.get(key) or arrival_rec
+            if cur.get("dup_removed"):
+                return ExecResult(True, "removed", cur.get("book_id"), "intake copy already removed")
+            if cur.get("state") != states.DUPLICATE:
+                return ExecResult(False, "failed", cur.get("book_id"),
+                                  f"arrival {key} is {cur.get('state')!r}, not a duplicate")
+            sha, book_id = cur.get("sha256"), cur.get("book_id")
+            j = cur.get("dup") if isinstance(cur.get("dup"), dict) else None
+            staged = False
+            try:
+                if not sha or type(book_id) is not int:
+                    raise _Fail(f"duplicate {key} has no sha256/book_id")
+                self._check_stop()
+                where = self._library_copy(book_id, sha)
+                sdir = fsops.staging_dir(self.intake_root, key)
+                if os.path.lexists(sdir):
+                    if j is None or j.get("staging_dir") != sdir:
+                        raise _Fail(f"{sdir} exists but is not this duplicate's staging dir")
+                    src, items = j["src"], j["staged"]
+                    staged = True
+                else:
+                    sdir, items, src = fsops.plan_staging(cur, self.intake_root)
+                    if not _is_regular(cur["primary"]) or self._hash(cur["primary"]) != sha:
+                        raise _Fail(f"intake copy {cur['primary']} changed since it was hashed")
+                    self.arrivals.record(key, states.DUPLICATE,
+                                         dup={"staging_dir": sdir, "staged": items, "src": src})
+                    staged = True
+                    fsops.stage(sdir, items, self.intake_root)
+                if os.path.lexists(src):
+                    fsops.require_under(src, sdir, "duplicate copy")
+                    if not _is_regular(src) or self._hash(src) != sha:
+                        raise _Fail(f"staged copy {src} is not identical to {where}")
+                    os.unlink(src)
+                staged = False                  # the primary is gone: never unstage now
+                summary = fsops.cleanup(cur.get("source"), sdir, self.intake_root,
+                                        self._supplement_id({"key": key, "source": cur.get("source"),
+                                                             "source_id": cur.get("source_id")}))
+            except Exception as e:
+                permanent = isinstance(e, (_Fail, fsops.UnsafePath)) or (
+                    isinstance(e, OSError) and e.errno in _PERMANENT_ERRNOS)
+                msg = str(e) if isinstance(e, (_Retry, _Stop, _Fail, fsops.UnsafePath)) else \
+                    f"{type(e).__name__}: {log_safe(e)}"
+                note = ""
+                if staged:
+                    err = fsops.unstage(sdir, items, self.intake_root)
+                    if err:
+                        permanent, note = True, f"; {err}"
+                return ExecResult(False, "failed" if permanent else "retryable", book_id,
+                                  f"duplicate intake copy kept: {msg}{note}")
+            detail = f"removed the intake copy of {cur.get('primary')} (identical to {where})"
+            if summary["supplements"]:
+                detail += f"; supplements: {', '.join(summary['supplements'])}"
+            if summary["left"]:
+                detail += f"; left in intake: {', '.join(summary['left'])}"
+            return ExecResult(True, "removed", book_id, detail)
+
+    def _library_copy(self, book_id: int, sha: str) -> str:
+        """The on-disk path of a file of `book_id` whose bytes hash to
+        `sha` (regular file, inside a filing library), else _Fail."""
+        d = self.index.detail(book_id, fresh=True)
+        library = d.get("libraryName")
+        if library not in LIBRARY_IDS:
+            raise _Fail(f"book {book_id} is in library {library!r}, not a filing library")
+        folder = self._local_folder(d, library)
+        for f in d.get("files") or []:
+            name = f.get("filename") if isinstance(f, dict) else None
+            if not isinstance(name, str) or not name:
+                continue
+            p = os.path.join(folder, name)
+            if fsops.is_under(p, self._lib_root(library)) and _is_regular(p) and self._hash(p) == sha:
+                return p
+        raise _Fail(f"no file of book {book_id} on disk has this arrival's sha256")
+
     # --- journal ------------------------------------------------------------
     def _journal(self, ctx: dict, step: str | None = None) -> None:
         if step is not None:
@@ -355,6 +442,10 @@ class Executor:
             except FileExistsError as e:
                 raise _Fail(f"cannot stage the arrival: {e}")
 
+            if not _is_regular(ctx["src"]):
+                # final review M2: never hash/link THROUGH a symlink -- its
+                # target (anywhere) would be linked into the library
+                raise _Fail(f"staged primary {ctx['src']} is not a regular file (symlink?)")
             if self._hash(ctx["src"]) != ctx["sha256"]:
                 raise _Fail(f"sha256 of {ctx['src']} no longer matches the arrival record")
             ctx["size"] = os.path.getsize(ctx["src"])
@@ -383,7 +474,7 @@ class Executor:
                 ctx["created_dir"] = True
                 self._journal(ctx)
             try:
-                os.link(ctx["src"], ctx["dst"])
+                os.link(ctx["src"], ctx["dst"], follow_symlinks=False)
                 ctx["linked"] = True
             except FileExistsError:
                 raise _Fail(f"destination {ctx['dst']} appeared (EEXIST); never overwriting")

@@ -54,6 +54,7 @@ from app.store import Store, append_record, read_records
 logger = logging.getLogger(__name__)
 
 TRANSCRIPT_MAX_AGE = 30 * 86400
+SIDECAR_GRACE = 3600          # s a kindle sidecar may disagree before the arrival fails
 # arrival states whose APPROVED intents the executor owns (never "recovered")
 _EXEC_OWNED = frozenset({states.RETRYABLE, states.EXECUTING, states.FILED})
 
@@ -102,6 +103,7 @@ class Service:
         self._seen: dict[str, tuple] = {}         # key -> last observed record signature
         self._changed: dict[str, float] = {}      # key -> when it last changed (unoffered)
         self._retry_at: dict[str, float] = {}     # key -> re-offer time after a failed run
+        self._sidecar_bad: dict[str, float] = {}  # key -> first tick its sidecar disagreed
         self.last_run_started: float | None = None
         self._stop = threading.Event()
         self._in_runner = False
@@ -479,9 +481,20 @@ class Service:
 
         err = intake.verify_sidecar(c, sha)
         if err:
+            # final review M1: kindle-ingest may still repair its sidecar
+            # (it re-verifies and rewrites on retry): not ready -- and not
+            # recorded -- for SIDECAR_GRACE, then failed
+            since = self._sidecar_bad.setdefault(key, now)
+            if now - since < SIDECAR_GRACE:
+                if since == now:
+                    logger.warning("arrival %s not ready: %s (failed if still wrong in %ds)",
+                                   log_safe(key), log_safe(err), SIDECAR_GRACE)
+                return
+            self._sidecar_bad.pop(key, None)
             logger.error("arrival %s failed: %s", log_safe(key), log_safe(err))
             self.arrivals.record(key, states.FAILED, error=err, **base)
             return
+        self._sidecar_bad.pop(key, None)
 
         filed = {r["sha256"]: r.get("book_id") for r in self.arrivals.by_state(states.FILED)
                  if r.get("sha256")}

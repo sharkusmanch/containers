@@ -109,3 +109,42 @@ def test_crash_before_finalize_escalates_the_left_alone_arrival_on_restart(tmp_p
     svc2 = live_factory(FakeModel(), FakeExecutor(), clock)
     assert svc2.arrivals.get(key)["state"] == states.NEEDS_DECISION
     assert len(core_escalations(svc2, key)) == 1
+
+
+# --- final review M4: a newer escalation clears the old human answer ----------------------------
+
+
+ANSWER = {"text": "1", "option": 1, "option_intent": {"kind": "attach", "book_id": 2},
+          "choice": "option", "comment_id": 7}
+
+
+def escalate_again(call):
+    st, arrivals = call("GET", "/arrivals")
+    for a in arrivals:
+        st, body = call("POST", "/intents", {
+            "kind": "escalate", "arrival": a["key"], "question": "Which edition did you mean?",
+            "options": [{"label": "First edition"}, {"label": "Leave it for me"}],
+            "recommendation": "ask"})
+        assert body["status"] == states.PROPOSED_I, body
+
+
+def test_llm_escalating_again_clears_the_answer(tmp_path, live_factory):
+    clock = Clock()
+    svc = live_factory(FakeModel(librarian=escalate_again), FakeExecutor(), clock)
+    add_libation(tmp_path)
+    drive(svc, clock)
+    key = only_key(svc)
+    svc.arrivals.record(key, states.ANSWERED, human_answer=dict(ANSWER))
+    drive(svc, clock, (1, 11))
+    rec = svc.arrivals.get(key)
+    assert rec["state"] == states.NEEDS_DECISION and rec.get("human_answer") is None
+
+
+def test_code_escalation_clears_the_answer(tmp_path, live_factory):
+    svc = live_factory(FakeModel(), FakeExecutor())
+    svc.arrivals.record("manual:a:1", states.NEEDS_DECISION, source="manual",
+                        human_answer=dict(ANSWER))
+    with svc.lock:
+        svc.intents.record_escalation("r1", "manual:a:1", "A re-check refused it", reason="guard")
+    assert svc.arrivals.get("manual:a:1").get("human_answer") is None
+    assert svc.arrivals.get("manual:a:1")["state"] == states.NEEDS_DECISION
