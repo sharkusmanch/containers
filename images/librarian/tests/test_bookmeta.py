@@ -68,3 +68,34 @@ def test_policy_mapped_fields_equal_the_keys_update_metadata_fields_maps():
                   | {"description", "isbn", "tags", "genres", "publisher", "seriesName", "narrator"})
     mapped = {k for k in candidates if bm.update_metadata_fields({k: samples.get(k, "x")})}
     assert mapped == set(policy._UPDATE_METADATA_MAPPED_FIELDS)
+
+
+# --- Task 9c ---------------------------------------------------------------------
+
+
+def test_create_metadata_sends_every_identity_field_null_when_absent():
+    """(c): the provider fetch after import writes junk into unset fields
+    (a bogus series, live); null clears it."""
+    from app.bookmeta import IDENTITY, create_metadata
+    out = create_metadata({"title": "T", "authors": ["A"]}, {"source": "manual"})
+    f = out["fields"]
+    assert set(IDENTITY) <= set(f)
+    assert f["title"] == "T" and f["authors"] == ["A"]
+    assert all(f[k] is None for k in ("subtitle", "seriesName", "seriesIndex", "publishedYear", "language"))
+
+
+def test_create_metadata_drops_index_without_series():
+    from app.bookmeta import create_metadata
+    f = create_metadata({"title": "T", "authors": ["A"], "seriesIndex": 3}, {"source": "manual"})["fields"]
+    assert f["seriesName"] is None and f["seriesIndex"] is None
+    f = create_metadata({"title": "T", "authors": ["A"], "series": "S", "seriesIndex": 3,
+                         "publishedYear": 2001, "language": "en", "subtitle": "Sub"},
+                        {"source": "manual"})["fields"]
+    assert (f["seriesName"], f["seriesIndex"], f["publishedYear"], f["language"], f["subtitle"]) == \
+        ("S", "3", 2001, "en", "Sub")
+
+
+def test_identity_locks_cover_every_identity_field():
+    from app import bookmeta
+    assert set(bookmeta.IDENTITY_LOCKS) == set(bookmeta.IDENTITY)
+    assert set(bookmeta.CREATE_LOCKS) == set(bookmeta.IDENTITY) | {"description"}

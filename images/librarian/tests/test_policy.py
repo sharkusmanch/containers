@@ -523,8 +523,15 @@ def test_validate_shape_update_metadata_lock_allows_title_subtitle_description()
     assert validate_shape(update_metadata_intent(2, lock=["title", "subtitle", "description"]))[0]
 
 
-def test_validate_shape_update_metadata_lock_rejects_series_fields():
-    ok, msg = validate_shape(update_metadata_intent(2, lock=["seriesName"]))
+def test_validate_shape_update_metadata_lock_allows_every_identity_field():
+    # Task 9c (b): every identity field the librarian sets is locked, so the
+    # post-import provider fetch can never overwrite it
+    lock = ["title", "subtitle", "authors", "seriesName", "seriesIndex", "publishedYear", "language"]
+    assert validate_shape(update_metadata_intent(2, lock=lock))[0]
+
+
+def test_validate_shape_update_metadata_lock_rejects_non_identity_fields():
+    ok, msg = validate_shape(update_metadata_intent(2, lock=["genres"]))
     assert not ok
     assert "lock" in msg
 

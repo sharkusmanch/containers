@@ -14,6 +14,15 @@ ASIN_RE = re.compile(r"^[A-Za-z0-9]{10,13}$")
 
 IDENTITY = ("title", "subtitle", "authors", "seriesName", "seriesIndex", "publishedYear", "language")
 
+# Task 9c (b): every identity field the librarian sets or restores is locked
+# (overrides P1's "series stays unlocked"): BookOrbit's post-import provider
+# fetch overwrites unlocked fields (it gave the Task 9b probe book a bogus
+# series), and locked fields hold across rescans. lockedFields REPLACES the
+# set server-side; BookorbitWriter.patch_metadata merges with the current one.
+IDENTITY_LOCKS = IDENTITY
+BASE_LOCKS = ("title", "subtitle", "description")
+CREATE_LOCKS = tuple(dict.fromkeys(BASE_LOCKS + IDENTITY_LOCKS))
+
 
 def names(entries) -> list:
     out = []
@@ -71,17 +80,20 @@ def create_metadata(md, arrival) -> dict:
     """PATCH keys confirmed against /config/books/scripts (see report):
     title, subtitle, authors, seriesName, seriesIndex (string), publishedYear,
     language, audibleId, tags. Narrators are NOT sent (no confirmed key)."""
-    meta = {"title": md["title"], "authors": list(md["authors"])}
-    if md.get("subtitle"):
-        meta["subtitle"] = md["subtitle"]
-    if md.get("series"):
-        meta["seriesName"] = md["series"]
-        if md.get("seriesIndex") is not None:
-            meta["seriesIndex"] = norm_index(md["seriesIndex"])
-    if md.get("publishedYear") is not None:
-        meta["publishedYear"] = int(md["publishedYear"])
-    if md.get("language"):
-        meta["language"] = md["language"]
+    # Task 9c (c): EVERY identity field is sent, null when absent -- null
+    # clears whatever the post-import provider fetch wrote (live: a bogus
+    # series). The index only travels with a series (policy.render_intent_folder
+    # renders the same mapping for guard 8).
+    series = md.get("series") or None
+    year = md.get("publishedYear")
+    meta = {
+        "title": md["title"], "authors": list(md["authors"]),
+        "subtitle": md.get("subtitle") or None,
+        "seriesName": series,
+        "seriesIndex": norm_index(md.get("seriesIndex")) if series else None,
+        "publishedYear": int(year) if year is not None else None,
+        "language": md.get("language") or None,
+    }
     sid = arrival.get("source_id")
     audible = md.get("audibleId")
     if arrival.get("source") == "libation" and isinstance(sid, str) and ASIN_RE.match(sid):

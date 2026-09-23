@@ -63,9 +63,11 @@ _ALLOWED_TARGET_LIBRARY_NAMES = frozenset(_LIBRARY_NAMES.values())
 _MAX_STRING_LEN = 2000
 _MAX_LIST_LEN = 20
 
-# update_metadata's lock list (Global "Metadata locks"): series stays
-# unlocked, so only these three may ever be requested.
-_UPDATE_METADATA_LOCK_FIELDS = frozenset({"title", "subtitle", "description"})
+# update_metadata's lock list: title/subtitle/description plus, since Task 9c
+# (b), every identity field (BookOrbit's provider fetch overwrites unlocked
+# ones). The executor also locks every identity field it writes regardless.
+_UPDATE_METADATA_LOCK_FIELDS = frozenset({"title", "subtitle", "description", "authors", "seriesName",
+                                          "seriesIndex", "publishedYear", "language"})
 
 # Fields validate_shape's shared metadata checks accept (they're valid
 # create_book fields too) but app.bookmeta.update_metadata_fields silently
