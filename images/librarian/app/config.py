@@ -62,6 +62,8 @@ def _sources(env: Mapping[str, str], name: str, default: frozenset) -> frozenset
     if v.lower() == "none":
         return frozenset()
     out = frozenset(p.strip().lower() for p in v.split(",") if p.strip())
+    if not out:
+        raise ValueError(f"{name}={v!r} names no source (use 'none' to make no source live)")
     unknown = out - SOURCES
     if unknown:
         raise ValueError(f"{name}: unknown source(s) {sorted(unknown)}; expected any of {sorted(SOURCES)}")
@@ -102,6 +104,11 @@ class Settings:
     # this directory (app/runner.py's child_env enforces it) -- the fence
     # against a run_dir that somehow escapes to the host's real ~/.claude.
     runs_root: str = "/tmp/runs"
+
+    def __post_init__(self):
+        for name in ("max_attempts", "max_exec_per_tick"):
+            if getattr(self, name) < 1:
+                raise ValueError(f"{name} must be >= 1, got {getattr(self, name)}")
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Settings":

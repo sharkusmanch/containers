@@ -192,7 +192,7 @@ def summary(svc, run_id: str, keys: list[str]) -> tuple[str, int, int]:
                 and rec.get("state") in (states.SIMULATED_I, states.EXECUTED, states.APPROVED,
                                          states.EXEC_FAILED)):
             filings[rec.get("arrival")] = rec
-    n_sim = n_filed = n_esc = n_failed = 0
+    n_sim = n_filed = n_esc = n_esc_dry = n_failed = n_queued = 0
     lines = []
     for key in keys:
         rec = svc.arrivals.get(key) or {}
@@ -219,29 +219,39 @@ def summary(svc, run_id: str, keys: list[str]) -> tuple[str, int, int]:
             else:
                 what = "filed"
         elif st == states.NEEDS_DECISION:
-            n_esc += 1
             if live:
+                n_esc += 1
                 icon, what = "❓", "needs a decision"
             else:
+                n_esc_dry += 1
                 what = "would escalate"
         elif st == states.FAILED:
             n_failed += 1
             icon, what = "⚠️", "failed, see task"
         elif st in (states.RETRYABLE, states.EXECUTING):
-            icon, what = "⏳", "filing pending, will retry"
+            n_queued += 1
+            icon = "⏳"
+            if st == states.EXECUTING:
+                what = "filing in progress"
+            elif int(rec.get("attempts") or 0) > 0:
+                what = "filing failed for now, will retry"
+            else:
+                what = "queued for filing"
         elif st == states.DEFERRED:
             what = "deferred" if live else "would defer"
         else:
             what = "no decision"
         lines.append(f"{icon} {hint} — {what}")
     if svc.settings.dry_run:
-        header = f"Librarian (dry-run): {n_sim} would file · {n_esc} would escalate"
+        header = f"Librarian (dry-run): {n_sim} would file · {n_esc_dry} would escalate"
     else:
         header = f"Librarian: {n_filed} filed · {n_esc} need a decision · {n_failed} failed"
-        if n_sim:
-            header += f" · {n_sim} would file (dry-run sources)"
+        if n_queued:
+            header += f" · {n_queued} queued"
+        if n_sim or n_esc_dry:
+            header += f" · dry-run sources: {n_sim} would file, {n_esc_dry} would escalate"
     text = "\n".join([header, *lines])
-    return text, n_filed + n_sim, n_esc
+    return text, n_filed + n_sim, n_esc + n_esc_dry
 
 
 def _append_run_record(svc, record: dict) -> None:

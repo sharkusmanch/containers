@@ -304,7 +304,7 @@ class IntentBook:
             for other in self.store.all()
         )
 
-    def _summary(self, rec: dict) -> str:
+    def describe(self, rec: dict) -> str:
         """A one-line summary of a filing intent, for an escalation option."""
         payload = rec.get("payload") or {}
         kind = rec.get("kind")
@@ -326,7 +326,7 @@ class IntentBook:
             "arrival": rec["arrival"],
             "question": question,
             "options": [
-                {"label": f"Proceed: {self._summary(rec)}", "intent": rec.get("payload")},
+                {"label": f"Proceed: {self.describe(rec)}", "intent": rec.get("payload")},
                 {"label": "Leave it for me"},
             ],
             "recommendation": "decide",
@@ -371,6 +371,43 @@ class IntentBook:
                                   review={"verdict": "reject", "argument": argument})
 
     # --- finalize --------------------------------------------------------------
+
+    def repair_proposed(self, run_id: str, keys, index=None) -> None:
+        """Startup repair after a crash inside a finalize (fix round 1):
+        for each of `keys` still `proposed` once `_finalize` has re-run --
+        i.e. finalize died between its own records -- finish the arrival's
+        escalation. Idempotent: keyed on the current states only.
+          * the run already filed an escalation for it (proposed or
+            simulated): simulate it and move the arrival to needs-decision;
+          * else the run's filing for it was rejected (the crash hit
+            between `_reject_and_escalate`'s two records): file that
+            auto-escalation now, then the same.
+        Anything else is left for startup recovery (reset to ready)."""
+        with self.lock:
+            for key in keys:
+                if (self.arrivals.get(key) or {}).get("state") != PROPOSED:
+                    continue
+                mine = [r for r in self.store.all()
+                        if r.get("run_id") == run_id and r.get("arrival") == key]
+                escs = [r for r in mine if r.get("kind") == ESCALATE]
+                if not escs:
+                    rejected = [r for r in mine if r.get("kind") in (ATTACH, CREATE_BOOK)
+                                and r.get("state") == REJECTED]
+                    if not rejected:
+                        continue
+                    rec = rejected[-1]
+                    argument = (rec.get("review") or {}).get("argument") or "reviewer did not rule"
+                    question = ("The reviewer did not rule on this proposal before the run ended."
+                                if argument == "reviewer did not rule"
+                                else f"The reviewer objected: {argument}")
+                    esc_id, _payload = self._reject_and_escalate(rec, argument=argument, question=question)
+                    escs = [self.store.get(esc_id)]
+                wd = []
+                for e in escs:
+                    wd = would_do(e["payload"], index=index)
+                    if e.get("state") == PROPOSED_I:
+                        self.store.record(e["intent_id"], SIMULATED_I, would_do=wd)
+                self.arrivals.record(key, NEEDS_DECISION, would_do=wd)
 
     def finalize_dry_run(self, run_id: str, index=None, only_arrivals=None) -> None:
         """Turn this run's accepted intents into arrival-visible "would do"

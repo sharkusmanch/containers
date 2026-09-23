@@ -301,8 +301,13 @@ def classify(key: str, c, sha: str, arrivals: Store, filed_hashes: dict) -> tupl
     if sha in filed_hashes:
         return ("duplicate", {"book_id": filed_hashes[sha]})
 
+    return ("new", {"previously_filed": previously_filed(key, c, arrivals)})
+
+
+def previously_filed(key: str, c, arrivals: Store):
+    """book_id of an earlier FILED arrival sharing `c`'s `source:source_id`
+    prefix (a re-arrival of the same book with different bytes), else None."""
     prefix = f"{c.source}:{c.source_id}:"
-    previously_filed = None
     for rec in arrivals.all():
         rkey = rec.get(arrivals.key_field)
         if not isinstance(rkey, str) or not rkey.startswith(prefix):
@@ -311,7 +316,5 @@ def classify(key: str, c, sha: str, arrivals: Store, filed_hashes: dict) -> tupl
             continue
         if rec.get("state") != states.FILED:
             continue
-        previously_filed = rec.get("book_id")
-        break
-
-    return ("new", {"previously_filed": previously_filed})
+        return rec.get("book_id")
+    return None

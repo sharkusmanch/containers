@@ -85,3 +85,14 @@ def test_repr_does_not_leak_bookorbit_password():
     s = Settings(bookorbit_url="http://b/api/v1", bookorbit_user="u", bookorbit_pass="hunter2-secret")
     assert "hunter2-secret" not in repr(s)
     assert "hunter2-secret" not in str(s)
+
+
+def test_live_sources_that_parse_to_empty_are_refused():
+    with pytest.raises(ValueError):
+        Settings.from_env({**BASE, "LIVE_SOURCES": " , ,"})
+
+
+@pytest.mark.parametrize("name", ["MAX_ATTEMPTS", "MAX_EXEC_PER_TICK"])
+def test_limits_must_be_positive(name):
+    with pytest.raises(ValueError):
+        Settings.from_env({**BASE, name: "0"})

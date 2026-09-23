@@ -151,20 +151,31 @@ class Service:
     def _complete_finalize(self, runs: list[dict]) -> None:
         """Plan 2: a cycle writes its end record BEFORE finalizing (so a
         crash during execution never makes recovery reject its intents). A
-        crash between the two leaves a finished run whose filing intents
-        are still proposed/approved and their arrivals `proposed` -- finish
-        that finalize now (live arrivals are only queued here; the first
-        tick executes them)."""
-        ended = {r.get("run_id") for r in runs
-                 if "outcome" in r and not r.get("failed", r.get("outcome") != "ok")}
+        crash between the two -- or inside finalize, between two of its
+        records -- leaves a finished run with arrivals still `proposed`.
+        For every such arrival whose LAST run (runs.jsonl order) ended
+        successfully and holds any intent for it, finalize is re-run for it
+        (idempotent: keyed on current state; live arrivals are only queued
+        here, the first tick executes them) and then
+        `IntentBook.repair_proposed` finishes a half-written escalation.
+        An arrival whose last run never ended is recovery's job."""
+        last: dict[str, dict] = {}
+        for r in runs:
+            for k in r.get("keys") or []:
+                if isinstance(k, str):
+                    last[k] = r
         pending: dict[str, set] = {}
-        for rec in self.intents.store.all():
-            if (rec.get("run_id") in ended and rec.get("kind") in execution.FILING
-                    and rec.get("state") in (states.PROPOSED_I, states.APPROVED)
-                    and (self.arrivals.get(rec.get("arrival")) or {}).get("state") == states.PROPOSED):
-                pending.setdefault(rec["run_id"], set()).add(rec["arrival"])
+        intents = self.intents.store.all()
+        for rec in self.arrivals.by_state(states.PROPOSED):
+            key = rec["key"]
+            r = last.get(key)
+            if r is None or "outcome" not in r or r.get("failed", r.get("outcome") != "ok"):
+                continue
+            run_id = r.get("run_id")
+            if any(i.get("run_id") == run_id and i.get("arrival") == key for i in intents):
+                pending.setdefault(run_id, set()).add(key)
         for run_id, keys in sorted(pending.items()):
-            logger.warning("run %s ended but was not finalized; finalizing %d arrival(s) now",
+            logger.warning("run %s ended but was not fully finalized; finalizing %d arrival(s) now",
                            log_safe(run_id), len(keys))
             live, other = execution.split_live(self, sorted(keys))
             if other:
@@ -172,6 +183,7 @@ class Service:
             if live:
                 self.intents.finalize_live(run_id, index=self.index, only_arrivals=set(live),
                                            now=self.clock())
+            self.intents.repair_proposed(run_id, sorted(keys), index=self.index)
 
     def _recover_interrupted(self, runs: list[dict]) -> set:
         """Discard the partial effects of a run the process died in the middle
@@ -314,8 +326,8 @@ class Service:
         self._lists_error = err
 
         if not self._live_started:
+            self._start_live()           # raises -> retried next tick
             self._live_started = True
-            self._start_live()
         if self._stop.is_set():
             return
         self._intake(now)
@@ -331,6 +343,7 @@ class Service:
         self._prune_transcripts()
 
     def _start_live(self) -> None:
+        execution.clear_stale_markers(self)
         if self.executor is None:
             waiting = (len(self.arrivals.by_state(states.EXECUTING))
                        + len([r for r in self.arrivals.by_state(states.RETRYABLE) if r.get("exec_intent")]))
@@ -338,6 +351,12 @@ class Service:
                 logger.warning("DRY_RUN: %d queued/executing filing(s) are left untouched until "
                                "DRY_RUN=false", waiting)
             return
+        stranded = [r for r in self.arrivals.by_state(states.RETRYABLE)
+                    if r.get("exec_intent") and not execution.is_live(self.settings, r.get("source"))
+                    and not execution.journal_reached_library(r.get("exec"))]
+        if stranded:
+            logger.warning("%d queued filing(s) of sources not in LIVE_SOURCES are left untouched",
+                           len(stranded))
         execution.resume_executing(self)
         execution.go_live(self)
 
@@ -414,14 +433,19 @@ class Service:
                                  would_do=[f"remove intake copy (identical to book {book_id})"], **base)
             return
 
+        self.make_dossier(key, c, sha, info.get("previously_filed"))
+        self.arrivals.record(key, states.READY, **base)
+        logger.info("arrival %s ready", log_safe(key))
+
+    def make_dossier(self, key: str, c, sha: str, previously_filed) -> None:
+        """Build and persist the arrival's dossier (intake, and the
+        dry-run -> live re-offer in app/execution.py)."""
         dossier = build_dossier(
             key, c, sha, self.index, prober=self.prober,
             kids=functools.partial(kids_signals, self.lists),
-            previously_filed=info.get("previously_filed"),
+            previously_filed=previously_filed,
         )
         self._write_dossier(key, dossier)
-        self.arrivals.record(key, states.READY, **base)
-        logger.info("arrival %s ready", log_safe(key))
 
     def _write_dossier(self, key: str, dossier: dict) -> None:
         path = os.path.join(self.dossier_dir, dossier_name(key))

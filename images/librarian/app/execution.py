@@ -23,7 +23,8 @@ freshly refreshed index, freshly loaded KidsLists and the stored dossier
 seen-id set is gone, so the intent's own book_id stands in for it -- the
 existence half of guard 1 still applies), and the intake primary is
 re-hashed against `arrival.sha256`. A guard refusal -> intent `exec-failed`,
-arrival `needs-decision` + auto-escalation; a missing/changed primary ->
+arrival `needs-decision` + auto-escalation; a missing dossier or a
+missing/changed primary ->
 intent `exec-failed`, arrival `failed` + escalation. After the move the
 checks are skipped (our own file now sits in the book, and the primary is
 gone) and `execute()` with the same intent resumes the journal.
@@ -45,7 +46,8 @@ import os
 import re
 import time
 
-from app import fsops, metrics, states
+from app import fsops, intake, metrics, states
+from app.config import SOURCES
 from app.executor import ExecResult
 from app.logutil import log_safe
 from app.policy import GuardContext, KidsLists, check_intent
@@ -171,14 +173,15 @@ def execute_arrival(svc, key: str) -> None:
         if rec is None or rec.get("state") != states.RETRYABLE:
             return
         intent = svc.intents.store.get(rec.get("exec_intent") or "")
-        dossier = svc.load_dossier(key)
     if (intent is None or intent.get("state") != states.APPROVED
             or intent.get("kind") not in FILING or intent.get("arrival") != key):
         with svc.lock:
             _failed(svc, rec, intent, f"no approved filing intent {rec.get('exec_intent')!r} to execute")
         return
+    dossier = svc.load_dossier(key)            # file IO: outside the lock
 
-    if not journal_reached_library(rec.get("exec")):
+    reached = journal_reached_library(rec.get("exec"))
+    if not reached:
         problem = _precheck(svc, intent, rec, dossier)
         if problem is not None:
             what, why = problem
@@ -186,14 +189,18 @@ def execute_arrival(svc, key: str) -> None:
                 cur = svc.arrivals.get(key) or rec
                 if what == "guard":
                     _guard_refused(svc, cur, intent, why)
-                elif what == "gone":
+                elif what == "failed":
                     _failed(svc, cur, intent, why)
                 else:
                     _retry(svc, cur, intent, why)
             return
+    if svc.stopping():
+        return                                   # still queued; due again after restart
 
     with svc.lock:
-        svc.arrivals.record(key, states.EXECUTING, detail=f"executing intent {intent['intent_id']}")
+        fields = {} if reached else {"exec": None}   # never replay a stale closed journal
+        svc.arrivals.record(key, states.EXECUTING, detail=f"executing intent {intent['intent_id']}",
+                            **fields)
         cur = svc.arrivals.get(key)
     logger.info("executing %s for arrival %s", intent["intent_id"], log_safe(key))
     try:
@@ -206,7 +213,7 @@ def execute_arrival(svc, key: str) -> None:
 
 def _precheck(svc, intent, rec, dossier):
     if dossier is None:
-        return "guard", "the arrival's dossier is missing"
+        return "failed", "the arrival's dossier is missing"
     try:
         svc.index.refresh(now=svc.clock(), force=True)
     except Exception as e:
@@ -230,7 +237,7 @@ def _precheck(svc, intent, rec, dossier):
     except OSError:
         sha = None
     if not sha or sha != rec.get("sha256"):
-        return "gone", f"intake copy changed or gone: {primary}"
+        return "failed", f"intake copy changed or gone: {primary}"
     return None
 
 
@@ -305,12 +312,12 @@ def _guard_refused(svc, rec, intent, why) -> None:
     detail = f"guard at execution: {why}"
     svc.intents.store.record(intent["intent_id"], states.EXEC_FAILED, exec_detail=detail)
     svc.intents.reject_paired_metadata(intent, "paired filing refused at execution")
-    options = [{"label": f"Proceed: {svc.intents._summary(intent)}", "intent": intent.get("payload")},
+    svc.arrivals.record(key, states.NEEDS_DECISION, retry_at=None, detail=detail)
+    options = [{"label": f"Proceed: {svc.intents.describe(intent)}", "intent": intent.get("payload")},
                {"label": "Leave it for me"}]
     svc.intents.record_escalation(_run_id(intent, rec), key,
                                   f"A re-check before filing refused it: {why}",
                                   reason=detail, options=options)
-    svc.arrivals.record(key, states.NEEDS_DECISION, retry_at=None, detail=detail)
     logger.warning("arrival %s: %s", log_safe(key), log_safe(detail))
 
 
@@ -394,15 +401,54 @@ def resume_executing(svc) -> None:
         record_result(svc, key, intent, res)
 
 
+def _marker(svc, source) -> str:
+    return os.path.join(svc.settings.state_dir, f"live-since-{source}")
+
+
+def clear_stale_markers(svc) -> None:
+    """Every start: a source that is not live right now (all of them under
+    DRY_RUN) loses its `live-since-<source>` marker, so the arrivals it
+    simulates meanwhile are re-offered when it goes live again (a DRY_RUN
+    rollback, or a source dropped from LIVE_SOURCES, never strands them)."""
+    for source in sorted(SOURCES):
+        if is_live(svc.settings, source):
+            continue
+        try:
+            os.unlink(_marker(svc, source))
+            logger.info("source %s is not live: cleared its live-since marker", source)
+        except FileNotFoundError:
+            pass
+
+
+def _find_in_intake(svc, rec, candidates):
+    """The intake candidate that is still exactly this arrival, with its sha."""
+    for c in candidates:
+        if c.source != rec.get("source") or c.source_id != rec.get("source_id"):
+            continue
+        try:
+            sha = fsops.hash_file(intake.primary_file(c), metrics.beat, HASH_BEAT_BYTES)
+        except (OSError, ValueError):
+            continue
+        if intake.arrival_key(c, sha) == rec["key"] and sha == rec.get("sha256"):
+            return c, sha
+    return None
+
+
 def go_live(svc) -> None:
     """Dry-run -> live, once per source (`<state>/live-since-<source>`):
-    simulated arrivals of that source whose primary still hashes to their
-    sha go back to `ready` (re-offered for live), the rest become `failed`
-    "intake copy gone" (no push). Then the marker is written."""
+    each simulated arrival of that source that is still in the intake
+    unchanged (same candidate, same key and sha) gets a freshly rebuilt
+    dossier -- exactly as intake builds one -- and goes back to `ready`
+    (re-offered for live); the rest become `failed` "intake copy gone" (no
+    push). Then the marker is written. Any exception (intake scan,
+    BookOrbit while building a dossier) propagates, so the service retries
+    the whole step next tick; already-handled arrivals are no longer
+    simulated, so a retry never touches them twice."""
+    candidates = None
     for source in sorted(svc.settings.live_sources):
         if not _SOURCE_RE.match(source):
             continue
-        marker = os.path.join(svc.settings.state_dir, f"live-since-{source}")
+        marker = _marker(svc, source)
         if os.path.exists(marker):
             continue
         for rec in svc.arrivals.by_state(states.SIMULATED):
@@ -410,14 +456,14 @@ def go_live(svc) -> None:
                 continue
             if svc.stopping():
                 return                      # marker not written: finishes next start
-            primary = rec.get("primary")
-            try:
-                sha = (fsops.hash_file(primary, metrics.beat, HASH_BEAT_BYTES)
-                       if isinstance(primary, str) and os.path.isfile(primary) else None)
-            except OSError:
-                sha = None
+            if candidates is None:
+                candidates = intake.scan(svc.settings.intake_root)
+            found = _find_in_intake(svc, rec, candidates)
+            if found is not None:
+                c, sha = found
+                svc.make_dossier(rec["key"], c, sha, intake.previously_filed(rec["key"], c, svc.arrivals))
             with svc.lock:
-                if sha and sha == rec.get("sha256"):
+                if found is not None:
                     history = list(rec.get("history") or [])
                     history.append({"ts": time.time(), "note": "re-offered for live (was simulated)"})
                     svc.arrivals.record(rec["key"], states.READY, detail="re-offered for live",

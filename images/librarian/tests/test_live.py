@@ -567,7 +567,13 @@ def test_dry_run_to_live_reoffers_simulated_arrivals_per_source(tmp_path, live_f
             p.unlink()
         return key
 
-    kept = simulated("libation", "B0KEPT", b"K" * 10)
+    folder = add_libation(tmp_path, asin="B0KEPT0000", data=b"K" * 10, title="Kept")
+    ksha = hashlib.sha256(b"K" * 10).hexdigest()
+    kept = f"libation:B0KEPT0000:{ksha[:12]}"
+    dry.arrivals.record(kept, states.SIMULATED, source="libation", source_id="B0KEPT0000",
+                        path=str(folder), primary=str(folder / "Kept.m4b"), sha256=ksha)
+    dry._write_dossier(kept, {"key": kept, "stale": True})
+    elsewhere = simulated("libation", "B0ELSEWHERE", b"X" * 10)   # hashes fine, not in the intake
     gone = simulated("libation", "B0GONE", b"G" * 10, keep=False)
     changed = simulated("manual", "changed", b"C" * 10, keep="changed")
     kindle = simulated("kindle", "B0KINDLE", b"E" * 10, keep=False)   # not in LIVE_SOURCES
@@ -577,7 +583,9 @@ def test_dry_run_to_live_reoffers_simulated_arrivals_per_source(tmp_path, live_f
     live.tick()
     assert live.arrivals.get(kept)["state"] == states.READY
     assert "re-offered for live" in live.arrivals.get(kept)["detail"]
-    for k in (gone, changed):
+    rebuilt = live.load_dossier(kept)
+    assert "stale" not in rebuilt and rebuilt["key"] == kept and "trusted" in rebuilt
+    for k in (gone, changed, elsewhere):
         assert live.arrivals.get(k)["state"] == states.FAILED, k
         assert live.arrivals.get(k)["error"] == "intake copy gone"
     assert live.arrivals.get(kindle)["state"] == states.SIMULATED
@@ -690,3 +698,202 @@ def test_torn_end_record_never_rejects_executor_owned_intents(tmp_path, live_fac
     assert svc2.arrivals.get(key)["state"] == states.EXECUTING
     svc2.tick()
     assert svc2.arrivals.get(key)["state"] == states.FILED
+
+
+# --- fix round 1 ------------------------------------------------------------------------------
+
+
+def test_rollback_to_dry_run_and_back_reoffers_new_simulated_arrivals(tmp_path, live_factory):
+    clock = Clock()
+    live = live_factory(FakeModel(), FakeExecutor(), clock)
+    live.tick()
+    sd = live.settings.state_dir
+    assert os.path.exists(os.path.join(sd, "live-since-libation"))
+    live.stop()
+
+    dry = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all), None, clock,
+                       dry_run=True)
+    add_libation(tmp_path)
+    drive(dry, clock)
+    key = only_key(dry)
+    assert dry.arrivals.get(key)["state"] == states.SIMULATED
+    assert not os.path.exists(os.path.join(sd, "live-since-libation"))     # rollback clears it
+    dry.stop()
+
+    back = live_factory(FakeModel(), FakeExecutor(), clock)
+    back.tick()
+    assert back.arrivals.get(key)["state"] == states.READY
+
+
+def test_removing_a_source_from_live_sources_clears_its_marker(tmp_path, live_factory):
+    clock = Clock()
+    live_factory(FakeModel(), FakeExecutor(), clock).tick()
+    sd = os.path.join(str(tmp_path), "state")
+    assert os.path.exists(os.path.join(sd, "live-since-manual"))
+    live_factory(FakeModel(), FakeExecutor(), clock, live_sources=frozenset({"libation"})).tick()
+    assert not os.path.exists(os.path.join(sd, "live-since-manual"))
+    assert os.path.exists(os.path.join(sd, "live-since-libation"))
+
+
+def test_crash_between_unruled_reject_and_its_escalation_is_repaired(tmp_path, live_factory):
+    clock = Clock()
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=lambda call: None), None,
+                       clock, dry_run=True)
+    real = svc.intents._next_id
+
+    def crash_once(run_id):
+        if any(r["kind"] == states.ATTACH and r["state"] == states.REJECTED
+               for r in svc.intents.store.all()):
+            raise Crash()
+        return real(run_id)
+
+    svc.intents._next_id = crash_once
+    add_libation(tmp_path)
+    with pytest.raises(Crash):
+        drive(svc, clock)
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.PROPOSED
+    assert [r["kind"] for r in svc.intents.store.all()] == [states.ATTACH]
+    svc.stop()
+
+    svc2 = live_factory(FakeModel(), None, clock, dry_run=True)
+    assert svc2.arrivals.get(key)["state"] == states.NEEDS_DECISION
+    esc = [r for r in svc2.intents.store.all() if r["kind"] == states.ESCALATE]
+    assert [r["state"] for r in esc] == [states.SIMULATED_I]
+
+
+def test_crash_after_escalation_simulated_sets_needs_decision(tmp_path, live_factory):
+    clock = Clock()
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=lambda call: None), None,
+                       clock, dry_run=True)
+    real = svc.arrivals.record
+
+    def crash_on_needs_decision(key, state, **kw):
+        if state == states.NEEDS_DECISION:
+            raise Crash()
+        return real(key, state, **kw)
+
+    svc.arrivals.record = crash_on_needs_decision
+    add_libation(tmp_path)
+    with pytest.raises(Crash):
+        drive(svc, clock)
+    svc.arrivals.record = real
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.PROPOSED
+    svc.stop()
+
+    svc2 = live_factory(FakeModel(), None, clock, dry_run=True)
+    assert svc2.arrivals.get(key)["state"] == states.NEEDS_DECISION
+    esc = [r for r in svc2.intents.store.all() if r["kind"] == states.ESCALATE]
+    assert [r["state"] for r in esc] == [states.SIMULATED_I]
+
+
+def test_stale_closed_journal_is_not_passed_to_a_new_attempt(tmp_path, live_factory):
+    clock = Clock()
+    seen = []
+    svc = None
+
+    def closed_retry(intent, rec):
+        svc.arrivals.record(rec["key"], states.EXECUTING, exec={
+            "intent_id": intent["intent_id"], "open": False,
+            "outcome": {"state": "retryable"}})
+        return retryable()
+
+    def look(intent, rec):
+        seen.append(svc.arrivals.get(rec["key"]).get("exec"))
+        return filed()
+
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all),
+                       FakeExecutor([closed_retry, look]), clock)
+    add_libation(tmp_path)
+    drive(svc, clock)
+    clock.t += 3600
+    svc.tick()
+    assert seen == [None]
+
+
+def test_start_live_is_retried_when_it_fails(tmp_path, live_factory, monkeypatch):
+    from app import execution
+    calls = []
+    real = execution.go_live
+
+    def flaky(svc):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("state dir hiccup")
+        return real(svc)
+
+    monkeypatch.setattr(execution, "go_live", flaky)
+    svc = live_factory(FakeModel(), FakeExecutor())
+    with pytest.raises(OSError):
+        svc.tick()
+    svc.tick()
+    svc.tick()
+    assert len(calls) == 2
+
+
+def test_missing_dossier_at_execution_fails(tmp_path, live_factory):
+    fx = FakeExecutor([retryable()])
+    clock = Clock()
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all), fx, clock)
+    add_libation(tmp_path)
+    drive(svc, clock)
+    key = only_key(svc)
+    os.unlink(os.path.join(svc.dossier_dir, __import__("app.service", fromlist=["x"]).dossier_name(key)))
+    clock.t += 3600
+    svc.tick()
+    rec = svc.arrivals.get(key)
+    assert rec["state"] == states.FAILED and "dossier" in rec["error"]
+    esc = executor_escalations(svc, key)
+    assert len(esc) == 1 and not any("intent" in o for o in esc[0]["payload"]["options"])
+
+
+def test_stop_after_precheck_does_not_start_execution(tmp_path, live_factory, monkeypatch):
+    from app import execution
+    fx = FakeExecutor()
+    clock = Clock()
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all), fx, clock)
+    real = execution._precheck
+
+    def precheck_then_stop(s, *a):
+        out = real(s, *a)
+        s._stop.set()
+        return out
+
+    monkeypatch.setattr(execution, "_precheck", precheck_then_stop)
+    add_libation(tmp_path)
+    drive(svc, clock)
+    rec = svc.arrivals.get(only_key(svc))
+    assert fx.calls == [] and rec["state"] == states.RETRYABLE and rec["attempts"] == 0
+
+
+def test_summary_counts_queued_separately(tmp_path, live_factory, caplog):
+    caplog.set_level(logging.INFO)
+    clock = Clock()
+    svc = live_factory(FakeModel(librarian=create_script, reviewer=approve_all), FakeExecutor(),
+                       clock, max_exec_per_tick=1)
+    _two_manual(tmp_path)
+    drive(svc, clock)
+    assert "Librarian: 1 filed · 0 need a decision · 0 failed · 1 queued" in caplog.text
+    assert "queued for filing" in caplog.text and "will retry" not in caplog.text
+
+
+def test_non_live_escalations_are_not_counted_as_needing_a_decision(tmp_path, live_factory, caplog):
+    from app import runs
+    caplog.set_level(logging.INFO)
+    svc = live_factory(FakeModel(), FakeExecutor(), live_sources=frozenset({"manual"}))
+    svc.arrivals.record("libation:X:abc", states.NEEDS_DECISION, source="libation", primary="x.m4b")
+    svc.arrivals.record("manual:y:abc", states.NEEDS_DECISION, source="manual", primary="y.m4b")
+    text, _f, _e = runs.summary(svc, "none", ["libation:X:abc", "manual:y:abc"])
+    assert text.splitlines()[0].startswith("Librarian: 0 filed · 1 need a decision · 0 failed")
+    assert "1 would escalate" in text.splitlines()[0]
+
+
+def test_startup_logs_queued_arrivals_of_non_live_sources(tmp_path, live_factory, caplog):
+    caplog.set_level(logging.INFO)
+    svc = live_factory(FakeModel(), FakeExecutor())
+    svc.arrivals.record("kindle:K:abc", states.RETRYABLE, source="kindle", exec_intent="r:1",
+                        attempts=0, retry_at=0)
+    svc.stop()
+    live_factory(FakeModel(), FakeExecutor()).tick()
+    assert "1 queued filing(s) of sources not in LIVE_SOURCES" in caplog.text
