@@ -141,9 +141,19 @@ def migrate_upload_limit_decisions(ctx: Ctx) -> int:
 def _hand_off(ctx: Ctx, book, artifact: str, attempts: int, res: CycleResult) -> None:
     """Intake mode, EPUB only: the librarian files it, BookOrbit is not called."""
     asin = book.asin
+    prev = ctx.ledger.get(asin) or {}
+
+    def _write_ahead(sha):
+        # Persist the sha about to become visible, so a crash between the
+        # replace and the ok record leaves a file the next attempt recognises
+        # as its own (a re-conversion will not hash the same).
+        ctx.ledger.record(asin, RETRYABLE, attempts=attempts, title=book.basename,
+                          intake_pending_sha=sha, detail="placing in intake")
     try:
         h = handoff.to_intake(ctx.cfg.intake_dir, asin, artifact,
-                              title_from_basename(book.basename, asin), [])
+                              title_from_basename(book.basename, asin), [],
+                              pending_sha=prev.get("intake_pending_sha"),
+                              on_pending=_write_ahead)
     except handoff.IntakeConflict:
         ctx.ledger.record(asin, NEEDS_DECISION, attempts=attempts,
                           title=book.basename, detail=INTAKE_CONFLICT)
@@ -153,7 +163,8 @@ def _hand_off(ctx: Ctx, book, artifact: str, attempts: int, res: CycleResult) ->
     # here would announce a book that is not in the library yet.
     ctx.ledger.record(asin, OK, attempts=attempts, artifact=artifact, kind="epub",
                       title=book.basename, handoff=INTAKE, intake_path=h.path,
-                      artifact_sha256=h.sha256, announced=True)
+                      artifact_sha256=h.sha256, announced=True,
+                      intake_pending_sha=None)
     metrics.BOOKS.labels(stage="handoff", outcome=OK).inc()
     metrics.LAST_SUCCESS.set(time.time())
     res.handed_off += 1
@@ -335,6 +346,7 @@ def _cleanup(ctx: Ctx, books: dict, res: CycleResult) -> None:
     if not ctx.cfg.cleanup_enabled:
         return
     done = 0
+    warned_mount = False
     for rec in ctx.ledger.by_outcome(OK):
         if done >= ctx.cfg.max_deletes_per_cycle:
             break
@@ -355,6 +367,13 @@ def _cleanup(ctx: Ctx, books: dict, res: CycleResult) -> None:
         if rec.get("handoff") == INTAKE:
             # Only the BookOrbit check is swapped: the intake copy must still
             # be the one recorded, or gone because the librarian filed it.
+            ipath = rec.get("intake_path")
+            if ipath and not os.path.isdir(os.path.dirname(ipath)):
+                if not warned_mount:
+                    log.warning("intake mount %s missing; skipping cleanup of "
+                                "handed-off books", os.path.dirname(ipath))
+                    warned_mount = True
+                continue
             if not handoff.intake_still_consistent(rec.get("intake_path"),
                                                    rec.get("artifact_sha256")):
                 continue
@@ -536,6 +555,7 @@ def main() -> int:
                   + cfg.poll_interval)
     if getattr(cfg, "handoff_mode", "upload") == INTAKE:
         migrate_upload_limit_decisions(ctx)
+        handoff.sweep_stale_temps(cfg.intake_dir)
     await_device(ctx.device)                    # else cycle 1 loses the race
 
     def _stop(signum, _frame):

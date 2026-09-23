@@ -114,13 +114,57 @@ def test_handoff_same_file_already_present_is_done(tmp_path):
     assert side["sha256"] == r.sha256            # missing sidecar was written
 
 
-def test_handoff_same_file_keeps_existing_sidecar(tmp_path):
+def test_handoff_same_file_keeps_a_matching_sidecar(tmp_path):
     intake = tmp_path / "intake"
     intake.mkdir()
     (intake / "B0ABC12345.epub").write_bytes(b"epub-bytes")
-    (intake / "B0ABC12345.json").write_text('{"keep": true}')
+    sha = sha256_file(str(intake / "B0ABC12345.epub"))
+    (intake / "B0ABC12345.json").write_text(json.dumps({"keep": True, "sha256": sha}))
     H.to_intake(str(intake), "B0ABC12345", _src(tmp_path), "T", [])
-    assert json.loads((intake / "B0ABC12345.json").read_text()) == {"keep": True}
+    assert json.loads((intake / "B0ABC12345.json").read_text()) == {"keep": True,
+                                                                    "sha256": sha}
+
+
+@pytest.mark.parametrize("body", ['{"sha256": "%s"}' % ("0" * 64), '{"asin": "x"}',
+                                  "not json"])
+def test_handoff_rewrites_a_sidecar_that_does_not_match(tmp_path, body):
+    intake = tmp_path / "intake"
+    intake.mkdir()
+    (intake / "B0ABC12345.epub").write_bytes(b"epub-bytes")
+    (intake / "B0ABC12345.json").write_text(body)
+    r = H.to_intake(str(intake), "B0ABC12345", _src(tmp_path), "T", [])
+    side = json.loads((intake / "B0ABC12345.json").read_text())
+    assert side["sha256"] == r.sha256 and side["asin"] == "B0ABC12345"
+    assert sorted(os.listdir(intake)) == ["B0ABC12345.epub", "B0ABC12345.json"]
+
+
+def test_handoff_pending_sha_adopts_our_own_earlier_output(tmp_path):
+    # calibre output is not byte-reproducible: the file a crashed attempt
+    # placed differs from this attempt's conversion, but it is ours.
+    intake = tmp_path / "intake"
+    intake.mkdir()
+    (intake / "B0ABC12345.epub").write_bytes(b"first conversion")
+    first = sha256_file(str(intake / "B0ABC12345.epub"))
+    r = H.to_intake(str(intake), "B0ABC12345", _src(tmp_path, b"second"), "T", [],
+                    pending_sha=first)
+    assert r.sha256 == first
+    assert (intake / "B0ABC12345.epub").read_bytes() == b"first conversion"
+    assert json.loads((intake / "B0ABC12345.json").read_text())["sha256"] == first
+
+
+def test_handoff_pending_sha_is_recorded_before_the_replace(tmp_path, monkeypatch):
+    intake = tmp_path / "intake"
+    intake.mkdir()
+    order = []
+    real = os.replace
+    monkeypatch.setattr(H.os, "replace",
+                        lambda a, b: (order.append(("replace", os.path.basename(b))),
+                                      real(a, b))[1])
+    src = _src(tmp_path)
+    H.to_intake(str(intake), "B0ABC12345", src, "T", [],
+                on_pending=lambda sha: order.append(("pending", sha)))
+    assert order[0] == ("pending", sha256_file(src))
+    assert order[1] == ("replace", "B0ABC12345.epub")
 
 
 def test_handoff_different_file_present_is_a_conflict(tmp_path):
@@ -451,8 +495,10 @@ def test_main_runs_the_migration_at_startup(monkeypatch):
     monkeypatch.setattr(m.metrics, "rebuild_from_ledger", lambda *a: None)
     monkeypatch.setattr(m.metrics, "serve", lambda *a, **k: None)
     ctx = types.SimpleNamespace(device=object(), ledger=object(), stop={"now": True})
+    monkeypatch.setattr(m.handoff, "sweep_stale_temps", lambda d: 0)
     cfg = types.SimpleNamespace(metrics_port=0, poll_interval=1, pull_timeout=10,
-                                convert_timeout=10, handoff_mode="intake")
+                                convert_timeout=10, handoff_mode="intake",
+                                intake_dir="/intake")
     monkeypatch.setattr(m.Ctx, "build", staticmethod(lambda c: ctx))
     monkeypatch.setattr(m.Config, "from_env", staticmethod(lambda: cfg))
     assert m.main() == 0
@@ -473,3 +519,147 @@ def test_intake_markers_do_not_survive_a_reprocess(cfg, monkeypatch, tmp_path):
     assert rec["outcome"] == OK and rec["bookorbit_id"] == 99
     for k in ("handoff", "intake_path", "artifact_sha256"):
         assert k not in rec, k
+
+
+
+# --- write-ahead: crash between the replace and the ok record ---------------
+
+class Crash(BaseException):
+    """Stands in for SIGKILL/OOM: no handler in _process catches it."""
+
+
+def _varying_conversion(monkeypatch):
+    n = {"i": 0}
+    def conv(a, o, t):
+        n["i"] += 1
+        open(o, "wb").write(f"conversion {n['i']}".encode())
+        return ""
+    monkeypatch.setattr(M, "to_epub", conv)
+
+
+def test_crash_after_replace_resumes_with_the_first_file(cfg, monkeypatch, tmp_path):
+    _stub_pipeline(monkeypatch)
+    _varying_conversion(monkeypatch)
+    cfg = _intake_cfg(cfg, tmp_path)
+    b = DeviceBook("B0CRASHI01", "Some Book_B0CRASHI01", 100, 2)
+    led = Ledger(cfg.ledger_path)
+    real = H._write_sidecar
+    monkeypatch.setattr(H, "_write_sidecar", lambda *a, **k: (_ for _ in ()).throw(Crash()))
+    with pytest.raises(Crash):
+        M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), _SpyApi(), led))
+    dst = os.path.join(cfg.intake_dir, "B0CRASHI01.epub")
+    first = sha256_file(dst)
+    assert led.get(b.asin)["outcome"] == RETRYABLE
+    assert led.get(b.asin)["intake_pending_sha"] == first
+
+    monkeypatch.setattr(H, "_write_sidecar", real)
+    led2 = Ledger(cfg.ledger_path)                       # a fresh process
+    M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), _SpyApi(), led2))
+    rec = led2.get(b.asin)
+    assert rec["outcome"] == OK, rec
+    assert rec["artifact_sha256"] == first
+    assert sha256_file(dst) == first
+    assert json.load(open(os.path.join(cfg.intake_dir, "B0CRASHI01.json")))["sha256"] == first
+    assert not rec.get("intake_pending_sha")
+
+
+def test_sidecar_failure_is_repaired_on_the_next_attempt(cfg, monkeypatch, tmp_path):
+    _stub_pipeline(monkeypatch)
+    _varying_conversion(monkeypatch)
+    cfg = _intake_cfg(cfg, tmp_path)
+    b = DeviceBook("B0SIDECA01", "Some Book_B0SIDECA01", 100, 2)
+    led = Ledger(cfg.ledger_path)
+    real = H._write_sidecar
+    def fail(*a, **k):
+        raise H.HandoffFailed("writing sidecar: EIO")
+    monkeypatch.setattr(H, "_write_sidecar", fail)
+    M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), _SpyApi(), led))
+    assert led.get(b.asin)["outcome"] == RETRYABLE
+    first = sha256_file(os.path.join(cfg.intake_dir, "B0SIDECA01.epub"))
+    assert not os.path.exists(os.path.join(cfg.intake_dir, "B0SIDECA01.json"))
+
+    monkeypatch.setattr(H, "_write_sidecar", real)
+    M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), _SpyApi(), led))
+    rec = led.get(b.asin)
+    assert rec["outcome"] == OK and rec["artifact_sha256"] == first
+    assert json.load(open(os.path.join(cfg.intake_dir, "B0SIDECA01.json")))["sha256"] == first
+
+
+def test_a_foreign_file_is_still_a_conflict_with_a_pending_sha(cfg, monkeypatch, tmp_path):
+    _stub_pipeline(monkeypatch)
+    cfg = _intake_cfg(cfg, tmp_path)
+    b = DeviceBook("B0FOREIG01", "Some Book_B0FOREIG01", 100, 2)
+    led = Ledger(cfg.ledger_path)
+    led.record(b.asin, RETRYABLE, attempts=1, intake_pending_sha="f" * 64)
+    open(os.path.join(cfg.intake_dir, "B0FOREIG01.epub"), "wb").write(b"not ours")
+    M.run_cycle(_ctx(cfg, FakeDevice({b.asin: b}), _SpyApi(), led))
+    assert led.get(b.asin)["outcome"] == NEEDS_DECISION
+
+
+def test_pending_sha_survives_retryable_records(cfg):
+    led = Ledger(cfg.ledger_path)
+    led.record("B0PEND0001", RETRYABLE, intake_pending_sha="a" * 64)
+    led.record("B0PEND0001", RETRYABLE, attempts=2, detail="started", error="x")
+    assert led.get("B0PEND0001")["intake_pending_sha"] == "a" * 64
+
+
+# --- cleanup: an absent file counts as "moved" only if the mount is there ---
+
+def test_cleanup_skips_when_the_intake_mount_is_missing(cfg, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(M, "verify_artifact", lambda *a, **k: None)
+    fn, ctx, d, b = _cleanup_ctx(cfg, tmp_path, monkeypatch, "B0NOMOUNT1", place=False)
+    ctx.ledger.record(b.asin, OK, intake_path="/nonexistent-mount/B0NOMOUNT1.epub")
+    b2 = DeviceBook("B0NOMOUNT2", "T_B0NOMOUNT2", 100, 2)
+    ctx.ledger.record(b2.asin, OK, **{k: v for k, v in ctx.ledger.get(b.asin).items()
+                                      if k not in ("asin", "outcome", "ts")})
+    res = M.CycleResult()
+    with caplog.at_level("WARNING"):
+        fn(ctx, {b.asin: b, b2.asin: b2}, res)
+    assert res.deleted == 0 and d.deleted == []
+    assert sum("intake" in r.getMessage() and "mount" in r.getMessage()
+               for r in caplog.records) == 1
+
+
+def test_intake_still_consistent_requires_the_directory(tmp_path):
+    assert H.intake_still_consistent(str(tmp_path / "B0X.epub"), "a" * 64) is True
+    assert H.intake_still_consistent(str(tmp_path / "gone" / "B0X.epub"), "a" * 64) is False
+
+
+# --- startup: stale hidden temps are swept -----------------------------------
+
+def test_stale_temp_files_are_swept(tmp_path):
+    intake = tmp_path / "intake"
+    intake.mkdir()
+    old = __import__("time").time() - 7200
+    names = {".B0STALE001.epub.tmp": old, ".B0STALE001.json.tmp": old,
+             ".B0FRESH001.epub.tmp": None,           # < 1 h: may be in flight
+             "B0KEEP0001.epub": old, ".other.tmp": old, ".B0X.epub.tmp": old}
+    for n, t in names.items():
+        (intake / n).write_bytes(b"x")
+        if t:
+            os.utime(intake / n, (t, t))
+    assert H.sweep_stale_temps(str(intake)) == 2
+    assert sorted(os.listdir(intake)) == sorted(
+        [".B0FRESH001.epub.tmp", "B0KEEP0001.epub", ".other.tmp", ".B0X.epub.tmp"])
+
+
+def test_sweep_tolerates_a_missing_intake(tmp_path):
+    assert H.sweep_stale_temps(str(tmp_path / "missing")) == 0
+
+
+def test_main_sweeps_temps_at_startup_in_intake_mode(monkeypatch):
+    import app.main as m
+    calls = []
+    monkeypatch.setattr(m, "await_device", lambda dev, **kw: True)
+    monkeypatch.setattr(m, "migrate_upload_limit_decisions", lambda ctx: 0)
+    monkeypatch.setattr(m.handoff, "sweep_stale_temps", lambda d: calls.append(d) or 0)
+    monkeypatch.setattr(m.metrics, "rebuild_from_ledger", lambda *a: None)
+    monkeypatch.setattr(m.metrics, "serve", lambda *a, **k: None)
+    ctx = types.SimpleNamespace(device=object(), ledger=object(), stop={"now": True})
+    cfg = types.SimpleNamespace(metrics_port=0, poll_interval=1, pull_timeout=10,
+                                convert_timeout=10, handoff_mode="intake",
+                                intake_dir="/intake")
+    monkeypatch.setattr(m.Ctx, "build", staticmethod(lambda c: ctx))
+    monkeypatch.setattr(m.Config, "from_env", staticmethod(lambda: cfg))
+    assert m.main() == 0
+    assert calls == ["/intake"]
