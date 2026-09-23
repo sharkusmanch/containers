@@ -99,3 +99,26 @@ def test_identity_locks_cover_every_identity_field():
     from app import bookmeta
     assert set(bookmeta.IDENTITY_LOCKS) == set(bookmeta.IDENTITY)
     assert set(bookmeta.CREATE_LOCKS) == set(bookmeta.IDENTITY) | {"description"}
+
+
+def test_whitespace_normalised_like_bookorbit_normalizeMetadataText():
+    """BookOrbit stores authors and seriesName through normalizeMetadataText
+    (/\\s+/g -> " ", trimmed); title is stored verbatim."""
+    from app.bookmeta import create_metadata, update_metadata_fields
+    md = {"title": "T  x", "authors": [" Jane\u00a0\u00a0Author ", "Bob\tSmith", "jane author"],
+          "series": "The\u2003 Saga "}
+    f = create_metadata(md, {"source": "manual"})["fields"]
+    assert f["authors"] == ["Jane Author", "Bob Smith"]           # deduped case-insensitively
+    assert f["seriesName"] == "The Saga" and f["title"] == "T  x"
+    u = update_metadata_fields(md)
+    assert u["authors"] == ["Jane Author", "Bob Smith"] and u["seriesName"] == "The Saga"
+
+
+def test_render_normalises_authors_and_series_whitespace():
+    from app.policy import render_folder
+    assert render_folder(["Jane\u00a0 Author"], "The  Saga", "1", "T") == "Jane Author/The Saga/01. T"
+
+
+def test_render_identity_keeps_the_stored_series_index_string():
+    from app.bookmeta import render_identity
+    assert render_identity({"title": "T", "authors": [{"name": "A"}], "seriesIndex": "2.50"})["seriesIndex"] == "2.50"

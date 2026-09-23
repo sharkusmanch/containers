@@ -621,6 +621,14 @@ class LibraryIndex:
         self._books[str(id)] = d
         return d
 
+    def naming_settings(self, library_id):
+        """Reads (Task 9c fix round 1) of what BookOrbit's renamer depends on:
+        GET /libraries/{id} (fileNamingPattern, fileRenameEnabled,
+        organizationMode) and GET /app-settings/cross-platform-path-
+        sanitization ({"enabled": bool}, app-settings.controller.js)."""
+        return {"library": self._client.get(f"/libraries/{int(library_id)}"),
+                "sanitization": self._client.get("/app-settings/cross-platform-path-sanitization")}
+
     def local_path(self, bookorbit_path):
         if not bookorbit_path.startswith(self._path_prefix + "/") and bookorbit_path != self._path_prefix:
             raise ValueError(

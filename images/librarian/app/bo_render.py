@@ -53,8 +53,40 @@ _JS_WS = ("\t\n\v\f\r          "
           "        　﻿")
 
 
+_JS_WS_RUN_RE = re.compile("[" + re.escape(_JS_WS) + "]+")
+
+
 def js_trim(s: str) -> str:
     return s.strip(_JS_WS)
+
+
+def normalize_metadata_text(value):
+    """normalizeMetadataText (/app/dist/common/utils/metadata-text-normalize.utils.js):
+    `value?.replace(/\\s+/g, ' ').trim()`, empty -> null. BookOrbit stores
+    authors (metadata.service.js replaceAuthors l.351-355) and seriesName
+    (book.service.js persistMetadataUpdate l.1475) through it; title,
+    subtitle and seriesIndex are stored verbatim."""
+    if value is None:
+        return None
+    out = js_trim(_JS_WS_RUN_RE.sub(" ", str(value)))
+    return out or None
+
+
+def normalize_authors(authors) -> list:
+    """replaceAuthors: normalise each name, drop empties, keep the first of
+    names equal case-insensitively (normalizeMetadataTextKey). BookOrbit
+    may also reuse an EXISTING author row matched case-insensitively --
+    its stored casing then wins; that cannot be predicted here."""
+    if isinstance(authors, str):
+        authors = [authors]
+    out, seen = [], set()
+    for a in authors or []:
+        n = normalize_metadata_text(a)
+        if n is None or n.lower() in seen:
+            continue
+        seen.add(n.lower())
+        out.append(n)
+    return out
 
 
 def _js_number_string(v) -> str:
@@ -288,10 +320,10 @@ def render_book_path(authors, series, series_index, title, ext: str, original_st
     """The book's primary file path relative to the library root, exactly as
     BookOrbit renders it (path.join-normalised), or None when the pattern
     resolves to nothing."""
-    if isinstance(authors, str):
-        authors = [authors]
+    authors = normalize_authors(authors)
+    series = normalize_metadata_text(series)
     fmt = ext.lstrip(".").lower()
-    rel = resolve_upload_path(PATTERN, pattern_tokens(title=title, authors=list(authors or []),
+    rel = resolve_upload_path(PATTERN, pattern_tokens(title=title, authors=authors,
                                                       series=series, series_index=series_index,
                                                       original_stem=original_stem, fmt=fmt), fmt)
     if rel is None:

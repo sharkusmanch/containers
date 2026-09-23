@@ -67,6 +67,12 @@ class FakeBookorbit:
         self.rename_log = []                 # (book_id, "moved"|"skipped"|"unchanged", why)
         self.patch_bodies = []               # (time, book_id, body)
         self.renamed_away = set()            # dirs a rename moved or emptied
+        # BookOrbit naming settings the executor checks before any PATCH/rename
+        self.libraries = {lid: {"id": lid, "name": name, "fileRenameEnabled": True,
+                                "fileNamingPattern": bo_render.PATTERN,
+                                "organizationMode": "book_per_folder"}
+                          for lid, name in LIB_NAMES.items()}
+        self.sanitize = True
         self.fetch_log = []                  # (time, book_id)
         self.crash_on = {}                   # (method, path-suffix) -> exception to raise
         self.on_idle = None                  # hook(fake) when a foreign running scan ends
@@ -238,6 +244,10 @@ class FakeBookorbit:
             items = ([{"id": i, "updatedAt": b["updatedAt"]} for i, b in self.books.items()]
                      if page == 0 else [])
             return 200, json.dumps({"items": items, "total": len(self.books)})
+        if path == "/app-settings/cross-platform-path-sanitization" and method == "GET":
+            return 200, json.dumps({"enabled": self.sanitize})
+        if path.startswith("/libraries/") and method == "GET":
+            return 200, json.dumps(self.libraries[int(path.split("/")[2])])
         if path.startswith("/scanner/libraries/"):
             lib = int(path.split("?")[0].split("/")[3])
             if "/scan-history" in path:
@@ -1985,3 +1995,131 @@ def test_execute_update_rename_noop_is_updated_with_attention(env):
         arr, 7001, metadata={"series": "Murderbot Diaries", "seriesIndex": 2}, lock=[]), arr, 7001)
 
     assert r.ok and r.state == "updated" and r.escalate and "02. Artificial Condition" in r.escalate
+
+
+# --- Task 9c fix round 1 ------------------------------------------------------------------
+
+
+def settings_gets(env):
+    return [c for c in env.fake.calls if c[0] == "GET" and
+            (c[1].startswith("/libraries/") or c[1].startswith("/app-settings/"))]
+
+
+def test_changed_naming_pattern_pauses_the_create_patch(env, caplog):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.libraries[7]["fileNamingPattern"] = "{authors:first}/{title}"
+
+    with caplog.at_level("WARNING"):
+        r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.ok and r.state == "filed" and r.escalate, r.detail
+    assert "naming settings changed" in r.escalate and "paused" in r.escalate
+    assert env.fake.patches() == [] and env.fake.renames() == []
+    made = env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]"
+    assert (made / "New Book.m4b").is_file()
+    assert sum("naming settings changed" in m for m in caplog.messages) == 1
+
+
+@pytest.mark.parametrize("change", [
+    lambda f: f.libraries[7].update(fileRenameEnabled=False),
+    lambda f: f.libraries[7].update(organizationMode="book_per_file"),
+    lambda f: f.libraries[7].update(fileNamingPattern=None),
+    lambda f: setattr(f, "sanitize", False),
+])
+def test_changed_naming_settings_refuse_the_attach_rename(env, change):
+    attach_target(env)
+    src = env.intake / "manual" / "weird name.m4b"
+    src.write_bytes(b"M" * 4000)
+    arr = env._arrival("manual", "weird name", src, src)
+    ex = env.executor()
+    env.snapshot_tree()
+    change(env.fake)
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.ok and r.state == "filed" and r.escalate and "naming settings changed" in r.escalate
+    assert env.fake.renames() == [] and env.fake.patches() == []
+    assert (env.books_root / "Library" / "Martha Wells" / "Artificial Condition" / "weird name.m4b").is_file()
+
+
+def test_changed_naming_settings_fail_execute_update_without_patching(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.sanitize = False
+
+    r = ex.execute_update(intent_update_metadata(arr, 7001), arr, 7001)
+
+    assert r.state == "failed" and "naming settings changed" in r.detail
+    assert env.fake.patches() == []
+
+
+def test_naming_settings_are_cached_for_at_most_ten_minutes(env, caplog):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    assert ex.execute_update(intent_update_metadata(arr, 7001), arr, 7001).ok
+    n = len(settings_gets(env))
+    assert n == 2                                             # library + sanitisation setting
+    assert ex.execute_update(intent_update_metadata(arr, 7001, metadata={"title": "Again"}),
+                             arr, 7001).ok
+    assert len(settings_gets(env)) == n                       # cached
+    env.clock.t += 601
+    assert ex.execute_update(intent_update_metadata(arr, 7001, metadata={"title": "Third"}),
+                             arr, 7001).ok
+    assert len(settings_gets(env)) == 2 * n                   # re-read after 10 min
+
+
+def test_stored_series_index_string_is_rendered_verbatim(env):
+    """A stored "2.50" renders "02.50." in BookOrbit; normalising it to 2.5
+    first would predict "02.5." and flag a correct move as misplaced."""
+    attach_target(env, rel="Martha Wells/Murderbot Diaries/02.50. Artificial Condition",
+                  seriesName="Murderbot Diaries", seriesIndex="2.50",
+                  files=(("02.50. Artificial Condition.epub", b"e"),))
+    arr = env.libation(title="Artificial Condition")
+    arr = mark_filed(env, arr, 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute_update(intent_update_metadata(arr, 7001, metadata={"title": "Artificial Condition II"}),
+                          arr, 7001)
+
+    assert r.ok and r.state == "updated" and not r.escalate, r.detail
+    assert env.fake.books[7001]["folderPath"] == \
+        "/books/Library/Martha Wells/Murderbot Diaries/02.50. Artificial Condition II"
+
+
+def test_guard9_restores_the_stored_series_index_string_verbatim(env):
+    attach_target(env, rel="Martha Wells/Murderbot Diaries/02.50. Artificial Condition",
+                  seriesName="Murderbot Diaries", seriesIndex="2.50",
+                  files=(("02.50. Artificial Condition.epub", b"e"),))
+    env.fake.on_scan = lambda fake, lib: fake.books[7001].update(seriesIndex="7")
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.ok and not r.escalate, r.detail
+    assert env.fake.patch_bodies[0][2]["metadata"]["seriesIndex"] == "2.50"
+    assert env.fake.books[7001]["folderPath"].endswith("/02.50. Artificial Condition")
+
+
+def test_create_payload_and_render_normalise_whitespace_like_bookorbit(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, authors=["Jane\u00a0 Author"], series="The  Saga"), arr, {})
+
+    assert r.ok and not r.escalate, r.detail
+    body = env.fake.patch_bodies[0][2]["metadata"]
+    assert body["authors"] == ["Jane Author"] and body["seriesName"] == "The Saga"
+    assert env.fake.books[r.book_id]["folderPath"] == "/books/Library/Jane Author/The Saga/02. New Book"

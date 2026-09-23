@@ -47,6 +47,7 @@ Never deletes under /media/books: the only library-side calls are
 and `os.rmdir` of our OWN still-empty `[lib-<sha12>]` dir on a failed create.
 """
 import errno
+import logging
 import os
 import stat
 import threading
@@ -58,6 +59,8 @@ from app.bookorbit import ScanError
 from app.fsops import sha12
 from app.logutil import log_safe
 from app.policy import render_folder
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["ExecResult", "Executor", "sha12", "STEPS"]
 
@@ -83,6 +86,10 @@ SETTLE_MIN = 12          # s: a stable read that does not match yet only ends th
 FETCH_POLL = 5           # s
 FETCH_QUIET = 20         # s: updatedAt unchanged this long = fetch settled
 FETCH_MAX = 90           # s
+# Guard 8 predicts BookOrbit's target with a hardcoded pattern and
+# sanitisation setting (app.bo_render); re-check the live settings at most
+# this often and refuse every PATCH/rename while they differ.
+NAMING_CHECK_TTL = 600   # s
 
 # One scan mutex for the process: the executor is the only BookOrbit writer
 # and every filing sequence runs under it end to end.
@@ -164,6 +171,8 @@ class Executor:
         self.stopping = stopping
         self.intake_root = os.path.abspath(settings.intake_root)
         self.books_root = os.path.abspath(settings.local_books_root)
+        self._naming = {}               # library id -> (checked_at, problem | None)
+        self._naming_logged = set()     # problems already logged
 
     # --- public ---------------------------------------------------------------
     def execute(self, intent: dict, arrival_rec: dict, dossier: dict | None = None) -> ExecResult:
@@ -562,7 +571,7 @@ class Executor:
         if library not in LIBRARY_IDS:
             raise _Fail(f"book {bid} is in library {library!r}, not a filing target")
         ctx.update(book_id=bid, library=library, library_id=LIBRARY_IDS[library])
-        ctx["snapshot"] = dict(bookmeta.identity(d), files=bookmeta.files_of(d),
+        ctx["snapshot"] = dict(bookmeta.render_identity(d), files=bookmeta.files_of(d),
                                lockedFields=list(d.get("lockedFields") or []))
 
     def _prepare_create(self, ctx, payload, arrival):
@@ -923,6 +932,7 @@ class Executor:
         move the book to (current identity overlaid with `meta`) and run the
         collision check against it; a clash raises _Attention and nothing is
         written. Returns the plan `_settle`/`_placement_problem` use."""
+        self._check_naming(library)
         self.index.refresh(now=self.clock(), force=True)
         d = self.index.detail(book_id, fresh=True)
         own = os.path.normpath(self._local_folder(d, library))
@@ -930,9 +940,8 @@ class Executor:
                 "renames": any(k in meta for k in bo_render.RENAME_RELEVANT_FIELDS)}
         if not plan["renames"]:
             return plan
-        ident = bookmeta.identity(d)
+        ident = bookmeta.render_identity(d)      # stored seriesIndex string, verbatim
         ident.update({k: meta[k] for k in IDENTITY if k in meta})
-        ident["seriesIndex"] = bookmeta.norm_index(ident.get("seriesIndex"))
         try:
             rel, target, _n = self._render(ident, library)
         except (TypeError, ValueError) as e:
@@ -946,6 +955,46 @@ class Executor:
                 raise _Attention(f"metadata not written to book {book_id}: BookOrbit would move it "
                                  f"to {rel!r}, but {clash}; it stays filed at {own}")
         return plan
+
+    def _check_naming(self, library: str) -> None:
+        """Refuse (_Attention) while BookOrbit's naming settings differ from
+        what app.bo_render hardcodes -- a wrong prediction could let
+        BookOrbit move a book onto another book's folder and merge them.
+        Cached per library for NAMING_CHECK_TTL s; each distinct problem is
+        logged once. A failed read is transient (_Retry)."""
+        lid = LIBRARY_IDS[library]
+        now = self.clock()
+        cached = self._naming.get(lid)
+        if cached is None or now - cached[0] >= NAMING_CHECK_TTL:
+            try:
+                got = self.index.naming_settings(lid)
+            except Exception as e:
+                raise _Retry(f"cannot read BookOrbit's naming settings for library {lid}: "
+                             f"{type(e).__name__}: {log_safe(e)}") from e
+            lib = got.get("library") or {}
+            san = (got.get("sanitization") or {}).get("enabled")
+            bad = []
+            if lib.get("fileNamingPattern") != bo_render.PATTERN:
+                bad.append(f"fileNamingPattern is {lib.get('fileNamingPattern')!r}")
+            if lib.get("fileRenameEnabled") is not True:
+                bad.append(f"fileRenameEnabled is {lib.get('fileRenameEnabled')!r}")
+            if lib.get("organizationMode") != "book_per_folder":
+                bad.append(f"organizationMode is {lib.get('organizationMode')!r}")
+            if san is not bo_render.SANITIZE:
+                bad.append(f"cross-platform path sanitization is {san!r}")
+            problem = None
+            if bad:
+                problem = (f"BookOrbit naming settings changed -- librarian paused filing "
+                           f"(library {library}: {'; '.join(bad)}); no metadata or rename was "
+                           f"sent; update app/bo_render.py to match, then re-file")
+            cached = (now, problem)
+            self._naming[lid] = cached
+        problem = cached[1]
+        if problem:
+            if problem not in self._naming_logged:
+                self._naming_logged.add(problem)
+                logger.warning("%s", problem)
+            raise _Attention(problem)
 
     def _sig(self, d):
         return (d.get("folderPath"), tuple(sorted((str(f.get("filename")), f.get("sizeBytes"))
@@ -1037,9 +1086,13 @@ class Executor:
                     if n:
                         return f"after BookOrbit's rename: {n}"
             return None
+        try:
+            self._check_naming(library)
+        except _Attention as e:
+            return str(e)
         self.index.refresh(now=self.clock(), force=True)
         d = self.index.detail(ctx["book_id"], fresh=True)
-        ident = bookmeta.identity(d)
+        ident = bookmeta.render_identity(d)
         try:
             rel, target, _n = self._render(ident, library)
         except (TypeError, ValueError) as e:

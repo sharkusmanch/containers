@@ -8,6 +8,7 @@ names). `narrators` is deliberately NOT written -- no confirmed PATCH key.
 """
 import re
 
+from app.bo_render import normalize_authors, normalize_metadata_text
 from app.policy import _format_index
 
 ASIN_RE = re.compile(r"^[A-Za-z0-9]{10,13}$")
@@ -52,6 +53,14 @@ def identity(d: dict) -> dict:
     }
 
 
+def render_identity(d: dict) -> dict:
+    """identity() with the STORED seriesIndex string untouched -- BookOrbit
+    renders "2.50" as "02.50.", so it must never be rewritten to "2.5"
+    before rendering (or restoring). Use identity()/norm_for_compare for
+    comparisons."""
+    return dict(identity(d), seriesIndex=d.get("seriesIndex"))
+
+
 def files_of(d: dict) -> list:
     return [[f.get("filename"), f.get("sizeBytes")] for f in d.get("files") or []
             if isinstance(f, dict)]
@@ -84,10 +93,13 @@ def create_metadata(md, arrival) -> dict:
     # clears whatever the post-import provider fetch wrote (live: a bogus
     # series). The index only travels with a series (policy.render_intent_folder
     # renders the same mapping for guard 8).
-    series = md.get("series") or None
+    # authors and seriesName go through BookOrbit's normalizeMetadataText on
+    # store (Task 9c fix round 1): send them normalised so what we render,
+    # send and read back are the same strings.
+    series = normalize_metadata_text(md.get("series"))
     year = md.get("publishedYear")
     meta = {
-        "title": md["title"], "authors": list(md["authors"]),
+        "title": md["title"], "authors": normalize_authors(md["authors"]),
         "subtitle": md.get("subtitle") or None,
         "seriesName": series,
         "seriesIndex": norm_index(md.get("seriesIndex")) if series else None,
@@ -123,9 +135,9 @@ def update_metadata_fields(md: dict) -> dict:
     for field_name in _UPDATE_METADATA_SIMPLE_FIELDS:
         val = md.get(field_name)
         if val is not None:
-            meta[field_name] = list(val) if field_name == "authors" else val
+            meta[field_name] = normalize_authors(val) if field_name == "authors" else val
     if md.get("series") is not None:
-        meta["seriesName"] = md["series"]
+        meta["seriesName"] = normalize_metadata_text(md["series"])
     if md.get("seriesIndex") is not None:
         meta["seriesIndex"] = norm_index(md["seriesIndex"])
     if md.get("publishedYear") is not None:
