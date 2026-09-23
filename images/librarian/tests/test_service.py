@@ -1,0 +1,569 @@
+"""Tests for app/service.py (+ app/runs.py, app/metrics.py): the poll loop.
+
+A fake runner stands in for `claude -p` and "plays the model": it reads the
+internal API URL and run token out of the `--mcp-config` JSON in argv (the
+exact config the real shim would be launched with) and drives the real
+`ApiServer` over HTTP with urllib, then writes a stream-json transcript whose
+system/init line grants only mcp__librarian__* tools -- so the service's
+containment tripwire passes -- unless a test asks it to grant "Bash".
+"""
+import hashlib
+import json
+import logging
+import os
+import time
+import urllib.error
+import urllib.request
+
+import pytest
+from prometheus_client import REGISTRY
+
+from app import states
+from app.bookorbit import BookorbitClient, LibraryIndex
+from app.config import Settings
+from app.runner import RunResult
+from app.service import Service
+from tests.test_bookorbit import fake_transport
+
+ASIN = "B0MURDERB0T"
+
+BOOKS = {
+    2: {
+        "id": 2, "title": "Artificial Condition", "subtitle": None,
+        "authors": [{"id": 2, "name": "Martha Wells", "sortName": "Wells, Martha"}],
+        "providerIds": {"audible": ASIN}, "tags": [], "isbn13": None, "isbn10": None,
+        "libraryName": "Library", "seriesName": "Murderbot Diaries", "seriesIndex": 2,
+        "publishedYear": 2018, "readAloudSync": {"state": "unavailable"},
+        "folderPath": "/books/Library/Martha Wells/Artificial Condition",
+        "files": [{"format": "epub", "filename": "ac.epub", "sizeBytes": 5}],
+        "updatedAt": "t2",
+    },
+}
+
+TAGS = {
+    "format": {
+        "duration": "40000",
+        "tags": {
+            "title": "Artificial Condition", "artist": "Martha Wells",
+            "series": "Murderbot Diaries", "series-part": "2", "audible_asin": ASIN,
+        },
+    },
+    "chapters": [{"tags": {"title": "Chapter 1"}}],
+}
+
+
+def fake_prober(_path):
+    return TAGS
+
+
+class Clock:
+    def __init__(self, t=1000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+# --- the fake model --------------------------------------------------------
+
+
+class FakeModel:
+    """A `runner=` stand-in. `scripts[mode]` is called with a `call(method,
+    path, body=None)` helper bound to this run's API + token."""
+
+    def __init__(self, librarian=None, reviewer=None, grant=("mcp__librarian__list_arrivals",),
+                 timed_out=False):
+        self.scripts = {"librarian": librarian, "reviewer": reviewer}
+        self.grant = list(grant)
+        self.timed_out = timed_out
+        self.calls = []  # modes, in order
+
+    def __call__(self, argv, *, cwd, env, timeout, transcript_path, on_tick=None, **_kw):
+        cfg = json.loads(argv[argv.index("--mcp-config") + 1])
+        senv = cfg["mcpServers"]["librarian"]["env"]
+        api, token, mode = senv["LIBRARIAN_API"], senv["LIBRARIAN_RUN_TOKEN"], senv["LIBRARIAN_MODE"]
+        self.calls.append(mode)
+        assert os.path.isdir(cwd)
+        assert os.path.isdir(env["CLAUDE_CONFIG_DIR"])
+        assert "BOOKORBIT_PASS" not in env
+
+        def call(method, path, body=None):
+            data = json.dumps(body).encode() if body is not None else None
+            req = urllib.request.Request(api + path, data=data, method=method, headers={
+                "Authorization": f"Bearer {token}", "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read() or b"{}")
+
+        script = self.scripts.get(mode)
+        if script is not None:
+            script(call)
+
+        os.makedirs(os.path.dirname(transcript_path), exist_ok=True)
+        with open(transcript_path, "w") as f:
+            f.write(json.dumps({"type": "system", "subtype": "init", "tools": self.grant}) + "\n")
+            if not self.timed_out:
+                f.write(json.dumps({"type": "result", "is_error": False, "result": "done",
+                                    "total_cost_usd": 0.25, "num_turns": 3}) + "\n")
+        return RunResult(
+            ok=not self.timed_out, exit_code=None if self.timed_out else 0,
+            timed_out=self.timed_out, result_text="" if self.timed_out else "done",
+            cost_usd=None if self.timed_out else 0.25, usage={},
+            num_turns=None if self.timed_out else 3, transcript_path=transcript_path,
+            error_reason="result_missing" if self.timed_out else None,
+        )
+
+
+def q(key):
+    return urllib.request.quote(key, safe="")
+
+
+def attach_script(book_id=2):
+    def script(call):
+        st, arrivals = call("GET", "/arrivals")
+        assert st == 200, arrivals
+        for a in arrivals:
+            call("GET", f"/arrivals/{q(a['key'])}")
+            call("POST", "/intents", {"kind": "attach", "arrival": a["key"], "book_id": book_id,
+                                      "reason": "same audible asin"})
+    return script
+
+
+def approve_all(call):
+    st, props = call("GET", "/proposals")
+    assert st == 200, props
+    for p in props:
+        st, body = call("POST", "/reviews", {"intent_id": p["intent_id"], "verdict": "approve",
+                                             "argument": "asin matches"})
+        assert st == 200, body
+
+
+# --- fixture wiring --------------------------------------------------------
+
+
+def make_settings(tmp_path, **kw):
+    prompts = tmp_path / "prompts"
+    prompts.mkdir(exist_ok=True)
+    (prompts / "librarian.md").write_text("You are the librarian.\n")
+    (prompts / "reviewer.md").write_text("You are the reviewer.\n")
+    base = dict(
+        bookorbit_url="http://b/api/v1", bookorbit_user="u", bookorbit_pass="p",
+        intake_root=str(tmp_path / "intake"), local_books_root=str(tmp_path / "media" / "books"),
+        state_dir=str(tmp_path / "state"), lists_dir=str(tmp_path / "lists"),
+        prompts_dir=str(prompts), quiet_period=0, debounce=10, api_port=0,
+        runs_root=str(tmp_path / "runs"), retry_after=3600,
+    )
+    base.update(kw)
+    return Settings(**base)
+
+
+def make_index(tmp_path, books=BOOKS):
+    c = BookorbitClient("http://b/api/v1", "u", "p", transport=fake_transport([], books=books),
+                        cookie_path=str(tmp_path / "c.txt"))
+    c.authenticate()
+    idx = LibraryIndex(c, state_path=str(tmp_path / "idx.json"),
+                       local_root=str(tmp_path / "media" / "books"))
+    idx.refresh(now=0, force=True)
+    return idx
+
+
+def add_libation(tmp_path, asin=ASIN, data=b"AUDIO" * 100, title="Artificial Condition"):
+    d = tmp_path / "intake" / "libation" / f"{title} [{asin}]"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{title}.m4b").write_bytes(data)
+    return d
+
+
+@pytest.fixture
+def svc_factory(tmp_path):
+    made = []
+
+    def make(model, clock=None, **settings_kw):
+        s = Service(make_settings(tmp_path, **settings_kw), index=make_index(tmp_path),
+                    runner=model, prober=fake_prober, clock=clock or Clock())
+        made.append(s)
+        return s
+
+    yield make
+    for s in made:
+        s.stop()
+
+
+def only_key(svc):
+    recs = svc.arrivals.all()
+    assert len(recs) == 1, recs
+    return recs[0]["key"]
+
+
+def metric(name, **labels):
+    return REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+# --- (a) happy path ----------------------------------------------------------
+
+
+def test_stable_arrival_runs_librarian_then_reviewer_and_simulates(tmp_path, svc_factory, caplog):
+    caplog.set_level(logging.INFO)
+    model = FakeModel(librarian=attach_script(), reviewer=approve_all)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    before_ok = metric("librarian_runs_total", mode="librarian", outcome="ok")
+
+    svc.tick()                       # first sighting: not yet stable
+    assert svc.arrivals.all() == []
+    clock.t += 1
+    svc.tick()                       # stable -> hashed, dossier, READY; debounce not elapsed
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.READY
+    assert svc.load_dossier(key)["key"] == key
+    dossier_file = os.path.join(svc.settings.state_dir, "dossiers",
+                                hashlib.sha256(key.encode()).hexdigest()[:24] + ".json")
+    assert os.path.exists(dossier_file)
+    assert model.calls == []
+
+    clock.t += 11
+    svc.tick()
+    assert model.calls == ["librarian", "reviewer"]
+    rec = svc.arrivals.get(key)
+    assert rec["state"] == states.SIMULATED
+    assert any("mv <primary>" in step for step in rec["would_do"])
+    assert svc.current_run() is None
+
+    # run record + summary text
+    with open(os.path.join(svc.settings.state_dir, "runs.jsonl")) as f:
+        runs = [json.loads(line) for line in f]
+    assert len(runs) == 1
+    assert runs[0]["keys"] == [key]
+    assert runs[0]["librarian"]["ok"] is True and runs[0]["reviewer"]["cost_usd"] == 0.25
+    assert "Librarian (dry-run): 1 would file · 0 would escalate" in caplog.text
+    assert 'would add to "Artificial Condition"' in caplog.text
+
+    # metrics
+    assert metric("librarian_runs_total", mode="librarian", outcome="ok") == before_ok + 1
+    assert metric("librarian_arrivals", state=states.SIMULATED) == 1
+    assert metric("librarian_index_books") == 1
+    assert metric("librarian_heartbeat_timestamp") > 0
+
+
+# --- (b) no change -> no run -------------------------------------------------
+
+
+def test_second_tick_without_changes_starts_no_run(tmp_path, svc_factory):
+    model = FakeModel(librarian=lambda call: None)   # librarian does nothing at all
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian"]              # no proposals -> no reviewer
+    for _ in range(5):
+        clock.t += 500
+        svc.tick()
+    assert model.calls == ["librarian"]
+    assert svc.arrivals.get(only_key(svc))["state"] == states.READY
+
+
+def test_burst_of_arrivals_is_one_run(tmp_path, svc_factory):
+    model = FakeModel(librarian=lambda call: None)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    add_libation(tmp_path, asin="B0SECOND00", data=b"OTHER" * 50, title="Second")
+    clock.t += 5
+    svc.tick()
+    clock.t += 1
+    svc.tick()                        # second one READY now, newest change is fresh
+    assert model.calls == []
+    clock.t += 11
+    svc.tick()
+    assert model.calls == ["librarian"]
+    assert len(svc.arrivals.all()) == 2
+
+
+# --- (c) reviewer never rules -----------------------------------------------
+
+
+def test_reviewer_never_rules_rejects_and_needs_decision(tmp_path, svc_factory):
+    model = FakeModel(librarian=attach_script(), reviewer=lambda call: None)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian", "reviewer"]
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.NEEDS_DECISION
+    filing = [r for r in svc.intents.store.all() if r["kind"] == states.ATTACH]
+    assert [r["state"] for r in filing] == [states.REJECTED]
+    assert filing[0]["review"]["argument"] == "reviewer did not rule"
+
+
+# --- (d) guard-rejected only ------------------------------------------------
+
+
+def test_guard_rejected_only_run_does_not_reoffer_until_change(tmp_path, svc_factory):
+    model = FakeModel(librarian=attach_script(book_id=999))    # not in the library
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian"]
+    key = only_key(svc)
+    assert [r["state"] for r in svc.intents.store.all()] == [states.GUARD_REJECTED]
+    assert svc.arrivals.get(key)["state"] == states.READY
+    for _ in range(3):
+        clock.t += 4000                                      # well past retry_after too
+        svc.tick()
+    assert model.calls == ["librarian"]
+
+
+# --- (e) duplicate bytes -----------------------------------------------------
+
+
+def test_duplicate_bytes_of_filed_arrival(tmp_path, svc_factory):
+    model = FakeModel()
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    data = b"AUDIO" * 100
+    sha = hashlib.sha256(data).hexdigest()
+    svc.arrivals.record(f"libation:B0OLDCOPY0:{sha[:12]}", states.FILED, sha256=sha, book_id=2)
+    add_libation(tmp_path, asin="B0NEWCOPY0", data=data)
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    dup = [r for r in svc.arrivals.all() if r["state"] == states.DUPLICATE]
+    assert len(dup) == 1
+    assert dup[0]["key"].startswith("libation:B0NEWCOPY0:")
+    assert dup[0]["would_do"] == ["remove intake copy (identical to book 2)"]
+    clock.t += 100
+    svc.tick()
+    assert model.calls == []
+
+
+def test_kindle_sidecar_mismatch_fails_arrival(tmp_path, svc_factory):
+    model = FakeModel()
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    k = tmp_path / "intake" / "kindle"
+    k.mkdir(parents=True)
+    (k / "B0KINDLE01.epub").write_bytes(b"not really an epub")
+    (k / "B0KINDLE01.json").write_text(json.dumps({"sha256": "0" * 64, "asin": "B0KINDLE01"}))
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    rec = only_key(svc)
+    assert svc.arrivals.get(rec)["state"] == states.FAILED
+    assert "mismatch" in svc.arrivals.get(rec)["error"]
+
+
+def test_dossier_error_leaves_candidate_unrecorded_and_retries(tmp_path, svc_factory):
+    model = FakeModel()
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    real_candidates = svc.index.candidates
+    boom = {"n": 1}
+
+    def flaky(**kw):
+        if boom["n"]:
+            boom["n"] -= 1
+            raise OSError("bookorbit down")
+        return real_candidates(**kw)
+
+    svc.index.candidates = flaky
+    svc.tick()
+    clock.t += 1
+    svc.tick()                 # dossier raises -> nothing recorded, tick survives
+    assert svc.arrivals.all() == []
+    clock.t += 1
+    svc.tick()
+    assert svc.arrivals.get(only_key(svc))["state"] == states.READY
+
+
+# --- (f) runner timeout -----------------------------------------------------
+
+
+def test_timeout_retries_after_retry_after_not_every_poll(tmp_path, svc_factory):
+    model = FakeModel(librarian=lambda call: None, timed_out=True)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    before = metric("librarian_runs_total", mode="librarian", outcome="timeout")
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian"]
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.READY
+    assert metric("librarian_runs_total", mode="librarian", outcome="timeout") == before + 1
+    with open(os.path.join(svc.settings.state_dir, "runs.jsonl")) as f:
+        assert json.loads(f.readline())["outcome"] == "timeout"
+
+    for _ in range(5):                 # polls within the retry window: nothing
+        clock.t += 120
+        svc.tick()
+    assert model.calls == ["librarian"]
+    clock.t += 3600
+    svc.tick()
+    assert model.calls == ["librarian", "librarian"]
+
+
+def test_timeout_discards_partial_intents(tmp_path, svc_factory):
+    model = FakeModel(librarian=attach_script(), timed_out=True)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian"]           # no reviewer for a failed run
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.READY
+    assert [r["state"] for r in svc.intents.store.all()] == [states.REJECTED]
+
+
+# --- containment tripwire ----------------------------------------------------
+
+
+def test_containment_tripwire_discards_run(tmp_path, svc_factory, caplog):
+    model = FakeModel(librarian=attach_script(), reviewer=approve_all,
+                      grant=("mcp__librarian__list_arrivals", "Bash"))
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    before = metric("librarian_runs_total", mode="librarian", outcome="containment_failed")
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian"]
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.READY
+    intents = svc.intents.store.all()
+    assert [r["state"] for r in intents] == [states.REJECTED]
+    assert intents[0]["review"]["argument"] == "containment check failed"
+    assert metric("librarian_runs_total", mode="librarian", outcome="containment_failed") == before + 1
+    assert any(r.levelno == logging.ERROR and "containment" in r.getMessage() for r in caplog.records)
+
+    # the discard itself rewrote the arrival (PROPOSED -> READY); that must
+    # not count as a "change" that re-offers it before retry_after
+    clock.t += 600
+    svc.tick()
+    clock.t += 20
+    svc.tick()
+    assert model.calls == ["librarian"]           # not re-offered before retry_after
+    clock.t += 3600
+    svc.tick()
+    assert model.calls == ["librarian", "librarian"]
+
+
+def test_empty_granted_tools_is_containment_failure(tmp_path, svc_factory):
+    model = FakeModel(librarian=lambda call: None, grant=())
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    before = metric("librarian_runs_total", mode="librarian", outcome="containment_failed")
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert metric("librarian_runs_total", mode="librarian", outcome="containment_failed") == before + 1
+
+
+# --- misc -----------------------------------------------------------------
+
+
+def test_refuses_live_mode(tmp_path):
+    with pytest.raises(SystemExit):
+        Service(make_settings(tmp_path, dry_run=False), index=make_index(tmp_path),
+                runner=FakeModel(), prober=fake_prober)
+
+
+def test_missing_prompt_skips_run(tmp_path, svc_factory, caplog):
+    model = FakeModel()
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    os.unlink(os.path.join(svc.settings.prompts_dir, "reviewer.md"))
+    add_libation(tmp_path)
+    for dt in (0, 1, 11, 120):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == []
+    assert "prompt" in caplog.text
+
+
+def test_only_restricts_to_one_source_id(tmp_path, svc_factory):
+    model = FakeModel()
+    clock = Clock()
+    svc = svc_factory(model, clock, only="B0SECOND00")
+    add_libation(tmp_path)
+    add_libation(tmp_path, asin="B0SECOND00", data=b"OTHER" * 50, title="Second")
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    assert [r["key"].split(":")[1] for r in svc.arrivals.all()] == ["B0SECOND00"]
+
+
+def test_old_transcripts_are_pruned(tmp_path, svc_factory):
+    svc = svc_factory(FakeModel())
+    tdir = os.path.join(svc.settings.state_dir, "transcripts")
+    os.makedirs(tdir, exist_ok=True)
+    old = os.path.join(tdir, "old-librarian.jsonl")
+    new = os.path.join(tdir, "new-librarian.jsonl")
+    for p in (old, new):
+        open(p, "w").close()
+    t = time.time() - 31 * 86400
+    os.utime(old, (t, t))
+    svc.tick()
+    assert not os.path.exists(old)
+    assert os.path.exists(new)
+
+
+def test_interrupted_run_is_recovered_on_startup(tmp_path, svc_factory):
+    svc = svc_factory(FakeModel())
+    svc.arrivals.record("libation:X:abc", states.PROPOSED)
+    svc.intents.store.record("r1:1", states.PROPOSED_I, run_id="r1", arrival="libation:X:abc",
+                             kind=states.ATTACH, payload={})
+    svc.intents.store.record("r1:2", states.PROPOSED_I, run_id="r1", arrival="libation:Y:abc",
+                             kind=states.ESCALATE, payload={})
+    svc.stop()
+    svc2 = svc_factory(FakeModel())
+    assert svc2.arrivals.get("libation:X:abc")["state"] == states.READY
+    assert svc2.intents.store.get("r1:1")["state"] == states.REJECTED
+    assert svc2.intents.store.get("r1:2")["state"] == states.PROPOSED_I
+
+
+def test_deferred_arrival_is_reoffered_once_not_before_passes(tmp_path, svc_factory):
+    def defer(call):
+        _, arrivals = call("GET", "/arrivals")
+        for a in arrivals:
+            st, body = call("POST", "/intents", {"kind": "defer", "arrival": a["key"],
+                                                 "not_before_hours": 2, "reason": "wait for epub"})
+            assert st == 200, body
+
+    model = FakeModel(librarian=defer)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian"]
+    assert svc.arrivals.get(only_key(svc))["state"] == states.DEFERRED
+    clock.t += 3600
+    svc.tick()
+    assert model.calls == ["librarian"]
+    clock.t += 3600 + 1          # not_before passed -> a change; debounce still applies
+    svc.tick()
+    assert model.calls == ["librarian"]
+    clock.t += 11
+    svc.tick()
+    assert model.calls == ["librarian", "librarian"]
