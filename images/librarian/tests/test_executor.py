@@ -1730,9 +1730,14 @@ def test_create_book_waits_for_the_provider_fetch_then_clears_and_locks_identity
     # the fetch ran (bogus series) BEFORE our PATCH, which cleared it with nulls
     assert env.fake.fetch_log and env.fake.fetch_log[0][0] < env.fake.patch_bodies[0][0]
     body = env.fake.patch_bodies[0][2]["metadata"]
-    assert body["seriesName"] is None and body["seriesIndex"] is None and body["publishedYear"] is None
-    assert b["seriesName"] is None and b["seriesIndex"] is None and b["publishedYear"] is None
-    assert set(b["lockedFields"]) >= FULL_LOCKS
+    assert body["seriesName"] is None and body["seriesIndex"] is None
+    assert b["seriesName"] is None and b["seriesIndex"] is None
+    # Task 11: a year neither the intent nor the arrival's EPUB OPF supplies
+    # is left out -- not nulled, not locked -- so the provider's year stands
+    # (the ruling's accepted cost)
+    assert "publishedYear" not in body and b["publishedYear"] == 1999
+    assert set(b["lockedFields"]) >= FULL_LOCKS - {"publishedYear"}
+    assert "publishedYear" not in b["lockedFields"]
     # BookOrbit's own async rename moved it; the executor never called rename-files
     assert env.fake.renames() == []
     final = env.books_root / "Library" / "Jane Author" / "New Book" / "New Book.m4b"
@@ -2462,3 +2467,111 @@ def test_own_lib_dir_already_gone_is_not_reported_left_behind(env, monkeypatch):
     (made / "x.m4b").write_bytes(b"x")
     assert ex._rmdir_own(ctx) == f"left non-empty {made}"
 
+
+# --- Task 11: create_book language / publishedYear from the arrival's EPUB OPF ----------------
+
+
+def manual_epub(env, name="zz-canary.epub"):
+    src = env.intake / "manual" / name
+    src.write_bytes(b"EPUB" * 400)
+    return env._arrival("manual", name, src, src)
+
+
+def omitting(intent, *keys):
+    for k in keys:
+        intent["payload"]["metadata"].pop(k, None)
+    return intent
+
+
+def epub_dossier(arr, **epub):
+    return {"key": arr["key"], "untrusted": {"epub": epub or None}}
+
+
+def test_create_book_takes_language_and_year_from_the_epub_when_the_intent_omits_them(env):
+    """The canary: no language in the intent, the OPF said "en" -- it was
+    written as a LOCKED null. Now the OPF value is written and locked."""
+    arr = manual_epub(env)
+    ex = env.executor()
+    env.snapshot_tree()
+    intent = omitting(intent_create(arr, title="Zz Canary", series=None, seriesIndex=None),
+                      "language", "publishedYear")
+
+    r = ex.execute(intent, arr, epub_dossier(arr, language="en", date="2026-09-23T00:00:00+00:00"))
+
+    assert r.ok and r.state == "filed" and not r.escalate, r.detail
+    body = env.fake.patch_bodies[0][2]["metadata"]
+    assert body["language"] == "en" and body["publishedYear"] == 2026
+    b = env.fake.books[r.book_id]
+    assert b["language"] == "en" and b["publishedYear"] == 2026
+    assert {"language", "publishedYear"} <= set(b["lockedFields"])
+
+
+def test_create_book_intent_language_and_year_beat_the_epub(env):
+    arr = manual_epub(env)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, language="fr", publishedYear=1999),
+                   arr, epub_dossier(arr, language="en", date="2026"))
+
+    assert r.ok, r.detail
+    body = env.fake.patch_bodies[0][2]["metadata"]
+    assert (body["language"], body["publishedYear"]) == ("fr", 1999)
+
+
+@pytest.mark.parametrize("epub", [
+    {"language": "<b>en</b>", "date": "0101-01-01T00:00:00+00:00"},    # junk code; calibre's "no date"
+    {"language": "und", "date": "someday"},
+    {"language": None, "date": None},
+    {},                                                                # no epub in the dossier at all
+])
+def test_create_book_omits_language_and_year_nobody_can_supply(env, epub):
+    arr = manual_epub(env)
+    ex = env.executor()
+    env.snapshot_tree()
+    intent = omitting(intent_create(arr, series=None, seriesIndex=None, subtitle=None),
+                      "language", "publishedYear")
+
+    r = ex.execute(intent, arr, epub_dossier(arr, **epub))
+
+    assert r.ok and r.state == "filed" and not r.escalate, r.detail
+    body = env.fake.patch_bodies[0][2]["metadata"]
+    assert "language" not in body and "publishedYear" not in body      # neither null ...
+    locked = set(env.fake.books[r.book_id]["lockedFields"])
+    assert not locked & {"language", "publishedYear"}                  # ... nor locked
+    # subtitle and series keep null + lock (the provider fetch pollutes series)
+    assert body["subtitle"] is None and body["seriesName"] is None and body["seriesIndex"] is None
+    assert {"title", "subtitle", "description", "authors", "seriesName", "seriesIndex"} <= locked
+
+
+def test_audio_only_create_book_omits_absent_language_and_year(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+    intent = omitting(intent_create(arr), "language", "publishedYear")
+
+    r = ex.execute(intent, arr, {"key": arr["key"], "untrusted": {"epub": None, "files": [{"name": "x"}]}})
+
+    assert r.ok and not r.escalate, r.detail
+    body = env.fake.patch_bodies[0][2]["metadata"]
+    assert "language" not in body and "publishedYear" not in body
+    assert not set(env.fake.books[r.book_id]["lockedFields"]) & {"language", "publishedYear"}
+
+
+def test_resumed_create_uses_the_metadata_journaled_before_the_move(env):
+    """The OPF values are resolved once, before the move, and journaled with
+    the rest of the create metadata: a resume (which has no dossier) sends
+    the same body."""
+    arr = manual_epub(env)
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.crash_on[("PATCH", "/metadata-and-locks")] = Crash()
+    intent = omitting(intent_create(arr), "language", "publishedYear")
+    with pytest.raises(Crash):
+        ex.execute(intent, arr, epub_dossier(arr, language="en", date="2026"))
+
+    r = env.executor().resume(env.arrivals.get(arr["key"]))
+
+    assert r.ok and r.state == "filed", r.detail
+    body = env.fake.patch_bodies[-1][2]["metadata"]
+    assert (body["language"], body["publishedYear"]) == ("en", 2026)

@@ -219,6 +219,23 @@ def test_manual_single_file_has_no_multiple_primaries_key(tmp_path):
     assert "multiple_primaries" not in d["trusted"]
 
 
+def test_epub_language_and_date_reach_the_dossier(tmp_path):
+    """Task 11: create_book fills an intent's missing language/publishedYear
+    from these two OPF fields, so the dossier must carry both (untrusted)."""
+    idx = make_index(tmp_path)
+    root = str(tmp_path / "manual")
+    os.makedirs(root)
+    epub1 = f"{root}/Canary.epub"
+    make_epub(epub1, "Zz Canary", ["Zz Author"], "hello", date="2026-09-23")   # fixture writes <dc:language>en
+    c = Candidate(source="manual", source_id="Canary.epub", path=epub1, files=[epub1])
+
+    d = build_dossier("manual:Canary.epub:abc123", c, "abc123", idx)
+
+    assert d["untrusted"]["epub"]["language"] == "en"
+    assert d["untrusted"]["epub"]["date"] == "2026-09-23"
+    assert "language" not in json.dumps(d["trusted"])
+
+
 # --- kindle epub candidate: measures + candidate lookup by ISBN --------------
 
 def test_kindle_epub_measures_chars_per_sec_against_candidate_m4b(tmp_path):

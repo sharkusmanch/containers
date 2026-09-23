@@ -24,6 +24,19 @@ IDENTITY_LOCKS = IDENTITY
 BASE_LOCKS = ("title", "subtitle", "description")
 CREATE_LOCKS = tuple(dict.fromkeys(BASE_LOCKS + IDENTITY_LOCKS))
 
+# Task 11: create_book fills a language / publishedYear the intent left out
+# from the arrival's own EPUB OPF (dossier `untrusted.epub`) -- untrusted
+# text, so only a plausible value is taken: a BCP-47-ish code ("en",
+# "en-US") or a plain language name ("English"), letters/hyphen/space only,
+# at most 20 chars ("und" is BCP-47 for "undetermined" -- no language); the
+# 4-digit year of dc:date within [1000, 2200] (calibre writes 0101-01-01 for
+# "no date").
+_LANGUAGE_RE = re.compile(r"[^\W\d_]+(?:[- ][^\W\d_]+)*")
+LANGUAGE_MAX = 20
+_NOT_A_LANGUAGE = frozenset({"und"})
+_YEAR_RE = re.compile(r"(?<!\d)(\d{4})(?!\d)")
+YEAR_MIN, YEAR_MAX = 1000, 2200
+
 
 def names(entries) -> list:
     out = []
@@ -85,27 +98,63 @@ def safe_segment(value, what: str) -> str:
     return value
 
 
-def create_metadata(md, arrival) -> dict:
+def opf_language(value) -> str | None:
+    """`value` stripped, if it reads as a language (see _LANGUAGE_RE), else None."""
+    if not isinstance(value, str):
+        return None
+    v = value.strip()
+    if len(v) > LANGUAGE_MAX or not _LANGUAGE_RE.fullmatch(v) or v.casefold() in _NOT_A_LANGUAGE:
+        return None
+    return v
+
+
+def opf_year(value) -> int | None:
+    """The first free-standing 4-digit year in an OPF dc:date ("2011",
+    "2011-06-07T04:00:00+00:00", "06/07/2011") if within [1000, 2200], else None."""
+    if not isinstance(value, str):
+        return None
+    m = _YEAR_RE.search(value)
+    if m is None:
+        return None
+    year = int(m.group(1))
+    return year if YEAR_MIN <= year <= YEAR_MAX else None
+
+
+def create_metadata(md, arrival, epub=None) -> dict:
     """PATCH keys confirmed against /config/books/scripts (see report):
     title, subtitle, authors, seriesName, seriesIndex (string), publishedYear,
-    language, audibleId, tags. Narrators are NOT sent (no confirmed key)."""
-    # Task 9c (c): EVERY identity field is sent, null when absent -- null
-    # clears whatever the post-import provider fetch wrote (live: a bogus
-    # series). The index only travels with a series (policy.render_intent_folder
+    language, audibleId, tags. Narrators are NOT sent (no confirmed key).
+    `epub` is the arrival's EPUB OPF metadata (dossier `untrusted.epub`:
+    `language`, `date`, ...), or None for an audio-only arrival."""
+    # Task 9c (c): subtitle, seriesName and seriesIndex are sent null when
+    # absent -- null clears whatever the post-import provider fetch wrote
+    # (live: a bogus series) -- and locked like every identity field written.
+    # The index only travels with a series (policy.render_intent_folder
     # renders the same mapping for guard 8).
+    # Task 11: publishedYear and language are the exception. Absent from the
+    # intent they come from the arrival's own OPF when plausible (opf_year /
+    # opf_language), else they are LEFT OUT -- neither null nor locked
+    # (create_locks) -- rather than a locked null (the go-live canary's
+    # EPUB said "en"). Accepted cost: a provider-fetched year/language stays
+    # on a book whose EPUB lacks them.
     # authors and seriesName go through BookOrbit's normalizeMetadataText on
     # store (Task 9c fix round 1): send them normalised so what we render,
     # send and read back are the same strings.
     series = normalize_metadata_text(md.get("series"))
-    year = md.get("publishedYear")
     meta = {
         "title": md["title"], "authors": normalize_authors(md["authors"]),
         "subtitle": md.get("subtitle") or None,
         "seriesName": series,
         "seriesIndex": norm_index(md.get("seriesIndex")) if series else None,
-        "publishedYear": int(year) if year is not None else None,
-        "language": md.get("language") or None,
     }
+    opf = epub if isinstance(epub, dict) else {}
+    year = md.get("publishedYear")
+    year = int(year) if year is not None else opf_year(opf.get("date"))
+    if year is not None:
+        meta["publishedYear"] = year
+    language = md.get("language") or opf_language(opf.get("language"))
+    if language:
+        meta["language"] = language
     sid = arrival.get("source_id")
     audible = md.get("audibleId")
     if arrival.get("source") == "libation" and isinstance(sid, str) and ASIN_RE.match(sid):
@@ -116,6 +165,13 @@ def create_metadata(md, arrival) -> dict:
     if arrival.get("source") == "kindle" and isinstance(sid, str) and ASIN_RE.match(sid):
         asin_tag = sid
     return {"fields": meta, "asin_tag": asin_tag}
+
+
+def create_locks(fields) -> set:
+    """The locks a create_book PATCH asks for: BASE_LOCKS plus every identity
+    field in `fields` -- i.e. CREATE_LOCKS minus an identity field
+    create_metadata left out (Task 11: omitted = neither written nor locked)."""
+    return {f for f in CREATE_LOCKS if f in BASE_LOCKS or f in fields}
 
 
 _UPDATE_METADATA_SIMPLE_FIELDS = ("title", "subtitle", "authors", "language", "audibleId")

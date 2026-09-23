@@ -202,6 +202,9 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
                         "title": epub.title,
                         "creators": list(epub.creators),
                         "date": epub.date,
+                        # Task 11: create_book reads language/date from here
+                        # when the intent leaves them out (bookmeta.opf_*)
+                        "language": epub.language,
                         "identifiers": dict(epub.identifiers),
                         "description": epub.description,
                     }

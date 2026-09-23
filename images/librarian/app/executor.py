@@ -9,9 +9,10 @@ Two sequences (spec §3.4):
   create_book  guard 2 -> stage -> re-hash -> exclusive mkdir
                `<root>/<author>/<title> [lib-<sha12>]` -> link+unlink ->
                scan+wait -> locate the new book -> wait for BookOrbit's
-               provider fetch -> guard 8 -> metadata+locks (every identity
-               field, null when absent) -> BookOrbit's own async rename
-               settles -> verify folder + file -> intake cleanup
+               provider fetch -> guard 8 -> metadata+locks (identity fields;
+               subtitle/series null when absent, publishedYear/language from
+               the arrival's EPUB OPF or left out) -> BookOrbit's own async
+               rename settles -> verify folder + file -> intake cleanup
 
 Task 9c (live probe of BookOrbit 3.0.0): every PATCH that carries title,
 authors, seriesName, seriesIndex or publishedYear makes BookOrbit move the
@@ -163,6 +164,14 @@ def _is_regular(path) -> bool:
         return False
 
 
+def _epub_of(dossier) -> dict | None:
+    """The arrival's EPUB OPF metadata from its dossier (`untrusted.epub`),
+    or None (no dossier, an audio-only arrival, or a malformed entry)."""
+    untrusted = dossier.get("untrusted") if isinstance(dossier, dict) else None
+    epub = untrusted.get("epub") if isinstance(untrusted, dict) else None
+    return epub if isinstance(epub, dict) else None
+
+
 def _not_our_hard_link(src, dst) -> str | None:
     """None iff `src` and `dst` are both regular files (lstat, symlinks not
     followed) sharing one (st_dev, st_ino); else why not."""
@@ -197,7 +206,10 @@ class Executor:
     def execute(self, intent: dict, arrival_rec: dict, dossier: dict | None = None) -> ExecResult:
         """File one arrival per its approved intent record (`intent_id` +
         `payload`, or a bare payload carrying `intent_id`). An open journal
-        for the same intent is resumed rather than started again."""
+        for the same intent is resumed rather than started again.
+        `dossier` is the arrival's stored dossier: a create_book takes a
+        language/publishedYear the intent left out from its `untrusted.epub`
+        (Task 11), resolved once, before the move, into the journal."""
         payload = intent.get("payload") or intent
         iid = intent.get("intent_id") or payload.get("intent_id")
         key = arrival_rec["key"]
@@ -220,7 +232,7 @@ class Executor:
                 return ExecResult(False, "failed", j.get("book_id"),
                                   f"refusing intent {iid}: arrival {key} was already handled by "
                                   f"intent {j.get('intent_id')} (its file reached the library)")
-            return self._execute(iid, payload, cur)
+            return self._execute(iid, payload, cur, dossier)
 
     def resume(self, rec: dict) -> ExecResult:
         """Startup recovery for an arrival left in `executing`."""
@@ -481,7 +493,7 @@ class Executor:
         return local
 
     # --- execute --------------------------------------------------------------
-    def _execute(self, iid, payload, arrival) -> ExecResult:
+    def _execute(self, iid, payload, arrival, dossier=None) -> ExecResult:
         kind = payload.get("kind")
         key = arrival["key"]
         ctx = {"intent_id": iid, "key": key, "kind": kind, "open": True, "step": None,
@@ -499,7 +511,7 @@ class Executor:
             if kind == states.ATTACH:
                 self._prepare_attach(ctx, payload)
             else:
-                self._prepare_create(ctx, payload, arrival)
+                self._prepare_create(ctx, payload, arrival, dossier)
             self._guard2(ctx["library_id"])
             self._check_stop()
             if kind == states.ATTACH:
@@ -593,7 +605,7 @@ class Executor:
         ctx["snapshot"] = dict(bookmeta.render_identity(d), files=bookmeta.files_of(d),
                                lockedFields=list(d.get("lockedFields") or []))
 
-    def _prepare_create(self, ctx, payload, arrival):
+    def _prepare_create(self, ctx, payload, arrival, dossier=None):
         library = INTENT_LIBRARY.get(payload.get("library"))
         if library is None:
             raise _Fail(f"create_book library must be adult|kids, got {payload.get('library')!r}")
@@ -622,7 +634,7 @@ class Executor:
             raise _Fail(f"new book folder {ctx['dst_dir']} already exists")
         ctx["max_book_id"] = max((int(b["id"]) for b in self.index.books()
                                   if isinstance(b.get("id"), int)), default=0)
-        ctx["meta"] = bookmeta.create_metadata(md, arrival)
+        ctx["meta"] = bookmeta.create_metadata(md, arrival, _epub_of(dossier))
 
     # --- error handling -------------------------------------------------------
     def _before_move_error(self, ctx, e, staged) -> ExecResult:
@@ -923,7 +935,7 @@ class Executor:
     def _write_metadata(self, ctx) -> str | None:
         self._await_fetch(ctx["book_id"])
         meta = dict(ctx["meta"]["fields"])
-        locks = set(bookmeta.CREATE_LOCKS)
+        locks = bookmeta.create_locks(meta)      # Task 11: an omitted field stays unlocked
         d = self.index.detail(ctx["book_id"], fresh=True)
         tag = ctx["meta"].get("asin_tag")
         if tag:

@@ -7,6 +7,8 @@ LLM-facing metadata keys to BookOrbit's PATCH body key names -- the same
 arrival-derived overrides, since update_metadata corrects a book that
 already exists rather than deriving identity from a brand-new arrival file.
 """
+import pytest
+
 from app.bookmeta import update_metadata_fields
 
 
@@ -73,15 +75,17 @@ def test_policy_mapped_fields_equal_the_keys_update_metadata_fields_maps():
 # --- Task 9c ---------------------------------------------------------------------
 
 
-def test_create_metadata_sends_every_identity_field_null_when_absent():
+def test_create_metadata_nulls_absent_subtitle_and_series_but_omits_year_and_language():
     """(c): the provider fetch after import writes junk into unset fields
-    (a bogus series, live); null clears it."""
-    from app.bookmeta import IDENTITY, create_metadata
+    (a bogus series, live); null clears it. Task 11: publishedYear and
+    language are the exception -- absent and not in the EPUB OPF, they are
+    left out (neither null nor locked)."""
+    from app.bookmeta import create_metadata
     out = create_metadata({"title": "T", "authors": ["A"]}, {"source": "manual"})
     f = out["fields"]
-    assert set(IDENTITY) <= set(f)
     assert f["title"] == "T" and f["authors"] == ["A"]
-    assert all(f[k] is None for k in ("subtitle", "seriesName", "seriesIndex", "publishedYear", "language"))
+    assert all(k in f and f[k] is None for k in ("subtitle", "seriesName", "seriesIndex"))
+    assert "publishedYear" not in f and "language" not in f
 
 
 def test_create_metadata_drops_index_without_series():
@@ -122,3 +126,83 @@ def test_render_normalises_authors_and_series_whitespace():
 def test_render_identity_keeps_the_stored_series_index_string():
     from app.bookmeta import render_identity
     assert render_identity({"title": "T", "authors": [{"name": "A"}], "seriesIndex": "2.50"})["seriesIndex"] == "2.50"
+
+
+# --- Task 11: language / publishedYear from the arrival's EPUB OPF ----------------
+
+
+@pytest.mark.parametrize("value", ["en", "en-US", "fr", "zh-Hant", "eng", "English", "Français",
+                                   "Old English", "x" * 20])
+def test_opf_language_accepts_codes_and_plain_names(value):
+    from app.bookmeta import opf_language
+    assert opf_language(value) == value
+    assert opf_language(f"  {value} ") == value
+
+
+@pytest.mark.parametrize("value", [None, 5, ["en"], "", "   ", "x" * 21, "en_US", "es-419", "<b>en</b>",
+                                   "en;fr", "en--US", "en-", "-", "\u200ben", "en\nUS",
+                                   "und", "UND"])      # "und" = BCP-47 "undetermined": no language
+def test_opf_language_rejects_junk(value):
+    from app.bookmeta import opf_language
+    assert opf_language(value) is None
+
+
+@pytest.mark.parametrize("value, year", [
+    ("2011", 2011), ("2011-06", 2011), ("2011-06-07", 2011), ("2011-06-07T04:00:00+00:00", 2011),
+    ("2011-06-07T04:00:00+0000", 2011), ("06/07/2011", 2011), (" 1851 ", 1851), ("1000", 1000),
+    ("2200", 2200),
+])
+def test_opf_year_takes_the_four_digit_year(value, year):
+    from app.bookmeta import opf_year
+    assert opf_year(value) == year
+
+
+@pytest.mark.parametrize("value", [None, 2011, "", "unknown", "0101-01-01T00:00:00+00:00",  # calibre: no date
+                                   "999", "0999", "2201", "3000-01-01", "20110607", "12345"])
+def test_opf_year_rejects_implausible_dates(value):
+    from app.bookmeta import opf_year
+    assert opf_year(value) is None
+
+
+def test_create_metadata_fills_absent_language_and_year_from_the_opf():
+    """The canary: the intent had no language, the OPF said "en"."""
+    from app.bookmeta import create_metadata
+    f = create_metadata({"title": "T", "authors": ["A"]}, {"source": "manual"},
+                        {"language": "en", "date": "2011-06-07T04:00:00+00:00"})["fields"]
+    assert (f["language"], f["publishedYear"]) == ("en", 2011)
+    # an explicit null / empty string in the intent counts as absent
+    f = create_metadata({"title": "T", "authors": ["A"], "language": "", "publishedYear": None},
+                        {"source": "manual"}, {"language": " en-GB ", "date": "1999"})["fields"]
+    assert (f["language"], f["publishedYear"]) == ("en-GB", 1999)
+
+
+def test_create_metadata_intent_values_beat_the_opf():
+    from app.bookmeta import create_metadata
+    f = create_metadata({"title": "T", "authors": ["A"], "language": "fr", "publishedYear": 1999.0},
+                        {"source": "manual"}, {"language": "en", "date": "2011"})["fields"]
+    assert (f["language"], f["publishedYear"]) == ("fr", 1999)
+
+
+@pytest.mark.parametrize("epub", [
+    None,                                                          # audio-only arrival: no EPUB at all
+    {},
+    {"language": None, "date": None},
+    {"language": "und", "date": "0101-01-01T00:00:00+00:00"},      # calibre's "unknown" values
+    {"language": "<script>", "date": "someday"},
+    "not a dict",
+])
+def test_create_metadata_omits_what_neither_the_intent_nor_the_opf_supplies(epub):
+    from app.bookmeta import create_metadata
+    f = create_metadata({"title": "T", "authors": ["A"]}, {"source": "manual"}, epub)["fields"]
+    assert "language" not in f and "publishedYear" not in f
+    assert f["subtitle"] is None and f["seriesName"] is None and f["seriesIndex"] is None
+
+
+def test_create_locks_cover_only_the_identity_fields_written():
+    from app.bookmeta import CREATE_LOCKS, create_locks, create_metadata
+    bare = create_metadata({"title": "T", "authors": ["A"]}, {"source": "manual"})["fields"]
+    assert create_locks(bare) == {"title", "subtitle", "description", "authors", "seriesName", "seriesIndex"}
+    full = create_metadata({"title": "T", "authors": ["A"], "language": "en", "publishedYear": 2001},
+                           {"source": "manual"})["fields"]
+    assert create_locks(full) == set(CREATE_LOCKS)
+    assert create_locks(dict(bare, language="en")) == create_locks(bare) | {"language"}
