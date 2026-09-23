@@ -102,3 +102,29 @@ def test_live_sources_that_parse_to_empty_are_refused():
 def test_limits_must_be_positive(name):
     with pytest.raises(ValueError):
         Settings.from_env({**BASE, name: "0"})
+
+
+# --- Plan 2 Task 6: Vikunja ------------------------------------------------------
+
+
+def test_vikunja_defaults_disabled():
+    s = Settings.from_env(BASE)
+    assert s.vikunja_enabled is False
+    assert s.vikunja_url == "http://vikunja.tools.svc.cluster.local:3456/api/v1"
+    assert s.vikunja_token == "" and s.vikunja_project_id == 0
+    assert s.vikunja_public_url == "" and s.bookorbit_public_url == ""
+
+
+def test_vikunja_from_env_and_token_never_in_repr():
+    s = Settings.from_env({**BASE, "VIKUNJA_ENABLED": "true", "VIKUNJA_TOKEN": "tk_secret",
+                           "VIKUNJA_PROJECT_ID": "12", "VIKUNJA_PUBLIC_URL": "https://v.example",
+                           "BOOKORBIT_PUBLIC_URL": "https://bo.example", "VIKUNJA_URL": "http://v/api/v1"})
+    assert s.vikunja_enabled is True and s.vikunja_token == "tk_secret"
+    assert s.vikunja_project_id == 12 and s.vikunja_url == "http://v/api/v1"
+    assert s.vikunja_public_url == "https://v.example" and s.bookorbit_public_url == "https://bo.example"
+    assert "tk_secret" not in repr(s)
+
+
+def test_vikunja_project_id_must_be_an_int():
+    with pytest.raises(ValueError):
+        Settings.from_env({**BASE, "VIKUNJA_PROJECT_ID": "Librarian"})

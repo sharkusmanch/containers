@@ -39,7 +39,7 @@ import os
 import threading
 import time
 
-from app import execution, intake, metrics, notify, states
+from app import escalations, execution, intake, metrics, notify, states
 from app.api import ApiServer
 from app.dossier import build_dossier, title_from_folder
 from app.intents import IntentBook
@@ -360,6 +360,14 @@ class Service:
             self._run_cycle(keys)
         if self.executor is not None and not self._stop.is_set():
             execution.run_due(self)     # queued + retryable filings, within the tick budget
+        if not self._stop.is_set():
+            # Plan 2 Task 6: Vikunja tasks/replies/closes (or, without
+            # Vikunja, the escalation pushes). HTTP outside svc.lock; a
+            # failure here must not cost the tick its flush/metrics.
+            try:
+                escalations.sync(self)
+            except Exception:
+                logger.exception("escalation sync failed")
         if self.notifier is not None and not self._stop.is_set():
             # Outside svc.lock (Plan 2 Task 5): the outbox is its own Store
             # with its own lock, and an HTTP call must never hold svc.lock.

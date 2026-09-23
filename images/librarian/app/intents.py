@@ -360,6 +360,19 @@ class IntentBook:
                           would_do=would_do(payload))
         return esc_id
 
+    def latest_escalation(self, arrival: str) -> dict | None:
+        """The arrival's most recent FINALIZED escalation (state
+        `simulated`: finalize, reviewer auto-escalation or executor), i.e.
+        the question a human is being asked right now (Plan 2 Task 6).
+        Store order is creation order -- `Store.record` updates a key in
+        place -- so the last match is the newest."""
+        latest = None
+        for rec in self.store.all():
+            if (rec.get("arrival") == arrival and rec.get("kind") == ESCALATE
+                    and rec.get("state") == SIMULATED_I and isinstance(rec.get("payload"), dict)):
+                latest = rec
+        return latest
+
     def reject_paired_metadata(self, rec: dict, argument: str) -> None:
         """A filing that did not execute takes its same-run update_metadata
         with it (caller holds `self.lock`)."""

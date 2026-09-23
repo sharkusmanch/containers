@@ -104,6 +104,17 @@ class Settings:
     # (the default) disables notifications entirely -- main.py builds no
     # Notifier at all, rather than one that silently drops everything.
     apprise_url: str = ""
+    # Plan 2 Task 6: Vikunja escalations. Off unless VIKUNJA_ENABLED=true AND
+    # the token, project id, public URL and BookOrbit public URL are all set
+    # (main.py builds no Vikunja client otherwise; escalations are then
+    # pushed straight away, without a task link). The project is created by
+    # hand; its id is configuration, never looked up by title.
+    vikunja_enabled: bool = False
+    vikunja_url: str = "http://vikunja.tools.svc.cluster.local:3456/api/v1"
+    vikunja_token: str = field(default="", repr=False)   # a user API token: never logged
+    vikunja_project_id: int = 0
+    vikunja_public_url: str = ""
+    bookorbit_public_url: str = ""
     # Every claude -p run's HOME/CLAUDE_CONFIG_DIR must live strictly under
     # this directory (app/runner.py's child_env enforces it) -- the fence
     # against a run_dir that somehow escapes to the host's real ~/.claude.
@@ -146,5 +157,11 @@ class Settings:
             max_exec_per_tick=_i(env, "MAX_EXEC_PER_TICK", 5),
             only=only,
             apprise_url=_s(env, "APPRISE_URL", ""),
+            vikunja_enabled=_b(env, "VIKUNJA_ENABLED", False),
+            vikunja_url=_s(env, "VIKUNJA_URL", "http://vikunja.tools.svc.cluster.local:3456/api/v1"),
+            vikunja_token=_s(env, "VIKUNJA_TOKEN", ""),
+            vikunja_project_id=_i(env, "VIKUNJA_PROJECT_ID", 0),
+            vikunja_public_url=_s(env, "VIKUNJA_PUBLIC_URL", ""),
+            bookorbit_public_url=_s(env, "BOOKORBIT_PUBLIC_URL", ""),
             runs_root=_s(env, "RUNS_ROOT", "/tmp/runs"),
         )

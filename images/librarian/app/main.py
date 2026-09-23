@@ -2,7 +2,8 @@
 
 Settings.from_env -> read-only BookOrbit client -> library index -> (only
 when DRY_RUN=false) a SEPARATE writable BookOrbit client, its
-BookorbitWriter and an Executor factory -> Service (which starts its own
+BookorbitWriter and an Executor factory -> (when VIKUNJA_ENABLED and fully configured) a
+Vikunja client -> Service (which starts its own
 loopback ApiServer) -> metrics -> serve_forever. In dry-run nothing
 constructs a writable client. SIGTERM/SIGINT stop the loop; if a `claude -p` child is
 running, `Stopping` is raised into the runner so run_claude's cleanup kills
@@ -22,6 +23,7 @@ from app.executor import Executor
 from app.notify import Notifier, OUTBOX_STATES
 from app.service import Service, Stopping
 from app.store import Store
+from app.vikunja import STORE_STATES as VIKUNJA_STORE_STATES, Vikunja
 
 log = logging.getLogger("librarian")
 
@@ -46,6 +48,30 @@ def authenticate(client, stop) -> bool:
                 metrics.beat()
                 time.sleep(1)
     return False
+
+
+def build_vikunja(settings):
+    """Plan 2 Task 6: a Vikunja client only when VIKUNJA_ENABLED and every
+    setting it needs is present; otherwise None (escalations are then
+    pushed without a task). A failed `verify()` is logged (once) but does
+    not disable it -- Vikunja may simply be restarting; every later call
+    is retried by the service tick."""
+    if not settings.vikunja_enabled:
+        log.info("VIKUNJA_ENABLED is not true: escalations are pushed without Vikunja tasks")
+        return None
+    missing = [name for name, value in (
+        ("VIKUNJA_TOKEN", settings.vikunja_token), ("VIKUNJA_PROJECT_ID", settings.vikunja_project_id),
+        ("VIKUNJA_PUBLIC_URL", settings.vikunja_public_url),
+        ("BOOKORBIT_PUBLIC_URL", settings.bookorbit_public_url)) if not value]
+    if missing:
+        log.error("VIKUNJA_ENABLED=true but %s unset: Vikunja escalations disabled", ", ".join(missing))
+        return None
+    store = Store(os.path.join(settings.state_dir, "vikunja.jsonl"), "comment_id", VIKUNJA_STORE_STATES)
+    vikunja = Vikunja(settings.vikunja_url, settings.vikunja_token, settings.vikunja_project_id,
+                      settings.vikunja_public_url, store)
+    if vikunja.verify():
+        log.info("Vikunja escalations enabled (project %s)", settings.vikunja_project_id)
+    return vikunja
 
 
 def main() -> int:
@@ -93,7 +119,8 @@ def main() -> int:
     else:
         log.info("APPRISE_URL not set: push notifications disabled")
 
-    service = Service(settings, index=index, executor=executor, notifier=notifier)
+    vikunja = build_vikunja(settings)
+    service = Service(settings, index=index, executor=executor, notifier=notifier, vikunja=vikunja)
     mode = "dry-run" if settings.dry_run else f"LIVE for {','.join(sorted(settings.live_sources)) or 'no source'}"
     log.info("librarian started (%s), api on 127.0.0.1:%s, metrics on :%s",
              mode, service.api_port, settings.metrics_port)
