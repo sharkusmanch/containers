@@ -100,6 +100,10 @@ class Settings:
     max_attempts: int = 5          # service-level executions before failed + escalation
     max_exec_per_tick: int = 5     # MAX_EXEC_PER_TICK (Global "Liveness")
     only: str | None = None
+    # Plan 2 Task 5: Apprise stateful-key URL for push notifications. Blank
+    # (the default) disables notifications entirely -- main.py builds no
+    # Notifier at all, rather than one that silently drops everything.
+    apprise_url: str = ""
     # Every claude -p run's HOME/CLAUDE_CONFIG_DIR must live strictly under
     # this directory (app/runner.py's child_env enforces it) -- the fence
     # against a run_dir that somehow escapes to the host's real ~/.claude.
@@ -141,5 +145,6 @@ class Settings:
             max_attempts=_i(env, "MAX_ATTEMPTS", 5),
             max_exec_per_tick=_i(env, "MAX_EXEC_PER_TICK", 5),
             only=only,
+            apprise_url=_s(env, "APPRISE_URL", ""),
             runs_root=_s(env, "RUNS_ROOT", "/tmp/runs"),
         )

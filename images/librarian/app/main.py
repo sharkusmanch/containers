@@ -19,7 +19,9 @@ from app import metrics
 from app.bookorbit import AUTH_RETRY_SECONDS, BookorbitClient, BookorbitWriter, LibraryIndex
 from app.config import Settings
 from app.executor import Executor
+from app.notify import Notifier, OUTBOX_STATES
 from app.service import Service, Stopping
+from app.store import Store
 
 log = logging.getLogger("librarian")
 
@@ -84,7 +86,14 @@ def main() -> int:
 
         executor = make_executor
 
-    service = Service(settings, index=index, executor=executor)
+    notifier = None
+    if settings.apprise_url:
+        outbox = Store(os.path.join(settings.state_dir, "outbox.jsonl"), "msg_id", OUTBOX_STATES)
+        notifier = Notifier(settings.apprise_url, outbox, dry_run=settings.dry_run)
+    else:
+        log.info("APPRISE_URL not set: push notifications disabled")
+
+    service = Service(settings, index=index, executor=executor, notifier=notifier)
     mode = "dry-run" if settings.dry_run else f"LIVE for {','.join(sorted(settings.live_sources)) or 'no source'}"
     log.info("librarian started (%s), api on 127.0.0.1:%s, metrics on :%s",
              mode, service.api_port, settings.metrics_port)

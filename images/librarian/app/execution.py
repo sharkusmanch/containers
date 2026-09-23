@@ -304,6 +304,7 @@ def _failed(svc, rec, intent, detail) -> None:
     svc.arrivals.record(key, states.FAILED, error=detail, retry_at=None)
     svc.intents.record_escalation(_run_id(intent, rec), key, f"Filing failed: {detail}",
                                   reason="execution failed")
+    svc.notify_failure(rec, intent, detail)   # Plan 2 Task 5: one push per failed filing
     logger.error("arrival %s failed: %s", log_safe(key), log_safe(detail))
 
 

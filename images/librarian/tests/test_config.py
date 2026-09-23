@@ -53,6 +53,12 @@ def test_all_defaults_match_spec():
     assert s.claude_bin == "claude"
     assert s.retry_after == 3600
     assert s.only is None
+    assert s.apprise_url == ""
+
+
+def test_apprise_url_from_env():
+    assert Settings.from_env({**BASE, "APPRISE_URL": "http://apprise.tools.svc:8000/notify/k"}).apprise_url \
+        == "http://apprise.tools.svc:8000/notify/k"
 
 
 def test_dry_run_accepts_1_and_0():

@@ -39,7 +39,7 @@ import os
 import threading
 import time
 
-from app import execution, intake, metrics, states
+from app import execution, intake, metrics, notify, states
 from app.api import ApiServer
 from app.dossier import build_dossier, title_from_folder
 from app.intents import IntentBook
@@ -59,6 +59,16 @@ _EXEC_OWNED = frozenset({states.RETRYABLE, states.EXECUTING, states.FILED})
 
 def dossier_name(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:24] + ".json"
+
+
+def _short_title(text, limit: int = 60) -> str:
+    """A push notification title fragment: sanitized and character-capped
+    at `limit` (titles are short by construction, so a character cap --
+    unlike the body's UTF-8 byte cap -- is plenty)."""
+    text = notify.sanitize(str(text or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
 
 
 class Service:
@@ -344,6 +354,10 @@ class Service:
             self._run_cycle(keys)
         if self.executor is not None and not self._stop.is_set():
             execution.run_due(self)     # queued + retryable filings, within the tick budget
+        if self.notifier is not None:
+            # Outside svc.lock (Plan 2 Task 5): the outbox is its own Store
+            # with its own lock, and an HTTP call must never hold svc.lock.
+            self.notifier.flush()
         metrics.rebuild_arrivals(self.arrivals)
         self._prune_transcripts()
 
@@ -551,6 +565,43 @@ class Service:
             return self.runner(argv, on_tick=metrics.beat, **kw)
         finally:
             self._in_runner = False
+
+    # --- notifications (Plan 2 Task 5) ----------------------------------------
+
+    def notify_failure(self, arrival_rec: dict, intent: dict | None, detail: str) -> None:
+        """Enqueue one push for a filing execution.py gave up on
+        (arrival state FAILED). Idempotent on (arrival, intent), so a
+        caller holding svc.lock -- every call site does -- may call this
+        unconditionally without risking a duplicate push."""
+        if self.notifier is None:
+            return
+        key = (arrival_rec or {}).get("key") or ""
+        intent_id = (intent or {}).get("intent_id") or (arrival_rec or {}).get("exec_intent") or "unknown"
+        hint = (arrival_rec or {}).get("title_hint") or key
+        title = f"Filing failed: {_short_title(hint)}"
+        body = notify.sanitize(str(detail or ""))
+        self.notifier.enqueue("failure", f"failure:{key}:{intent_id}", title, body)
+
+    def notify_escalation(self, arrival_rec: dict, intent: dict) -> None:
+        """Enqueue one push for an escalation (a human decision is
+        needed). `intent` is the ESCALATE intent record. The body carries
+        the (untrusted, LLM-authored) question and the arrival's Vikunja
+        task URL when one exists (`arrival_rec["vikunja_url"]`, set by Task
+        6) -- Task 6 calls this once the task is created, or immediately
+        when Vikunja is disabled."""
+        if self.notifier is None:
+            return
+        key = (arrival_rec or {}).get("key") or ""
+        intent_id = (intent or {}).get("intent_id") or "unknown"
+        hint = (arrival_rec or {}).get("title_hint") or key
+        title = f"Needs a decision: {_short_title(hint)}"
+        payload = (intent or {}).get("payload") or {}
+        question = payload.get("question") or (intent or {}).get("reason") or ""
+        question = notify.truncate_utf8(notify.sanitize(str(question)), 600)
+        vikunja_url = (arrival_rec or {}).get("vikunja_url")
+        tail = vikunja_url if vikunja_url else "task pending"
+        body = f"{question}\n\n{tail}"
+        self.notifier.enqueue("escalation", f"escalation:{key}:{intent_id}", title, body)
 
     # --- housekeeping --------------------------------------------------------
 

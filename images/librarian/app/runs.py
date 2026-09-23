@@ -342,6 +342,12 @@ def _cycle(svc, keys, pre, lib_run, lib_prompt, rev_prompt, record) -> bool:
         logger.warning("librarian cycle %s failed (%s); offered arrivals retry after %ss",
                        lib_run.run_id, outcome, s.retry_after)
     else:
-        text, _n_file, _n_esc = summary(svc, lib_run.run_id, keys)
+        text, n_filed, n_esc = summary(svc, lib_run.run_id, keys)
         logger.info("%s", text)
+        # Plan 2 Task 5: one summary push per run that did anything -- every
+        # non-failed cycle, since it is only ever started with >=1 offered
+        # arrival (app/service.py's _due()).
+        if svc.notifier is not None and keys:
+            title = f"Librarian: {n_filed} filed · {n_esc} need a decision"
+            svc.notifier.enqueue("summary", f"summary:{lib_run.run_id}", title, text)
     return failed

@@ -22,6 +22,8 @@ RUNS = Counter("librarian_runs", "claude -p runs by mode and outcome", ["mode", 
 RUN_COST = Counter("librarian_run_cost_usd", "Reported claude -p cost in USD")
 INTENTS = Counter("librarian_intents", "Intents by kind and final status", ["kind", "status"])
 INDEX_BOOKS = Gauge("librarian_index_books", "Books in the BookOrbit library index")
+NOTIFY_FAILURES = Counter("librarian_notify_failures_total",
+                          "Apprise pushes that gave up after MAX_ATTEMPTS retries")
 
 _started = time.time()
 _last_beat = 0.0   # mirrors HEARTBEAT without reaching into prometheus internals
