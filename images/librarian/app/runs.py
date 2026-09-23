@@ -36,7 +36,6 @@ arrival text. The prompt trailer carries only the arrival COUNT (controller
 ruling: manual keys contain attacker-influenced filenames) -- the model
 discovers the keys through `list_arrivals`.
 """
-import json
 import logging
 import os
 import secrets
@@ -48,6 +47,7 @@ from app import metrics, states
 from app.mcp_shim import build_mcp_config
 from app.runner import child_env, claude_argv, granted_tools
 from app.states import Run
+from app.store import append_record
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +178,8 @@ def summary(svc, run_id: str, keys: list[str]) -> tuple[str, int, int]:
     """The text Plan 2 will push: header + one line per offered arrival."""
     simulated = {}
     for rec in svc.intents.store.all():
-        if rec.get("run_id") == run_id and rec.get("state") == states.SIMULATED_I:
+        if (rec.get("run_id") == run_id and rec.get("state") == states.SIMULATED_I
+                and rec.get("kind") in (states.ATTACH, states.CREATE_BOOK)):
             simulated[rec.get("arrival")] = rec
     n_file = n_esc = 0
     lines = []
@@ -208,10 +209,9 @@ def summary(svc, run_id: str, keys: list[str]) -> tuple[str, int, int]:
 
 
 def _append_run_record(svc, record: dict) -> None:
-    with open(svc.runs_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, sort_keys=True) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
+    # Store-style append (final review I2): a torn tail left by a crash is
+    # truncated first, so this record is never glued onto a partial one.
+    append_record(svc.runs_path, record)
 
 
 # --- the cycle ---------------------------------------------------------------------
@@ -227,14 +227,19 @@ def execute_cycle(svc, keys: list[str]) -> bool:
     pre = {k: svc.arrivals.get(k) for k in keys}
     lib_run = Run(run_id=new_run_id(), token=secrets.token_urlsafe(32), mode="librarian",
                   arrival_keys=list(keys))
-    record = {"run_id": lib_run.run_id, "started": started, "keys": list(keys),
-              "librarian": None, "reviewer": None}
+    started_ts = time.time()
+    # The start record is what lets a restart know which arrivals a run that
+    # never finished was offered (final review I3) -- and hold them.
+    _append_run_record(svc, {"event": "start", "run_id": lib_run.run_id, "started": started,
+                             "started_ts": started_ts, "keys": list(keys)})
+    record = {"event": "end", "run_id": lib_run.run_id, "started": started, "started_ts": started_ts,
+              "keys": list(keys), "librarian": None, "reviewer": None}
     try:
         return _cycle(svc, keys, pre, lib_run, lib_prompt, rev_prompt, record)
     except Stopping:
         logger.warning("librarian cycle %s interrupted by shutdown; discarding it", lib_run.run_id)
         discard(svc, lib_run.run_id, pre, "service stopping")
-        record.update(outcome="stopped", ended=svc.clock(),
+        record.update(outcome="stopped", failed=True, ended=svc.clock(), ended_ts=time.time(),
                       counts={"would_file": 0, "would_escalate": 0, "offered": len(keys)})
         _append_run_record(svc, record)
         raise
@@ -282,7 +287,7 @@ def _cycle(svc, keys, pre, lib_run, lib_prompt, rev_prompt, record) -> bool:
             metrics.INTENTS.labels(kind=str(rec.get("kind")), status=str(rec.get("state"))).inc()
 
     text, n_file, n_esc = summary(svc, lib_run.run_id, keys)
-    record.update(outcome=outcome, ended=svc.clock(),
+    record.update(outcome=outcome, failed=failed, ended=svc.clock(), ended_ts=time.time(),
                   counts={"would_file": n_file, "would_escalate": n_esc, "offered": len(keys)})
     _append_run_record(svc, record)
     if failed:

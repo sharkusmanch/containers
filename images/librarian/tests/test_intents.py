@@ -456,3 +456,37 @@ def test_apply_review_refuses_a_reviewer_auto_escalation(tmp_path):
     assert result.get("error") == "conflict"
     assert intents_store.get(esc_id)["state"] == PROPOSED_I
 
+
+# --- final review I2: finalize makes escalate/defer terminal ------------------
+
+
+def test_finalize_moves_escalate_and_defer_to_simulated(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    index = FakeIndex({})
+    esc = book.submit(run, escalate_intent(), ctx_factory_for(make_dossier(), index, run))
+    dfr = book.submit(run, defer_intent(arrival=OTHER_ARRIVAL),
+                      ctx_factory_for(make_dossier(key=OTHER_ARRIVAL), index, run))
+
+    book.finalize_dry_run(run.run_id, index=index)
+
+    for submitted in (esc, dfr):
+        rec = intents_store.get(submitted["intent_id"])
+        assert rec["state"] == SIMULATED_I, rec
+        assert rec["would_do"]
+    assert arrivals_store.get(OTHER_ARRIVAL)["state"] == DEFERRED
+
+
+def test_finalize_moves_auto_escalations_to_simulated(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+    book.submit(run, attach_intent(412), ctx_factory_for(dossier, index, run))   # never reviewed
+
+    book.finalize_dry_run(run.run_id, index=index)
+
+    escalations = [r for r in intents_store.all() if r["kind"] == ESCALATE]
+    assert [e["state"] for e in escalations] == [SIMULATED_I]
+    assert [r["state"] for r in intents_store.all() if r["state"] == PROPOSED_I] == []
+

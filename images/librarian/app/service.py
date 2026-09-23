@@ -19,8 +19,11 @@ so the run's own state changes never re-trigger it. A run starts only when
 some marked, offerable key exists and the newest mark is at least
 `debounce` seconds old -- a burst of arrivals becomes one run, and an
 arrival the librarian looked at and left alone is not offered again until
-something about it changes. Being in-memory, a restart re-offers every
-offerable arrival once, which is the intended "retry after restart".
+something about it changes. The markers are in-memory, but a restart
+rebuilds them from runs.jsonl (`_seed_debounce`, final review I3): an
+arrival the last run offered and left alone stays unmarked, and the
+arrivals of an interrupted or failed run stay held for `retry_after` -- a
+restart never triggers a paid re-run by itself.
 """
 import functools
 import hashlib
@@ -38,7 +41,7 @@ from app.media import ffprobe_json
 from app.policy import KidsLists, kids_signals
 from app.runner import run_claude
 from app.runs import Stopping, execute_cycle  # noqa: F401 (Stopping re-exported for main.py)
-from app.store import Store
+from app.store import Store, read_records
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +87,9 @@ class Service:
         self._in_runner = False
         self._lists_error: str | None = None
 
-        self._recover_interrupted()
+        runs = read_records(self.runs_path)   # StoreCorrupt halts, like the stores
+        held = self._recover_interrupted(runs)
+        self._seed_debounce(runs, held)
 
         self.api = api_factory(self, port=settings.api_port)
         self.api_port = self.api.start()
@@ -123,34 +128,27 @@ class Service:
                 logger.exception("tick failed")
             self._stop.wait(self.settings.poll_interval)
 
-    def _completed_run_ids(self) -> set:
-        done = set()
-        try:
-            with open(self.runs_path, encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        rid = json.loads(line).get("run_id")
-                    except (json.JSONDecodeError, AttributeError):
-                        continue    # a torn final line from the crash itself
-                    if isinstance(rid, str):
-                        done.add(rid)
-        except FileNotFoundError:
-            pass
-        return done
-
-    def _recover_interrupted(self) -> None:
+    def _recover_interrupted(self, runs: list[dict]) -> set:
         """Discard the partial effects of a run the process died in the middle
         of (OOM, SIGKILL, node loss) -- the same treatment a failed run gets.
+        Returns the arrival keys that run was offered or that recovery reset,
+        which `_seed_debounce` then holds for `retry_after`.
 
-        Every cycle that ends -- ok, failed, discarded or stopped -- appends
-        its record to runs.jsonl, so a run id with intents but no record is a
-        crashed run. Its still-open intents (proposed/approved, any kind:
-        attach, create_book, escalate, defer) are rejected, and the arrivals
-        they moved (PROPOSED / NEEDS_DECISION / DEFERRED) go back to READY to
-        be re-offered. Escalations from COMPLETED runs are left alone: they
-        are awaiting a human. Any PROPOSED arrival is also reset -- nothing
-        ever offers that state again."""
-        done = self._completed_run_ids()
+        Every cycle writes a start record to runs.jsonl before launching and
+        an end record (with `outcome`) when it ends -- ok, failed, discarded
+        or stopped. A finalized run leaves only TERMINAL intents behind
+        (app/intents.py, final review I2), so any intent still
+        proposed/approved whose run has no end record is a crashed run's
+        partial effect: it is rejected, and the arrivals it moved (PROPOSED /
+        NEEDS_DECISION / DEFERRED) go back to READY. A lost or torn end record
+        therefore can no longer undo a completed run's escalations. Any
+        PROPOSED arrival is also reset -- nothing ever offers that state
+        again."""
+        done = {r.get("run_id") for r in runs if "outcome" in r}
+        held = set()
+        for r in runs:
+            if r.get("event") == "start" and r.get("run_id") not in done:
+                held.update(k for k in (r.get("keys") or []) if isinstance(k, str))
         reason = "service restarted mid-run"
         with self.lock:
             touched = set()
@@ -163,13 +161,62 @@ class Service:
                                           review={"verdict": "reject", "argument": reason})
                 if isinstance(rec.get("arrival"), str):
                     touched.add(rec["arrival"])
-            for key in touched:
+            held |= touched
+            for key in sorted(touched):
                 cur = self.arrivals.get(key)
                 if cur and cur.get("state") in (states.PROPOSED, states.NEEDS_DECISION, states.DEFERRED):
                     self.arrivals.record(key, states.READY, not_before=None,
                                          detail="recovered after interrupted run")
             for rec in self.arrivals.by_state(states.PROPOSED):
+                held.add(rec["key"])
                 self.arrivals.record(rec["key"], states.READY, detail="recovered after interrupted run")
+        return held
+
+    def _seed_debounce(self, runs: list[dict], held: set) -> None:
+        """Rebuild the in-memory debounce state from runs.jsonl (final review
+        I3), so a restart does not re-offer -- and pay for -- every
+        offerable arrival at once:
+
+          * an arrival the most recent run that offered it left alone (its
+            record unchanged since that run STARTED) is not "changed";
+          * an arrival of an interrupted run (start record, no end record),
+            or one recovery reset, is held until now + `retry_after`;
+          * an arrival of a FAILED run is held until that run's end +
+            `retry_after`, exactly as the live service would have held it,
+            unless the arrival changed after the run ended.
+
+        Anything else (never offered, answered or deferral expired since)
+        is marked changed by the first `_observe_changes`, as before.
+        Timestamps compared against arrival records use the store's own
+        wall clock (`started_ts`/`ended_ts`); hold deadlines use the
+        service clock, like `_retry_at` itself."""
+        now = self.clock()
+        last: dict[str, dict] = {}
+        for r in runs:                     # file order: a run's end record overrides its start
+            for k in r.get("keys") or []:
+                if isinstance(k, str):
+                    last[k] = r
+        retry = self.settings.retry_after
+        for rec in self.arrivals.all():
+            key = rec["key"]
+            ts = rec.get("ts") or 0
+            r = last.get(key)
+            if key in held:
+                hold_until = now + retry
+            elif r is None or r.get("event") == "start":
+                continue
+            elif r.get("failed", r.get("outcome") != "ok"):
+                if ts > (r.get("ended_ts") or 0):
+                    continue
+                ended = r.get("ended")
+                hold_until = (ended if isinstance(ended, (int, float)) else now) + retry
+            else:
+                if ts > (r.get("started_ts") or 0):
+                    continue
+                self._seen[key] = self._signature(rec, now)
+                continue
+            self._seen[key] = self._signature(rec, now)
+            self._retry_at[key] = hold_until
 
     # --- tick ----------------------------------------------------------------
 

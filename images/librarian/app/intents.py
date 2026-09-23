@@ -31,6 +31,15 @@ decision, a still-unreviewed proposal is treated as rejected ("the reviewer
 did not rule") and auto-escalated the same way an explicit rejection is,
 and a deferred arrival is simply left alone -- it already carries its
 `not_before` from submission time.
+
+Every accepted intent of a finalized run ends in a TERMINAL intent state
+(final review I2): filings are `simulated` or `rejected`, and escalations
+(LLM-authored or auto-filed) and deferrals are `simulated` too -- in DRY_RUN
+"simulated" is exactly "the would-do plan was recorded". Only an
+interrupted run can therefore leave `proposed`/`approved` intents behind,
+which is what app/service.py's startup recovery keys on; a finalized run's
+escalations can never be mistaken for a crashed run's partial effects,
+whether or not its runs.jsonl record survived.
 """
 import time
 
@@ -247,19 +256,24 @@ class IntentBook:
                         self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
                         self.arrivals.record(rec["arrival"], SIMULATED, would_do=wd)
                     elif state == PROPOSED_I:
-                        _esc_id, esc_payload = self._reject_and_escalate(
+                        esc_id, esc_payload = self._reject_and_escalate(
                             rec, argument="reviewer did not rule",
                             question="The reviewer did not rule on this proposal before the run ended.",
                         )
                         wd = would_do(esc_payload, index=index)
+                        self.store.record(esc_id, SIMULATED_I, would_do=wd)
                         self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd)
 
-                elif kind == ESCALATE:
+                elif kind == ESCALATE and state == PROPOSED_I:
                     wd = would_do(rec["payload"], index=index)
+                    self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
                     self.arrivals.record(rec["arrival"], NEEDS_DECISION, would_do=wd)
 
-                # DEFER: the arrival was already recorded DEFERRED with its
-                # not_before at submit time -- nothing to do here.
+                elif kind == DEFER and state == PROPOSED_I:
+                    # the arrival was already recorded DEFERRED with its
+                    # not_before at submit time -- only the intent moves.
+                    wd = would_do(rec["payload"], index=index)
+                    self.store.record(rec["intent_id"], SIMULATED_I, would_do=wd)
 
 
 # --- would_do ------------------------------------------------------------------

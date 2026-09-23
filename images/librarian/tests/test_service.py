@@ -234,8 +234,10 @@ def test_stable_arrival_runs_librarian_then_reviewer_and_simulates(tmp_path, svc
 
     # run record + summary text
     with open(os.path.join(svc.settings.state_dir, "runs.jsonl")) as f:
-        runs = [json.loads(line) for line in f]
-    assert len(runs) == 1
+        lines = [json.loads(line) for line in f]
+    assert [r["event"] for r in lines] == ["start", "end"]
+    assert lines[0]["keys"] == [key] and lines[0]["run_id"] == lines[1]["run_id"]
+    runs = lines[1:]
     assert runs[0]["keys"] == [key]
     assert runs[0]["librarian"]["ok"] is True and runs[0]["reviewer"]["cost_usd"] == 0.25
     assert "Librarian (dry-run): 1 would file · 0 would escalate" in caplog.text
@@ -407,7 +409,7 @@ def test_timeout_retries_after_retry_after_not_every_poll(tmp_path, svc_factory)
     assert svc.arrivals.get(key)["state"] == states.READY
     assert metric("librarian_runs_total", mode="librarian", outcome="timeout") == before + 1
     with open(os.path.join(svc.settings.state_dir, "runs.jsonl")) as f:
-        assert json.loads(f.readline())["outcome"] == "timeout"
+        assert json.loads(f.readlines()[-1])["outcome"] == "timeout"
 
     for _ in range(5):                 # polls within the retry window: nothing
         clock.t += 120
@@ -758,3 +760,175 @@ def test_escalation_only_run_launches_no_reviewer(tmp_path, svc_factory):
         svc.tick()
     assert model.calls == ["librarian"]
     assert svc.arrivals.get(only_key(svc))["state"] == states.NEEDS_DECISION
+
+
+# --- final review I2: runs.jsonl torn-tail repair; finalized intents are terminal ---
+
+
+def _run_records(svc):
+    from app.store import read_records
+    return [r for r in read_records(svc.runs_path) if r.get("event") != "start"]
+
+
+def _escalate_script(call):
+    _, arrivals = call("GET", "/arrivals")
+    for a in arrivals:
+        st, body = call("POST", "/intents", {"kind": "escalate", "arrival": a["key"], "question": "which?",
+                                             "options": [{"label": "a"}, {"label": "b"}],
+                                             "recommendation": "a"})
+        assert st == 200, body
+
+
+def test_torn_runs_tail_is_repaired_before_next_append(tmp_path, svc_factory):
+    model = FakeModel(librarian=lambda call: None)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    os.makedirs(os.path.dirname(svc.runs_path), exist_ok=True)
+    with open(svc.runs_path, "w") as f:
+        f.write('{"run_id": "old", "outc')                  # a torn final write
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian"]
+    recs = _run_records(svc)                                 # parses: nothing glued on
+    assert [r["outcome"] for r in recs] == ["ok"]
+
+
+def test_completed_run_with_torn_record_is_not_treated_as_interrupted(tmp_path, svc_factory):
+    clock = Clock()
+    svc = svc_factory(FakeModel(librarian=_escalate_script), clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.NEEDS_DECISION
+    esc = [r for r in svc.intents.store.all() if r["kind"] == states.ESCALATE]
+    assert [r["state"] for r in esc] == [states.SIMULATED_I]
+    svc.stop()
+    # the end record's write was torn by a crash
+    with open(svc.runs_path, "rb") as f:
+        data = f.read()
+    with open(svc.runs_path, "wb") as f:
+        f.write(data[:-20])
+
+    model2 = FakeModel(librarian=_escalate_script)
+    svc2 = svc_factory(model2, clock)
+    assert svc2.arrivals.get(key)["state"] == states.NEEDS_DECISION
+    assert svc2.intents.store.get(esc[0]["intent_id"])["state"] == states.SIMULATED_I
+    for _ in range(3):
+        clock.t += 4000
+        svc2.tick()
+    assert model2.calls == []
+
+
+# --- final review I3: restart does not re-offer already-offered arrivals ----------
+
+
+def test_restart_does_not_reoffer_arrival_the_last_run_left_alone(tmp_path, svc_factory):
+    clock = Clock()
+    svc = svc_factory(FakeModel(librarian=lambda call: None), clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    svc.stop()
+
+    model2 = FakeModel(librarian=lambda call: None)
+    svc2 = svc_factory(model2, clock)
+    for _ in range(5):
+        clock.t += 4000
+        svc2.tick()
+    assert model2.calls == []
+    assert svc2.arrivals.get(only_key(svc2))["state"] == states.READY
+
+
+def test_restart_still_offers_never_offered_arrival(tmp_path, svc_factory):
+    clock = Clock()
+    svc = svc_factory(FakeModel(), clock)
+    add_libation(tmp_path)
+    svc.tick()
+    clock.t += 1
+    svc.tick()                          # READY, debounce not yet elapsed
+    svc.stop()
+
+    model2 = FakeModel(librarian=lambda call: None)
+    svc2 = svc_factory(model2, clock)
+    clock.t += 1
+    svc2.tick()
+    clock.t += 11
+    svc2.tick()
+    assert model2.calls == ["librarian"]
+
+
+def test_restart_offers_arrival_answered_after_the_run(tmp_path, svc_factory):
+    clock = Clock()
+    svc = svc_factory(FakeModel(librarian=lambda call: None), clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    key = only_key(svc)
+    svc.stop()
+    time.sleep(0.01)
+    svc.arrivals.record(key, states.ANSWERED, human_answer="it's book 2")
+
+    model2 = FakeModel(librarian=lambda call: None)
+    svc2 = svc_factory(model2, clock)
+    clock.t += 1
+    svc2.tick()
+    clock.t += 11
+    svc2.tick()
+    assert model2.calls == ["librarian"]
+
+
+def test_restart_after_interrupted_run_holds_arrivals_for_retry_after(tmp_path, svc_factory):
+    def crash(call):
+        attach_script()(call)
+        raise KeyboardInterrupt()          # stands in for SIGKILL/OOM: no end record
+
+    clock = Clock()
+    svc = svc_factory(FakeModel(librarian=crash), clock)
+    add_libation(tmp_path)
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    clock.t += 11
+    with pytest.raises(KeyboardInterrupt):
+        svc.tick()
+    svc.stop()
+
+    model2 = FakeModel(librarian=lambda call: None)
+    svc2 = svc_factory(model2, clock)
+    key = only_key(svc2)
+    assert svc2.arrivals.get(key)["state"] == states.READY           # recovered
+    for _ in range(5):
+        clock.t += 600
+        svc2.tick()
+    assert model2.calls == []                                        # held: 3000s < retry_after
+    clock.t += 700
+    svc2.tick()
+    assert model2.calls == ["librarian"]
+
+
+def test_restart_after_failed_run_keeps_holding_until_retry_after(tmp_path, svc_factory):
+    clock = Clock()
+    svc = svc_factory(FakeModel(librarian=lambda call: None, timed_out=True), clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    ended = clock.t
+    svc.stop()
+
+    model2 = FakeModel(librarian=lambda call: None)
+    svc2 = svc_factory(model2, clock)
+    clock.t += 60
+    svc2.tick()
+    clock.t += 60
+    svc2.tick()
+    assert model2.calls == []
+    clock.t = ended + 3600 + 11          # released at retry_after; debounce still applies
+    svc2.tick()
+    assert model2.calls == ["librarian"]

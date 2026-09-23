@@ -49,6 +49,7 @@ from app.bookorbit import BookorbitClient, LibraryIndex  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.runner import RunResult, run_claude  # noqa: E402
 from app.service import Service  # noqa: E402
+from app.store import read_records  # noqa: E402
 from tests.fixtures import make_epub  # noqa: E402
 
 LIBRARY_NAMES = {"Library": 7, "Kids Audiobooks": 8, "Comics": 3}
@@ -264,7 +265,8 @@ def outcome(svc, key: str, scripted_id: str | None = None) -> dict:
     intents = [r for r in svc.intents.store.all() if r.get("arrival") == key]
     got = {"state": st, "kind": "none"}
     if st == states.SIMULATED:
-        sim = next((r for r in intents if r.get("state") == states.SIMULATED_I), None)
+        sim = next((r for r in intents if r.get("state") == states.SIMULATED_I
+                    and r.get("kind") in (states.ATTACH, states.CREATE_BOOK)), None)
         if sim:
             p = sim.get("payload") or {}
             got.update(kind=sim["kind"], book_id=p.get("book_id"), library=_lib_of(svc, sim["kind"], p),
@@ -416,13 +418,13 @@ def run_case(case: dict, args, out_root: str) -> dict:
             for _ in range(6):
                 clock.t += 1
                 svc.tick()
-                if os.path.exists(svc.runs_path):
+                if any("outcome" in r for r in read_records(svc.runs_path)):
                     break
             recs = svc.arrivals.all()
             record = {}
-            if os.path.exists(svc.runs_path):
-                with open(svc.runs_path) as f:
-                    record = json.loads(f.readlines()[-1])
+            ends = [r for r in read_records(svc.runs_path) if "outcome" in r]
+            if ends:
+                record = ends[-1]
             if len(recs) != 1:
                 got = {"kind": "none", "error": f"{len(recs)} arrivals recorded", "trail": []}
             else:
