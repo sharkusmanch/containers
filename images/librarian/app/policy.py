@@ -32,6 +32,11 @@ against `ctx.lists` from the arrival's own untrusted-but-safe-to-match
 inputs (series/asins/author names -- normalized set-membership checks only,
 never free text) at check time, and denies if EITHER the stored or the
 fresh computation has a deny hit.
+
+Human answers (Plan 2 Task 6): guards 7 and 10 honour a human answer only
+through `human_answer_matches` -- the submitted intent must be the option
+intent the human selected in Vikunja. A free-text answer never unlocks a
+guard.
 """
 import math
 import os
@@ -624,16 +629,50 @@ def _targets_kids(intent: dict, kind: str, ctx: "GuardContext") -> bool:
     return False
 
 
-def _valid_human_answer(human_answer) -> bool:
-    """A human has genuinely weighed in on this arrival: a dict with a
-    non-empty `choice`. Anything else (None, a bare string, an empty dict,
-    an empty choice) does not count -- guards 7 and 10 must not treat
-    adversarial or malformed input as a human decision."""
-    return isinstance(human_answer, dict) and bool(human_answer.get("choice"))
+def _same_id(a, b) -> bool:
+    """Book ids compare as real ints only -- `True == 1` in Python, and an
+    option intent is LLM-authored data."""
+    return (isinstance(a, int) and not isinstance(a, bool)
+            and isinstance(b, int) and not isinstance(b, bool) and a == b)
 
 
-def _human_kids_override(human_answer) -> bool:
-    return _valid_human_answer(human_answer) and human_answer.get("choice") == "kids"
+def human_answer_matches(intent: dict, human_answer) -> bool:
+    """Plan 2 Task 6 (Global "Human answer shape"): a human answer unlocks
+    guards 7 and 10 ONLY for the exact intent the human selected -- the
+    submitted intent must equal `human_answer["option_intent"]` on kind,
+    book_id and library (only the keys the option carries; a create_book
+    compares kind + library, an attach/update_metadata must name its
+    book_id). If the option names an arrival it must be this one.
+
+    Anything else never overrides a guard: None, a non-dict, a pre-Plan-2
+    `{"choice": ...}` answer, a free-text reply or an option without an
+    intent ("Leave it for me") all have `option_intent` None -- the LLM must
+    then follow the answer through the normal guards or escalate again.
+
+    One exception (Task 3 note): an `update_metadata` paired with the
+    answered attach -- same arrival, same book_id as the selected attach
+    option -- rides on that answer, since the kind comparison alone would
+    deny the metadata correction the human's filing needs."""
+    if not isinstance(human_answer, dict):
+        return False
+    oi = human_answer.get("option_intent")
+    if not isinstance(oi, dict):
+        return False
+    if "arrival" in oi and oi.get("arrival") != intent.get("arrival"):
+        return False
+    kind = intent.get("kind")
+    okind = oi.get("kind")
+    if kind == UPDATE_METADATA and okind == ATTACH:
+        return _same_id(oi.get("book_id"), intent.get("book_id"))
+    if okind != kind:
+        return False
+    if kind == CREATE_BOOK:
+        return oi.get("library") == intent.get("library")
+    if kind in (ATTACH, UPDATE_METADATA):
+        if not _same_id(oi.get("book_id"), intent.get("book_id")):
+            return False
+        return "library" not in oi or oi.get("library") == intent.get("library")
+    return False
 
 
 # --- check_intent --------------------------------------------------------
@@ -716,8 +755,8 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
     # Guard 7: filing into Kids needs a clean, FRESH allow signal (recomputed
     # against ctx.lists right now, not just whatever the dossier baked in
     # when it was built) with no deny hit from either the stored or the
-    # fresh computation -- or an explicit human "kids" decision that
-    # overrides the denylist. A malformed allow/denylist file fails CLOSED:
+    # fresh computation -- or a human answer that selected exactly this
+    # filing (`human_answer_matches`), which overrides the lists. A malformed allow/denylist file fails CLOSED:
     # every kids filing is refused, no override, until the file is fixed.
     override_note = ""
     if _targets_kids(intent, kind, ctx):
@@ -735,18 +774,18 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
 
         deny_hit = stored_deny_hit or fresh_deny_hit
         needs_override = deny_hit or not fresh_allow_hit
-        human_override = _human_kids_override(ctx.human_answer)
+        human_override = human_answer_matches(intent, ctx.human_answer)
 
         if needs_override and not human_override:
             return False, ("kids filing needs a fresh allowlist hit and no denylist hit "
-                            "(stored or fresh), or a human 'kids' decision")
+                            "(stored or fresh), or a human answer selecting exactly this filing")
         if needs_override:  # human_override is true here
             reasons = []
             if deny_hit:
                 reasons.append("a denylist hit")
             if not fresh_allow_hit:
                 reasons.append("a missing allowlist hit")
-            override_note = f" (human 'kids' choice overrides {' and '.join(reasons)})"
+            override_note = f" (human's selected option overrides {' and '.join(reasons)})"
 
     # Guard 8: a new book's rendered folder name must not collide with an
     # existing book already filed in the same target library, NOR with
@@ -770,7 +809,7 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
                 return False, f"folder name {rendered!r} collides with an existing book in {library_name}"
 
     # Guard 10: don't attach when the series index disagrees, unless a human
-    # has already weighed in on this arrival. Prefer the dossier's own
+    # selected exactly this attach (`human_answer_matches`). Prefer the dossier's own
     # measure (already computed against this run's exact candidate list);
     # for a book with no measure -- e.g. one the LLM found via search_books
     # rather than a ranked candidate -- recompute the same agreement from
@@ -788,7 +827,7 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
             arrival_idx = trusted.get("arrival_series_index")
             cand_idx = (book or {}).get("seriesIndex")
             disagree = agreement(arrival_idx, cand_idx) == "disagree"
-        if disagree and not _valid_human_answer(ctx.human_answer):
+        if disagree and not human_answer_matches(intent, ctx.human_answer):
             return False, "series index disagreement for this book needs a human decision before attaching"
 
     return True, "ok" + override_note
