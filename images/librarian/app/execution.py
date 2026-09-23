@@ -40,6 +40,14 @@ escalation but the filing stands. `retryable` -> attempts+1 and
 `max_attempts` -> failed. A retryable caused by the service stopping is not
 an attempt. `failed` -> intent `exec-failed`, arrival `failed` +
 auto-escalation carrying the executor's detail (paths).
+
+Final review I1: an escalation on an arrival that does not end up
+`needs-decision` (filed + `ExecResult.escalate`, failed, update_metadata
+failed) is surfaced by `flag_attention` -- a push (a failed filing keeps
+its own failure push instead) and a Vikunja "Librarian needs a look" task
+(app/escalations.py) -- and every filed/failed outcome is noted for the
+tick's summary pass, which pushes a "late" summary for those no run
+summary of the same tick covers.
 """
 import logging
 import os
@@ -256,17 +264,49 @@ def record_result(svc, key: str, intent: dict | None, res: ExecResult) -> None:
                                 detail=res.detail, retry_at=None,
                                 moves=[list(m) for m in res.moves])
             logger.info("arrival %s filed into book %s", log_safe(key), res.book_id)
+            note_outcome(svc, key)
             if res.escalate:
-                svc.intents.record_escalation(
-                    _run_id(intent, rec), key,
-                    f"Filed into book {res.book_id}, but needs a look: {res.escalate}",
-                    reason="executor escalation")
+                text = f"Filed into book {res.book_id}, but needs a look: {res.escalate}"
+                esc_id = svc.intents.record_escalation(_run_id(intent, rec), key, text,
+                                                       reason="executor escalation")
+                flag_attention(svc, key, _intent_id(intent, rec), esc_id, text)
         elif res.state == "retryable":
             _retry(svc, rec, intent, res.detail)
         else:
             _failed(svc, rec, intent, res.detail or f"executor returned {res.state!r}")
     if res.state == "filed" and intent is not None:
         run_updates(svc, key, run_id=intent.get("run_id"), book_id=res.book_id)
+
+
+def _intent_id(intent, rec) -> str:
+    return (intent or {}).get("intent_id") or rec.get("exec_intent") or "unknown"
+
+
+def note_outcome(svc, key: str) -> None:
+    """Remember that `key` reached a terminal filing outcome this tick; the
+    tick's summary pass (app/runs.py `flush_summaries`) reports every such
+    arrival its own run summary does not cover as a "late" summary (final
+    review I1: retries, budget spill and startup resume file outside a
+    cycle)."""
+    svc.__dict__.setdefault("tick_outcomes", set()).add(key)
+
+
+def flag_attention(svc, key: str, intent_id: str, esc_id: str, text: str, *, push: bool = True) -> None:
+    """Final review I1: an executor escalation on an arrival that does NOT
+    end up needing a decision (filed-but-look, failed, metadata correction
+    failed) is surfaced to the human -- an `attention` entry on the arrival
+    (app/escalations.py turns each into a Vikunja task "Librarian needs a
+    look: <title>", left open for the human to close) and, unless `push` is
+    False (a failed filing already has its failure push), one push
+    `attention:<arrival>:<intent>`. Caller holds svc.lock."""
+    rec = svc.arrivals.get(key) or {"key": key}
+    items = [dict(a) for a in (rec.get("attention") or []) if isinstance(a, dict)]
+    if not any(a.get("id") == esc_id for a in items):
+        items.append({"id": esc_id, "intent": intent_id, "text": str(text), "task_id": None,
+                      "url": None, "pushed": bool(push and svc.notifier is not None)})
+        rec = svc.arrivals.record(key, rec.get("state") or states.FAILED, attention=items)
+    if push:
+        svc.notify_attention(rec, intent_id, text)
 
 
 def _run_id(intent, rec) -> str:
@@ -302,9 +342,12 @@ def _failed(svc, rec, intent, detail) -> None:
         svc.intents.store.record(intent["intent_id"], states.EXEC_FAILED, exec_detail=detail)
         svc.intents.reject_paired_metadata(intent, "paired filing did not execute")
     svc.arrivals.record(key, states.FAILED, error=detail, retry_at=None)
-    svc.intents.record_escalation(_run_id(intent, rec), key, f"Filing failed: {detail}",
-                                  reason="execution failed")
+    esc_id = svc.intents.record_escalation(_run_id(intent, rec), key, f"Filing failed: {detail}",
+                                           reason="execution failed")
     svc.notify_failure(rec, intent, detail)   # Plan 2 Task 5: one push per failed filing
+    # final review I1: + a Vikunja task (the failure push above is the push)
+    flag_attention(svc, key, _intent_id(intent, rec), esc_id, f"Filing failed: {detail}", push=False)
+    note_outcome(svc, key)
     logger.error("arrival %s failed: %s", log_safe(key), log_safe(detail))
 
 
@@ -368,10 +411,10 @@ def _record_update(svc, m, key, book_id, res) -> None:
     else:
         detail = res.detail
     svc.intents.store.record(mid, states.EXEC_FAILED, exec_detail=detail)
-    svc.intents.record_escalation(
-        m.get("run_id") or "executor", key,
-        f"The file was filed into book {book_id}, but its metadata correction failed: {detail}",
-        reason="update_metadata failed")
+    text = f"The file was filed into book {book_id}, but its metadata correction failed: {detail}"
+    esc_id = svc.intents.record_escalation(m.get("run_id") or "executor", key, text,
+                                           reason="update_metadata failed")
+    flag_attention(svc, key, mid, esc_id, text)
     logger.error("update_metadata %s for book %s failed: %s", mid, book_id, log_safe(detail))
 
 

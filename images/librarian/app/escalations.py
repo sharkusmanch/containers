@@ -361,6 +361,12 @@ def sync(svc) -> None:
         # link-less fallback once due, so an outage silences nobody
         _each(svc, svc.arrivals.by_state(states.NEEDS_DECISION), lambda rec: _stamp(svc, rec))
 
+    # final review I1: executor escalations on arrivals that need no
+    # decision (filed-but-look, failed, metadata correction failed) become
+    # "Librarian needs a look" tasks, left open for the human to close
+    _each(svc, [r for r in svc.arrivals.all() if _open_attention(r)],
+          lambda rec: _attention(svc, rec, budget), budget)
+
     def close(rec):
         if (rec.get("vikunja_task_id") and not rec.get("vikunja_closed")
                 and rec.get("state") in TERMINAL):
@@ -368,6 +374,63 @@ def sync(svc) -> None:
                 return False
             _close(svc, rec, budget)
     _each(svc, svc.arrivals.all(), close, budget)
+
+
+def _open_attention(rec) -> list:
+    return [a for a in (rec.get("attention") or [])
+            if isinstance(a, dict) and not a.get("task_id") and a.get("id")]
+
+
+def attention_title(rec: dict) -> str:
+    hint = _clean(rec.get("title_hint") or rec.get("key") or "arrival", 200)
+    title = f"Librarian needs a look: {hint}"
+    return title if len(title) <= TITLE_MAX else title[: TITLE_MAX - 1].rstrip() + "…"
+
+
+def attention_text(rec: dict, item: dict, bookorbit_url: str = "") -> str:
+    lines = [_clean(item.get("text"), 1500), "",
+             f"Arrival: {_clean(rec.get('key'), 300)}",
+             f"State: {_clean(rec.get('state'), 40)}"]
+    book_id = _int(rec.get("book_id"))
+    if bookorbit_url and book_id is not None:
+        lines.append(f"BookOrbit: {bookorbit_url.rstrip('/')}/books/{book_id}")
+    lines += ["", "Nothing will be retried automatically. Close this task once you have looked."]
+    return "\n".join(lines)
+
+
+def _attention(svc, rec, budget):
+    key = rec["key"]
+    now = svc.clock()
+    windows = svc.__dict__.setdefault("_vikunja_create_failures", {})
+    for item in _open_attention(rec):
+        wkey = ("attention", key, item["id"])
+        recent = [t for t in windows.get(wkey, []) if now - t < HOUR]
+        windows[wkey] = recent
+        if len(recent) >= MAX_CREATE_FAILURES_PER_HOUR:
+            continue
+        if not budget.take():
+            return False
+        try:
+            tid, url = svc.vikunja.create_task(
+                attention_title(rec), attention_text(rec, item, svc.settings.bookorbit_public_url))
+        except VikunjaError as e:
+            _error(svc, key, "creating the attention task", e, budget)
+            if e.transport:
+                budget.refund()
+                return False
+            recent.append(now)
+            continue
+        with svc.lock:
+            cur = svc.arrivals.get(key)
+            if cur is None:
+                return None
+            items = [dict(a) for a in (cur.get("attention") or []) if isinstance(a, dict)]
+            for a in items:
+                if a.get("id") == item["id"]:
+                    a.update(task_id=tid, url=url)
+            svc.arrivals.record(key, cur["state"], attention=items)
+        logger.info("arrival %s: Vikunja attention task %s created", log_safe(key), tid)
+    return None
 
 
 def _push_only(svc) -> None:

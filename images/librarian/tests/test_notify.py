@@ -505,7 +505,8 @@ def test_summary_push_enqueued_and_flushed_after_dry_run_cycle(tmp_path):
     rec = sent_recs[0]
     assert rec["kind"] == "summary"
     assert rec["msg_id"].startswith("summary:")
-    assert "filed" in rec["title"] and "need a decision" in rec["title"]
+    # dry-run: the title says what WOULD happen (final review M6)
+    assert rec["title"] == "Librarian (dry-run): 1 would file · 0 would escalate"
     assert "would add to" in rec["body"]
     payload = session.calls[0][1]
     assert payload["title"] == rec["title"] and payload["body"] == rec["body"]

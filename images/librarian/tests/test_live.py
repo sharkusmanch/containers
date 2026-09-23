@@ -79,11 +79,11 @@ class FakeExecutor:
 def live_factory(tmp_path):
     made = []
 
-    def make(model=None, fx=None, clock=None, books=BOOKS, **kw):
+    def make(model=None, fx=None, clock=None, books=BOOKS, notifier=None, vikunja=None, **kw):
         kw.setdefault("dry_run", False)
         s = Service(make_settings(tmp_path, **kw), index=make_index(tmp_path, books=books),
                     runner=model or FakeModel(), prober=fake_prober, clock=clock or Clock(),
-                    executor=fx)
+                    executor=fx, notifier=notifier, vikunja=vikunja)
         made.append(s)
         return s
 
@@ -235,7 +235,7 @@ def test_failed_execution_fails_arrival_and_escalates_with_paths(tmp_path, live_
     assert filing_intent(svc, key)["state"] == states.EXEC_FAILED
     esc = executor_escalations(svc, key)
     assert len(esc) == 1 and "/media/books/y/x.m4b" in esc[0]["payload"]["question"]
-    assert "⚠️ Artificial Condition — failed, see task" in caplog.text
+    assert "⚠️ Artificial Condition — failed, see push" in caplog.text   # no Vikunja: no task
     assert "0 filed · 0 need a decision · 1 failed" in caplog.text
 
 

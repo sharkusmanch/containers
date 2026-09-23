@@ -47,7 +47,7 @@ from app.logutil import log_safe
 from app.media import ffprobe_json
 from app.policy import KidsLists, kids_signals
 from app.runner import run_claude
-from app.runs import Stopping, execute_cycle  # noqa: F401 (Stopping re-exported for main.py)
+from app.runs import Stopping, execute_cycle, flush_summaries  # noqa: F401 (Stopping re-exported for main.py)
 from app.store import Store, append_record, read_records
 
 logger = logging.getLogger(__name__)
@@ -114,6 +114,8 @@ class Service:
             self.notifier.beat = metrics.beat
         self.vikunja = vikunja              # Plan 2 Task 6
         self.exec_budget = 0                # executions left this tick (max_exec_per_tick)
+        self.pending_summaries: list = []   # (run_id, keys) of this tick's finished cycles
+        self.tick_outcomes: set = set()     # arrivals that reached filed/failed this tick
         self._live_started = False
         self._go_live_pending = False
         self._go_live_errors: set = set()   # (key, error) already logged by go_live
@@ -368,6 +370,13 @@ class Service:
                 escalations.sync(self)
             except Exception:
                 logger.exception("escalation sync failed")
+        # final review I1: run summaries are built AFTER execution and the
+        # Vikunja pass (so "see task" is only said of a task that exists),
+        # plus one "late" summary for filings that finished outside a cycle
+        try:
+            flush_summaries(self)
+        except Exception:
+            logger.exception("summary push failed")
         if self.notifier is not None and not self._stop.is_set():
             # Outside svc.lock (Plan 2 Task 5): the outbox is its own Store
             # with its own lock, and an HTTP call must never hold svc.lock.
@@ -597,6 +606,21 @@ class Service:
         title = f"Filing failed: {_short_title(hint)}"
         body = notify.sanitize(str(detail or ""))
         self.notifier.enqueue("failure", f"failure:{key}:{intent_id}", title, body)
+
+    def notify_attention(self, arrival_rec: dict, intent_id: str, text: str) -> None:
+        """Final review I1: one push per executor escalation on an arrival
+        that does not need a decision (filed but needs a look, metadata
+        correction failed). Plain text with the detail (paths included);
+        idempotent on msg_id `attention:<arrival>:<intent>`."""
+        if self.notifier is None:
+            return
+        key = (arrival_rec or {}).get("key") or ""
+        hint = (arrival_rec or {}).get("title_hint") or key
+        title = f"Librarian needs a look: {_short_title(hint)}"
+        body = notify.sanitize(str(text or ""))
+        if self.vikunja is not None:
+            body += "\n\nA Vikunja task \u201cLibrarian needs a look\u201d follows."
+        self.notifier.enqueue("attention", f"attention:{key}:{intent_id or 'unknown'}", title, body)
 
     def notify_escalation(self, arrival_rec: dict, intent: dict, *, suffix: str = "",
                           tail: str | None = None) -> None:
