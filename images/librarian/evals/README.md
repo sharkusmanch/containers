@@ -8,7 +8,7 @@ live outside this repo (the deployment's `prompts/librarian.md` and `prompts/rev
 ```bash
 cd images/librarian
 bao login -method=kubernetes role=toolbox jwt=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token) >/dev/null
-export CLAUDE_CODE_OAUTH_TOKEN=$(bao kv get -field=CLAUDE_CODE_OAUTH_TOKEN secret/apps/toolbox/claude-scheduler)
+export CLAUDE_CODE_OAUTH_TOKEN=$(bao kv get -field=CLAUDE_CODE_OAUTH_TOKEN secret/apps/media/librarian)
 uv run -q --with requests --with prometheus-client==0.26.0 --with "mcp<2" --with pytest \
   python evals/run_eval.py --prompts <prompts dir> --model opus [--case NAME ...]
 ```
