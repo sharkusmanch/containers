@@ -32,22 +32,17 @@ import time
 
 from app import intake, metrics, states
 from app.api import ApiServer
-from app.dossier import _title_from_folder, build_dossier
+from app.dossier import build_dossier, title_from_folder
 from app.intents import IntentBook
 from app.media import ffprobe_json
 from app.policy import KidsLists, kids_signals
 from app.runner import run_claude
-from app.runs import execute_cycle
+from app.runs import Stopping, execute_cycle  # noqa: F401 (Stopping re-exported for main.py)
 from app.store import Store
 
 logger = logging.getLogger(__name__)
 
 TRANSCRIPT_MAX_AGE = 30 * 86400
-
-
-class Stopping(Exception):
-    """Raised (by main.py's SIGTERM handler) into an in-flight runner so
-    run_claude's cleanup kills the child and the cycle is discarded."""
 
 
 def dossier_name(key: str) -> str:
@@ -87,6 +82,7 @@ class Service:
         self.last_run_started: float | None = None
         self._stop = threading.Event()
         self._in_runner = False
+        self._lists_error: str | None = None
 
         self._recover_interrupted()
 
@@ -127,18 +123,51 @@ class Service:
                 logger.exception("tick failed")
             self._stop.wait(self.settings.poll_interval)
 
+    def _completed_run_ids(self) -> set:
+        done = set()
+        try:
+            with open(self.runs_path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        rid = json.loads(line).get("run_id")
+                    except (json.JSONDecodeError, AttributeError):
+                        continue    # a torn final line from the crash itself
+                    if isinstance(rid, str):
+                        done.add(rid)
+        except FileNotFoundError:
+            pass
+        return done
+
     def _recover_interrupted(self) -> None:
-        """A crash/SIGKILL mid-run leaves filing intents PROPOSED/APPROVED and
-        their arrivals PROPOSED -- a state nothing ever offers again. A
-        finished run never leaves a filing intent in either state (finalize
-        simulates or rejects every one), so any found here are orphans."""
+        """Discard the partial effects of a run the process died in the middle
+        of (OOM, SIGKILL, node loss) -- the same treatment a failed run gets.
+
+        Every cycle that ends -- ok, failed, discarded or stopped -- appends
+        its record to runs.jsonl, so a run id with intents but no record is a
+        crashed run. Its still-open intents (proposed/approved, any kind:
+        attach, create_book, escalate, defer) are rejected, and the arrivals
+        they moved (PROPOSED / NEEDS_DECISION / DEFERRED) go back to READY to
+        be re-offered. Escalations from COMPLETED runs are left alone: they
+        are awaiting a human. Any PROPOSED arrival is also reset -- nothing
+        ever offers that state again."""
+        done = self._completed_run_ids()
+        reason = "service restarted mid-run"
         with self.lock:
+            touched = set()
             for rec in self.intents.store.all():
-                if rec.get("kind") in (states.ATTACH, states.CREATE_BOOK) and \
-                        rec.get("state") in (states.PROPOSED_I, states.APPROVED):
-                    self.intents.store.record(
-                        rec["intent_id"], states.REJECTED,
-                        review={"verdict": "reject", "argument": "service restarted mid-run"})
+                if rec.get("run_id") in done:
+                    continue
+                if rec.get("state") not in (states.PROPOSED_I, states.APPROVED):
+                    continue
+                self.intents.store.record(rec["intent_id"], states.REJECTED,
+                                          review={"verdict": "reject", "argument": reason})
+                if isinstance(rec.get("arrival"), str):
+                    touched.add(rec["arrival"])
+            for key in touched:
+                cur = self.arrivals.get(key)
+                if cur and cur.get("state") in (states.PROPOSED, states.NEEDS_DECISION, states.DEFERRED):
+                    self.arrivals.record(key, states.READY, not_before=None,
+                                         detail="recovered after interrupted run")
             for rec in self.arrivals.by_state(states.PROPOSED):
                 self.arrivals.record(rec["key"], states.READY, detail="recovered after interrupted run")
 
@@ -153,10 +182,16 @@ class Service:
             logger.exception("library index refresh failed; using cached index")
         metrics.INDEX_BOOKS.set(len(self.index.books()))
         self.lists = KidsLists.load(self.settings.lists_dir)
-        if not self.lists.valid:
-            logger.error("kids lists invalid (kids filings refused): %s", self.lists.error)
+        err = None if self.lists.valid else self.lists.error
+        if err and err != self._lists_error:
+            logger.error("kids lists invalid (kids filings refused): %s", err)
+        elif self._lists_error and not err:
+            logger.info("kids lists valid again")
+        self._lists_error = err
 
         self._intake(now)
+        if self._stop.is_set():
+            return
         self._observe_changes(now)
         keys = self._due(now)
         if keys:
@@ -184,6 +219,11 @@ class Service:
             logger.exception("intake scan failed")
             return
         for c in candidates:
+            # hashing a large m4b can take a while: keep liveness fresh and
+            # let a SIGTERM stop intake between candidates
+            metrics.beat()
+            if self._stop.is_set():
+                return
             if not self._only_match(c.source, c.source_id):
                 continue
             try:
@@ -197,7 +237,7 @@ class Service:
         if not self.stability.observe(c, now):
             return
         cid = (c.source, c.source_id)
-        sig = intake._signature(c)
+        sig = intake.signature(c)
         cached = self._hashed.get(cid)
         if cached is not None and cached[0] == sig:
             sha = cached[1]
@@ -212,7 +252,7 @@ class Service:
 
         primary = intake.primary_file(c)
         base = {"source": c.source, "source_id": c.source_id, "path": c.path,
-                "primary": primary, "sha256": sha, "title_hint": _title_from_folder(c)}
+                "primary": primary, "sha256": sha, "title_hint": title_from_folder(c)}
 
         err = intake.verify_sidecar(c, sha)
         if err:
@@ -285,13 +325,17 @@ class Service:
 
     def _due(self, now: float) -> list[str]:
         pending = []
+        stale = []
         for key, at in self._changed.items():
             rec = self.arrivals.get(key)
             if rec is None or not self._offerable(rec, now):
+                stale.append(key)   # a later flip to offerable re-marks it
                 continue
             if not self._only_match(rec.get("source", ""), rec.get("source_id", ""), key):
                 continue
             pending.append((rec.get("first_seen", 0), key, at))
+        for key in stale:
+            del self._changed[key]
         if not pending:
             return []
         if now - max(at for _, _, at in pending) < self.settings.debounce:
@@ -306,12 +350,21 @@ class Service:
         self.last_run_started = now
         for k in keys:
             self._changed.pop(k, None)
-        failed = execute_cycle(self, keys)
-        after = self.clock()
-        self.snapshot_seen(after)
-        if failed:
-            for k in keys:
-                self._retry_at[k] = after + self.settings.retry_after
+        failed = True
+        try:
+            failed = execute_cycle(self, keys)
+        except Exception:
+            # e.g. finalize/summary/run-record/discard raising: the run's own
+            # writes must still be absorbed and the keys held back, or they
+            # look like changes and a paid re-run starts after `debounce`.
+            logger.exception("librarian cycle crashed; holding its arrivals for retry_after")
+        finally:
+            # also on Stopping (BaseException), which then propagates
+            after = self.clock()
+            self.snapshot_seen(after)
+            if failed:
+                for k in keys:
+                    self._retry_at[k] = after + self.settings.retry_after
 
     def set_run(self, run) -> None:
         """Open or close (run=None) the current run -- always under
@@ -327,6 +380,7 @@ class Service:
             return self.runner(argv, on_tick=metrics.beat, **kw)
         finally:
             self._in_runner = False
+        self._lists_error: str | None = None
 
     # --- housekeeping --------------------------------------------------------
 

@@ -173,7 +173,7 @@ def scan(intake_root: str) -> list[Candidate]:
     return out
 
 
-def _signature(c: Candidate) -> tuple:
+def signature(c: Candidate) -> tuple:
     sig = []
     for f in c.files:
         try:
@@ -202,7 +202,7 @@ class Stability:
 
     def observe(self, c: Candidate, now: float) -> bool:
         cid = _candidate_id(c)
-        sig = _signature(c)
+        sig = signature(c)
         if sig is None:
             # files disappeared out from under us -- forget the candidate.
             self._seen.pop(cid, None)

@@ -46,7 +46,7 @@ def _short_reason(exc: Exception) -> str:
     return str(exc)[:_UNTRUSTED_STRING_CAP] or exc.__class__.__name__
 
 
-def _title_from_folder(c) -> str:
+def title_from_folder(c) -> str:
     name = os.path.basename(c.path)
     if os.path.splitext(name)[1].lower() in (".epub", ".cbz", ".m4b"):
         name = os.path.splitext(name)[0]  # kindle/manual-file: strip the extension too
@@ -122,7 +122,7 @@ def build_dossier(key: str, c, sha: str, index, prober=ffprobe_json, kids=None,
         if isinstance(raw_authors, list):
             authors.extend(a for a in raw_authors if isinstance(a, str))
 
-    folder_title = _title_from_folder(c)
+    folder_title = title_from_folder(c)
     if folder_title:
         titles.append(folder_title)
 

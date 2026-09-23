@@ -22,7 +22,7 @@ from app import states
 from app.bookorbit import BookorbitClient, LibraryIndex
 from app.config import Settings
 from app.runner import RunResult
-from app.service import Service
+from app.service import Service, Stopping
 from tests.test_bookorbit import fake_transport
 
 ASIN = "B0MURDERB0T"
@@ -529,16 +529,30 @@ def test_old_transcripts_are_pruned(tmp_path, svc_factory):
 
 def test_interrupted_run_is_recovered_on_startup(tmp_path, svc_factory):
     svc = svc_factory(FakeModel())
+    # r0 completed (has a runs.jsonl record): its open escalation awaits a human
+    with open(svc.runs_path, "a") as f:
+        f.write(json.dumps({"run_id": "r0", "outcome": "ok"}) + "\n")
+    svc.arrivals.record("libation:Z:abc", states.NEEDS_DECISION)
+    svc.intents.store.record("r0:1", states.PROPOSED_I, run_id="r0", arrival="libation:Z:abc",
+                             kind=states.ESCALATE, payload={})
+    # r1 crashed mid-run (no record): all its open intents are partial effects
     svc.arrivals.record("libation:X:abc", states.PROPOSED)
+    svc.arrivals.record("libation:Y:abc", states.NEEDS_DECISION)
+    svc.arrivals.record("libation:W:abc", states.DEFERRED, not_before=10**12)
     svc.intents.store.record("r1:1", states.PROPOSED_I, run_id="r1", arrival="libation:X:abc",
                              kind=states.ATTACH, payload={})
     svc.intents.store.record("r1:2", states.PROPOSED_I, run_id="r1", arrival="libation:Y:abc",
                              kind=states.ESCALATE, payload={})
+    svc.intents.store.record("r1:3", states.PROPOSED_I, run_id="r1", arrival="libation:W:abc",
+                             kind=states.DEFER, payload={})
     svc.stop()
     svc2 = svc_factory(FakeModel())
-    assert svc2.arrivals.get("libation:X:abc")["state"] == states.READY
-    assert svc2.intents.store.get("r1:1")["state"] == states.REJECTED
-    assert svc2.intents.store.get("r1:2")["state"] == states.PROPOSED_I
+    for k in ("X", "Y", "W"):
+        assert svc2.arrivals.get(f"libation:{k}:abc")["state"] == states.READY, k
+    for i in ("r1:1", "r1:2", "r1:3"):
+        assert svc2.intents.store.get(i)["state"] == states.REJECTED, i
+    assert svc2.intents.store.get("r0:1")["state"] == states.PROPOSED_I
+    assert svc2.arrivals.get("libation:Z:abc")["state"] == states.NEEDS_DECISION
 
 
 def test_deferred_arrival_is_reoffered_once_not_before_passes(tmp_path, svc_factory):
@@ -567,3 +581,121 @@ def test_deferred_arrival_is_reoffered_once_not_before_passes(tmp_path, svc_fact
     clock.t += 11
     svc.tick()
     assert model.calls == ["librarian", "librarian"]
+
+
+# --- fix round 1 ---------------------------------------------------------------
+
+
+def test_librarian_prompt_carries_count_not_keys(tmp_path, svc_factory):
+    seen = []
+
+    class Capture(FakeModel):
+        def __call__(self, argv, **kw):
+            seen.append(argv[argv.index("-p") + 1])
+            return super().__call__(argv, **kw)
+
+    model = Capture(librarian=lambda call: None)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    key = only_key(svc)
+    assert len(seen) == 1
+    prompt = seen[0]
+    assert key not in prompt
+    assert ASIN not in prompt and "Artificial Condition" not in prompt
+    assert "1 arrival(s)" in prompt
+
+
+def test_exception_inside_cycle_holds_arrivals_for_retry_after(tmp_path, svc_factory):
+    model = FakeModel(librarian=attach_script(), reviewer=approve_all)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+
+    def boom(*a, **kw):
+        raise RuntimeError("finalize exploded")
+
+    svc.intents.finalize_dry_run = boom
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()                                   # must not propagate
+    assert model.calls == ["librarian", "reviewer"]
+    for _ in range(5):                               # the run's own writes are not "changes"
+        clock.t += 120
+        svc.tick()
+    assert model.calls == ["librarian", "reviewer"]
+
+
+def test_sigterm_during_reviewer_discards_whole_cycle(tmp_path, svc_factory):
+    def reviewer(call):
+        raise Stopping()                              # what main.py's handler raises
+
+    model = FakeModel(librarian=attach_script(), reviewer=reviewer)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    clock.t += 11
+    with pytest.raises(Stopping):
+        svc.tick()
+    assert svc.current_run() is None
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.READY
+    intents = svc.intents.store.all()
+    assert [r["state"] for r in intents] == [states.REJECTED]      # no false escalation
+    assert intents[0]["review"]["argument"] != "reviewer did not rule"
+    with open(svc.runs_path) as f:
+        assert json.loads(f.readlines()[-1])["outcome"] == "stopped"
+
+
+def test_sigterm_during_librarian_discards_cycle(tmp_path, svc_factory):
+    def librarian(call):
+        attach_script()(call)
+        raise Stopping()
+
+    model = FakeModel(librarian=librarian)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    clock.t += 11
+    with pytest.raises(Stopping):
+        svc.tick()
+    assert model.calls == ["librarian"]
+    assert svc.arrivals.get(only_key(svc))["state"] == states.READY
+    assert [r["state"] for r in svc.intents.store.all()] == [states.REJECTED]
+
+
+def test_stopping_is_not_an_exception():
+    assert not issubclass(Stopping, Exception)
+
+
+def test_non_offerable_marks_are_pruned(tmp_path, svc_factory):
+    clock = Clock()
+    svc = svc_factory(FakeModel(), clock)
+    data = b"AUDIO" * 100
+    sha = hashlib.sha256(data).hexdigest()
+    svc.arrivals.record(f"libation:B0OLDCOPY0:{sha[:12]}", states.FILED, sha256=sha, book_id=2)
+    add_libation(tmp_path, asin="B0NEWCOPY0", data=data)
+    for dt in (0, 1, 1):
+        clock.t += dt
+        svc.tick()
+    assert svc._changed == {}
+
+
+def test_invalid_kids_lists_logged_once(tmp_path, svc_factory, caplog):
+    svc = svc_factory(FakeModel())
+    os.makedirs(svc.settings.lists_dir, exist_ok=True)
+    with open(os.path.join(svc.settings.lists_dir, "kids-allowlist.json"), "w") as f:
+        f.write("{not json")
+    caplog.set_level(logging.ERROR)
+    for _ in range(3):
+        svc.tick()
+    assert sum("kids lists invalid" in r.getMessage() for r in caplog.records) == 1

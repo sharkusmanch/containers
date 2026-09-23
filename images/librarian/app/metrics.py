@@ -24,10 +24,13 @@ INTENTS = Counter("librarian_intents", "Intents by kind and final status", ["kin
 INDEX_BOOKS = Gauge("librarian_index_books", "Books in the BookOrbit library index")
 
 _started = time.time()
+_last_beat = 0.0   # mirrors HEARTBEAT without reaching into prometheus internals
 
 
 def beat() -> None:
-    HEARTBEAT.set(time.time())
+    global _last_beat
+    _last_beat = time.time()
+    HEARTBEAT.set(_last_beat)
 
 
 def rebuild_arrivals(store) -> None:
@@ -52,7 +55,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith("/healthz"):
             now = time.time()
-            hb = HEARTBEAT._value.get()
+            hb = _last_beat
             alive = hb > 0 and (now - hb) < self.stale_after
             if hb == 0 and (now - _started) < self.stale_after:
                 alive = True     # startup grace: the first tick may be slow
