@@ -28,6 +28,10 @@ import urllib.request
 from app.titles import surnames, title_keys
 
 RELOGIN_AFTER_SECONDS = 600  # access token lives 900s
+# BookOrbit login is throttled 5/min, shared with every other client. After a
+# failed login no new login is attempted for this long (final review I5):
+# callers get a clear error instead, rather than every request re-trying.
+AUTH_RETRY_SECONDS = 300
 
 # post() is read-adjacent only: /books/query is a search (POST because the
 # filter body doesn't fit a query string), and the two auth endpoints are
@@ -41,12 +45,15 @@ QUERY_PAGE_SIZE = 100
 
 
 class BookorbitClient:
-    def __init__(self, base_url, username, password, transport=None, cookie_path=None):
+    def __init__(self, base_url, username, password, transport=None, cookie_path=None,
+                 clock=time.time):
         self.base_url = base_url.rstrip("/")
         self._username = username
         self._password = password
         self._token = None
         self._token_obtained_at = 0.0
+        self._clock = clock
+        self._login_blocked_until = 0.0
 
         if not cookie_path:
             raise ValueError("cookie_path is required")
@@ -85,7 +92,7 @@ class BookorbitClient:
     # --- auth ------------------------------------------------------------
     @property
     def token_age_seconds(self):
-        return time.time() - self._token_obtained_at
+        return self._clock() - self._token_obtained_at
 
     def has_refresh_credential(self):
         """True if a stored refresh_token cookie is available to trade in."""
@@ -101,13 +108,23 @@ class BookorbitClient:
 
     def _accept_token(self, data):
         self._token = data["accessToken"]
-        self._token_obtained_at = time.time()
+        self._token_obtained_at = self._clock()
         self._save_cookies()
 
     def login(self):
-        self._accept_token(self._call(
-            "POST", "/auth/login",
-            {"username": self._username, "password": self._password}, authorized=False))
+        now = self._clock()
+        if now < self._login_blocked_until:
+            raise RuntimeError(
+                f"BookOrbit login in cooldown after a failed attempt; next attempt allowed in "
+                f"{int(self._login_blocked_until - now) + 1}s")
+        try:
+            data = self._call(
+                "POST", "/auth/login",
+                {"username": self._username, "password": self._password}, authorized=False)
+        except Exception:
+            self._login_blocked_until = self._clock() + AUTH_RETRY_SECONDS
+            raise
+        self._accept_token(data)
 
     def refresh(self):
         """Trade the stored cookie for a new access token. Unthrottled."""

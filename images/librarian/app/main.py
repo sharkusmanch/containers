@@ -14,15 +14,15 @@ import sys
 import time
 
 from app import metrics
-from app.bookorbit import BookorbitClient, LibraryIndex
+from app.bookorbit import AUTH_RETRY_SECONDS, BookorbitClient, LibraryIndex
 from app.config import Settings
 from app.service import Service, Stopping
 
 log = logging.getLogger("librarian")
 
-# BookOrbit login is throttled 5/min, shared with every other client --
-# never retry faster than this.
-AUTH_RETRY_SECONDS = 300
+# AUTH_RETRY_SECONDS (app/bookorbit.py): BookOrbit login is throttled 5/min,
+# shared with every other client -- never retry faster than that; the client
+# itself enforces the same cooldown after any failed login.
 
 
 def authenticate(client, stop) -> bool:

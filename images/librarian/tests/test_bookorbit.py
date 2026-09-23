@@ -244,3 +244,76 @@ def test_generic_file_key_with_other_author_stays_title_only_and_is_suppressed(t
     # with a real title+surname match present it is suppressed entirely
     ids = [d["id"] for d, _ in idx.candidates(titles=["Part 01", "Thrawn"], authors=["Timothy Zahn"])]
     assert ids == [1]
+
+
+# --- final review I5: login cooldown after a failed login ---------------------
+
+import pytest  # noqa: E402
+
+from app import bookorbit as bookorbit_mod  # noqa: E402
+
+
+class _Clock:
+    def __init__(self, t=10_000.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+def _failing_login_transport(calls, fail=lambda: True):
+    ok = fake_transport([])
+
+    def t(method, url, body, headers):
+        calls.append((method, url))
+        if url.endswith("/auth/login") and fail():
+            return 429, "too many requests"
+        if url.endswith("/auth/refresh"):
+            return 401, "expired"
+        return ok(method, url, body, headers)
+    return t
+
+
+def _logins(calls):
+    return sum(1 for _m, u in calls if u.endswith("/auth/login"))
+
+
+def test_failed_login_is_not_retried_within_cooldown(tmp_path):
+    calls, clock = [], _Clock()
+    c = BookorbitClient("http://b/api/v1", "u", "p", transport=_failing_login_transport(calls),
+                        cookie_path=str(tmp_path / "c.txt"), clock=clock)
+    with pytest.raises(RuntimeError):
+        c.authenticate()
+    assert _logins(calls) == 1
+    for _ in range(5):
+        clock.t += 30
+        with pytest.raises(RuntimeError, match="cooldown"):
+            c.authenticate()
+    assert _logins(calls) == 1
+    clock.t = 10_000.0 + bookorbit_mod.AUTH_RETRY_SECONDS
+    with pytest.raises(RuntimeError):
+        c.authenticate()
+    assert _logins(calls) == 2
+
+
+def test_requests_with_stale_token_do_not_relogin_during_cooldown(tmp_path):
+    calls, clock = [], _Clock()
+    state = {"fail": False}
+    c = BookorbitClient("http://b/api/v1", "u", "p",
+                        transport=_failing_login_transport(calls, fail=lambda: state["fail"]),
+                        cookie_path=str(tmp_path / "c.txt"), clock=clock)
+    c.authenticate()
+    assert _logins(calls) == 1
+    state["fail"] = True
+    clock.t += bookorbit_mod.RELOGIN_AFTER_SECONDS            # token is now stale
+    with pytest.raises(RuntimeError):
+        c.get("/books/1")                                     # refresh+login both fail
+    assert _logins(calls) == 2
+    for _ in range(10):
+        with pytest.raises(RuntimeError, match="cooldown"):
+            c.get("/books/1")
+    assert _logins(calls) == 2
+    state["fail"] = False
+    clock.t += bookorbit_mod.AUTH_RETRY_SECONDS
+    assert c.get("/books/1")["id"] == 1
+    assert _logins(calls) == 3
