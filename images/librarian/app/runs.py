@@ -47,6 +47,7 @@ from app import metrics, states
 from app.mcp_shim import build_mcp_config
 from app.runner import child_env, claude_argv, granted_tools
 from app.states import Run
+from app.logutil import log_safe as _log_safe  # noqa: F401 (kept for callers/tests)
 from app.store import append_record
 
 logger = logging.getLogger(__name__)
@@ -172,14 +173,6 @@ def discard(svc, run_id: str, pre: dict, reason: str) -> None:
                 continue
             svc.arrivals.record(key, prev["state"], not_before=prev.get("not_before"),
                                 detail=f"run {run_id} discarded: {reason}")
-
-
-def _log_safe(text: str) -> str:
-    """Escape control characters (C0, DEL, and every other non-printable
-    code point) in attacker-influenced text before it is logged, so a title
-    hint cannot forge log lines or emit terminal escapes (final review
-    minor 11)."""
-    return "".join(ch if ch.isprintable() else repr(ch)[1:-1] for ch in text)
 
 
 def summary(svc, run_id: str, keys: list[str]) -> tuple[str, int, int]:

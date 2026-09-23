@@ -54,6 +54,7 @@ import threading
 from http import HTTPStatus
 from urllib.parse import parse_qs, unquote, urlparse
 
+from app.logutil import log_safe
 from app.media import search_epub
 from app.policy import GuardContext
 
@@ -312,7 +313,7 @@ def _build_handler(core):
                 qs = parse_qs(parsed.query)
                 self._route(method, segments, qs, body, run)
             except Exception:  # never let a bug wedge the whole server
-                logger.exception("unhandled error handling %s %s", method, self.path)
+                logger.exception("unhandled error handling %s %s", method, log_safe(self.path))
                 try:
                     self._error(500, "internal_error")
                 except Exception:
@@ -448,7 +449,7 @@ def _build_handler(core):
             try:
                 hits = search_epub(real, q)
             except Exception as e:  # missing/corrupt EPUB: a 404, not a 500
-                logger.warning("search in book %s failed: %s", book_id, type(e).__name__)
+                logger.warning("search in book %s failed: %s", log_safe(book_id), type(e).__name__)
                 return self._error(404, "not_found", "EPUB is missing or unreadable")
             self._send_json(200, hits)
 

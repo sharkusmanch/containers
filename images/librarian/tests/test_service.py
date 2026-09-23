@@ -966,3 +966,66 @@ def test_intents_metric_maps_model_controlled_kind_to_invalid(tmp_path, svc_fact
         svc.tick()
     assert metric("librarian_intents_total", kind="invalid", status=states.GUARD_REJECTED) == before + 1
     assert metric("librarian_intents_total", kind="x" * 50, status=states.GUARD_REJECTED) == 0
+
+
+# --- Task 14a P1: an interrupted run is recovered ONCE ---------------------------
+
+
+def test_interrupted_run_is_not_rehold_on_every_restart(tmp_path, svc_factory):
+    """Run A crashes offering k -> restart 1 holds k -> run B offers k and
+    leaves it READY -> restart 2 must neither hold nor re-offer k."""
+    def crash(call):
+        raise KeyboardInterrupt()          # SIGKILL/OOM stand-in: no end record
+
+    clock = Clock()
+    svc = svc_factory(FakeModel(librarian=crash), clock)
+    add_libation(tmp_path)
+    for dt in (0, 1):
+        clock.t += dt
+        svc.tick()
+    clock.t += 11
+    with pytest.raises(KeyboardInterrupt):
+        svc.tick()
+    svc.stop()
+
+    before = metric("librarian_runs_total", mode="librarian", outcome="interrupted")
+    model1 = FakeModel(librarian=lambda call: None)      # run B leaves k READY
+    svc1 = svc_factory(model1, clock)
+    assert metric("librarian_runs_total", mode="librarian", outcome="interrupted") == before + 1
+    key = only_key(svc1)
+    clock.t += 3600 + 11
+    svc1.tick()
+    assert model1.calls == ["librarian"]
+    assert svc1.arrivals.get(key)["state"] == states.READY
+    svc1.stop()
+    from app.store import read_records
+    synthetic = [r for r in read_records(svc1.runs_path) if r.get("outcome") == "interrupted"]
+    assert len(synthetic) == 1 and synthetic[0]["failed"] is True and synthetic[0]["keys"] == [key]
+
+    model2 = FakeModel(librarian=lambda call: None)
+    svc2 = svc_factory(model2, clock)
+    assert key not in svc2._retry_at                     # not re-held
+    for _ in range(4):
+        clock.t += 4000
+        svc2.tick()
+    assert model2.calls == []                            # not re-offered (a paid run)
+    assert len([r for r in read_records(svc2.runs_path) if r.get("outcome") == "interrupted"]) == 1
+
+
+# --- Task 14a P2: intake-derived text is escaped in every log line ---------------
+
+
+def test_arrival_ready_log_escapes_control_chars_in_key(tmp_path, svc_factory, caplog):
+    d = tmp_path / "intake" / "manual"
+    d.mkdir(parents=True)
+    (d / "Evil\nINFO app.service: arrival forged ready.epub").write_bytes(b"EPUB" * 10)
+    clock = Clock()
+    svc = svc_factory(FakeModel(), clock)
+    caplog.set_level(logging.INFO)
+    svc.tick()
+    clock.t += 1
+    svc.tick()
+    msgs = [r.getMessage() for r in caplog.records if "ready" in r.getMessage()]
+    assert msgs, caplog.text
+    assert all("\n" not in m for m in msgs)
+    assert any("Evil\\nINFO" in m for m in msgs)

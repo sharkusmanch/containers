@@ -19,7 +19,9 @@ import re
 from dataclasses import dataclass
 
 from app import states
+from app.logutil import log_safe
 from app.store import Store
+
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +101,7 @@ def _scan_libation(root: str) -> list[Candidate]:
             continue
         m = _LIBATION_DIR_RE.match(entry.name)
         if not m:
-            logger.info("intake: ignoring libation dir not matching arrival pattern: %s", entry.name)
+            logger.info("intake: ignoring libation dir not matching arrival pattern: %s", log_safe(entry.name))
             continue
         files = sorted(_list_files_recursive(entry.path))
         out.append(Candidate(
@@ -126,7 +128,7 @@ def _scan_kindle(root: str) -> list[Candidate]:
             with open(sidecar_path, "r", encoding="utf-8") as f:
                 sidecar = json.load(f)
         except (OSError, ValueError) as e:
-            logger.warning("intake: unreadable kindle sidecar %s: %s", sidecar_path, e)
+            logger.warning("intake: unreadable kindle sidecar %s: %s", log_safe(sidecar_path), log_safe(e))
             continue
         out.append(Candidate(
             source="kindle",

@@ -20,6 +20,7 @@ import re
 import zipfile
 
 from app.intake import primary_file
+from app.logutil import log_safe
 from app.media import ffprobe_json, probe_audio, read_epub
 from app.titles import edition_flags, parse_series
 
@@ -363,4 +364,4 @@ def _shrink_to_budget(dossier: dict) -> None:
         return
 
     logger.warning("dossier %s still %d bytes after trimming (budget %d)",
-                    dossier.get("key"), _size(dossier), SIZE_BUDGET_BYTES)
+                    log_safe(dossier.get("key")), _size(dossier), SIZE_BUDGET_BYTES)

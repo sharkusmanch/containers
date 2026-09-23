@@ -37,11 +37,12 @@ from app import intake, metrics, states
 from app.api import ApiServer
 from app.dossier import build_dossier, title_from_folder
 from app.intents import IntentBook
+from app.logutil import log_safe
 from app.media import ffprobe_json
 from app.policy import KidsLists, kids_signals
 from app.runner import run_claude
 from app.runs import Stopping, execute_cycle  # noqa: F401 (Stopping re-exported for main.py)
-from app.store import Store, read_records
+from app.store import Store, append_record, read_records
 
 logger = logging.getLogger(__name__)
 
@@ -146,9 +147,12 @@ class Service:
         again."""
         done = {r.get("run_id") for r in runs if "outcome" in r}
         held = set()
+        interrupted = []
         for r in runs:
             if r.get("event") == "start" and r.get("run_id") not in done:
-                held.update(k for k in (r.get("keys") or []) if isinstance(k, str))
+                keys = [k for k in (r.get("keys") or []) if isinstance(k, str)]
+                held.update(keys)
+                interrupted.append((r, keys))
         reason = "service restarted mid-run"
         with self.lock:
             touched = set()
@@ -170,6 +174,25 @@ class Service:
             for rec in self.arrivals.by_state(states.PROPOSED):
                 held.add(rec["key"])
                 self.arrivals.record(rec["key"], states.READY, detail="recovered after interrupted run")
+        # Close each interrupted run with a synthetic end record, AFTER the
+        # resets above, so it is recovered exactly once: later restarts see
+        # an ordinary failed run and `_seed_debounce` applies the failed-run
+        # rule (hold until its end + retry_after, or nothing once a later run
+        # has offered the key). Without it the start record stays open
+        # forever and every restart re-holds -- then re-offers, a paid run --
+        # its keys (Task 14a P1).
+        for r, keys in interrupted:
+            rec = {"event": "end", "run_id": r.get("run_id"), "started": r.get("started"),
+                   "started_ts": r.get("started_ts"), "keys": keys,
+                   "librarian": None, "reviewer": None,
+                   "outcome": "interrupted", "failed": True,
+                   "ended": self.clock(), "ended_ts": time.time(),
+                   "counts": {"would_file": 0, "would_escalate": 0, "offered": len(keys)}}
+            append_record(self.runs_path, rec)
+            runs.append(rec)
+            metrics.RUNS.labels(mode="librarian", outcome="interrupted").inc()
+            logger.warning("librarian run %s was interrupted by a restart; its %d arrival(s) "
+                           "are held for retry_after", log_safe(r.get("run_id")), len(keys))
         return held
 
     def _seed_debounce(self, runs: list[dict], held: set) -> None:
@@ -278,7 +301,7 @@ class Service:
             except Exception:
                 # e.g. a BookOrbit error inside build_dossier: leave the
                 # candidate unrecorded so the next tick retries it.
-                logger.exception("intake of %s:%s failed; will retry", c.source, c.source_id)
+                logger.exception("intake of %s:%s failed; will retry", c.source, log_safe(c.source_id))
 
     def _intake_one(self, c, now: float) -> None:
         if not self.stability.observe(c, now):
@@ -303,7 +326,7 @@ class Service:
 
         err = intake.verify_sidecar(c, sha)
         if err:
-            logger.error("arrival %s failed: %s", key, err)
+            logger.error("arrival %s failed: %s", log_safe(key), log_safe(err))
             self.arrivals.record(key, states.FAILED, error=err, **base)
             return
 
@@ -314,7 +337,7 @@ class Service:
             return
         if verdict == "duplicate":
             book_id = info["book_id"]
-            logger.info("arrival %s duplicates book %s", key, book_id)
+            logger.info("arrival %s duplicates book %s", log_safe(key), log_safe(book_id))
             self.arrivals.record(key, states.DUPLICATE, book_id=book_id,
                                  would_do=[f"remove intake copy (identical to book {book_id})"], **base)
             return
@@ -326,7 +349,7 @@ class Service:
         )
         self._write_dossier(key, dossier)
         self.arrivals.record(key, states.READY, **base)
-        logger.info("arrival %s ready", key)
+        logger.info("arrival %s ready", log_safe(key))
 
     def _write_dossier(self, key: str, dossier: dict) -> None:
         path = os.path.join(self.dossier_dir, dossier_name(key))
