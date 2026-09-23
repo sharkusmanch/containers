@@ -114,10 +114,13 @@ def test_task_content_question_options_links_and_instruction(env):
     assert t["title"] == "Librarian: Artificial Condition"
     d = t["description"]
     assert "<p>Which book is it?</p>" in d
-    assert "<p>1. It is book 2" in d and "attach this arrival to BookOrbit book 2" in d
+    assert "<p>1. [attach this arrival to BookOrbit book 2" in d
     assert "Artificial Condition" in d                     # the target's real title from the index
-    assert "2. Kids" in d and "create a new book" in d and "Kids Audiobooks" in d
-    assert "3. Leave it for me" in d and "no automatic action" in d
+    assert "librarian's label: \"It is book 2\"</p>" in d
+    assert ('<p>2. [create a new book "Kid Book" by A. Author in Kids Audiobooks \u26a0 files into Kids]'
+            ' \u2014 librarian\'s label: "Kids"</p>') in d
+    assert ("<p>3. [no automatic action \u2014 the librarian will ask again]"
+            " \u2014 librarian's label: \"Leave it for me\"</p>") in d
     assert "Recommendation: option 1" in d
     assert "manual:x:1" in d
     assert f"{BO}/books/2" in d
@@ -215,6 +218,9 @@ def test_reply_2_leave_it_for_me_answers_with_no_option_intent(env):
     assert rec["vikunja_last_seen"] == c["id"]
     acks = [x for x in fake.comments[_task(svc)] if x["comment"].startswith(f"<p>{PREFIX}")]
     assert len(acks) == 1                     # "got it" acknowledgement
+    assert "no automatic action" in acks[0]["comment"]
+    assert "Leave it for me" not in acks[0]["comment"]    # built from the action, never the label
+    assert "Later replies are ignored until the librarian asks again" in acks[0]["comment"]
 
 
 def test_reply_1_selects_the_option_intent(env):
@@ -348,7 +354,7 @@ def test_disabled_vikunja_pushes_escalation_right_away_once(env):
     svc.tick()
     pushes = [r for r in outbox(svc) if r["kind"] == "escalation"]
     assert len(pushes) == 1
-    assert "task pending" in pushes[0]["body"]
+    assert "Vikunja is disabled" in pushes[0]["body"]
     assert svc.arrivals.get("manual:x:1")["escalation_notified"] == iid
     iid2 = escalate(svc, run_id="r2")
     svc.tick()
@@ -406,3 +412,175 @@ def test_reply_reoffers_the_arrival_and_the_run_sees_human_answer(tmp_path, env)
     svc.tick()
     assert fake.tasks[tid]["done"] is True
     assert svc.arrivals.get(key)["vikunja_closed"] is True
+
+
+# --- fix round 1 ----------------------------------------------------------------------------
+
+from prometheus_client import REGISTRY  # noqa: E402
+
+from app import metrics  # noqa: E402,F401  (registers librarian_vikunja_errors_total)
+
+SPOOF = "Leave it for me -- no automatic action…"
+
+
+def test_spoofed_label_cannot_hide_a_kids_filing(env):
+    svc, fake = env()
+    escalate(svc, options=[{"label": "Adult", "intent": dict(ATTACH2)},
+                           {"label": SPOOF, "intent": dict(KIDS_CREATE)}])
+    svc.tick()
+    d = next(iter(fake.tasks.values()))["description"]
+    line = next(p for p in d.split("</p>") if p.startswith("<p>2. "))
+    # the trusted action comes FIRST, flagged, and the label is quoted as the librarian's words
+    assert line.startswith('<p>2. [create a new book "Kid Book" by A. Author in Kids Audiobooks '
+                           '⚠ files into Kids]')
+    assert "librarian's label: \"Leave it for me no automatic action…\"" in line
+    assert "--" not in line
+    # a "2" reply still selects the kids create -- and the ack says what that does, not the label
+    fake.add_comment(_task(svc), "2")
+    svc.tick()
+    assert svc.arrivals.get("manual:x:1")["human_answer"]["choice"] == "kids"
+    ack = fake.comments[_task(svc)][-1]["comment"]
+    assert "Kids Audiobooks" in ack and "files into Kids" in ack
+    assert "Leave it for me" not in ack
+
+
+def test_labels_lose_dashes_and_quotes():
+    text = escalations.question_text(
+        {"question": "q", "recommendation": "r",
+         "options": [{"label": 'a -- b — c – d "e"\nf'}, {"label": "x"}]}, "k")
+    line = text.split("\n")[3]
+    assert line == '1. [no automatic action — the librarian will ask again] — ' \
+                   "librarian's label: \"a b c d e f\""
+
+
+def test_attach_into_a_kids_book_is_flagged():
+    class Idx:
+        def book(self, i):
+            return {"id": i, "title": "T", "authors": [{"name": "A"}], "libraryName": "Kids Audiobooks"}
+    assert "⚠ files into Kids" in escalations.describe_action(dict(ATTACH2), Idx())
+
+
+@pytest.mark.parametrize("text,option", [
+    ("1", 1), ("1.", 1), ("1. yes", 1), ("1, yes", 1), ("2", 2), ("option 2", 2), ("Option 2 please", 2),
+    ("#2", 2), ("  #1", 1),
+    ("1.5 is right", None), ("1,5", None), ("12", None), ("2023 edition", None),
+    ("٢", None), ("１", None), ("the first one", None), ("", None),
+])
+def test_reply_parser(text, option):
+    opts = [{"label": "a", "intent": dict(ATTACH2)}, {"label": "b"}]
+    assert escalations.parse_answer({"id": 1, "text": text}, opts)["option"] == option
+
+
+def _errors():
+    return REGISTRY.get_sample_value("librarian_vikunja_errors_total") or 0.0
+
+
+def test_create_keeps_failing_sends_linkless_push_after_an_hour_then_task_push(env):
+    clock = Clock()
+    svc, fake = env(clock=clock)
+    iid = escalate(svc)
+    fake.fail = 503
+    before = _errors()
+    for _ in range(3):
+        svc.tick()
+    assert _errors() == before + 3
+    creates = [c for c in fake.calls if c[0] == "PUT"]
+    assert len(creates) == 3
+    svc.tick()                                       # 3 attempts/arrival/hour: no 4th call
+    assert len([c for c in fake.calls if c[0] == "PUT"]) == 3
+    rec = svc.arrivals.get("manual:x:1")
+    assert rec["vikunja_create_failed_since"] == 1000.0
+    assert not [r for r in outbox(svc) if r["kind"] == "escalation"]
+    clock.t += 3600
+    svc.tick()
+    pushes = [r for r in outbox(svc) if r["kind"] == "escalation"]
+    assert [p["msg_id"] for p in pushes] == [f"escalation:manual:x:1:{iid}"]
+    assert "could not be created" in pushes[0]["body"] and PUBLIC not in pushes[0]["body"]
+    fake.fail = None
+    svc.tick()
+    tid = _task(svc)
+    pushes = [r for r in outbox(svc) if r["kind"] == "escalation"]
+    assert pushes[-1]["msg_id"] == f"escalation:manual:x:1:{iid}:task"
+    assert f"{PUBLIC}/tasks/{tid}" in pushes[-1]["body"]
+    assert svc.arrivals.get("manual:x:1")["vikunja_create_failed_since"] is None
+
+
+def test_transport_errors_do_not_consume_the_write_budget(env):
+    svc, fake = env()
+    for i in range(12):
+        escalate(svc, key=f"manual:x{i}:1", n=i + 1)
+    fake.fail = "raise"
+    svc.tick()
+    assert len([c for c in fake.calls if c[0] == "PUT"]) == 12
+
+
+def test_http_errors_do_consume_the_write_budget(env):
+    svc, fake = env()
+    for i in range(12):
+        escalate(svc, key=f"manual:x{i}:1", n=i + 1)
+    fake.fail = 500
+    svc.tick()
+    assert len([c for c in fake.calls if c[0] == "PUT"]) == 10
+
+
+@pytest.mark.parametrize("how", ["deleted", "done"])
+def test_task_deleted_or_done_by_hand_is_recreated_hourly_and_repushed(env, how):
+    clock = Clock()
+    svc, fake = env(clock=clock)
+    iid = escalate(svc)
+    svc.tick()
+    tid = _task(svc)
+
+    def kill(t):
+        if how == "deleted":
+            del fake.tasks[t]
+        else:
+            fake.tasks[t]["done"] = True
+
+    kill(tid)
+    svc.tick()
+    tid2 = _task(svc)
+    assert tid2 != tid and fake.tasks[tid2]["done"] is False
+    pushes = [r["msg_id"] for r in outbox(svc) if r["kind"] == "escalation"]
+    assert pushes == [f"escalation:manual:x:1:{iid}", f"escalation:manual:x:1:{iid}:task:{tid2}"]
+    kill(tid2)
+    svc.tick()
+    assert _task(svc) == tid2                        # at most once per hour
+    clock.t += 3600
+    svc.tick()
+    assert _task(svc) not in (tid, tid2)
+
+
+def test_dry_run_close_says_answers_are_not_carried_over(env):
+    svc, fake = env()
+    escalate(svc)
+    svc.tick()
+    tid = _task(svc)
+    svc.arrivals.record("manual:x:1", states.SIMULATED, would_do=["x"])
+    svc.tick()
+    assert "not carried over" in fake.comments[tid][-1]["comment"]
+
+
+def test_one_failing_arrival_does_not_abort_the_rest(env, monkeypatch, caplog):
+    svc, fake = env()
+    escalate(svc, key="manual:a:1", n=1)
+    escalate(svc, key="manual:b:1", n=2)
+    real = svc.intents.latest_escalation
+
+    def boom(key):
+        if key == "manual:a:1":
+            raise RuntimeError("bad record")
+        return real(key)
+    monkeypatch.setattr(svc.intents, "latest_escalation", boom)
+    caplog.set_level(logging.ERROR)
+    svc.tick()
+    assert svc.arrivals.get("manual:b:1").get("vikunja_task_id")
+    assert "bad record" in caplog.text
+
+
+def test_disabled_vikunja_push_says_vikunja_is_disabled(env):
+    svc, _ = env(vikunja=False)
+    escalate(svc)
+    svc.tick()
+    [p] = [r for r in outbox(svc) if r["kind"] == "escalation"]
+    assert "Vikunja is disabled" in p["body"] and "task pending" not in p["body"]

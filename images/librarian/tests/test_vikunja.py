@@ -37,10 +37,12 @@ class FakeVikunjaSession:
         self.calls = []             # (method, path, json)
         self.fail = None            # "raise" | int status for every call
 
-    def add_comment(self, task_id, text, username="marcus"):
+    def add_comment(self, task_id, text, username="marcus", author_id=1):
         self.next_comment += 1
         c = {"id": self.next_comment, "comment": text, "created": "2026-09-22T10:00:00Z",
-             "author": {"id": 1, "username": username}}
+             "author": {"id": author_id, "username": username}}
+        if author_id is None:
+            del c["author"]
         self.comments.setdefault(task_id, []).append(c)
         return c
 
@@ -55,6 +57,8 @@ class FakeVikunjaSession:
         if isinstance(self.fail, int):
             return FakeResponse(self.fail, {"message": "nope"})
         parts = path.strip("/").split("/")
+        if parts == ["user"] and method == "GET":
+            return FakeResponse(200, {"id": 1, "username": "marcus"})
         if parts[0] == "projects":
             pid = int(parts[1])
             if pid != self.project_id:
@@ -114,8 +118,10 @@ def test_html_to_text_strips_tags_and_unescapes():
 
 
 def test_verify_true_when_project_exists(tmp_path, fake):
-    assert make(tmp_path, fake).verify() is True
-    assert fake.calls == [("GET", "/projects/5", None)]
+    v = make(tmp_path, fake)
+    assert v.verify() is True
+    assert fake.calls == [("GET", "/projects/5", None), ("GET", "/user", None)]
+    assert v.owner_id == 1
 
 
 def test_verify_false_and_logs_once_when_project_missing(tmp_path, fake, caplog):
@@ -269,3 +275,61 @@ def test_close_already_done_task_posts_nothing(tmp_path, fake):
     fake.tasks[tid]["done"] = True
     assert v.close(tid, "again") is False
     assert fake.comments.get(tid) is None
+
+
+# --- fix round 1 -----------------------------------------------------------------------
+
+
+def test_replies_only_from_the_token_owner(tmp_path, fake):
+    v = make(tmp_path, fake)
+    tid, _ = v.create_task("t", "d")
+    fake.add_comment(tid, "1", username="guest", author_id=2)
+    mine = fake.add_comment(tid, "2")
+    assert [r["id"] for r in v.replies(tid, None)] == [mine["id"]]   # owner looked up lazily
+
+
+def test_replies_without_author_are_ignored_and_logged_once(tmp_path, fake, caplog):
+    v = make(tmp_path, fake)
+    tid, _ = v.create_task("t", "d")
+    fake.add_comment(tid, "1", author_id=None)
+    caplog.set_level(logging.WARNING)
+    assert v.replies(tid, None) == []
+    assert v.replies(tid, None) == []
+    assert caplog.text.count("no author") == 1
+
+
+def test_replies_fail_closed_when_owner_unknown(tmp_path, fake):
+    v = make(tmp_path, fake)
+    tid, _ = v.create_task("t", "d")
+    fake.add_comment(tid, "1")
+    real = fake.request
+
+    def no_user(method, url, **kw):
+        if url.endswith("/user"):
+            return FakeResponse(500, {})
+        return real(method, url, **kw)
+    fake.request = no_user
+    with pytest.raises(VikunjaError):
+        v.replies(tid, None)
+
+
+def test_task_state_open_done_gone(tmp_path, fake):
+    v = make(tmp_path, fake)
+    tid, _ = v.create_task("t", "d")
+    assert v.task_state(tid) == "open"
+    fake.tasks[tid]["done"] = True
+    assert v.task_state(tid) == "done"
+    del fake.tasks[tid]
+    assert v.task_state(tid) == "gone"
+
+
+def test_vikunja_error_carries_status_and_transport(tmp_path, fake):
+    v = make(tmp_path, fake)
+    fake.fail = 500
+    with pytest.raises(VikunjaError) as e:
+        v.create_task("t", "d")
+    assert e.value.status == 500 and e.value.transport is False
+    fake.fail = "raise"
+    with pytest.raises(VikunjaError) as e:
+        v.create_task("t", "d")
+    assert e.value.status is None and e.value.transport is True

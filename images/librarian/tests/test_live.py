@@ -571,7 +571,9 @@ def test_dry_run_to_live_reoffers_simulated_arrivals_per_source(tmp_path, live_f
     ksha = hashlib.sha256(b"K" * 10).hexdigest()
     kept = f"libation:B0KEPT0000:{ksha[:12]}"
     dry.arrivals.record(kept, states.SIMULATED, source="libation", source_id="B0KEPT0000",
-                        path=str(folder), primary=str(folder / "Kept.m4b"), sha256=ksha)
+                        path=str(folder), primary=str(folder / "Kept.m4b"), sha256=ksha,
+                        human_answer={"text": "1", "option": 1, "option_intent": {"kind": "attach"},
+                                      "choice": "option", "comment_id": 3})
     dry._write_dossier(kept, {"key": kept, "stale": True})
     elsewhere = simulated("libation", "B0ELSEWHERE", b"X" * 10)   # hashes fine, not in the intake
     gone = simulated("libation", "B0GONE", b"G" * 10, keep=False)
@@ -583,6 +585,7 @@ def test_dry_run_to_live_reoffers_simulated_arrivals_per_source(tmp_path, live_f
     live.tick()
     assert live.arrivals.get(kept)["state"] == states.READY
     assert "re-offered for live" in live.arrivals.get(kept)["detail"]
+    assert live.arrivals.get(kept)["human_answer"] is None   # Task 6 fix: dry-run answers don't carry over
     rebuilt = live.load_dossier(kept)
     assert "stale" not in rebuilt and rebuilt["key"] == kept and "trusted" in rebuilt
     for k in (gone, changed, elsewhere):

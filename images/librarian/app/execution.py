@@ -493,8 +493,11 @@ def go_live(svc) -> bool:
                 if found is not None:
                     history = list(rec.get("history") or [])
                     history.append({"ts": time.time(), "note": "re-offered for live (was simulated)"})
+                    # Task 6 fix round 1: an answer given during the dry
+                    # run never carries into live filing (it could unlock
+                    # guards 7/10 for a decision made about a simulation)
                     svc.arrivals.record(rec["key"], states.READY, detail="re-offered for live",
-                                        history=history, would_do=None)
+                                        history=history, would_do=None, human_answer=None)
                 else:
                     svc.arrivals.record(rec["key"], states.FAILED, error="intake copy gone")
         if not source_ok:

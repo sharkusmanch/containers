@@ -598,13 +598,16 @@ class Service:
         body = notify.sanitize(str(detail or ""))
         self.notifier.enqueue("failure", f"failure:{key}:{intent_id}", title, body)
 
-    def notify_escalation(self, arrival_rec: dict, intent: dict) -> None:
+    def notify_escalation(self, arrival_rec: dict, intent: dict, *, suffix: str = "",
+                          tail: str | None = None) -> None:
         """Enqueue one push for an escalation (a human decision is
         needed). `intent` is the ESCALATE intent record. The body carries
-        the (untrusted, LLM-authored) question and the arrival's Vikunja
-        task URL when one exists (`arrival_rec["vikunja_url"]`, set by Task
-        6) -- Task 6 calls this once the task is created, or immediately
-        when Vikunja is disabled."""
+        the (untrusted, LLM-authored) question and `tail`: by default the
+        arrival's Vikunja task URL (`arrival_rec["vikunja_url"]`, Task 6),
+        else a note that Vikunja is disabled. msg_id is
+        `escalation:<key>:<intent>` + `suffix` -- app/escalations.py uses a
+        suffix for the follow-up push that carries a task link after a
+        link-less one, or after a task was re-created."""
         if self.notifier is None:
             return
         key = (arrival_rec or {}).get("key") or ""
@@ -614,10 +617,16 @@ class Service:
         payload = (intent or {}).get("payload") or {}
         question = payload.get("question") or (intent or {}).get("reason") or ""
         question = notify.truncate_utf8(notify.sanitize(str(question)), 600)
-        vikunja_url = (arrival_rec or {}).get("vikunja_url")
-        tail = vikunja_url if vikunja_url else "task pending"
-        body = f"{question}\n\n{tail}"
-        self.notifier.enqueue("escalation", f"escalation:{key}:{intent_id}", title, body)
+        if tail is None:
+            vikunja_url = (arrival_rec or {}).get("vikunja_url")
+            if vikunja_url:
+                tail = vikunja_url
+            elif self.vikunja is None:
+                tail = "Vikunja is disabled \u2014 answer via the librarian's state"
+            else:
+                tail = "Vikunja task not created yet"
+        body = f"{question}\n\n{notify.sanitize(tail)}"
+        self.notifier.enqueue("escalation", f"escalation:{key}:{intent_id}{suffix}", title, body)
 
     # --- housekeeping --------------------------------------------------------
 

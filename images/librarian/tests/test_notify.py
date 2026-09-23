@@ -583,7 +583,7 @@ def test_notify_escalation_includes_vikunja_url_when_present(tmp_path):
         svc.stop()
 
 
-def test_notify_escalation_says_task_pending_without_vikunja_url(tmp_path):
+def test_notify_escalation_without_vikunja_says_vikunja_is_disabled(tmp_path):
     outbox = make_outbox(tmp_path, "outbox5.jsonl")
     notifier = Notifier("http://apprise/notify/k", outbox, session=FakeSession())
     svc = _svc_for_helper(tmp_path, notifier)
@@ -592,7 +592,8 @@ def test_notify_escalation_says_task_pending_without_vikunja_url(tmp_path):
         intent = {"intent_id": "run1:2", "payload": {"question": "Which book?"}}
         svc.notify_escalation(arrival_rec, intent)
         rec = outbox.get("escalation:manual:x:abc:run1:2")
-        assert "task pending" in rec["body"]
+        assert "task pending" not in rec["body"]
+        assert "Vikunja is disabled" in rec["body"]
     finally:
         svc.stop()
 
@@ -624,7 +625,8 @@ def test_notify_escalation_is_idempotent_per_intent(tmp_path):
         svc.notify_escalation(arrival_rec, intent)
         svc.notify_escalation({**arrival_rec, "vikunja_url": "https://x/1"}, intent)
         rec = outbox.get("escalation:manual:x:abc:run1:2")
-        assert "task pending" in rec["body"]  # first call's body wins; not re-queued
+        assert "task pending" not in rec["body"]
+        assert "Vikunja is disabled" in rec["body"]  # first call's body wins; not re-queued
         assert len([r for r in outbox.all() if r["msg_id"].startswith("escalation:")]) == 1
     finally:
         svc.stop()

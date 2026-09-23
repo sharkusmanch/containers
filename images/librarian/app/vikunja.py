@@ -14,6 +14,9 @@ with `PREFIX` ("🤖 Librarian: "), and `replies()` drops prefixed comments
 even when unrecorded -- a crash between posting a comment and recording
 its id must never turn the librarian's own words into a "human" answer.
 
+Only comments authored by the token's own user count (`GET /user`, fix
+round 1) -- a comment by another project member is never an answer.
+
 Comments posted through vikunja-mcp by Claude sessions (which use the same
 user's token) are NOT recorded here and do not carry the prefix, so they
 count as replies exactly like one typed in the Vikunja UI -- by design: a
@@ -49,13 +52,20 @@ _BLOCK_TAGS = frozenset({"p", "br", "div", "li", "ul", "ol", "blockquote", "h1",
 
 class VikunjaError(Exception):
     """A Vikunja call failed (transport error, non-2xx, or a malformed
-    response). Safe to log: never contains the token."""
+    response). Safe to log: never contains the token. `status` is the HTTP
+    status (None for transport/malformed), `transport` is True when no HTTP
+    response arrived at all (Vikunja down/unreachable)."""
+
+    def __init__(self, msg, status=None, transport=False):
+        super().__init__(msg)
+        self.status = status
+        self.transport = transport
 
 
 def text_to_html(text: str) -> str:
     """Plain text -> Vikunja HTML: one escaped `<p>` per non-blank line."""
     lines = [ln.strip() for ln in str(text or "").split("\n")]
-    return "".join(f"<p>{html.escape(ln)}</p>" for ln in lines if ln)
+    return "".join(f"<p>{html.escape(ln, quote=False)}</p>" for ln in lines if ln)
 
 
 class _TextExtractor(HTMLParser):
@@ -106,6 +116,8 @@ class Vikunja:
         self.store = store
         self._session = session
         self._verify_logged = False
+        self.owner_id = None          # the token owner's user id (GET /user)
+        self._no_author_logged = False
 
     def __repr__(self):   # never the token
         return f"Vikunja({self.base_url!r}, project_id={self.project_id})"
@@ -127,10 +139,12 @@ class Vikunja:
                 json=body, timeout=TIMEOUT)
         except Exception as e:
             # never str(e): a transport error's message can embed the URL
-            raise VikunjaError(f"{method} {path}: request failed: {type(e).__name__}") from None
+            raise VikunjaError(f"{method} {path}: request failed: {type(e).__name__}",
+                               transport=True) from None
         status = getattr(resp, "status_code", None)
         if not isinstance(status, int) or not 200 <= status < 300:
-            raise VikunjaError(f"{method} {path}: HTTP {status}")
+            raise VikunjaError(f"{method} {path}: HTTP {status}",
+                               status=status if isinstance(status, int) else None)
         try:
             return resp.json()
         except Exception:
@@ -138,11 +152,24 @@ class Vikunja:
 
     # --- API ------------------------------------------------------------------------
 
+    def _owner(self) -> int:
+        """The token owner's user id, fetched once (fix round 1): only
+        comments authored by this user count as replies."""
+        if self.owner_id is None:
+            me = self._call("GET", "/user")
+            uid = _int_id(me.get("id")) if isinstance(me, dict) else None
+            if uid is None:
+                raise VikunjaError("GET /user: response has no user id")
+            self.owner_id = uid
+        return self.owner_id
+
     def verify(self) -> bool:
-        """The configured project exists and the token can read it. Logs
-        the first failure only (it is re-checked by callers, not spammed)."""
+        """The configured project exists and the token can read it, and the
+        token owner's id is known. Logs the first failure only (it is
+        re-checked by callers, not spammed)."""
         try:
             self._call("GET", f"/projects/{self.project_id}")
+            self._owner()
             return True
         except VikunjaError as e:
             if not self._verify_logged:
@@ -171,9 +198,13 @@ class Vikunja:
         return cid
 
     def replies(self, task_id: int, after_id) -> list[dict]:
-        """Human replies on the task: comments not recorded as ours and not
-        carrying our prefix, with id > `after_id` (None = all), oldest
-        first, as `{id, text, created, author}` (text is plain)."""
+        """Human replies on the task: comments by the token owner (fix round
+        1: another project member's comment is not an answer; a comment
+        without an author is ignored -- fail closed -- and logged once),
+        not recorded as ours and not carrying our prefix, with id >
+        `after_id` (None = all), oldest first, as `{id, text, created,
+        author}` (text is plain). Raises when the owner is unknown."""
+        owner = self._owner()
         raw = self._call("GET", f"/tasks/{int(task_id)}/comments")
         if not isinstance(raw, list):
             raise VikunjaError("GET comments: response is not a list")
@@ -190,11 +221,30 @@ class Vikunja:
             text = html_to_text(c.get("comment"))
             if not text or text.startswith(PREFIX.strip()):
                 continue
-            author = c.get("author") if isinstance(c.get("author"), dict) else {}
+            author = c.get("author") if isinstance(c.get("author"), dict) else None
+            if author is None or _int_id(author.get("id")) is None:
+                if not self._no_author_logged:
+                    self._no_author_logged = True
+                    logger.warning("Vikunja comment %s on task %s has no author id: ignored", cid, task_id)
+                continue
+            if author["id"] != owner:
+                continue
             out.append({"id": cid, "text": text, "created": c.get("created"),
                         "author": author.get("username")})
         out.sort(key=lambda r: r["id"])
         return out
+
+    def task_state(self, task_id: int) -> str:
+        """"open", "done" (marked done, e.g. by hand) or "gone" (404)."""
+        try:
+            task = self._call("GET", f"/tasks/{int(task_id)}")
+        except VikunjaError as e:
+            if e.status == 404:
+                return "gone"
+            raise
+        if not isinstance(task, dict):
+            raise VikunjaError("GET task: response is not an object")
+        return "done" if task.get("done") else "open"
 
     def close(self, task_id: int, text: str) -> bool:
         """Comment the outcome and mark the task done. Vikunja's

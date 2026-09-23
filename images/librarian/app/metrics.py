@@ -25,6 +25,9 @@ INDEX_BOOKS = Gauge("librarian_index_books", "Books in the BookOrbit library ind
 NOTIFY_FAILURES = Counter("librarian_notify_failures_total",
                           "Apprise pushes that gave up after MAX_ATTEMPTS retries")
 
+VIKUNJA_ERRORS = Counter("librarian_vikunja_errors_total",
+                         "Vikunja API calls that failed (escalation tasks, replies, closes)")
+
 _started = time.time()
 _last_beat = 0.0   # mirrors HEARTBEAT without reaching into prometheus internals
 
