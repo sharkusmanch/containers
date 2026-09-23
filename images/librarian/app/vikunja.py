@@ -169,13 +169,22 @@ class Vikunja:
         re-checked by callers, not spammed)."""
         try:
             self._call("GET", f"/projects/{self.project_id}")
-            self._owner()
-            return True
         except VikunjaError as e:
             if not self._verify_logged:
                 self._verify_logged = True
                 logger.error("Vikunja project %s is not reachable: %s", self.project_id, e)
             return False
+        try:
+            self._owner()
+        except VikunjaError as e:
+            # distinct from the project check (fix round 2): the project is
+            # fine, but without the owner id no reply can ever be accepted
+            if not self._verify_logged:
+                self._verify_logged = True
+                logger.error("Vikunja GET /user failed, token owner unknown (replies are ignored "
+                             "until it succeeds): %s", e)
+            return False
+        return True
 
     def create_task(self, title: str, description: str) -> tuple[int, str]:
         """Create a task in the project; returns (task id, public task URL).

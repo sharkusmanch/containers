@@ -333,3 +333,24 @@ def test_vikunja_error_carries_status_and_transport(tmp_path, fake):
     with pytest.raises(VikunjaError) as e:
         v.create_task("t", "d")
     assert e.value.status is None and e.value.transport is True
+
+
+def test_verify_logs_user_failure_distinctly(tmp_path, fake, caplog):
+    v = make(tmp_path, fake)
+    real = fake.request
+
+    def no_user(method, url, **kw):
+        if url.endswith("/user"):
+            return FakeResponse(500, {})
+        return real(method, url, **kw)
+    fake.request = no_user
+    caplog.set_level(logging.ERROR)
+    assert v.verify() is False
+    assert "GET /user" in caplog.text and "token owner" in caplog.text
+    assert "project 5 is not reachable" not in caplog.text
+
+
+def test_verify_logs_project_failure_distinctly(tmp_path, fake, caplog):
+    caplog.set_level(logging.ERROR)
+    assert make(tmp_path, fake, project_id=9).verify() is False
+    assert "project 9 is not reachable" in caplog.text and "token owner" not in caplog.text

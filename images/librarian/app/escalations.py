@@ -69,6 +69,7 @@ the escalation push is sent right away instead, once per escalation
 """
 import logging
 import re
+import unicodedata
 
 from app import metrics, states
 from app.logutil import log_safe
@@ -87,11 +88,21 @@ TERMINAL = frozenset({states.FILED, states.FAILED, states.DUPLICATE, states.SIMU
 # longer number or a decimal ("1.5", "1,5", "12").
 _OPTION_RE = re.compile(r"^\s*(?:option\s*|#)?([0-9]{1,3})(?![0-9]|[.,][0-9])", re.IGNORECASE)
 _WS = re.compile(r"\s+")
-_LABEL_JUNK = re.compile(r"--+|[\u2014\u2013\"]")
+_HYPHENS = re.compile(r"-{2,}")
+# fix round 2: look-alikes an LLM could use to fake our own separators,
+# quotes or brackets inside an inserted value
+_TRANSLATE = {
+    **{ord(c): "-" for c in "\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58\ufe63\uff0d"
+                         "\u2e3a\u2e3b\ufe31\ufe32"},
+    **{ord(c): "'" for c in "\"\u201c\u201d\u2018\u2019\u201e\u201f\uff02\uff07\u00ab\u00bb"
+                         "\u2039\u203a"},
+    ord("["): "(", ord("]"): ")",
+}
+FIELD_MAX = 80
 HOUR = 3600
 MAX_CREATE_FAILURES_PER_HOUR = 3     # non-transport create failures per arrival
 FALLBACK_AFTER_FAILURES = 6
-_KIDS_FLAG = " \u26a0 files into Kids"
+_KIDS_FLAG = "\u26a0 KIDS \u2014 "   # FIRST inside the bracket: nothing can push it out of view
 _NO_ACTION = "no automatic action \u2014 the librarian will ask again"
 
 
@@ -105,21 +116,41 @@ def _flat(value, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+def _clean(value, limit: int = FIELD_MAX) -> str:
+    """The one cleaner for every untrusted value inserted into task text
+    (fix round 2): NFKC-normalised; control chars become spaces; format
+    (Cf: bidi overrides, zero-width), private-use (Co) and surrogate (Cs)
+    chars are dropped; dash, quote and bracket look-alikes become a plain
+    hyphen, apostrophe or parenthesis (runs of hyphens collapse); one line;
+    capped at `limit`. So a value can never fake our separators (" \u2014 "),
+    close our quotes or brackets, or reorder the line visually."""
+    text = unicodedata.normalize("NFKC", str(value if value is not None else ""))
+    out = []
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if cat == "Cc":
+            out.append(" ")
+        elif cat not in ("Cf", "Co", "Cs"):
+            out.append(ch)
+    text = _HYPHENS.sub("-", "".join(out).translate(_TRANSLATE))
+    return _flat(text, limit)
+
+
 def _int(value):
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _label(value) -> str:
-    """An LLM-authored option label, reduced so it cannot pass for our own
-    text: one line, no dash separators, no double quotes (it is rendered
-    inside quotes as "librarian's label")."""
-    return _flat(_LABEL_JUNK.sub(" ", _flat(value, 400)), 200)
+    """An LLM-authored option label (rendered inside quotes as
+    "librarian's label"): `_clean`ed like every other inserted value."""
+    return _clean(value)
 
 
 def describe_action(intent, index=None) -> str:
     """What selecting an option would actually do, in words -- built from
     the option's intent, never from its (LLM-authored) label. A filing
-    into Kids is flagged."""
+    into Kids is flagged FIRST. Every inserted value goes through
+    `_clean` (fix round 2)."""
     if intent is None:
         return _NO_ACTION
     if not isinstance(intent, dict):
@@ -132,26 +163,27 @@ def describe_action(intent, index=None) -> str:
         if book:
             authors = ", ".join(str(a.get("name") or "") if isinstance(a, dict) else str(a)
                                 for a in (book.get("authors") or []))
-            what = f" (\"{_flat(book.get('title'), 120)}\"{' by ' + _flat(authors, 80) if authors else ''}" \
-                   f", {_flat(book.get('libraryName'), 40)})"
+            what = f" (\"{_clean(book.get('title'))}\"{' by ' + _clean(authors) if authors else ''}" \
+                   f", {_clean(book.get('libraryName'))})"
         verb = "attach this arrival to" if kind == states.ATTACH else "update the metadata of"
         flag = _KIDS_FLAG if (book or {}).get("libraryName") == _LIBRARY_NAMES["kids"] else ""
-        return f"{verb} BookOrbit book {book_id}{what}{flag}"
+        return f"{flag}{verb} BookOrbit book {book_id}{what}"
     if kind == states.CREATE_BOOK:
         md = intent.get("metadata") if isinstance(intent.get("metadata"), dict) else {}
         authors = md.get("authors") if isinstance(md.get("authors"), list) else []
-        library = _LIBRARY_NAMES.get(intent.get("library"), f"unknown library {intent.get('library')!r}")
+        library = _LIBRARY_NAMES.get(intent.get("library"),
+                                     f"unknown library '{_clean(intent.get('library'))}'")
         series = ""
         if md.get("series"):
-            series = f", series \"{_flat(md.get('series'), 80)}\""
+            series = f", series \"{_clean(md.get('series'))}\""
             if md.get("seriesIndex") is not None:
-                series += f" #{_flat(md.get('seriesIndex'), 10)}"
+                series += f" #{_clean(md.get('seriesIndex'), 10)}"
         flag = _KIDS_FLAG if intent.get("library") == "kids" else ""
-        return (f"create a new book \"{_flat(md.get('title'), 120)}\" by "
-                f"{_flat(', '.join(str(a) for a in authors), 80)}{series} in {library}{flag}")
+        return (f"{flag}create a new book \"{_clean(md.get('title'))}\" by "
+                f"{_clean(', '.join(str(a) for a in authors))}{series} in {library}")
     if kind == states.DEFER:
-        return f"wait {_flat(intent.get('not_before_hours'), 10)}h, then look again"
-    return f"{_flat(kind, 40)} (not a filing)"
+        return f"wait {_clean(intent.get('not_before_hours'), 10)}h, then look again"
+    return f"{_clean(kind, 40)} (not a filing)"
 
 
 def _book_ids(payload: dict, dossier) -> list:
@@ -174,15 +206,15 @@ def _book_ids(payload: dict, dossier) -> list:
 def question_text(payload: dict, key: str, *, dossier=None, index=None, bookorbit_url="") -> str:
     """The plain-text body of an escalation (task description, or the
     comment for a follow-up escalation on the same task)."""
-    lines = [_flat(payload.get("question"), 1500) or "(no question given)", "", "Options:"]
+    lines = [_clean(payload.get("question"), 1500) or "(no question given)", "", "Options:"]
     for n, opt in enumerate(payload.get("options") or [], 1):
         opt = opt if isinstance(opt, dict) else {}
         # fix round 1: the TRUSTED action first, the LLM's label after it,
         # quoted and attributed -- a label can't pass itself off as the action
         lines.append(f"{n}. [{describe_action(opt.get('intent'), index)}] \u2014 "
                      f"librarian's label: \"{_label(opt.get('label'))}\"")
-    lines += ["", f"Recommendation: {_flat(payload.get('recommendation'), 300)}",
-              f"Arrival: {_flat(key, 300)}"]
+    lines += ["", f"Recommendation: {_clean(payload.get('recommendation'), 300)}",
+              f"Arrival: {_clean(key, 300)}"]
     ids = _book_ids(payload, dossier) if bookorbit_url else []
     if ids:
         lines.append("BookOrbit:")
@@ -193,7 +225,7 @@ def question_text(payload: dict, key: str, *, dossier=None, index=None, bookorbi
 
 
 def task_title(rec: dict) -> str:
-    hint = _flat(rec.get("title_hint") or rec.get("key") or "arrival", 200)
+    hint = _clean(rec.get("title_hint") or rec.get("key") or "arrival", 200)
     title = f"Librarian: {hint}"
     return title if len(title) <= TITLE_MAX else title[: TITLE_MAX - 1].rstrip() + "…"
 
@@ -234,12 +266,12 @@ def outcome_text(rec: dict, bookorbit_url: str = "") -> str:
     if st == states.DUPLICATE:
         return f"Duplicate: this file is already in book {book_id}{link}. Nothing filed. Closing."
     if st == states.FAILED:
-        return f"Filing failed: {_flat(rec.get('error') or rec.get('detail') or 'unknown error', 600)}. Closing."
+        return f"Filing failed: {_clean(rec.get('error') or rec.get('detail') or 'unknown error', 600)}. Closing."
     if st == states.SIMULATED:
-        wd = "; ".join(_flat(x, 200) for x in (rec.get("would_do") or []))
+        wd = "; ".join(_clean(x, 200) for x in (rec.get("would_do") or []))
         return (f"Dry run -- nothing was changed. Would do: {wd or 'nothing'}. Answers given "
                 f"during the dry run are not carried over to live filing. Closing.")
-    return f"Finished ({_flat(st, 40)}). Closing."
+    return f"Finished ({_clean(st, 40)}). Closing."
 
 
 # --- the tick --------------------------------------------------------------------------
@@ -248,6 +280,7 @@ def outcome_text(rec: dict, bookorbit_url: str = "") -> str:
 class _Budget:
     def __init__(self, n):
         self.left = n
+        self.halted = False     # fix round 2: a transport error ends this tick's Vikunja work
 
     def take(self, n=1) -> bool:
         if self.left < n:
@@ -266,9 +299,13 @@ def _log_once(svc, key, msg) -> None:
         logger.warning("Vikunja: arrival %s: %s (retried next tick)", log_safe(key), log_safe(msg))
 
 
-def _error(svc, key, what, e) -> None:
+def _error(svc, key, what, e, budget) -> None:
     metrics.VIKUNJA_ERRORS.inc()
     _log_once(svc, key, f"{what} failed: {e}")
+    if e.transport:
+        # Vikunja unreachable/hanging: stop for this tick so a hang costs
+        # one timeout per tick, not one per arrival
+        budget.halted = True
 
 
 def _annotate(svc, key, **fields):
@@ -281,17 +318,23 @@ def _annotate(svc, key, **fields):
         return svc.arrivals.record(key, cur["state"], **fields)
 
 
-def _each(svc, recs, fn) -> None:
+def _each(svc, recs, fn, budget=None) -> None:
     """Run `fn(rec)` per arrival; one arrival's unexpected error is logged
-    and skipped, never aborting the rest of the tick's work (fix round 1)."""
+    (once per distinct arrival + error, fix round 2) and skipped, never
+    aborting the rest of the tick's work (fix round 1). Stops when the
+    service is stopping or `budget` was halted by a transport error."""
+    seen = svc.__dict__.setdefault("_escalation_exc", set())
     for rec in recs:
-        if svc.stopping():
+        if svc.stopping() or (budget is not None and budget.halted):
             return
         try:
             if fn(rec) is False:
                 return
-        except Exception:
-            logger.exception("escalation sync failed for arrival %s", log_safe(rec.get("key")))
+        except Exception as e:
+            sig = (rec.get("key"), f"{type(e).__name__}: {e}")
+            if sig not in seen:
+                seen.add(sig)
+                logger.exception("escalation sync failed for arrival %s", log_safe(rec.get("key")))
 
 
 def sync(svc) -> None:
@@ -299,15 +342,15 @@ def sync(svc) -> None:
         _push_only(svc)
         return
     budget = _Budget(MAX_WRITES_PER_TICK)
-    _each(svc, svc.arrivals.by_state(states.NEEDS_DECISION), lambda rec: _open(svc, rec, budget))
+    _each(svc, svc.arrivals.by_state(states.NEEDS_DECISION), lambda rec: _open(svc, rec, budget), budget)
 
     def close(rec):
         if (rec.get("vikunja_task_id") and not rec.get("vikunja_closed")
                 and rec.get("state") in TERMINAL):
             if not budget.take(2):
                 return False
-            _close(svc, rec)
-    _each(svc, svc.arrivals.all(), close)
+            _close(svc, rec, budget)
+    _each(svc, svc.arrivals.all(), close, budget)
 
 
 def _push_only(svc) -> None:
@@ -338,7 +381,9 @@ def _maybe_fallback(svc, rec, esc, now) -> None:
         return
     if now - since < HOUR and fails < FALLBACK_AFTER_FAILURES:
         return
-    svc.notify_escalation(rec, esc, tail=("The Vikunja task could not be created (the librarian keeps "
+    # own msg_id suffix (fix round 2): never swallowed by an earlier push of
+    # the same escalation (e.g. the first task's, before it was deleted)
+    svc.notify_escalation(rec, esc, suffix=":fallback", tail=("The Vikunja task could not be created (the librarian keeps "
                                           "retrying); answer via the librarian's state."))
     _annotate(svc, rec["key"], vikunja_fallback_pushed=esc["intent_id"])
 
@@ -357,7 +402,7 @@ def _create(svc, rec, esc, budget, *, recreate: bool) -> None:
     try:
         tid, url = svc.vikunja.create_task(task_title(rec), _content(svc, rec, esc))
     except VikunjaError as e:
-        _error(svc, key, "creating the task", e)
+        _error(svc, key, "creating the task", e, budget)
         if e.transport:
             budget.refund()                       # Vikunja down: not this arrival's fault
         else:
@@ -395,8 +440,13 @@ def _open(svc, rec, budget) -> None:
     try:
         state = svc.vikunja.task_state(tid)
     except VikunjaError as e:
-        _error(svc, key, "reading the task", e)
+        _error(svc, key, "reading the task", e, budget)
         return
+    if state == "done" and rec.get("vikunja_intent") == esc["intent_id"]:
+        # fix round 2: a reply and a hand-ticked "done" in the same poll
+        # window -- the reply wins; only re-create when there is none
+        if _take_reply(svc, rec, esc, tid, budget) is not False:
+            return
     if state != "open":
         # deleted or marked done by hand while a decision is still needed:
         # re-create it (at most once an hour) and push again
@@ -411,25 +461,33 @@ def _open(svc, rec, budget) -> None:
         try:
             cid = svc.vikunja.comment(tid, "New question:\n" + _content(svc, rec, esc))
         except VikunjaError as e:
-            _error(svc, key, "posting the new question", e)
+            _error(svc, key, "posting the new question", e, budget)
             return
         new = _annotate(svc, key, vikunja_intent=esc["intent_id"], vikunja_last_seen=cid)
         svc.notify_escalation(new or rec, esc)
         return
+    _take_reply(svc, rec, esc, tid, budget)
+
+
+def _take_reply(svc, rec, esc, tid, budget):
+    """Turn the first new owner reply into `answered`. Returns True when
+    answered, False when there was no reply, None when it could not tell
+    (a Vikunja error, or the arrival changed under us)."""
+    key = rec["key"]
     try:
         replies = svc.vikunja.replies(tid, rec.get("vikunja_last_seen"))
     except VikunjaError as e:
-        _error(svc, key, "reading replies", e)
-        return
+        _error(svc, key, "reading replies", e, budget)
+        return None
     if not replies:
-        return
+        return False
     reply = replies[0]
     answer = parse_answer(reply, esc["payload"].get("options"))
     with svc.lock:
         cur = svc.arrivals.get(key) or {}
         if (cur.get("state") != states.NEEDS_DECISION or cur.get("vikunja_task_id") != tid
                 or cur.get("vikunja_intent") != esc["intent_id"]):
-            return
+            return None
         svc.arrivals.record(key, states.ANSWERED, human_answer=answer, vikunja_last_seen=reply["id"],
                             detail=f"answered in Vikunja (comment {reply['id']})")
     logger.info("arrival %s answered in Vikunja (option %s)", log_safe(key), answer["option"])
@@ -445,15 +503,16 @@ def _open(svc, rec, budget) -> None:
         try:
             svc.vikunja.comment(tid, ack)
         except VikunjaError as e:
-            _error(svc, key, "acknowledging the reply", e)
+            _error(svc, key, "acknowledging the reply", e, budget)
+    return True
 
 
-def _close(svc, rec) -> None:
+def _close(svc, rec, budget) -> None:
     key = rec["key"]
     try:
         svc.vikunja.close(rec["vikunja_task_id"], outcome_text(rec, svc.settings.bookorbit_public_url))
     except VikunjaError as e:
-        _error(svc, key, "closing the task", e)
+        _error(svc, key, "closing the task", e, budget)
         return
     _annotate(svc, key, vikunja_closed=True)
     logger.info("arrival %s: Vikunja task %s closed (%s)", log_safe(key), rec["vikunja_task_id"],

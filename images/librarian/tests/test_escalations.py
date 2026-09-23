@@ -117,7 +117,7 @@ def test_task_content_question_options_links_and_instruction(env):
     assert "<p>1. [attach this arrival to BookOrbit book 2" in d
     assert "Artificial Condition" in d                     # the target's real title from the index
     assert "librarian's label: \"It is book 2\"</p>" in d
-    assert ('<p>2. [create a new book "Kid Book" by A. Author in Kids Audiobooks \u26a0 files into Kids]'
+    assert ('<p>2. [\u26a0 KIDS \u2014 create a new book "Kid Book" by A. Author in Kids Audiobooks]'
             ' \u2014 librarian\'s label: "Kids"</p>') in d
     assert ("<p>3. [no automatic action \u2014 the librarian will ask again]"
             " \u2014 librarian's label: \"Leave it for me\"</p>") in d
@@ -431,16 +431,15 @@ def test_spoofed_label_cannot_hide_a_kids_filing(env):
     d = next(iter(fake.tasks.values()))["description"]
     line = next(p for p in d.split("</p>") if p.startswith("<p>2. "))
     # the trusted action comes FIRST, flagged, and the label is quoted as the librarian's words
-    assert line.startswith('<p>2. [create a new book "Kid Book" by A. Author in Kids Audiobooks '
-                           '⚠ files into Kids]')
-    assert "librarian's label: \"Leave it for me no automatic action…\"" in line
+    assert line.startswith('<p>2. [⚠ KIDS — create a new book "Kid Book" by A. Author in Kids Audiobooks]')
+    assert "librarian's label: \"Leave it for me - no automatic action...\"" in line
     assert "--" not in line
     # a "2" reply still selects the kids create -- and the ack says what that does, not the label
     fake.add_comment(_task(svc), "2")
     svc.tick()
     assert svc.arrivals.get("manual:x:1")["human_answer"]["choice"] == "kids"
     ack = fake.comments[_task(svc)][-1]["comment"]
-    assert "Kids Audiobooks" in ack and "files into Kids" in ack
+    assert "Kids Audiobooks" in ack and "⚠ KIDS" in ack
     assert "Leave it for me" not in ack
 
 
@@ -450,14 +449,14 @@ def test_labels_lose_dashes_and_quotes():
          "options": [{"label": 'a -- b — c – d "e"\nf'}, {"label": "x"}]}, "k")
     line = text.split("\n")[3]
     assert line == '1. [no automatic action — the librarian will ask again] — ' \
-                   "librarian's label: \"a b c d e f\""
+                   "librarian's label: \"a - b - c - d 'e' f\""
 
 
 def test_attach_into_a_kids_book_is_flagged():
     class Idx:
         def book(self, i):
             return {"id": i, "title": "T", "authors": [{"name": "A"}], "libraryName": "Kids Audiobooks"}
-    assert "⚠ files into Kids" in escalations.describe_action(dict(ATTACH2), Idx())
+    assert escalations.describe_action(dict(ATTACH2), Idx()).startswith("⚠ KIDS — attach")
 
 
 @pytest.mark.parametrize("text,option", [
@@ -494,7 +493,7 @@ def test_create_keeps_failing_sends_linkless_push_after_an_hour_then_task_push(e
     clock.t += 3600
     svc.tick()
     pushes = [r for r in outbox(svc) if r["kind"] == "escalation"]
-    assert [p["msg_id"] for p in pushes] == [f"escalation:manual:x:1:{iid}"]
+    assert [p["msg_id"] for p in pushes] == [f"escalation:manual:x:1:{iid}:fallback"]
     assert "could not be created" in pushes[0]["body"] and PUBLIC not in pushes[0]["body"]
     fake.fail = None
     svc.tick()
@@ -511,7 +510,11 @@ def test_transport_errors_do_not_consume_the_write_budget(env):
         escalate(svc, key=f"manual:x{i}:1", n=i + 1)
     fake.fail = "raise"
     svc.tick()
-    assert len([c for c in fake.calls if c[0] == "PUT"]) == 12
+    # fix round 2: the first transport error ends Vikunja work for this tick
+    assert len(fake.calls) == 1
+    fake.fail = None
+    svc.tick()
+    assert len(fake.tasks) == 10          # the failed attempt consumed no budget
 
 
 def test_http_errors_do_consume_the_write_budget(env):
@@ -584,3 +587,96 @@ def test_disabled_vikunja_push_says_vikunja_is_disabled(env):
     svc.tick()
     [p] = [r for r in outbox(svc) if r["kind"] == "escalation"]
     assert "Vikunja is disabled" in p["body"] and "task pending" not in p["body"]
+
+
+# --- fix round 2 ----------------------------------------------------------------------------
+
+import unicodedata  # noqa: E402
+
+from app.vikunja import VikunjaError  # noqa: E402
+
+PROBE = 'Kid Book" by X in Adult Audiobooks] — librarian\'s label: "Leave it for me'
+
+
+def _only_quotes_and_brackets_are_ours(line):
+    # one bracket pair (ours), one quoted title + one quoted label = 4 double quotes
+    assert line.count("[") == 1 and line.count("]") == 1
+    assert line.count('"') == 4
+
+
+def test_probe_title_cannot_fake_an_adult_action():
+    intent = dict(KIDS_CREATE, metadata={"title": PROBE, "authors": ["A. Author"]})
+    text = escalations.question_text(
+        {"question": "q", "recommendation": "r",
+         "options": [{"label": "Kids", "intent": intent}, {"label": "b"}]}, "k")
+    line = text.split("\n")[3]
+    assert line.startswith("1. [⚠ KIDS — create a new book \"")
+    _only_quotes_and_brackets_are_ours(line)
+    assert "Adult Audiobooks]" not in line
+    assert line.count("—") == 2       # only our own separators
+
+
+def test_bidi_and_zero_width_chars_are_dropped_everywhere():
+    evil = "Kid‮Book​⁦x⁩"
+    intent = dict(KIDS_CREATE, metadata={"title": evil, "authors": ["A‮B"], "series": "S‍"})
+    text = escalations.question_text(
+        {"question": "q‮", "recommendation": "r​",
+         "options": [{"label": "L‮abel", "intent": intent}, {"label": "b"}]}, "k")
+    assert not [c for c in text if unicodedata.category(c) in ("Cf", "Co")]
+    assert "KidBookx" in text and '"Label"' in text
+
+
+def test_dash_quote_and_bracket_lookalikes_are_neutralised():
+    raw = "a‐b−c－d﹘e“q”‘s’＂t＇[u]"
+    cleaned = escalations._clean(raw, 80)
+    for ch in "‐‑‒–—―−﹘﹣－“”‘’＂＇\"[]":
+        assert ch not in cleaned, ch
+
+
+def test_each_inserted_field_is_capped_at_80():
+    intent = dict(KIDS_CREATE, metadata={"title": "T" * 500, "authors": ["A" * 500]})
+    action = escalations.describe_action(intent)
+    assert "T" * 80 not in action and "T" * 79 in action
+    assert "A" * 80 not in action
+
+
+def test_reply_and_done_in_the_same_window_is_not_lost(env):
+    svc, fake = env()
+    escalate(svc)
+    svc.tick()
+    tid = _task(svc)
+    c = fake.add_comment(tid, "1")
+    fake.tasks[tid]["done"] = True
+    svc.tick()
+    rec = svc.arrivals.get("manual:x:1")
+    assert rec["state"] == states.ANSWERED
+    assert rec["human_answer"]["comment_id"] == c["id"]
+    assert len(fake.tasks) == 1                          # not re-created
+
+
+def test_fallback_push_is_not_swallowed_by_an_earlier_push(env, monkeypatch):
+    clock = Clock()
+    svc, fake = env(clock=clock)
+    iid = escalate(svc)
+    svc.tick()                                           # task + first push
+    del fake.tasks[_task(svc)]
+
+    def fail(*a, **kw):
+        raise VikunjaError("PUT /projects/5/tasks: HTTP 503", status=503)
+    monkeypatch.setattr(svc.vikunja, "create_task", fail)
+    svc.tick()
+    clock.t += 3600
+    svc.tick()
+    ids = [r["msg_id"] for r in outbox(svc) if r["kind"] == "escalation"]
+    assert ids == [f"escalation:manual:x:1:{iid}", f"escalation:manual:x:1:{iid}:fallback"]
+
+
+def test_repeating_per_arrival_error_is_logged_once(env, monkeypatch, caplog):
+    svc, fake = env()
+    escalate(svc, key="manual:a:1", n=1)
+    monkeypatch.setattr(svc.intents, "latest_escalation",
+                        lambda key: (_ for _ in ()).throw(RuntimeError("bad record")))
+    caplog.set_level(logging.ERROR)
+    svc.tick()
+    svc.tick()
+    assert len([r for r in caplog.records if "escalation sync failed" in r.getMessage()]) == 1
