@@ -6,7 +6,8 @@ leftovers after a verified filing. Every destructive call asserts its path is
 under the intake root first -- nothing in this module may delete, overwrite or
 rename anything under `/media/books`. The one library-side move (the primary
 file into a book folder) lives in app/executor.py, where it is journaled.
-`hash_file` and `rename_collision` also look at library paths, read-only.
+`hash_file`, `rename_collision` and `fresh_lstat` also look at library paths,
+read-only.
 
 Moves use `os.link` + `os.unlink` (never `os.rename` onto a path that might
 exist): `link` fails atomically with EEXIST instead of silently replacing,
@@ -14,6 +15,7 @@ and EXDEV (a different filesystem) fails instead of degrading to a copy.
 """
 import hashlib
 import os
+import stat
 
 # Libation leftovers that are safe to delete once the book is verified filed:
 # cover art, the chapter cue sheet and Libation's JSON sidecars. Anything else
@@ -192,6 +194,46 @@ def hash_file(path: str, beat, beat_every: int) -> str:
                 since = 0
     beat()
     return h.hexdigest()
+
+
+def fresh_lstat(path: str, root: str):
+    """`os.lstat(path)` after listing every directory from `root` down to
+    the path's parent, top-down; None when the path cannot be seen (yet).
+    Read-only.
+
+    Task 11: the library is an NFS mount (lookupcache=all). A lookup that
+    finds nothing is cached as a negative entry -- guard 8's `lexists` of the
+    folder BookOrbit is about to move a book into leaves one -- and this
+    client keeps answering ENOENT for that name, although BookOrbit (another
+    client) has since created it, until the directory holding the entry is
+    revalidated. Opening a directory to list it forces that revalidation
+    (close-to-open GETATTR; a changed directory drops its negative entries).
+    The entry sits in the deepest directory that already existed -- above
+    the file's own parent when the move created a new book or series
+    folder -- hence every level from `root` down. Each level is lstat'ed
+    first and the walk ends at one that is not a real directory -- never
+    listing through a symlink (fix round 1, M4) -- or cannot be listed:
+    everything below it is out of sight anyway."""
+    root = os.path.abspath(root)
+    parent = os.path.dirname(os.path.abspath(path))
+    levels = []
+    if parent == root or parent.startswith(root + os.sep):
+        levels.append(root)
+        rel = os.path.relpath(parent, root)
+        if rel != ".":
+            for part in rel.split(os.sep):
+                levels.append(os.path.join(levels[-1], part))
+    for d in levels:
+        try:
+            if not stat.S_ISDIR(os.lstat(d).st_mode):
+                break
+            os.listdir(d)
+        except OSError:
+            break
+    try:
+        return os.lstat(path)
+    except OSError:
+        return None
 
 
 def rename_collision(index, book_id, library: str, rendered: str, lib_root: str, own: str) -> str | None:

@@ -685,6 +685,63 @@ def test_end_to_end_live_attach_with_real_executor(tmp_path):
         svc.stop()
 
 
+def test_end_to_end_live_create_book_takes_language_and_year_from_the_epub(tmp_path):
+    """Task 11, the canary's shape: a manual EPUB whose OPF says language
+    "en", filed by create_book with no language/publishedYear in the intent.
+    The real dossier carries both OPF fields and the real executor writes and
+    locks them instead of a locked null."""
+    from tests.fixtures import make_epub
+    books_root = tmp_path / "media" / "books"
+    (books_root / "Library").mkdir(parents=True)
+    (books_root / "Kids Audiobooks").mkdir(parents=True)
+    fake = FakeBookorbit(books_root)
+    fclock = FakeClock()
+    fake.clock = fclock
+    ro = BookorbitClient("http://b/api/v1", "u", "p", transport=fake.transport,
+                         cookie_path=str(tmp_path / "ro.txt"), clock=fclock)
+    ro.authenticate()
+    index = LibraryIndex(ro, str(tmp_path / "idx.json"), path_prefix="/books",
+                         local_root=str(books_root))
+    index.refresh(now=0, force=True)
+    wc = BookorbitClient("http://b/api/v1", "u", "p", transport=fake.transport,
+                         cookie_path=str(tmp_path / "w.txt"), clock=fclock, writable=True)
+    wc.authenticate()
+    writer = BookorbitWriter(wc)
+
+    def factory(svc):
+        return Executor(svc.settings, writer, svc.index, svc.arrivals, clock=fclock,
+                        sleep=fclock.sleep, stopping=svc.stopping)
+
+    def create_without_language(call):
+        st, arrivals = call("GET", "/arrivals")
+        assert st == 200 and len(arrivals) == 1, arrivals
+        st, body = call("POST", "/intents", {
+            "kind": "create_book", "arrival": arrivals[0]["key"], "library": "adult",
+            "metadata": {"title": "Zz Librarian Canary One", "authors": ["Zz Canary Author"]},
+            "reason": "new"})
+        assert st == 200 and body["status"] == states.PROPOSED_I, body
+
+    manual = tmp_path / "intake" / "manual"
+    manual.mkdir(parents=True)
+    make_epub(str(manual / "zz-librarian-canary.epub"), "Zz Librarian Canary One", ["Zz Canary Author"],
+              "It is a truth universally acknowledged.", date="2026")
+    clock = Clock()
+    svc = Service(make_settings(tmp_path, dry_run=False), index=index,
+                  runner=FakeModel(librarian=create_without_language, reviewer=approve_all),
+                  prober=fake_prober, clock=clock, executor=factory)
+    try:
+        drive(svc, clock)
+        rec = svc.arrivals.get(only_key(svc))
+        assert rec["state"] == states.FILED, rec
+        body = fake.patch_bodies[0][2]["metadata"]
+        assert body["language"] == "en" and body["publishedYear"] == 2026
+        book = fake.books[rec["book_id"]]
+        assert book["language"] == "en" and {"language", "publishedYear"} <= set(book["lockedFields"])
+        assert book["folderPath"] == "/books/Library/Zz Canary Author/Zz Librarian Canary One"
+    finally:
+        svc.stop()
+
+
 def test_torn_end_record_never_rejects_executor_owned_intents(tmp_path, live_factory):
     def die(intent, rec):
         raise Crash()

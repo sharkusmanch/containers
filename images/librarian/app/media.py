@@ -189,6 +189,27 @@ def _classify_identifier(ident_id: str | None, scheme_attr: str | None, raw_valu
     return (ident_id.strip().lower() if ident_id else "unknown"), value
 
 
+# dc:date opf:event values (EPUB2) that date the BOOK's publication. No event
+# at all is the common case (calibre, and EPUB3 has no opf:event: its only
+# dc:date is the publication date); creation/modification/... date the FILE.
+_PUBLICATION_EVENTS = frozenset({"", "publication", "original-publication"})
+
+
+def _publication_date(metadata) -> str | None:
+    """The first dc:date dating the publication (see _PUBLICATION_EVENTS),
+    in document order; None when there are only file dates (Task 11 fix
+    round 1, M5: they must never become create_book's publishedYear)."""
+    if metadata is None:
+        return None
+    for el in metadata.findall("dc:date", _NS):
+        event = el.get(f"{{{_OPF_NS}}}event") or el.get("event") or ""
+        if event.strip().lower() in _PUBLICATION_EVENTS:
+            text = _el_text(el)
+            if text:
+                return text
+    return None
+
+
 def _parse_opf(zf: zipfile.ZipFile, opf_path: str) -> tuple[dict, list[str]]:
     with zf.open(opf_path) as f:
         root = ET.parse(f).getroot()
@@ -201,7 +222,7 @@ def _parse_opf(zf: zipfile.ZipFile, opf_path: str) -> tuple[dict, list[str]]:
         if metadata is not None
         else []
     )
-    date = _el_text(metadata.find("dc:date", _NS)) if metadata is not None else None
+    date = _publication_date(metadata)
     language = _el_text(metadata.find("dc:language", _NS)) if metadata is not None else None
     description = _el_text(metadata.find("dc:description", _NS)) if metadata is not None else None
     if description and len(description) > _DESCRIPTION_MAX:

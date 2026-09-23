@@ -17,14 +17,22 @@ _CONTAINER_XML = (
 
 
 def make_epub(path, title, creators, text, date="2020", identifiers=None, raw_identifiers=None,
-              description=None):
+              description=None, dates=None):
     """`identifiers`: dict of scheme -> value, written with an `opf:scheme`
     attribute (the common case). `raw_identifiers`: list of (id, value) pairs
     written WITHOUT an `opf:scheme` attribute (id may be None) -- for
     exercising EPUB2's optional-scheme / urn: / bare-ISBN fallback paths.
-    `description`: optional dc:description text (evals use it for injection)."""
+    `description`: optional dc:description text (evals use it for injection).
+    `dates`: optional list of (opf:event or None, value) written as dc:date
+    elements in that order, instead of the single `date`."""
     identifiers = identifiers or {}
     raw_identifiers = raw_identifiers or []
+    if dates is None:
+        dates = [(None, date)]
+    date_xml = "".join(
+        (f'<dc:date opf:event="{escape(event)}">' if event else "<dc:date>") + f"{escape(value)}</dc:date>"
+        for event, value in dates
+    )
 
     creator_xml = "".join(f"<dc:creator>{escape(c)}</dc:creator>" for c in creators)
     identifier_xml = "".join(
@@ -42,7 +50,7 @@ def make_epub(path, title, creators, text, date="2020", identifiers=None, raw_id
         '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">'
         f"<dc:title>{escape(title)}</dc:title>"
         f"{creator_xml}"
-        f"<dc:date>{escape(date)}</dc:date>"
+        f"{date_xml}"
         "<dc:language>en</dc:language>"
         f"{'<dc:description>' + escape(description) + '</dc:description>' if description else ''}"
         f"{identifier_xml}"
