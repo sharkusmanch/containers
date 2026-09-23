@@ -24,7 +24,10 @@ Case file schema (see evals/README.md):
   {"name", "arrival": {source, source_id, folder?, files: [{name, kind, size,
    probe|epub}], sidecar?}, "library": [BookOrbit detail dicts], "kids_lists"?:
    {"allow": {...}, "deny": {...}}, "expect": {"kind_in": [...], "book_id"?,
-   "library"?, "title_contains"?, "readalong"?, "forbid"?: {"book_id"?, "library"?}}}
+   "library"?, "title_contains"?, "readalong"?, "forbid"?: {"book_id"?, "library"?},
+   "update_metadata"?: {"state", "fields"?, "forbid_keys"?, "lock_max"?}},
+   "answered"?: {"escalation": {question, options, recommendation}, "reply": "..."},
+   "scripted_intent"? | "scripted_intents"?: [...]}
 """
 import argparse
 import glob
@@ -45,6 +48,8 @@ IMAGE_DIR = os.path.dirname(HERE)
 sys.path.insert(0, IMAGE_DIR)
 
 from app import states  # noqa: E402
+from app.escalations import parse_answer  # noqa: E402
+from app.intents import would_do  # noqa: E402
 from app.bookorbit import BookorbitClient, LibraryIndex  # noqa: E402
 from app.config import Settings  # noqa: E402
 from app.runner import RunResult, run_claude  # noqa: E402
@@ -191,14 +196,15 @@ def make_prober(probes: dict):
 
 class ScriptedLibrarian:
     """`runner=` for reviewer cases: in librarian mode it submits the case's
-    fixed `scripted_intent` through the internal API with the run's own token
-    (calling get_book first, so guard 1 accepts the target), then writes a
-    transcript granting only mcp__librarian__* tools so the containment
-    tripwire passes. Reviewer mode runs the real sandboxed claude."""
+    fixed `scripted_intent` (or, in order, its `scripted_intents` -- e.g. an
+    attach and its update_metadata) through the internal API with the run's
+    own token (calling get_book first, so guard 1 accepts an attach target),
+    then writes a transcript granting only mcp__librarian__* tools so the
+    containment tripwire passes. Reviewer mode runs the real sandboxed claude."""
 
-    def __init__(self, intent: dict):
-        self.intent = intent
-        self.submitted = None      # the API's answer to the scripted POST
+    def __init__(self, intents: list):
+        self.intents = intents
+        self.submitted = []        # the API's answer to each scripted POST
 
     def __call__(self, argv, *, cwd, env, timeout, transcript_path, on_tick=None, **kw):
         cfg = json.loads(argv[argv.index("--mcp-config") + 1])
@@ -221,10 +227,11 @@ class ScriptedLibrarian:
         arrivals = call("GET", "/arrivals")
         key = arrivals[0]["key"]
         call("GET", f"/arrivals/{urllib.parse.quote(key, safe='')}")
-        body = dict(self.intent, arrival=key)
-        if body.get("kind") == "attach":
-            call("GET", f"/books/{body['book_id']}?arrival={urllib.parse.quote(key, safe='')}")
-        self.submitted = call("POST", "/intents", body)
+        for intent in self.intents:
+            body = dict(intent, arrival=key)
+            if body.get("kind") == "attach":
+                call("GET", f"/books/{body['book_id']}?arrival={urllib.parse.quote(key, safe='')}")
+            self.submitted.append(call("POST", "/intents", body))
 
         os.makedirs(os.path.dirname(transcript_path), exist_ok=True)
         with open(transcript_path, "w") as f:
@@ -234,6 +241,51 @@ class ScriptedLibrarian:
                                 "total_cost_usd": 0.0, "num_turns": 1}) + "\n")
         return RunResult(ok=True, exit_code=0, timed_out=False, result_text="scripted", cost_usd=0.0,
                          usage={}, num_turns=1, transcript_path=transcript_path, error_reason=None)
+
+
+# --- answered escalations -------------------------------------------------------------
+
+
+SEED_RUN = "seed-escalation"
+
+
+def seed_answer(svc, key: str, answered: dict) -> None:
+    """Put a freshly-ingested arrival into the state a human reply leaves it
+    in: a finalized escalation (as a previous run's finalize records it),
+    the arrival NEEDS_DECISION with that plan, then ANSWERED with the
+    `human_answer` the real Vikunja reply parser builds from `reply`."""
+    esc = answered["escalation"]
+    options = []
+    for opt in esc["options"]:
+        opt = dict(opt)
+        if isinstance(opt.get("intent"), dict):
+            opt["intent"] = dict(opt["intent"], arrival=key)
+        options.append(opt)
+    payload = {"kind": states.ESCALATE, "arrival": key, "question": esc["question"],
+               "options": options, "recommendation": esc["recommendation"]}
+    wd = would_do(payload, index=svc.index)
+    svc.intents.store.record(f"{SEED_RUN}:1", states.SIMULATED_I, run_id=SEED_RUN, arrival=key,
+                             kind=states.ESCALATE, payload=payload, reason=esc["question"],
+                             guard=None, review=None, would_do=wd)
+    svc.arrivals.record(key, states.NEEDS_DECISION, would_do=wd)
+    answer = parse_answer({"text": answered["reply"], "id": 9001}, options)
+    svc.arrivals.record(key, states.ANSWERED, human_answer=answer,
+                        detail="answered in Vikunja (comment 9001)")
+
+
+def seed_on_intake(svc, answered: dict) -> None:
+    """Wrap the service's intake so an arrival is answered the moment it is
+    recorded READY -- before the tick's debounce/run step can offer it."""
+    orig = svc._intake_one
+    done = set()
+
+    def wrapped(c, now):
+        orig(c, now)
+        for rec in svc.arrivals.by_state(states.READY):
+            if rec["key"] not in done:
+                done.add(rec["key"])
+                seed_answer(svc, rec["key"], answered)
+    svc._intake_one = wrapped
 
 
 # --- grading -------------------------------------------------------------------------
@@ -259,7 +311,7 @@ def _lib_of(svc, kind, payload):
     return payload.get("library")
 
 
-def outcome(svc, key: str, scripted_id: str | None = None) -> dict:
+def outcome(svc, key: str, scripted_ids=()) -> dict:
     rec = svc.arrivals.get(key) or {}
     st = rec.get("state")
     intents = [r for r in svc.intents.store.all() if r.get("arrival") == key]
@@ -289,12 +341,18 @@ def outcome(svc, key: str, scripted_id: str | None = None) -> dict:
         p = r.get("payload") or {}
         got["trail"].append({
             "intent_id": r.get("intent_id"), "kind": r.get("kind"), "state": r.get("state"),
-            "scripted": r.get("intent_id") == scripted_id,
+            "scripted": r.get("intent_id") in scripted_ids or r.get("run_id") == SEED_RUN,
             "auto": p.get("origin") == "reviewer",
             "book_id": p.get("book_id"), "library": _lib_of(svc, r.get("kind"), p),
             "title": (p.get("metadata") or {}).get("title"),
             "reason": r.get("reason"), "guard": r.get("guard"), "review": r.get("review"),
             "question": p.get("question")})
+    metas = [r for r in intents if r.get("kind") == states.UPDATE_METADATA
+             and r.get("state") != states.GUARD_REJECTED]
+    if metas:
+        p = metas[-1].get("payload") or {}
+        got["meta"] = {"state": metas[-1].get("state"), "metadata": p.get("metadata"),
+                       "lock": p.get("lock"), "book_id": p.get("book_id")}
     got["verdicts"] = [(t.get("review") or {}).get("verdict") for t in got["trail"]
                        if t["review"] and not t["auto"] and t["state"] != states.GUARD_REJECTED]
     got["guard_rejects"] = [f"{t['kind']}#{t['book_id']}" if t["book_id"] else f"{t['kind']}"
@@ -335,6 +393,22 @@ def grade(expect: dict, got: dict, record: dict) -> tuple[bool, str]:
             return False, f"escalation came from {got.get('origin')}, expected {want}"
     if kind == "attach" and "book_id" in expect and got.get("book_id") != expect["book_id"]:
         return False, f"attached to {got.get('book_id')}, expected {expect['book_id']}"
+    um = expect.get("update_metadata")
+    if um is not None:
+        meta = got.get("meta")
+        st = meta["state"] if meta else "absent"
+        if st != um["state"]:
+            return False, f"update_metadata {st}, expected {um['state']}"
+        if meta:
+            md = meta.get("metadata") or {}
+            for k, v in (um.get("fields") or {}).items():
+                if k not in md or (md[k] != v and _fold(md[k]) != _fold(v)):
+                    return False, f"update_metadata {k}={md.get(k)!r}, expected {v!r}"
+            bad_keys = sorted(set(um.get("forbid_keys") or []) & set(md))
+            if bad_keys:
+                return False, f"update_metadata changed forbidden fields {bad_keys}"
+            if "lock_max" in um and not set(meta.get("lock") or []) <= set(um["lock_max"]):
+                return False, f"update_metadata locked {meta.get('lock')}, allowed {um['lock_max']}"
     if kind == "create_book":
         if "library" in expect and got.get("library") != expect["library"]:
             return False, f"library {got.get('library')}, expected {expect['library']}"
@@ -357,6 +431,11 @@ def expected_str(expect: dict) -> str:
         s += f" ra={expect['readalong']}"
     if expect.get("escalate_origin"):
         s += f" by {expect['escalate_origin']}"
+    if expect.get("update_metadata"):
+        um = expect["update_metadata"]
+        s += f" +meta:{um['state']}"
+        if um.get("fields"):
+            s += "(" + ",".join(f"{k}={v}" for k, v in um["fields"].items()) + ")"
     if expect.get("forbid"):
         s += " !" + ",".join(f"{k}={v}" for k, v in expect["forbid"].items())
     return s
@@ -372,6 +451,9 @@ def got_str(got: dict) -> str:
         out = f"escalate[{got.get('origin')}]"
     else:
         out = k
+    if got.get("meta"):
+        m = got["meta"]
+        out += f" +meta:{m['state']}({json.dumps(m.get('metadata'), sort_keys=True)} lock={m.get('lock')})"
     if got.get("verdicts"):
         out += " (rev: " + ",".join(str(v) for v in got["verdicts"]) + ")"
     return out
@@ -410,9 +492,12 @@ def run_case(case: dict, args, out_root: str) -> dict:
         index.refresh(now=0, force=True)
 
         clock = Clock()
-        scripted = ScriptedLibrarian(case["scripted_intent"]) if case.get("scripted_intent") else None
+        script = case.get("scripted_intents") or ([case["scripted_intent"]] if case.get("scripted_intent") else [])
+        scripted = ScriptedLibrarian(script) if script else None
         svc_kw = {"runner": scripted} if scripted else {}
         svc = Service(settings, index=index, prober=make_prober(probes), clock=clock, **svc_kw)
+        if case.get("answered"):
+            seed_on_intake(svc, case["answered"])
         started = time.time()
         try:
             for _ in range(6):
@@ -428,8 +513,8 @@ def run_case(case: dict, args, out_root: str) -> dict:
             if len(recs) != 1:
                 got = {"kind": "none", "error": f"{len(recs)} arrivals recorded", "trail": []}
             else:
-                sid = (scripted.submitted or {}).get("intent_id") if scripted else None
-                got = outcome(svc, recs[0]["key"], sid)
+                sids = {s.get("intent_id") for s in scripted.submitted} if scripted else set()
+                got = outcome(svc, recs[0]["key"], sids)
         finally:
             svc.stop()
 
@@ -439,7 +524,8 @@ def run_case(case: dict, args, out_root: str) -> dict:
             if isinstance(c, (int, float)):
                 cost += c
         ok, why = grade(case["expect"], got, record)
-        if scripted and (scripted.submitted or {}).get("status") != "proposed":
+        if scripted and (len(scripted.submitted) != len(script)
+                         or any(s.get("status") != "proposed" for s in scripted.submitted)):
             ok, why = False, f"scripted intent not accepted: {scripted.submitted}"
 
         dest = os.path.join(out_root, case["name"])
