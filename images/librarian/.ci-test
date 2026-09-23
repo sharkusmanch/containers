@@ -12,6 +12,8 @@ if command -v uv >/dev/null 2>&1; then
   uv run -q --with pytest --with requests==2.34.2 --with prometheus-client==0.26.0 --with mcp==1.30.0 \
     python -m pytest -q tests
 else
-  python3 -m pip install -q pytest "requests==2.34.2" "prometheus-client==0.26.0" "mcp==1.30.0"
-  python3 -m pytest -q tests
+  # Same interpreter choice as ses-puller's gate (the runner's toolcache python).
+  PY=$(command -v python || command -v python3)
+  "$PY" -m pip install -q pytest "requests==2.34.2" "prometheus-client==0.26.0" "mcp==1.30.0"
+  "$PY" -m pytest -q tests
 fi
