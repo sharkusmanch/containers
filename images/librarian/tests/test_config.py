@@ -57,3 +57,8 @@ def test_settings_is_frozen():
 def test_missing_required_field_raises():
     with pytest.raises(Exception):
         Settings.from_env({"BOOKORBIT_USER": "u", "BOOKORBIT_PASS": "p"})
+
+
+def test_runs_root_default_and_override():
+    assert Settings.from_env(BASE).runs_root == "/tmp/runs"
+    assert Settings.from_env({**BASE, "RUNS_ROOT": "/var/run/librarian"}).runs_root == "/var/run/librarian"

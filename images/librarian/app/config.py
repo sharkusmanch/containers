@@ -74,6 +74,10 @@ class Settings:
     retry_after: int = 3600
     dry_run: bool = True
     only: str | None = None
+    # Every claude -p run's HOME/CLAUDE_CONFIG_DIR must live strictly under
+    # this directory (app/runner.py's child_env enforces it) -- the fence
+    # against a run_dir that somehow escapes to the host's real ~/.claude.
+    runs_root: str = "/tmp/runs"
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Settings":
@@ -109,4 +113,5 @@ class Settings:
             retry_after=_i(env, "RETRY_AFTER", 3600),
             dry_run=dry_run,
             only=only,
+            runs_root=_s(env, "RUNS_ROOT", "/tmp/runs"),
         )
