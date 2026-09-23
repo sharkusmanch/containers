@@ -1,4 +1,11 @@
-"""One librarian cycle: librarian run -> reviewer run -> dry-run finalize.
+"""One librarian cycle: librarian run -> reviewer run -> end record -> finalize.
+
+Plan 2 Task 4: the run's END record is written as soon as the reviewer is
+done and BEFORE finalizing, so a crash while the executor works can never
+make startup recovery treat the run's approved intents as a crashed run's
+partial effects. Finalize then splits by source (app/execution.py): dry-run
+finalize for non-live arrivals, queue + execute for live ones; the summary
+is built afterwards so it reports live outcomes.
 
 Split out of app/service.py to keep the loop readable. `execute_cycle(svc,
 keys)` takes the `Service` (for its stores, index, settings, API port and
@@ -36,6 +43,7 @@ arrival text. The prompt trailer carries only the arrival COUNT (controller
 ruling: manual keys contain attacker-influenced filenames) -- the model
 discovers the keys through `list_arrivals`.
 """
+import hashlib
 import logging
 import os
 import secrets
@@ -43,7 +51,7 @@ import shutil
 import sys
 import time
 
-from app import metrics, states
+from app import execution, metrics, states
 from app.mcp_shim import build_mcp_config
 from app.runner import child_env, claude_argv, granted_tools
 from app.states import Run
@@ -176,37 +184,50 @@ def discard(svc, run_id: str, pre: dict, reason: str) -> None:
 
 
 def summary(svc, run_id: str, keys: list[str]) -> tuple[str, int, int]:
-    """The text Plan 2 will push: header + one line per offered arrival."""
-    simulated = {}
+    """The text pushed for a run: header + one line per offered arrival.
+    Live-source arrivals report what actually happened; dry-run ones (all
+    of them under DRY_RUN) what would have. Returns (text, filed, needs a
+    decision) for the push title -- in live mode real filings and live
+    escalations only, never simulated ones (final review M6); under
+    DRY_RUN the would-file / would-escalate counts."""
+    filings = {}
     for rec in svc.intents.store.all():
-        if (rec.get("run_id") == run_id and rec.get("state") == states.SIMULATED_I
-                and rec.get("kind") in (states.ATTACH, states.CREATE_BOOK)):
-            simulated[rec.get("arrival")] = rec
-    n_file = n_esc = 0
+        if (rec.get("run_id") == run_id and rec.get("kind") in (states.ATTACH, states.CREATE_BOOK)
+                and rec.get("state") in (states.SIMULATED_I, states.EXECUTED, states.APPROVED,
+                                         states.EXEC_FAILED)):
+            filings[rec.get("arrival")] = rec
+    n_sim = n_filed = n_esc = n_esc_dry = n_failed = n_queued = 0
     lines = []
     for key in keys:
         rec = svc.arrivals.get(key) or {}
-        icon = "🎧" if str(rec.get("primary", "")).lower().endswith(".m4b") else "📖"
-        hint = _log_safe(str(rec.get("title_hint") or key))
         st = rec.get("state")
+        live = execution.is_live(svc.settings, rec.get("source"))
         if st == states.SIMULATED:
-            n_file += 1
-            intent = simulated.get(key) or {}
-            if intent.get("kind") == states.ATTACH:
-                book = svc.index.book((intent.get("payload") or {}).get("book_id")) or {}
-                what = f'would add to "{book.get("title", "?")}"'
-            else:
-                what = "would create new book"
+            n_sim += 1
+        elif st == states.FILED:
+            n_filed += 1
         elif st == states.NEEDS_DECISION:
-            n_esc += 1
-            what = "would escalate"
-        elif st == states.DEFERRED:
-            what = "would defer"
-        else:
-            what = "no decision"
-        lines.append(f"{icon} {hint} — {what}")
-    text = "\n".join([f"Librarian (dry-run): {n_file} would file · {n_esc} would escalate", *lines])
-    return text, n_file, n_esc
+            if live:
+                n_esc += 1
+            else:
+                n_esc_dry += 1
+        elif st == states.FAILED:
+            n_failed += 1
+        elif st in (states.RETRYABLE, states.EXECUTING):
+            n_queued += 1
+        lines.append(_line(svc, rec, key, filings.get(key) or {}))
+    if svc.settings.dry_run:
+        header = f"Librarian (dry-run): {n_sim} would file · {n_esc_dry} would escalate"
+    else:
+        header = f"Librarian: {n_filed} filed · {n_esc} need a decision · {n_failed} failed"
+        if n_queued:
+            header += f" · {n_queued} queued"
+        if n_sim or n_esc_dry:
+            header += f" · dry-run sources: {n_sim} would file, {n_esc_dry} would escalate"
+    text = "\n".join([header, *lines])
+    if svc.settings.dry_run:
+        return text, n_sim, n_esc_dry
+    return text, n_filed, n_esc
 
 
 def _append_run_record(svc, record: dict) -> None:
@@ -241,7 +262,7 @@ def execute_cycle(svc, keys: list[str]) -> bool:
         logger.warning("librarian cycle %s interrupted by shutdown; discarding it", lib_run.run_id)
         discard(svc, lib_run.run_id, pre, "service stopping")
         record.update(outcome="stopped", failed=True, ended=svc.clock(), ended_ts=time.time(),
-                      counts={"would_file": 0, "would_escalate": 0, "offered": len(keys)})
+                      counts={"offered": len(keys)})
         _append_run_record(svc, record)
         raise
 
@@ -280,8 +301,12 @@ def _cycle(svc, keys, pre, lib_run, lib_prompt, rev_prompt, record) -> bool:
                 failed = True
                 discard(svc, lib_run.run_id, pre, "containment check failed")
 
-        if not failed:
-            svc.intents.finalize_dry_run(lib_run.run_id, index=svc.index)
+    # End record FIRST (Global "Crash-safe execution"), then finalize.
+    record.update(outcome=outcome, failed=failed, ended=svc.clock(), ended_ts=time.time(),
+                  counts={"offered": len(keys)})
+    _append_run_record(svc, record)
+    if not failed:
+        execution.finalize(svc, lib_run.run_id, keys)
 
     for rec in svc.intents.store.all():
         if rec.get("run_id") == lib_run.run_id:
@@ -289,13 +314,123 @@ def _cycle(svc, keys, pre, lib_run, lib_prompt, rev_prompt, record) -> bool:
             kind = kind if kind in states.INTENT_KINDS else "invalid"   # model-controlled label
             metrics.INTENTS.labels(kind=kind, status=str(rec.get("state"))).inc()
 
-    text, n_file, n_esc = summary(svc, lib_run.run_id, keys)
-    record.update(outcome=outcome, failed=failed, ended=svc.clock(), ended_ts=time.time(),
-                  counts={"would_file": n_file, "would_escalate": n_esc, "offered": len(keys)})
-    _append_run_record(svc, record)
     if failed:
         logger.warning("librarian cycle %s failed (%s); offered arrivals retry after %ss",
                        lib_run.run_id, outcome, s.retry_after)
     else:
-        logger.info("%s", text)
+        # Plan 2 Task 5: one summary push per run that did anything -- every
+        # non-failed cycle, since it is only ever started with >=1 offered
+        # arrival (app/service.py's _due()). Final review I1: built by
+        # `flush_summaries` at the end of the tick, after execution and the
+        # Vikunja pass.
+        svc.__dict__.setdefault("pending_summaries", []).append((lib_run.run_id, list(keys)))
     return failed
+
+
+def flush_summaries(svc) -> None:
+    """End of tick: log + push each finished cycle's summary, then one
+    "late" summary for arrivals that reached filed/failed (or whose
+    duplicate intake copy was removed) this tick outside any of those
+    cycles -- a retry, a budget spill onto a later tick, a startup resume."""
+    pending = list(svc.__dict__.get("pending_summaries") or [])
+    outcomes = set(svc.__dict__.get("tick_outcomes") or ())
+    svc.pending_summaries = []
+    svc.tick_outcomes = set()
+    covered = set()
+    for run_id, keys in pending:
+        covered.update(keys)
+        text, n_filed, n_esc = summary(svc, run_id, keys)
+        logger.info("%s", text)
+        if svc.notifier is not None and keys:
+            if svc.settings.dry_run:
+                title = f"Librarian (dry-run): {n_filed} would file · {n_esc} would escalate"
+            else:
+                title = f"Librarian: {n_filed} filed · {n_esc} need a decision"
+            svc.notifier.enqueue("summary", f"summary:{run_id}", title, text)
+    late = sorted(outcomes - covered)
+    if not late:
+        return
+    text, title = late_summary(svc, late)
+    logger.info("%s", text)
+    if svc.notifier is not None:
+        digest = hashlib.sha256("\n".join(late).encode("utf-8")).hexdigest()[:12]
+        svc.notifier.enqueue("summary", f"late:{int(svc.clock())}:{digest}", title, text)
+
+
+def late_summary(svc, keys: list[str]) -> tuple[str, str]:
+    n_filed = n_failed = n_dup = 0
+    lines = []
+    for key in keys:
+        rec = svc.arrivals.get(key) or {}
+        st = rec.get("state")
+        if st == states.FILED:
+            n_filed += 1
+        elif st == states.FAILED:
+            n_failed += 1
+        elif st == states.DUPLICATE:
+            n_dup += 1
+        intent = svc.intents.store.get(rec.get("exec_intent") or "") or {}
+        lines.append(_line(svc, rec, key, intent))
+    title = f"Librarian (later): {n_filed} filed · {n_failed} failed"
+    if n_dup:
+        title += f" · {n_dup} duplicate(s) removed"
+    return "\n".join([title, *lines]), title
+
+
+def _look(svc, rec) -> str:
+    """Where the human finds the detail: "see task" only when a Vikunja task
+    for it exists (an attention task, or the arrival's decision task), else
+    "see push" (final review I1)."""
+    items = [a for a in (rec.get("attention") or []) if isinstance(a, dict)]
+    if any(a.get("task_id") for a in items) or (rec.get("vikunja_task_id") and not rec.get("vikunja_closed")):
+        return "see task"
+    return "see push"
+
+
+def _line(svc, rec, key, intent) -> str:
+    """One summary line for arrival `rec` (live outcome, or the dry-run
+    would-do)."""
+    fmt = "🎧" if str(rec.get("primary", "")).lower().endswith(".m4b") else "📖"
+    icon = fmt
+    hint = _log_safe(str(rec.get("title_hint") or key))
+    st = rec.get("state")
+    live = execution.is_live(svc.settings, rec.get("source"))
+    if st == states.SIMULATED:
+        if intent.get("kind") == states.ATTACH:
+            book = svc.index.book((intent.get("payload") or {}).get("book_id")) or {}
+            what = f'would add to "{book.get("title", "?")}"'
+        else:
+            what = "would create new book"
+    elif st == states.FILED:
+        if intent.get("kind") == states.ATTACH:
+            book = svc.index.book(rec.get("book_id")) or {}
+            what = f'added to "{book.get("title", "?")}"'
+        elif intent.get("kind") == states.CREATE_BOOK:
+            what = "new book"
+        else:
+            what = "filed"
+        if rec.get("attention"):
+            what += f", needs a look — {_look(svc, rec)}"
+    elif st == states.NEEDS_DECISION:
+        if live:
+            icon, what = "❓", "needs a decision"
+        else:
+            what = "would escalate"
+    elif st == states.FAILED:
+        icon, what = "⚠️", f"failed, {_look(svc, rec)}"
+    elif st in (states.RETRYABLE, states.EXECUTING):
+        icon = "⏳"
+        if st == states.EXECUTING:
+            what = "filing in progress"
+        elif int(rec.get("attempts") or 0) > 0:
+            what = "filing failed for now, will retry"
+        else:
+            what = "queued for filing"
+    elif st == states.DEFERRED:
+        what = "deferred" if live else "would defer"
+    elif st == states.DUPLICATE:
+        icon = "♻️"
+        what = "duplicate removed" if rec.get("dup_removed") is True else "duplicate"
+    else:
+        what = "no decision"
+    return f"{icon} {hint} — {what}"

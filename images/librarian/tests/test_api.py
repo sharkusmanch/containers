@@ -157,6 +157,15 @@ def attach_intent(arrival, book_id, reason="matches"):
     return {"kind": "attach", "arrival": arrival, "book_id": book_id, "reason": reason}
 
 
+def update_metadata_intent(arrival, book_id, metadata=None, lock=None, reason="fixing metadata"):
+    return {
+        "kind": "update_metadata", "arrival": arrival, "book_id": book_id,
+        "metadata": metadata if metadata is not None else {"title": "Corrected Title"},
+        "lock": lock if lock is not None else [],
+        "reason": reason,
+    }
+
+
 def direct_ctx_factory(core, run):
     """A `ctx_factory` for calling `IntentBook.submit` directly (bypassing
     the HTTP layer) when a test needs to seed a proposal before the API
@@ -510,6 +519,41 @@ def test_attach_to_seen_id_passes_guard_unseen_id_fails(tmp_path):
                                    body=attach_intent("a1", 2))
         assert status == 200
         assert payload["status"] == PROPOSED_I
+    finally:
+        srv.stop()
+
+
+def test_post_intent_update_metadata_pairs_with_attach_same_run(tmp_path):
+    run = Run(run_id="r1", token="tok", mode="librarian", arrival_keys=["a1"])
+    core = FakeCore(tmp_path, run)
+    core._dossiers["a1"] = make_dossier("a1", primary_kind="epub", candidates=[2])
+    srv, port = start(core)
+    try:
+        status, attach_result = request(port, "POST", "/intents", token="tok",
+                                        body=attach_intent("a1", 2))
+        assert status == 200 and attach_result["status"] == PROPOSED_I
+
+        status, update_result = request(port, "POST", "/intents", token="tok",
+                                        body=update_metadata_intent("a1", 2))
+        assert status == 200
+        assert update_result["status"] == PROPOSED_I
+        rec = core.intents.store.get(update_result["intent_id"])
+        assert rec["kind"] == "update_metadata"
+    finally:
+        srv.stop()
+
+
+def test_post_intent_update_metadata_without_prior_attach_is_guard_rejected(tmp_path):
+    run = Run(run_id="r1", token="tok", mode="librarian", arrival_keys=["a1"])
+    core = FakeCore(tmp_path, run)
+    core._dossiers["a1"] = make_dossier("a1", primary_kind="epub", candidates=[2])
+    srv, port = start(core)
+    try:
+        status, result = request(port, "POST", "/intents", token="tok",
+                                 body=update_metadata_intent("a1", 2))
+        assert status == 200
+        assert result["status"] == "guard-rejected"
+        assert "attach" in result["reason"]
     finally:
         srv.stop()
 

@@ -1,0 +1,112 @@
+{
+  "name": "catching-fire-missing-series-index",
+  "note": "Audio Book 2 arrives; the library's Catching Fire ebook (#602) sits in 'The Hunger Games' with NO series index while #601/#603 carry 1 and 3. Attach and fix the missing index (seriesIndex 2) — no title change, no locks.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B0CATCHF02",
+    "folder": "Catching Fire [B0CATCHF02]",
+    "files": [
+      {
+        "name": "Catching Fire.m4b",
+        "kind": "m4b",
+        "size": 8000,
+        "probe": {
+          "duration": 42060,
+          "tags": {
+            "title": "Catching Fire",
+            "album": "Catching Fire",
+            "artist": "Suzanne Collins",
+            "album_artist": "Tatiana Maslany",
+            "series": "The Hunger Games",
+            "series-part": "2",
+            "date": "2018",
+            "audible_asin": "B0CATCHF02"
+          },
+          "chapters": [
+            "Opening Credits",
+            "Part I: The Spark",
+            "Chapter 1"
+          ],
+          "chapter_count": 30
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 601,
+      "title": "The Hunger Games",
+      "authors": [
+        "Suzanne Collins"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "1. The Hunger Games.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "The Hunger Games",
+      "seriesIndex": 1,
+      "publishedYear": 2008
+    },
+    {
+      "id": 602,
+      "title": "Catching Fire",
+      "authors": [
+        "Suzanne Collins"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "2. Catching Fire.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "The Hunger Games",
+      "seriesIndex": null,
+      "publishedYear": 2009
+    },
+    {
+      "id": 603,
+      "title": "The Hunger Games: Mockingjay",
+      "authors": [
+        "Suzanne Collins"
+      ],
+      "files": [
+        {
+          "format": "epub",
+          "filename": "3. Mockingjay.epub",
+          "sizeBytes": 900000
+        }
+      ],
+      "seriesName": "The Hunger Games",
+      "seriesIndex": 3,
+      "publishedYear": 2010
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "attach"
+    ],
+    "book_id": 602,
+    "forbid": {
+      "book_id": [
+        601,
+        603
+      ]
+    },
+    "update_metadata": {
+      "state": "simulated",
+      "fields": {
+        "seriesIndex": 2
+      },
+      "forbid_keys": [
+        "title",
+        "subtitle",
+        "authors"
+      ],
+      "lock_max": []
+    }
+  }
+}

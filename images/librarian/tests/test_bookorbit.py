@@ -317,3 +317,452 @@ def test_requests_with_stale_token_do_not_relogin_during_cooldown(tmp_path):
     clock.t += bookorbit_mod.AUTH_RETRY_SECONDS
     assert c.get("/books/1")["id"] == 1
     assert _logins(calls) == 3
+
+
+# --- Plan 2 Task 1: BookorbitWriter + BookorbitClient._write allowlist ------
+
+from app.bookorbit import BookorbitHTTPError, BookorbitWriter, ScanError  # noqa: E402
+
+
+def _history_entry(id, status, error=None):
+    return {
+        "id": id, "status": status, "triggeredBy": "manual",
+        "startedAt": "s", "completedAt": "e" if status != "running" else None,
+        "addedCount": 0, "updatedCount": 0, "missingCount": 0,
+        "errorMessage": error,
+    }
+
+
+def _writer(tmp_path, transport):
+    c = BookorbitClient("http://b/api/v1", "u", "p", transport=transport,
+                        cookie_path=str(tmp_path / "c.txt"), writable=True)
+    c.authenticate()
+    return c, BookorbitWriter(c)
+
+
+def test_write_rejects_unallowlisted_paths(tmp_path):
+    c, _w = _writer(tmp_path, fake_transport([]))
+    for method, path in [
+        ("POST", "/books/1/refresh-metadata"),   # explicitly forbidden by global constraints
+        ("DELETE", "/books/1"),
+        ("PATCH", "/books/1"),
+        ("PATCH", "/books/abc/metadata-and-locks"),   # not a valid id
+        ("POST", "/scanner/libraries/9/scan"),   # not library 7 or 8
+        ("GET", "/scanner/libraries/7/scan"),    # right path, wrong verb
+        # --- fix round 1 #5: fullmatch + [0-9]+ closes these off ---------
+        ("POST", "/books/1/rename-files/extra"),      # trailing segment
+        ("POST", "/books/1/rename-files?x=1"),         # query string
+        ("POST", "/books/1/rename-files/"),             # trailing slash
+        ("POST", "/books/1/rename-files\n"),             # trailing newline
+        ("POST", "/books/１/rename-files"),           # unicode digit (fullwidth 1)
+    ]:
+        with pytest.raises(PermissionError):
+            c._write(method, path, {})
+
+
+def test_write_rejects_when_client_not_constructed_writable(tmp_path):
+    # fix round 1 #6: writable=False (the default) refuses even an
+    # otherwise-allowlisted path -- this is the P1 read-only client's shape.
+    c = BookorbitClient("http://b/api/v1", "u", "p", transport=fake_transport([]),
+                        cookie_path=str(tmp_path / "c.txt"))
+    c.authenticate()
+    assert c.writable is False
+    with pytest.raises(PermissionError):
+        c._write("POST", "/books/1/rename-files", {})
+
+
+def test_writer_requires_writable_client(tmp_path):
+    c = BookorbitClient("http://b/api/v1", "u", "p", transport=fake_transport([]),
+                        cookie_path=str(tmp_path / "c.txt"))
+    c.authenticate()
+    with pytest.raises(ValueError):
+        BookorbitWriter(c)
+
+
+def test_writer_rejects_invalid_library_id(tmp_path):
+    _c, w = _writer(tmp_path, fake_transport([]))
+    with pytest.raises(ValueError):
+        w.scan(9)
+    with pytest.raises(ValueError):
+        w.scan_running(9)
+    with pytest.raises(ValueError):
+        w.wait_scan(9, after_id=0)
+
+
+def test_scan_running_reflects_latest_history_entry(tmp_path):
+    def make_transport(status):
+        def t(method, url, body, headers):
+            if url.endswith("/auth/login"):
+                return 200, json.dumps({"accessToken": "tok"})
+            if url.endswith("/scan-history"):
+                return 200, json.dumps([_history_entry(5, status)])
+            raise AssertionError((method, url))
+        return t
+
+    _c, w = _writer(tmp_path, make_transport("running"))
+    assert w.scan_running(7) is True
+    _c2, w2 = _writer(tmp_path, make_transport("completed"))
+    assert w2.scan_running(7) is False
+
+
+def test_scan_when_idle_returns_max_id_and_triggers(tmp_path):
+    calls = []
+
+    def t(method, url, body, headers):
+        calls.append((method, url))
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            return 200, json.dumps([_history_entry(4, "completed"), _history_entry(3, "failed")])
+        if url.endswith("/scanner/libraries/7/scan"):
+            return 200, json.dumps({})
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    max_id = w.scan(7)
+    assert max_id == 4
+    assert ("POST", "http://b/api/v1/scanner/libraries/7/scan") in calls
+
+
+def test_scan_waits_for_already_running_scan_then_triggers(tmp_path):
+    """`scan_running()` catches the already-running scan up front (no 409
+    needed): scan() must poll until it finishes, THEN record the max id and
+    trigger its own scan."""
+    history_calls = {"n": 0}
+    scan_posts = {"n": 0}
+
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            history_calls["n"] += 1
+            status = "completed" if history_calls["n"] >= 3 else "running"
+            return 200, json.dumps([_history_entry(5, status)])
+        if url.endswith("/scanner/libraries/7/scan"):
+            scan_posts["n"] += 1
+            return 200, json.dumps({})
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    sleeps = []
+    max_id = w.scan(7, sleep=sleeps.append, clock=lambda: 0.0)
+    assert max_id == 5              # recorded AFTER the running scan finished
+    assert scan_posts["n"] == 1     # triggered exactly once -- no 409 involved
+    assert len(sleeps) >= 1         # it actually waited
+
+
+def test_scan_409_race_waits_then_retries(tmp_path):
+    """scan_running() reports idle (a race: the scan started between our
+    check and our POST), the trigger 409s, so scan() must wait it out and
+    retry rather than raising."""
+    history_calls = {"n": 0}
+    scan_posts = {"n": 0}
+
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            history_calls["n"] += 1
+            # call 1: scan_running() check -> idle. call 2: max_id before
+            # first trigger attempt -> still idle (race not yet visible).
+            # calls 3-4: _wait_until_idle polling -> running, then completed.
+            if history_calls["n"] <= 2:
+                return 200, json.dumps([_history_entry(4, "completed")])
+            status = "completed" if history_calls["n"] >= 4 else "running"
+            return 200, json.dumps([_history_entry(4, "completed"), _history_entry(5, status)])
+        if url.endswith("/scanner/libraries/7/scan"):
+            scan_posts["n"] += 1
+            if scan_posts["n"] == 1:
+                return 409, "already running"
+            return 200, json.dumps({})
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    sleeps = []
+    max_id = w.scan(7, sleep=sleeps.append, clock=lambda: 0.0)
+    assert max_id == 5              # max id after the raced scan finished
+    assert scan_posts["n"] == 2     # first attempt 409'd, second succeeded
+    assert len(sleeps) >= 1
+
+
+def test_scan_times_out_waiting_for_existing_scan(tmp_path):
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            return 200, json.dumps([_history_entry(5, "running")])   # never finishes
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    clock_state = {"t": 0.0}
+
+    def clock():
+        clock_state["t"] += 700  # two ticks exceeds a 1200s timeout
+        return clock_state["t"]
+
+    with pytest.raises(ScanError) as exc_info:
+        w.scan(7, timeout=1200, sleep=lambda s: None, clock=clock)
+    assert exc_info.value.kind == "timeout"
+
+
+def test_scan_non_409_error_from_trigger_is_reraised(tmp_path):
+    """fix round 1 #9: a non-409 4xx from the scan POST must propagate as
+    BookorbitHTTPError, not get swallowed or turned into a ScanError."""
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            return 200, json.dumps([_history_entry(4, "completed")])
+        if url.endswith("/scanner/libraries/7/scan"):
+            return 403, "forbidden"
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    with pytest.raises(BookorbitHTTPError) as exc_info:
+        w.scan(7)
+    assert exc_info.value.status == 403
+
+
+def test_scan_second_409_on_retry_raises_scan_error(tmp_path):
+    """fix round 1 #4: if the retry POST (after waiting out the first
+    running scan) ALSO 409s, that's not something scan() can recover from
+    by retrying again -- it must surface as ScanError, not a raw
+    BookorbitHTTPError."""
+    scan_posts = {"n": 0}
+
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            # never reports "running" -- the 409s below are the only signal
+            # that something is scanning, simulating server-side flakiness
+            # rather than a wait-observable running scan.
+            return 200, json.dumps([_history_entry(4, "completed")])
+        if url.endswith("/scanner/libraries/7/scan"):
+            scan_posts["n"] += 1
+            return 409, "already running"
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    with pytest.raises(ScanError) as exc_info:
+        w.scan(7, sleep=lambda s: None, clock=lambda: 0.0)
+    assert exc_info.value.kind == "failed"
+    assert scan_posts["n"] == 2   # both the initial attempt and the retry
+
+
+def test_scan_shares_one_deadline_across_both_waits(tmp_path):
+    """fix round 1 #3 regression test: previously each _wait_until_idle call
+    computed its own `clock() + timeout` deadline, so a proactive wait
+    followed by a raced second wait could together wait up to 2x `timeout`.
+    With a single deadline shared across both waits, once the shared
+    deadline has already passed, the second wait must time out immediately
+    rather than granting itself a fresh `timeout` budget.
+
+    Both the clock and scan-history responses are finite iterators (not
+    infinite generators) so that a regression which consumes more calls
+    than expected fails loudly (StopIteration) instead of hanging."""
+    history_responses = iter(["running", "running", "completed", "completed", "running"])
+    clock_values = iter([0, 10, 35])   # deadline anchor, 1st wait check, 2nd wait check
+    scan_posts = {"n": 0}
+
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            return 200, json.dumps([_history_entry(5, next(history_responses))])
+        if url.endswith("/scanner/libraries/7/scan"):
+            scan_posts["n"] += 1
+            return 409, "already running"   # every trigger attempt races
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    with pytest.raises(ScanError) as exc_info:
+        w.scan(7, timeout=30, sleep=lambda s: None, clock=lambda: next(clock_values))
+    assert exc_info.value.kind == "timeout"
+    # the first attempt 409'd (reactively racing scan_running()'s "idle"
+    # read); the second wait timed out on the SHARED deadline before any
+    # retry POST was attempted
+    assert scan_posts["n"] == 1
+
+
+def test_wait_scan_picks_first_entry_with_id_greater_than_after_id(tmp_path):
+    history_calls = {"n": 0}
+
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            history_calls["n"] += 1
+            if history_calls["n"] == 1:
+                # not there yet
+                return 200, json.dumps([_history_entry(4, "completed")])
+            # newest-first; two entries qualify (id > 4 and terminal) -- the
+            # "first" one is the smaller id (5), not the newest (7).
+            return 200, json.dumps([
+                _history_entry(7, "completed"),
+                _history_entry(6, "running"),
+                _history_entry(5, "completed"),
+                _history_entry(4, "completed"),
+            ])
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    sleeps = []
+    entry = w.wait_scan(7, after_id=4, sleep=sleeps.append, clock=lambda: 0.0)
+    assert entry["id"] == 5
+    assert len(sleeps) == 1
+
+
+def test_wait_scan_raises_scan_error_on_failed_status(tmp_path):
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            return 200, json.dumps([_history_entry(5, "failed", error="disk full")])
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    with pytest.raises(ScanError, match="disk full"):
+        w.wait_scan(7, after_id=4, sleep=lambda s: None, clock=lambda: 0.0)
+
+
+def test_wait_scan_times_out(tmp_path):
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/scan-history"):
+            return 200, json.dumps([_history_entry(5, "running")])
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    clock_state = {"t": 0.0}
+
+    def clock():
+        clock_state["t"] += 6
+        return clock_state["t"]
+
+    with pytest.raises(ScanError):
+        w.wait_scan(7, after_id=4, timeout=10, sleep=lambda s: None, clock=clock)
+
+
+def test_rename_files_calls_allowlisted_endpoint(tmp_path):
+    calls = []
+
+    def t(method, url, body, headers):
+        calls.append((method, url))
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if url.endswith("/books/3/rename-files"):
+            return 200, json.dumps({"ok": True})
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    result = w.rename_files(3)
+    assert result == {"ok": True}
+    assert ("POST", "http://b/api/v1/books/3/rename-files") in calls
+
+
+def test_patch_metadata_merges_locked_fields_as_union(tmp_path):
+    sent = {}
+
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if method == "GET" and url.endswith("/books/4"):
+            return 200, json.dumps({"id": 4, "lockedFields": ["authors", "tags"]})
+        if method == "PATCH" and url.endswith("/books/4/metadata-and-locks"):
+            sent["payload"] = json.loads(body)
+            return 200, json.dumps({"id": 4})
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    result = w.patch_metadata(4, {"title": "New Title"}, ["title"])
+    assert result == {"id": 4}
+    assert sent["payload"]["metadata"] == {"title": "New Title"}
+    assert set(sent["payload"]["lockedFields"]) == {"authors", "tags", "title"}
+
+
+def test_patch_metadata_never_drops_an_existing_lock_not_in_the_new_request(tmp_path):
+    sent = {}
+
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if method == "GET" and url.endswith("/books/9"):
+            return 200, json.dumps({"id": 9, "lockedFields": ["tags"]})
+        if method == "PATCH" and url.endswith("/books/9/metadata-and-locks"):
+            sent["payload"] = json.loads(body)
+            return 200, json.dumps({"id": 9})
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    w.patch_metadata(9, {"subtitle": "Sub"}, ["subtitle"])
+    assert "tags" in sent["payload"]["lockedFields"]
+
+
+def test_patch_metadata_refuses_when_locked_fields_missing_sends_no_patch(tmp_path):
+    """fix round 1 Important #1: a GET with no lockedFields key at all must
+    not be treated as an empty list -- that would replace-and-drop every
+    existing lock. No PATCH may be sent."""
+    calls = []
+
+    def t(method, url, body, headers):
+        calls.append((method, url))
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if method == "GET" and url.endswith("/books/4"):
+            return 200, json.dumps({"id": 4})   # no lockedFields key
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    with pytest.raises(RuntimeError):
+        w.patch_metadata(4, {"title": "New Title"}, ["title"])
+    assert not any(m == "PATCH" for m, _u in calls)
+
+
+def test_patch_metadata_refuses_when_locked_fields_is_null_sends_no_patch(tmp_path):
+    calls = []
+
+    def t(method, url, body, headers):
+        calls.append((method, url))
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if method == "GET" and url.endswith("/books/4"):
+            return 200, json.dumps({"id": 4, "lockedFields": None})
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    with pytest.raises(RuntimeError):
+        w.patch_metadata(4, {"title": "New Title"}, ["title"])
+    assert not any(m == "PATCH" for m, _u in calls)
+
+
+def test_patch_metadata_sends_no_patch_when_get_fails(tmp_path):
+    calls = []
+
+    def t(method, url, body, headers):
+        calls.append((method, url))
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if method == "GET" and url.endswith("/books/4"):
+            return 500, "boom"
+        raise AssertionError((method, url))
+
+    _c, w = _writer(tmp_path, t)
+    with pytest.raises(RuntimeError):
+        w.patch_metadata(4, {"title": "New Title"}, ["title"])
+    assert not any(m == "PATCH" for m, _u in calls)
+
+
+def test_rename_files_rejects_non_int_book_id(tmp_path):
+    _c, w = _writer(tmp_path, fake_transport([]))
+    with pytest.raises(TypeError):
+        w.rename_files("3")
+    with pytest.raises(TypeError):
+        w.rename_files(True)   # bool is an int subclass -- must still be rejected
+
+
+def test_patch_metadata_rejects_non_int_book_id(tmp_path):
+    _c, w = _writer(tmp_path, fake_transport([]))
+    with pytest.raises(TypeError):
+        w.patch_metadata("4", {"title": "x"}, ["title"])

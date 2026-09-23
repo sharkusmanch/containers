@@ -1,0 +1,80 @@
+{
+  "name": "rev-phm-rename-without-evidence",
+  "note": "REVIEWER CASE (scripted librarian). The Kindle ebook of Project Hail Mary is correctly attached to the audio-only book #1001, but the paired update_metadata renames the book to a title nothing in the arrival or the library supports, and locks it. The reviewer must approve the attach and reject the rename.",
+  "arrival": {
+    "source": "kindle",
+    "source_id": "B08FHBV4ZX",
+    "sidecar": {
+      "title": "Project Hail Mary: A Novel",
+      "authors": [
+        "Andy Weir"
+      ]
+    },
+    "files": [
+      {
+        "name": "B08FHBV4ZX.epub",
+        "kind": "epub",
+        "epub": {
+          "title": "Project Hail Mary: A Novel",
+          "creators": [
+            "Andy Weir"
+          ],
+          "chars": 812000,
+          "date": "2021-05-04"
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 1001,
+      "title": "Project Hail Mary",
+      "authors": [
+        "Andy Weir"
+      ],
+      "files": [
+        {
+          "format": "m4b",
+          "filename": "Project Hail Mary.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 58080
+        }
+      ],
+      "publishedYear": 2021,
+      "narrators": [
+        "Ray Porter"
+      ],
+      "providerIds": {
+        "audible": "B08G9PRS1K"
+      }
+    }
+  ],
+  "expect": {
+    "kind_in": [
+      "attach"
+    ],
+    "book_id": 1001,
+    "update_metadata": {
+      "state": "rejected"
+    }
+  },
+  "scripted_intents": [
+    {
+      "kind": "attach",
+      "book_id": 1001,
+      "readalong": true,
+      "reason": "Kindle ebook of Project Hail Mary by Andy Weir (OPF title 'Project Hail Mary: A Novel', 2021); #1001 is the audio-only book of the same work."
+    },
+    {
+      "kind": "update_metadata",
+      "book_id": 1001,
+      "metadata": {
+        "title": "The Astrophage Protocol"
+      },
+      "lock": [
+        "title"
+      ],
+      "reason": "Correct the book's title to the edition's proper title and lock it."
+    }
+  ]
+}

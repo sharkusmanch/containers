@@ -12,7 +12,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 
-from . import backup, metrics
+from . import backup, handoff, metrics
 from .bookorbit import AuthExpired, BookOrbit, Duplicate, Transport, UploadRejected
 from .config import Config
 from .convert import ConvertFailed, classify, epub_to_cbz, to_epub
@@ -54,6 +54,7 @@ class Ctx:
 @dataclass
 class CycleResult:
     uploaded: int = 0
+    handed_off: int = 0
     failed: int = 0
     needs_decision: int = 0
     skipped: int = 0
@@ -106,6 +107,67 @@ def reconcile_startup(ctx: Ctx) -> int:
     if n:
         log.info("reconciled %d interrupted upload(s)", n)
     return n
+
+
+INTAKE = "intake"
+UPLOAD_LIMIT_MARK = "upload limit"
+INTAKE_CONFLICT = "intake already holds a different file for this ASIN"
+
+
+def migrate_upload_limit_decisions(ctx: Ctx) -> int:
+    """Re-queue books parked only because BookOrbit's upload cap refused them.
+
+    In intake mode an EPUB never meets that cap, so those decisions are moot.
+    One-time in effect and idempotent: a migrated record is RETRYABLE and no
+    longer matches. Comics are left alone -- they still take the upload path
+    and would only land on the same decision again.
+    """
+    if ctx.cfg.handoff_mode != INTAKE:
+        return 0
+    n = 0
+    for rec in ctx.ledger.by_outcome(NEEDS_DECISION):
+        if UPLOAD_LIMIT_MARK not in (rec.get("detail") or ""):
+            continue
+        if rec.get("kind") == "cbz":
+            continue
+        ctx.ledger.record(rec["asin"], RETRYABLE, attempts=0, notified=False,
+                          detail="re-queued for intake hand-off (was over upload limit)")
+        n += 1
+    if n:
+        log.info("re-queued %d upload-limit decision(s) for intake hand-off", n)
+    return n
+
+
+def _hand_off(ctx: Ctx, book, artifact: str, attempts: int, res: CycleResult) -> None:
+    """Intake mode, EPUB only: the librarian files it, BookOrbit is not called."""
+    asin = book.asin
+    prev = ctx.ledger.get(asin) or {}
+
+    def _write_ahead(sha):
+        # Persist the sha about to become visible, so a crash between the
+        # replace and the ok record leaves a file the next attempt recognises
+        # as its own (a re-conversion will not hash the same).
+        ctx.ledger.record(asin, RETRYABLE, attempts=attempts, title=book.basename,
+                          intake_pending_sha=sha, detail="placing in intake")
+    try:
+        h = handoff.to_intake(ctx.cfg.intake_dir, asin, artifact,
+                              title_from_basename(book.basename, asin), [],
+                              pending_sha=prev.get("intake_pending_sha"),
+                              on_pending=_write_ahead)
+    except handoff.IntakeConflict:
+        ctx.ledger.record(asin, NEEDS_DECISION, attempts=attempts,
+                          title=book.basename, detail=INTAKE_CONFLICT)
+        res.needs_decision += 1
+        return
+    # announced=True: the librarian summarises what it files; a success push
+    # here would announce a book that is not in the library yet.
+    ctx.ledger.record(asin, OK, attempts=attempts, artifact=artifact, kind="epub",
+                      title=book.basename, handoff=INTAKE, intake_path=h.path,
+                      artifact_sha256=h.sha256, announced=True,
+                      intake_pending_sha=None)
+    metrics.BOOKS.labels(stage="handoff", outcome=OK).inc()
+    metrics.LAST_SUCCESS.set(time.time())
+    res.handed_off += 1
 
 
 def _process(ctx: Ctx, book, keyfile: str, res: CycleResult) -> None:
@@ -168,6 +230,12 @@ def _process(ctx: Ctx, book, keyfile: str, res: CycleResult) -> None:
                 artifact, kind, expect = p["epub"], "epub", None
         verify_artifact(artifact, kind, expect)
         metrics.BOOKS.labels(stage="convert", outcome=OK).inc()
+
+        # --- intake hand-off (EPUB only; comics keep the upload path) --------
+        if cfg.handoff_mode == INTAKE and kind == "epub":
+            ctx.check_stop()
+            _hand_off(ctx, book, artifact, attempts, res)
+            return
 
         # --- reconcile-then-POST -------------------------------------------
         ctx.check_stop()
@@ -237,6 +305,10 @@ def _process(ctx: Ctx, book, keyfile: str, res: CycleResult) -> None:
         ctx.api._token = None
         ctx.ledger.record(asin, RETRYABLE, attempts=attempts, error=str(e)[:200])
         res.errors.append((asin, str(e)[:80]))
+    except handoff.HandoffFailed as e:
+        ctx.ledger.record(asin, RETRYABLE, attempts=attempts, title=book.basename,
+                          error=f"intake hand-off: {str(e)[:180]}")
+        res.errors.append((asin, "handoff"))
     except KeyUnavailable as e:
         # The device emits keys every cycle; a key absent now will be there
         # next time. FAILED would strand the book permanently.
@@ -274,6 +346,7 @@ def _cleanup(ctx: Ctx, books: dict, res: CycleResult) -> None:
     if not ctx.cfg.cleanup_enabled:
         return
     done = 0
+    warned_mount = False
     for rec in ctx.ledger.by_outcome(OK):
         if done >= ctx.cfg.max_deletes_per_cycle:
             break
@@ -291,7 +364,20 @@ def _cleanup(ctx: Ctx, books: dict, res: CycleResult) -> None:
             continue
         if not archive_intact(p["archive"], sha):
             continue
-        if not ctx.api.verify(rec.get("bookorbit_id"), art):
+        if rec.get("handoff") == INTAKE:
+            # Only the BookOrbit check is swapped: the intake copy must still
+            # be the one recorded, or gone because the librarian filed it.
+            ipath = rec.get("intake_path")
+            if ipath and not os.path.isdir(os.path.dirname(ipath)):
+                if not warned_mount:
+                    log.warning("intake mount %s missing; skipping cleanup of "
+                                "handed-off books", os.path.dirname(ipath))
+                    warned_mount = True
+                continue
+            if not handoff.intake_still_consistent(rec.get("intake_path"),
+                                                   rec.get("artifact_sha256")):
+                continue
+        elif not ctx.api.verify(rec.get("bookorbit_id"), art):
             continue
         ctx.device.delete_book(book)          # .kfx + assets/ ONLY, never .sdr
         ctx.ledger.record(asin, OK, cleaned=True, **{k: rec[k] for k in
@@ -467,6 +553,9 @@ def main() -> int:
     metrics.serve(cfg.metrics_port,
                   stale_after=cfg.pull_timeout + cfg.convert_timeout
                   + cfg.poll_interval)
+    if getattr(cfg, "handoff_mode", "upload") == INTAKE:
+        migrate_upload_limit_decisions(ctx)
+        handoff.sweep_stale_temps(cfg.intake_dir)
     await_device(ctx.device)                    # else cycle 1 loses the race
 
     def _stop(signum, _frame):
@@ -479,8 +568,9 @@ def main() -> int:
         started = time.time()
         try:
             r = run_cycle(ctx)
-            log.info("cycle: uploaded=%d failed=%d needs_decision=%d skipped=%d deleted=%d",
-                     r.uploaded, r.failed, r.needs_decision, r.skipped, r.deleted)
+            log.info("cycle: uploaded=%d handed_off=%d failed=%d needs_decision=%d "
+                     "skipped=%d deleted=%d", r.uploaded, r.handed_off, r.failed,
+                     r.needs_decision, r.skipped, r.deleted)
         except Stopping:
             break
         except Exception:

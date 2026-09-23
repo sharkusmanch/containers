@@ -7,6 +7,9 @@ class ConfigError(Exception):
     pass
 
 
+HANDOFF_MODES = frozenset({"upload", "intake"})
+
+
 def _s(name: str, default: str | None = None) -> str:
     """Env string. A blank value is treated as absent, not as an empty string --
     `FOO=$UNSET` and compose env_files both produce blanks, and an empty URL or
@@ -61,6 +64,11 @@ class Config:
     convert_timeout: int
     cycle_deadline: int
     ledger_path: str
+    # "upload" (BookOrbit, as always) or "intake" (EPUBs go to the librarian's
+    # intake folder; comics still upload). Never switch back to "upload" while
+    # handed-off files are still waiting in the intake.
+    handoff_mode: str = "upload"
+    intake_dir: str = "/intake"
 
     @staticmethod
     def from_env() -> "Config":
@@ -70,6 +78,10 @@ class Config:
         # A cycle must not outlive its interval, or two cycles overlap and two
         # writers race on the ledger.
         deadline = _i("CYCLE_DEADLINE", max(60, poll - 60))
+        handoff_mode = _s("HANDOFF_MODE", "upload")
+        if handoff_mode not in HANDOFF_MODES:
+            raise ConfigError(f"HANDOFF_MODE={handoff_mode!r} is not one of "
+                              f"{sorted(HANDOFF_MODES)}")
         if deadline >= poll:
             raise ConfigError(
                 f"CYCLE_DEADLINE ({deadline}) must be less than POLL_INTERVAL ({poll})")
@@ -108,4 +120,6 @@ class Config:
             convert_timeout=_i("CONVERT_TIMEOUT", 1800),
             cycle_deadline=deadline,
             ledger_path=_s("LEDGER_PATH", os.path.join(state_dir, "books.jsonl")),
+            handoff_mode=handoff_mode,
+            intake_dir=_s("INTAKE_DIR", "/intake"),
         )

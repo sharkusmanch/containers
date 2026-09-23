@@ -6,8 +6,14 @@
 Run orchestration (launch, containment tripwire, review, finalize, summary)
 lives in app/runs.py to keep this module to the loop itself.
 
-DRY_RUN is hard-wired for this plan: `__init__` refuses `dry_run=False`
-(tests and evals build `Settings` directly, bypassing `from_env`'s guard).
+DRY_RUN (Plan 2 Task 4) is a real switch. With `dry_run=False` the service
+needs an `executor` (an Executor, or a factory called with the service --
+the Executor must share this service's arrivals Store); approved filings of
+LIVE_SOURCES arrivals then execute (app/execution.py). In dry-run no
+executor is ever built or used, whatever is passed. On the first live tick
+the service settles arrivals a crash left `executing` (`Executor.resume`)
+and re-offers each newly-live source's simulated arrivals (once per source,
+`<state>/live-since-<source>`).
 
 Debounce / "changed since last run" (brief step 3, 5): the service keeps an
 in-memory per-arrival change marker (`_changed[key] = when`). A key is
@@ -19,7 +25,8 @@ so the run's own state changes never re-trigger it. A run starts only when
 some marked, offerable key exists and the newest mark is at least
 `debounce` seconds old -- a burst of arrivals becomes one run, and an
 arrival the librarian looked at and left alone is not offered again until
-something about it changes. The markers are in-memory, but a restart
+something about it changes -- which is why finalize escalates such an
+arrival to a human (final review I2, `execution.escalate_undecided`). The markers are in-memory, but a restart
 rebuilds them from runs.jsonl (`_seed_debounce`, final review I3): an
 arrival the last run offered and left alone stays unmarked, and the
 arrivals of an interrupted or failed run stay held for `retry_after` -- a
@@ -33,7 +40,7 @@ import os
 import threading
 import time
 
-from app import intake, metrics, states
+from app import escalations, execution, intake, metrics, notify, states
 from app.api import ApiServer
 from app.dossier import build_dossier, title_from_folder
 from app.intents import IntentBook
@@ -41,23 +48,36 @@ from app.logutil import log_safe
 from app.media import ffprobe_json
 from app.policy import KidsLists, kids_signals
 from app.runner import run_claude
-from app.runs import Stopping, execute_cycle  # noqa: F401 (Stopping re-exported for main.py)
+from app.runs import Stopping, execute_cycle, flush_summaries  # noqa: F401 (Stopping re-exported for main.py)
 from app.store import Store, append_record, read_records
 
 logger = logging.getLogger(__name__)
 
 TRANSCRIPT_MAX_AGE = 30 * 86400
+SIDECAR_GRACE = 3600          # s a kindle sidecar may disagree before the arrival fails
+# arrival states whose APPROVED intents the executor owns (never "recovered")
+_EXEC_OWNED = frozenset({states.RETRYABLE, states.EXECUTING, states.FILED})
 
 
 def dossier_name(key: str) -> str:
     return hashlib.sha256(key.encode("utf-8")).hexdigest()[:24] + ".json"
 
 
+def _short_title(text, limit: int = 60) -> str:
+    """A push notification title fragment: sanitized and character-capped
+    at `limit` (titles are short by construction, so a character cap --
+    unlike the body's UTF-8 byte cap -- is plenty)."""
+    text = notify.sanitize(str(text or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
 class Service:
     def __init__(self, settings, *, index, api_factory=ApiServer, runner=run_claude,
-                 prober=ffprobe_json, clock=time.time):
-        if not settings.dry_run:
-            raise SystemExit("live mode ships in plan P2")
+                 prober=ffprobe_json, clock=time.time, executor=None, notifier=None, vikunja=None):
+        if not settings.dry_run and executor is None:
+            raise ValueError("DRY_RUN=false needs an executor")
         self.settings = settings
         self.index = index
         self.runner = runner
@@ -83,12 +103,31 @@ class Service:
         self._seen: dict[str, tuple] = {}         # key -> last observed record signature
         self._changed: dict[str, float] = {}      # key -> when it last changed (unoffered)
         self._retry_at: dict[str, float] = {}     # key -> re-offer time after a failed run
+        self._sidecar_bad: dict[str, float] = {}  # key -> first tick its sidecar disagreed
         self.last_run_started: float | None = None
         self._stop = threading.Event()
         self._in_runner = False
         self._lists_error: str | None = None
+        self.notifier = notifier            # Plan 2 Task 5
+        if self.notifier is not None:
+            # fix round 1: the service is the one true source of `stopping`
+            # and the liveness heartbeat, whichever code constructed the
+            # Notifier (main.py builds it before the Service exists).
+            self.notifier.stopping = self.stopping
+            self.notifier.beat = metrics.beat
+        self.vikunja = vikunja              # Plan 2 Task 6
+        self.exec_budget = 0                # executions left this tick (max_exec_per_tick)
+        self.pending_summaries: list = []   # (run_id, keys) of this tick's finished cycles
+        self.tick_outcomes: set = set()     # arrivals that reached filed/failed this tick
+        self._live_started = False
+        self._go_live_pending = False
+        self._go_live_errors: set = set()   # (key, error) already logged by go_live
+        self.executor = None
+        if not settings.dry_run:
+            self.executor = executor if hasattr(executor, "execute") else executor(self)
 
         runs = read_records(self.runs_path)   # StoreCorrupt halts, like the stores
+        self._complete_finalize(runs)
         held = self._recover_interrupted(runs)
         self._seed_debounce(runs, held)
 
@@ -108,6 +147,9 @@ class Service:
             return None
 
     # --- lifecycle ---------------------------------------------------------------
+
+    def stopping(self) -> bool:
+        return self._stop.is_set()
 
     def stop(self) -> None:
         self._stop.set()
@@ -129,6 +171,58 @@ class Service:
                 logger.exception("tick failed")
             self._stop.wait(self.settings.poll_interval)
 
+    def _complete_finalize(self, runs: list[dict]) -> None:
+        """Plan 2: a cycle writes its end record BEFORE finalizing (so a
+        crash during execution never makes recovery reject its intents). A
+        crash between the two -- or inside finalize, between two of its
+        records -- leaves a finished run with arrivals still `proposed`.
+        For every such arrival whose LAST run (runs.jsonl order) ended
+        successfully and holds any intent for it, finalize is re-run for it
+        (idempotent: keyed on current state; live arrivals are only queued
+        here, the first tick executes them) and then
+        `IntentBook.repair_proposed` finishes a half-written escalation.
+        An arrival whose last run never ended is recovery's job."""
+        last: dict[str, dict] = {}
+        for r in runs:
+            for k in r.get("keys") or []:
+                if isinstance(k, str):
+                    last[k] = r
+        pending: dict[str, set] = {}
+        intents = self.intents.store.all()
+        # final review I2: an arrival the run left alone (still offerable,
+        # unchanged since the run started) is escalated like finalize does
+        undecided: dict[str, list] = {}
+        for rec in self.arrivals.all():
+            if rec.get("state") not in states.OFFERABLE:
+                continue
+            r = last.get(rec["key"])
+            if r is None or "outcome" not in r or r.get("failed", r.get("outcome") != "ok"):
+                continue
+            if (rec.get("ts") or 0) <= (r.get("started_ts") or 0):
+                undecided.setdefault(r.get("run_id"), []).append(rec["key"])
+        for run_id, keys in sorted(undecided.items()):
+            ts = next((r.get("started_ts") for r in runs if r.get("run_id") == run_id
+                       and "outcome" in r), None)
+            execution.escalate_undecided(self, run_id, sorted(keys), unchanged_since=ts or 0)
+        for rec in self.arrivals.by_state(states.PROPOSED):
+            key = rec["key"]
+            r = last.get(key)
+            if r is None or "outcome" not in r or r.get("failed", r.get("outcome") != "ok"):
+                continue
+            run_id = r.get("run_id")
+            if any(i.get("run_id") == run_id and i.get("arrival") == key for i in intents):
+                pending.setdefault(run_id, set()).add(key)
+        for run_id, keys in sorted(pending.items()):
+            logger.warning("run %s ended but was not fully finalized; finalizing %d arrival(s) now",
+                           log_safe(run_id), len(keys))
+            live, other = execution.split_live(self, sorted(keys))
+            if other:
+                self.intents.finalize_dry_run(run_id, index=self.index, only_arrivals=set(other))
+            if live:
+                self.intents.finalize_live(run_id, index=self.index, only_arrivals=set(live),
+                                           now=self.clock())
+            self.intents.repair_proposed(run_id, sorted(keys), index=self.index)
+
     def _recover_interrupted(self, runs: list[dict]) -> set:
         """Discard the partial effects of a run the process died in the middle
         of (OOM, SIGKILL, node loss) -- the same treatment a failed run gets.
@@ -144,7 +238,13 @@ class Service:
         NEEDS_DECISION / DEFERRED) go back to READY. A lost or torn end record
         therefore can no longer undo a completed run's escalations. Any
         PROPOSED arrival is also reset -- nothing ever offers that state
-        again."""
+        again.
+
+        Plan 2: an APPROVED intent whose arrival is queued, executing or
+        filed (`retryable`/`executing`/`filed`) belongs to the executor --
+        the run's end record was written before it was queued, so it is
+        never a crashed run's partial effect even if that record was torn
+        -- and is left alone, as are those arrivals."""
         done = {r.get("run_id") for r in runs if "outcome" in r}
         held = set()
         interrupted = []
@@ -160,6 +260,9 @@ class Service:
                 if rec.get("run_id") in done:
                     continue
                 if rec.get("state") not in (states.PROPOSED_I, states.APPROVED):
+                    continue
+                if rec.get("state") == states.APPROVED and (
+                        (self.arrivals.get(rec.get("arrival")) or {}).get("state") in _EXEC_OWNED):
                     continue
                 self.intents.store.record(rec["intent_id"], states.REJECTED,
                                           review={"verdict": "reject", "argument": reason})
@@ -187,7 +290,7 @@ class Service:
                    "librarian": None, "reviewer": None,
                    "outcome": "interrupted", "failed": True,
                    "ended": self.clock(), "ended_ts": time.time(),
-                   "counts": {"would_file": 0, "would_escalate": 0, "offered": len(keys)}}
+                   "counts": {"offered": len(keys)}}
             append_record(self.runs_path, rec)
             runs.append(rec)
             metrics.RUNS.labels(mode="librarian", outcome="interrupted").inc()
@@ -245,6 +348,7 @@ class Service:
 
     def tick(self) -> None:
         metrics.beat()
+        self.exec_budget = self.settings.max_exec_per_tick
         now = self.clock()
         try:
             self.index.refresh(now)
@@ -259,6 +363,14 @@ class Service:
             logger.info("kids lists valid again")
         self._lists_error = err
 
+        if not self._live_started:
+            self._start_live()           # raises -> retried next tick
+            self._live_started = True
+        if self._go_live_pending and not self._stop.is_set():
+            # never raises per arrival: a bad arrival only delays its source
+            self._go_live_pending = not execution.go_live(self)
+        if self._stop.is_set():
+            return
         self._intake(now)
         if self._stop.is_set():
             return
@@ -266,8 +378,55 @@ class Service:
         keys = self._due(now)
         if keys:
             self._run_cycle(keys)
+        if self.executor is not None and not self._stop.is_set():
+            execution.run_due(self)     # queued + retryable filings, within the tick budget
+        if not self._stop.is_set():
+            # Plan 2 Task 6: Vikunja tasks/replies/closes (or, without
+            # Vikunja, the escalation pushes). HTTP outside svc.lock; a
+            # failure here must not cost the tick its flush/metrics.
+            try:
+                escalations.sync(self)
+            except Exception:
+                logger.exception("escalation sync failed")
+        # final review I1: run summaries are built AFTER execution and the
+        # Vikunja pass (so "see task" is only said of a task that exists),
+        # plus one "late" summary for filings that finished outside a cycle
+        try:
+            flush_summaries(self)
+        except Exception:
+            logger.exception("summary push failed")
+        if self.notifier is not None and not self._stop.is_set():
+            # Outside svc.lock (Plan 2 Task 5): the outbox is its own Store
+            # with its own lock, and an HTTP call must never hold svc.lock.
+            # Gated on the stop flag like execution.run_due (fix round 1).
+            self.notifier.flush()
         metrics.rebuild_arrivals(self.arrivals)
+        metrics.rebuild_escalations(self.arrivals, self.intents,
+                                    lambda rec: execution.is_live(self.settings, rec.get("source")),
+                                    live_since=lambda source: execution.live_since(self, source))
         self._prune_transcripts()
+        self._prune_outbox()
+
+    def _start_live(self) -> None:
+        execution.clear_stale_markers(self)
+        if self.executor is None:
+            waiting = (len(self.arrivals.by_state(states.EXECUTING))
+                       + len([r for r in self.arrivals.by_state(states.RETRYABLE) if r.get("exec_intent")])
+                       + len([r for r in self.arrivals.by_state(states.DUPLICATE)
+                              if isinstance(r.get("dup"), dict) and not r.get("dup_removed")
+                              and not r.get("dup_failed")]))
+            if waiting:
+                logger.warning("DRY_RUN: %d queued/executing filing(s) or journaled duplicate "
+                               "removal(s) are left untouched until DRY_RUN=false", waiting)
+            return
+        stranded = [r for r in self.arrivals.by_state(states.RETRYABLE)
+                    if r.get("exec_intent") and not execution.is_live(self.settings, r.get("source"))
+                    and not execution.journal_reached_library(r.get("exec"))]
+        if stranded:
+            logger.warning("%d queued filing(s) of sources not in LIVE_SOURCES are left untouched",
+                           len(stranded))
+        execution.resume_executing(self)
+        self._go_live_pending = True     # tick() runs go_live until it completes
 
     # --- intake --------------------------------------------------------------
 
@@ -326,9 +485,20 @@ class Service:
 
         err = intake.verify_sidecar(c, sha)
         if err:
+            # final review M1: kindle-ingest may still repair its sidecar
+            # (it re-verifies and rewrites on retry): not ready -- and not
+            # recorded -- for SIDECAR_GRACE, then failed
+            since = self._sidecar_bad.setdefault(key, now)
+            if now - since < SIDECAR_GRACE:
+                if since == now:
+                    logger.warning("arrival %s not ready: %s (failed if still wrong in %ds)",
+                                   log_safe(key), log_safe(err), SIDECAR_GRACE)
+                return
+            self._sidecar_bad.pop(key, None)
             logger.error("arrival %s failed: %s", log_safe(key), log_safe(err))
             self.arrivals.record(key, states.FAILED, error=err, **base)
             return
+        self._sidecar_bad.pop(key, None)
 
         filed = {r["sha256"]: r.get("book_id") for r in self.arrivals.by_state(states.FILED)
                  if r.get("sha256")}
@@ -342,14 +512,19 @@ class Service:
                                  would_do=[f"remove intake copy (identical to book {book_id})"], **base)
             return
 
+        self.make_dossier(key, c, sha, info.get("previously_filed"))
+        self.arrivals.record(key, states.READY, **base)
+        logger.info("arrival %s ready", log_safe(key))
+
+    def make_dossier(self, key: str, c, sha: str, previously_filed) -> None:
+        """Build and persist the arrival's dossier (intake, and the
+        dry-run -> live re-offer in app/execution.py)."""
         dossier = build_dossier(
             key, c, sha, self.index, prober=self.prober,
             kids=functools.partial(kids_signals, self.lists),
-            previously_filed=info.get("previously_filed"),
+            previously_filed=previously_filed,
         )
         self._write_dossier(key, dossier)
-        self.arrivals.record(key, states.READY, **base)
-        logger.info("arrival %s ready", log_safe(key))
 
     def _write_dossier(self, key: str, dossier: dict) -> None:
         path = os.path.join(self.dossier_dir, dossier_name(key))
@@ -451,6 +626,67 @@ class Service:
         finally:
             self._in_runner = False
 
+    # --- notifications (Plan 2 Task 5) ----------------------------------------
+
+    def notify_failure(self, arrival_rec: dict, intent: dict | None, detail: str) -> None:
+        """Enqueue one push for a filing execution.py gave up on
+        (arrival state FAILED). Idempotent on (arrival, intent), so a
+        caller holding svc.lock -- every call site does -- may call this
+        unconditionally without risking a duplicate push."""
+        if self.notifier is None:
+            return
+        key = (arrival_rec or {}).get("key") or ""
+        intent_id = (intent or {}).get("intent_id") or (arrival_rec or {}).get("exec_intent") or "unknown"
+        hint = (arrival_rec or {}).get("title_hint") or key
+        title = f"Filing failed: {_short_title(hint)}"
+        body = notify.sanitize(str(detail or ""))
+        self.notifier.enqueue("failure", f"failure:{key}:{intent_id}", title, body)
+
+    def notify_attention(self, arrival_rec: dict, intent_id: str, text: str) -> None:
+        """Final review I1: one push per executor escalation on an arrival
+        that does not need a decision (filed but needs a look, metadata
+        correction failed). Plain text with the detail (paths included);
+        idempotent on msg_id `attention:<arrival>:<intent>`."""
+        if self.notifier is None:
+            return
+        key = (arrival_rec or {}).get("key") or ""
+        hint = (arrival_rec or {}).get("title_hint") or key
+        title = f"Librarian needs a look: {_short_title(hint)}"
+        body = notify.sanitize(str(text or ""))
+        if self.vikunja is not None:
+            body += "\n\nA Vikunja task \u201cLibrarian needs a look\u201d follows."
+        self.notifier.enqueue("attention", f"attention:{key}:{intent_id or 'unknown'}", title, body)
+
+    def notify_escalation(self, arrival_rec: dict, intent: dict, *, suffix: str = "",
+                          tail: str | None = None) -> None:
+        """Enqueue one push for an escalation (a human decision is
+        needed). `intent` is the ESCALATE intent record. The body carries
+        the (untrusted, LLM-authored) question and `tail`: by default the
+        arrival's Vikunja task URL (`arrival_rec["vikunja_url"]`, Task 6),
+        else a note that Vikunja is disabled. msg_id is
+        `escalation:<key>:<intent>` + `suffix` -- app/escalations.py uses a
+        suffix for the follow-up push that carries a task link after a
+        link-less one, or after a task was re-created."""
+        if self.notifier is None:
+            return
+        key = (arrival_rec or {}).get("key") or ""
+        intent_id = (intent or {}).get("intent_id") or "unknown"
+        hint = (arrival_rec or {}).get("title_hint") or key
+        title = f"Needs a decision: {_short_title(hint)}"
+        payload = (intent or {}).get("payload") or {}
+        question = payload.get("question") or (intent or {}).get("reason") or ""
+        question = notify.truncate_utf8(notify.sanitize(str(question)), 600)
+        if tail is None:
+            vikunja_url = (arrival_rec or {}).get("vikunja_url")
+            if vikunja_url:
+                tail = vikunja_url
+            elif self.vikunja is None:
+                tail = "Vikunja is disabled \u2014 answer via the librarian's state"
+            else:
+                tail = "Vikunja task not created yet"
+        body = f"{question}\n\n{notify.sanitize(tail)}"
+        self.notifier.enqueue("escalation", f"escalation:{key}:{intent_id}{suffix}", title, body)
+
     # --- housekeeping --------------------------------------------------------
 
     def _prune_transcripts(self) -> None:
@@ -465,3 +701,16 @@ class Service:
                     os.unlink(e.path)
             except OSError:
                 logger.warning("could not prune transcript %s", e.path)
+
+    def _prune_outbox(self) -> None:
+        """Fix round 1: same cadence as `_prune_transcripts` (every tick) --
+        drops sent/failed notification outbox records older than
+        `notify.OUTBOX_MAX_AGE`; pending ones are never touched, however
+        old. `Store.compact` already no-ops (no rewrite) when nothing is
+        removed, so this is cheap on the common no-op tick."""
+        if self.notifier is None:
+            return
+        try:
+            self.notifier.prune()
+        except OSError:
+            logger.warning("could not prune notification outbox")

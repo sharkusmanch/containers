@@ -174,3 +174,81 @@ def test_concurrent_all_by_state_counts_during_writes_never_raises(tmp_path):
         t.join()
 
     assert errors == []
+
+
+# --- compact (fix round 1, Task 5's notification outbox) --------------------
+
+
+def test_compact_removes_filtered_records_and_reloads(tmp_path):
+    p = tmp_path / "a.jsonl"
+    s = Store(str(p), "key", STATES)
+    s.record("k1", "ready")
+    s.record("k2", "filed")
+    s.record("k3", "ready")
+    removed = s.compact(lambda r: r["key"] != "k2")
+    assert removed == 1
+    assert s.get("k2") is None
+    assert {r["key"] for r in s.all()} == {"k1", "k3"}
+    # the file on disk was actually rewritten, not just the in-memory state
+    s2 = Store(str(p), "key", STATES)
+    assert {r["key"] for r in s2.all()} == {"k1", "k3"}
+
+
+def test_compact_keeps_everything_removes_nothing(tmp_path):
+    p = tmp_path / "a.jsonl"
+    s = Store(str(p), "key", STATES)
+    s.record("k1", "ready")
+    s.record("k2", "filed")
+    removed = s.compact(lambda r: True)
+    assert removed == 0
+    assert {r["key"] for r in s.all()} == {"k1", "k2"}
+
+
+def test_compact_noop_does_not_rewrite_the_file(tmp_path):
+    p = tmp_path / "a.jsonl"
+    s = Store(str(p), "key", STATES)
+    s.record("k1", "ready")
+    before = p.stat().st_mtime_ns
+    removed = s.compact(lambda r: True)
+    assert removed == 0
+    assert p.stat().st_mtime_ns == before
+
+
+def test_compact_survives_a_crash_before_replace(tmp_path, monkeypatch):
+    """A crash between writing+fsyncing the temp file and the atomic
+    os.replace must leave the original file exactly as it was -- os.replace
+    is the one moment the real path changes, so failing before it must be a
+    complete no-op on disk."""
+    p = tmp_path / "a.jsonl"
+    s = Store(str(p), "key", STATES)
+    s.record("k1", "ready")
+    s.record("k2", "filed")
+    original = p.read_bytes()
+
+    def boom(*a, **kw):
+        raise OSError("simulated crash before replace lands")
+
+    monkeypatch.setattr("app.store.os.replace", boom)
+    with pytest.raises(OSError):
+        s.compact(lambda r: r["key"] != "k2")
+
+    assert p.read_bytes() == original
+    # in-memory state was never swapped either (compact updates self._state
+    # only after a successful replace)
+    assert s.get("k2") is not None
+
+    s2 = Store(str(p), "key", STATES)   # still fully loadable, nothing lost
+    assert {r["key"] for r in s2.all()} == {"k1", "k2"}
+
+
+def test_compact_result_is_reloadable_after_torn_tail_elsewhere(tmp_path):
+    # compact's own writes go through the same fsync'd temp+replace path
+    # regardless of what state the store was in beforehand; a completely
+    # fresh store after compaction must load cleanly like any other.
+    p = tmp_path / "a.jsonl"
+    s = Store(str(p), "key", STATES)
+    for i in range(5):
+        s.record(f"k{i}", "ready")
+    s.compact(lambda r: r["key"] in {"k0", "k4"})
+    s2 = Store(str(p), "key", STATES)
+    assert {r["key"] for r in s2.all()} == {"k0", "k4"}

@@ -103,6 +103,31 @@ def defer_intent(hours=24, arrival=DEFAULT_ARRIVAL_KEY):
     return {"kind": "defer", "arrival": arrival, "reason": "waiting on more info", "not_before_hours": hours}
 
 
+def update_metadata_intent(book_id, *, metadata=None, lock=None, arrival=DEFAULT_ARRIVAL_KEY,
+                            reason="fixing the series name"):
+    return {
+        "kind": "update_metadata", "arrival": arrival, "book_id": book_id,
+        "metadata": metadata if metadata is not None else {"series": "Murderbot Diaries"},
+        "lock": lock if lock is not None else [],
+        "reason": reason,
+    }
+
+
+def answer(option_intent=None, *, option=None, text=None):
+    """A human_answer in the Global shape (Plan 2 Task 6), as
+    app/escalations.py builds it from a Vikunja reply."""
+    if option_intent is None:
+        choice = None
+    elif option_intent.get("kind") == "create_book" and option_intent.get("library") == "kids":
+        choice = "kids"
+    else:
+        choice = "option"
+    if option is None and option_intent is not None:
+        option = 1
+    return {"text": text if text is not None else str(option or "free text"), "option": option,
+            "option_intent": option_intent, "choice": choice, "comment_id": 7}
+
+
 def _kids_dir_lists(tmp_path, *, allow_series=(), deny_series=()):
     (tmp_path / "kids-allowlist.json").write_text(json.dumps({
         "series": list(allow_series), "asins": [], "authors": [],
@@ -260,7 +285,7 @@ def test_kids_signals_denylist_beats_allowlist_when_both_match(tmp_path):
 
 
 def test_validate_shape_rejects_unknown_kind():
-    ok, msg = validate_shape({"kind": "update_metadata", "arrival": "x"})
+    ok, msg = validate_shape({"kind": "reticulate_splines", "arrival": "x"})
     assert not ok
     assert "kind" in msg
 
@@ -396,6 +421,174 @@ def test_validate_shape_rejects_oversized_string():
     assert "reason" in msg
 
 
+# --- validate_shape: update_metadata ----------------------------------------
+
+
+def test_validate_shape_update_metadata_valid():
+    assert validate_shape(update_metadata_intent(2))[0]
+
+
+def test_validate_shape_update_metadata_requires_fields():
+    ok, msg = validate_shape({"kind": "update_metadata", "arrival": "x"})
+    assert not ok
+    assert "book_id" in msg and "metadata" in msg and "lock" in msg and "reason" in msg
+
+
+def test_validate_shape_update_metadata_book_id_must_be_int():
+    intent = update_metadata_intent(2)
+    intent["book_id"] = "2"
+    ok, msg = validate_shape(intent)
+    assert not ok
+
+
+def test_validate_shape_update_metadata_book_id_bool_rejected():
+    intent = update_metadata_intent(2)
+    intent["book_id"] = True
+    ok, msg = validate_shape(intent)
+    assert not ok
+
+
+def test_validate_shape_update_metadata_empty_metadata_rejected():
+    intent = update_metadata_intent(2, metadata={})
+    ok, msg = validate_shape(intent)
+    assert not ok
+    assert "metadata" in msg
+
+
+def test_validate_shape_update_metadata_does_not_require_title_or_authors():
+    # unlike create_book, a correction may touch only one field
+    assert validate_shape(update_metadata_intent(2, metadata={"title": "New Title"}))[0]
+    assert validate_shape(update_metadata_intent(2, metadata={"authors": ["Someone"]}))[0]
+
+
+def test_validate_shape_update_metadata_unknown_metadata_key_rejected():
+    intent = update_metadata_intent(2, metadata={"bogus": "x"})
+    ok, msg = validate_shape(intent)
+    assert not ok
+    assert "bogus" in msg
+
+
+def test_validate_shape_update_metadata_reuses_create_book_field_checks():
+    # title path-segment check
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": "A/B"}))
+    assert not ok
+    # authors[0] path-segment check
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"authors": [".."]}))
+    assert not ok
+    # series index must be a finite number
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"seriesIndex": "abc"}))
+    assert not ok
+    # published year must be a finite number
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"publishedYear": "2020"}))
+    assert not ok
+    # empty title rejected
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": ""}))
+    assert not ok
+    # empty authors list rejected
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"authors": []}))
+    assert not ok
+
+
+def test_validate_shape_update_metadata_lock_must_be_list():
+    intent = update_metadata_intent(2, lock="title")
+    ok, msg = validate_shape(intent)
+    assert not ok
+
+
+def test_validate_shape_update_metadata_lock_allows_title_subtitle_description():
+    assert validate_shape(update_metadata_intent(2, lock=["title", "subtitle", "description"]))[0]
+
+
+def test_validate_shape_update_metadata_lock_rejects_series_fields():
+    ok, msg = validate_shape(update_metadata_intent(2, lock=["seriesName"]))
+    assert not ok
+    assert "lock" in msg
+
+
+def test_validate_shape_update_metadata_lock_rejects_unknown_entry():
+    ok, msg = validate_shape(update_metadata_intent(2, lock=["bogus"]))
+    assert not ok
+
+
+def test_validate_shape_update_metadata_lock_empty_list_ok():
+    assert validate_shape(update_metadata_intent(2, lock=[]))[0]
+
+
+def test_validate_shape_update_metadata_reason_required():
+    intent = update_metadata_intent(2, reason="")
+    ok, msg = validate_shape(intent)
+    assert not ok
+
+
+# --- fix round 1, Important: narrators/asinTag/None must be REJECTED, not --
+# --- silently dropped -- an approved no-op intent used to reach the       --
+# --- executor with nothing left to patch                                  --
+
+
+def test_validate_shape_update_metadata_rejects_narrators():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": "T", "narrators": ["N"]}))
+    assert not ok
+    assert "narrators" in msg
+
+
+def test_validate_shape_update_metadata_rejects_asin_tag():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": "T", "asinTag": "B0X"}))
+    assert not ok
+    assert "asinTag" in msg
+
+
+def test_validate_shape_update_metadata_rejects_only_narrators_and_asin_tag():
+    # nothing left for update_metadata_fields to map -- must be rejected,
+    # not silently accepted as a no-op
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"narrators": ["N"], "asinTag": "B0X"}))
+    assert not ok
+
+
+def test_validate_shape_update_metadata_rejects_none_value():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": "T", "subtitle": None}))
+    assert not ok
+    assert "subtitle" in msg
+
+
+def test_validate_shape_update_metadata_rejects_none_title():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"title": None}))
+    assert not ok
+    assert "title" in msg
+
+
+def test_validate_shape_update_metadata_rejects_empty_string_series():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"series": ""}))
+    assert not ok
+    assert "series" in msg
+
+
+def test_validate_shape_update_metadata_rejects_empty_string_subtitle():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"subtitle": ""}))
+    assert not ok
+    assert "subtitle" in msg
+
+
+def test_validate_shape_update_metadata_rejects_empty_string_language():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"language": ""}))
+    assert not ok
+    assert "language" in msg
+
+
+def test_validate_shape_update_metadata_rejects_empty_string_audible_id():
+    ok, msg = validate_shape(update_metadata_intent(2, metadata={"audibleId": ""}))
+    assert not ok
+    assert "audibleId" in msg
+
+
+def test_validate_shape_update_metadata_series_index_alone_is_a_mapped_field():
+    # seriesIndex without series still maps to something patchable
+    assert validate_shape(update_metadata_intent(2, metadata={"seriesIndex": 3}))[0]
+
+
+def test_validate_shape_update_metadata_audible_id_alone_is_valid():
+    assert validate_shape(update_metadata_intent(2, metadata={"audibleId": "B0TEST1234"}))[0]
+
+
 # --- I5: folder-name-bound fields reject path-unsafe values ----------------
 
 
@@ -488,6 +681,28 @@ def test_check_intent_never_raises_arrival_wrong_type():
 
 def test_check_intent_never_raises_reason_none():
     _never_raises(lambda i: i.__setitem__("reason", None))
+
+
+def _never_raises_update_metadata(mutate) -> None:
+    intent = update_metadata_intent(2)
+    mutate(intent)
+    index = FakeIndex({})
+    dossier = make_dossier()
+    ok, msg = check_intent(intent, ctx(dossier, index))  # must not raise
+    assert ok is False
+    assert isinstance(msg, str) and msg
+
+
+def test_check_intent_never_raises_update_metadata_book_id_wrong_type():
+    _never_raises_update_metadata(lambda i: i.__setitem__("book_id", "nope"))
+
+
+def test_check_intent_never_raises_update_metadata_lock_wrong_type():
+    _never_raises_update_metadata(lambda i: i.__setitem__("lock", "title"))
+
+
+def test_check_intent_never_raises_update_metadata_metadata_wrong_type():
+    _never_raises_update_metadata(lambda i: i.__setitem__("metadata", "x"))
 
 
 # --- guard 1: id existence / candidate membership --------------------------
@@ -632,6 +847,70 @@ def test_guard5_attach_rejected_when_primary_missing():
     dossier = make_dossier(primary_kind=None, candidates=[candidate(2)])
     ok, msg = check_intent(attach_intent(2), ctx(dossier, index))
     assert not ok
+
+
+# --- update_metadata: book_id existence + library allowlist -----------------
+
+
+def test_update_metadata_book_id_not_in_index_rejected():
+    index = FakeIndex({})
+    ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
+    assert not ok
+
+
+def test_update_metadata_book_id_valid_target_accepted():
+    index = FakeIndex({2: make_book(2)})
+    ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
+    assert ok
+
+
+def test_update_metadata_target_comics_rejected():
+    index = FakeIndex({2: make_book(2, library="Comics")})
+    ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
+    assert not ok
+
+
+def test_update_metadata_target_unknown_library_rejected():
+    index = FakeIndex({2: make_book(2, library="Secret")})
+    ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
+    assert not ok
+
+
+# --- guard 7 applies to update_metadata's kids target too -------------------
+
+
+def test_update_metadata_kids_target_deny_rejected(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, msg = check_intent(update_metadata_intent(2), ctx(dossier, index, lists=lists))
+    assert not ok
+
+
+def test_update_metadata_kids_target_allow_accepted(tmp_path):
+    lists = _kids_dir_lists(tmp_path, allow_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, msg = check_intent(update_metadata_intent(2), ctx(dossier, index, lists=lists))
+    assert ok
+
+
+def test_update_metadata_kids_human_override_accepted(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, msg = check_intent(
+        update_metadata_intent(2), ctx(dossier, index, lists=lists, human_answer=answer(attach_intent(2))),
+    )
+    assert ok
+
+
+def test_update_metadata_adult_target_ignores_kids_signals(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Library")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, msg = check_intent(update_metadata_intent(2), ctx(dossier, index, lists=lists))
+    assert ok
 
 
 # --- guard 6: one filing intent per arrival / one arrival per (book,fmt) ---
@@ -832,7 +1111,7 @@ def test_guard7_invalid_lists_rejects_even_with_human_override(tmp_path):
     dossier = _dossier_for_kids()
     ok, msg = check_intent(
         create_book_intent(library="kids"),
-        ctx(dossier, FakeIndex({}), lists=lists, human_answer={"choice": "kids"}),
+        ctx(dossier, FakeIndex({}), lists=lists, human_answer=answer(create_book_intent(library="kids"))),
     )
     assert not ok
 
@@ -883,7 +1162,7 @@ def test_guard7_human_kids_override_on_attach_path(tmp_path):
     index = FakeIndex({2: make_book(2, library="Kids Audiobooks")})
     dossier = _dossier_for_kids(candidates=[candidate(2)], fresh_series="x")
     ok, msg = check_intent(
-        attach_intent(2), ctx(dossier, index, lists=lists, human_answer={"choice": "kids"}),
+        attach_intent(2), ctx(dossier, index, lists=lists, human_answer=answer(attach_intent(2))),
     )
     assert ok
 
@@ -893,7 +1172,7 @@ def test_guard7_override_note_names_missing_allowlist_hit(tmp_path):
     dossier = _dossier_for_kids()
     ok, msg = check_intent(
         create_book_intent(library="kids"),
-        ctx(dossier, FakeIndex({}), lists=lists, human_answer={"choice": "kids"}),
+        ctx(dossier, FakeIndex({}), lists=lists, human_answer=answer(create_book_intent(library="kids"))),
     )
     assert ok
     assert "allowlist" in msg.lower()
@@ -904,7 +1183,7 @@ def test_guard7_override_note_names_denylist_hit(tmp_path):
     dossier = _dossier_for_kids(fresh_series="x")
     ok, msg = check_intent(
         create_book_intent(library="kids"),
-        ctx(dossier, FakeIndex({}), lists=lists, human_answer={"choice": "kids"}),
+        ctx(dossier, FakeIndex({}), lists=lists, human_answer=answer(create_book_intent(library="kids"))),
     )
     assert ok
     assert "denylist" in msg.lower()
@@ -926,12 +1205,12 @@ def test_guard10_human_answer_empty_choice_rejected():
     assert not ok
 
 
-def test_guard10_human_answer_any_nonempty_choice_counts():
+def test_guard10_legacy_choice_without_option_intent_no_longer_counts():
     index = FakeIndex({2: make_book(2)})
     dossier = make_dossier(candidates=[candidate(2)],
                             measures=[{"book_id": 2, "series_index_agreement": "disagree"}])
     ok, msg = check_intent(attach_intent(2), ctx(dossier, index, human_answer={"choice": "attach"}))
-    assert ok
+    assert not ok
 
 
 # --- guard 8: folder-name collision ------------------------------------------
@@ -965,6 +1244,32 @@ def test_guard8_collision_only_checked_within_target_library():
     assert ok
 
 
+# --- guard 8 amendment: two create_books in one run can't render the same --
+# --- folder, even before either is a real book in the index ----------------
+
+
+def test_guard8_same_run_folder_claim_collision_rejected():
+    claims = {("folder", "Library", "martha wells/artificial condition"): "run1:1"}
+    intent = create_book_intent(library="adult", title="Artificial Condition", authors=["Martha Wells"],
+                                 arrival="libation:Y:def456")
+    ok, msg = check_intent(intent, ctx(make_dossier(key="libation:Y:def456"), FakeIndex({}), run_claims=claims))
+    assert not ok
+
+
+def test_guard8_same_run_folder_claim_different_folder_accepted():
+    claims = {("folder", "Library", "someone else/different book"): "run1:1"}
+    intent = create_book_intent(library="adult", title="Artificial Condition", authors=["Martha Wells"])
+    ok, msg = check_intent(intent, ctx(make_dossier(), FakeIndex({}), run_claims=claims))
+    assert ok
+
+
+def test_guard8_same_run_folder_claim_different_library_ignored():
+    claims = {("folder", "Kids Audiobooks", "martha wells/artificial condition"): "run1:1"}
+    intent = create_book_intent(library="adult", title="Artificial Condition", authors=["Martha Wells"])
+    ok, msg = check_intent(intent, ctx(make_dossier(), FakeIndex({}), run_claims=claims))
+    assert ok
+
+
 # --- guard 10: series-index disagreement ------------------------------------
 
 
@@ -980,7 +1285,7 @@ def test_guard10_disagree_measure_with_human_accepted():
     index = FakeIndex({2: make_book(2)})
     dossier = make_dossier(candidates=[candidate(2)],
                             measures=[{"book_id": 2, "series_index_agreement": "disagree"}])
-    ok, msg = check_intent(attach_intent(2), ctx(dossier, index, human_answer={"choice": "attach"}))
+    ok, msg = check_intent(attach_intent(2), ctx(dossier, index, human_answer=answer(attach_intent(2))))
     assert ok
 
 
@@ -1019,7 +1324,7 @@ def test_guard10_fallback_unknown_when_missing_data_does_not_reject():
 def test_guard10_fallback_disagreement_overridden_by_human():
     index = FakeIndex({2: make_book(2, series_index=3)})
     dossier = make_dossier(candidates=[candidate(2)], measures=[], arrival_series_index=2.0)
-    ok, msg = check_intent(attach_intent(2), ctx(dossier, index, human_answer={"choice": "attach"}))
+    ok, msg = check_intent(attach_intent(2), ctx(dossier, index, human_answer=answer(attach_intent(2))))
     assert ok
 
 
@@ -1071,4 +1376,192 @@ def test_claims_for_attach():
 def test_claims_for_create_book():
     dossier = make_dossier()
     claims = claims_for(create_book_intent(), dossier)
-    assert claims == [("arrival", dossier["key"])]
+    assert ("arrival", dossier["key"]) in claims
+
+
+def test_claims_for_create_book_includes_folder_claim():
+    dossier = make_dossier()
+    intent = create_book_intent(library="adult", title="Artificial Condition", authors=["Martha Wells"])
+    claims = claims_for(intent, dossier)
+    assert ("folder", "Library", "martha wells/artificial condition") in claims
+
+
+def test_claims_for_update_metadata_takes_no_claims():
+    dossier = make_dossier()
+    assert claims_for(update_metadata_intent(2), dossier) == []
+
+
+# --- Plan 2 Task 6: human answers honoured only when the intent matches ----
+# --- the option the human selected (Global "Human answer shape") -----------
+
+
+def _disagree(book_id=2, others=()):
+    index = FakeIndex({book_id: make_book(book_id), **{o: make_book(o) for o in others}})
+    dossier = make_dossier(candidates=[candidate(book_id)] + [candidate(o) for o in others],
+                            measures=[{"book_id": b, "series_index_agreement": "disagree"}
+                                      for b in (book_id, *others)])
+    return dossier, index
+
+
+def test_guard10_reply_2_leave_it_for_me_does_not_unlock():
+    dossier, index = _disagree()
+    ha = answer(None, option=2, text="2")    # option 2 = "Leave it for me" (no intent)
+    ok, msg = check_intent(attach_intent(2), ctx(dossier, index, human_answer=ha))
+    assert not ok
+    assert "series index" in msg
+
+
+def test_guard10_free_text_answer_never_overrides():
+    dossier, index = _disagree()
+    ha = answer(None, text="yes attach it to book 2, the index is wrong")
+    ok, _ = check_intent(attach_intent(2), ctx(dossier, index, human_answer=ha))
+    assert not ok
+
+
+def test_guard10_answer_for_a_different_book_does_not_unlock():
+    dossier, index = _disagree(2, others=(3,))
+    ok, _ = check_intent(attach_intent(2), ctx(dossier, index, human_answer=answer(attach_intent(3))))
+    assert not ok
+    ok, _ = check_intent(attach_intent(3), ctx(dossier, index, human_answer=answer(attach_intent(3))))
+    assert ok
+
+
+def test_guard10_answer_of_a_different_kind_does_not_unlock():
+    dossier, index = _disagree()
+    ha = answer(create_book_intent(library="adult"))
+    ok, _ = check_intent(attach_intent(2), ctx(dossier, index, human_answer=ha))
+    assert not ok
+
+
+def test_guard10_attach_option_without_book_id_does_not_unlock():
+    dossier, index = _disagree()
+    ha = answer({"kind": "attach", "arrival": DEFAULT_ARRIVAL_KEY})
+    ok, _ = check_intent(attach_intent(2), ctx(dossier, index, human_answer=ha))
+    assert not ok
+
+
+def test_guard10_bool_book_id_in_option_does_not_match_int():
+    dossier, index = _disagree(1)
+    ha = answer({"kind": "attach", "arrival": DEFAULT_ARRIVAL_KEY, "book_id": True})
+    ok, _ = check_intent(attach_intent(1), ctx(dossier, index, human_answer=ha))
+    assert not ok
+
+
+def test_guard10_option_for_another_arrival_does_not_unlock():
+    dossier, index = _disagree()
+    ha = answer(attach_intent(2, arrival="libation:OTHER:def"))
+    ok, _ = check_intent(attach_intent(2), ctx(dossier, index, human_answer=ha))
+    assert not ok
+
+
+def test_guard10_option_without_arrival_key_compares_kind_and_book_id():
+    dossier, index = _disagree()
+    ha = answer({"kind": "attach", "book_id": 2})
+    ok, _ = check_intent(attach_intent(2), ctx(dossier, index, human_answer=ha))
+    assert ok
+
+
+def test_guard7_legacy_kids_choice_without_option_intent_rejected(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, _ = check_intent(create_book_intent(library="kids"),
+                         ctx(dossier, FakeIndex({}), lists=lists, human_answer={"choice": "kids"}))
+    assert not ok
+
+
+def test_guard7_free_text_kids_answer_never_overrides(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ha = answer(None, text="put it in kids please")
+    ok, _ = check_intent(create_book_intent(library="kids"),
+                         ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
+    assert not ok
+
+
+def test_guard7_adult_option_does_not_unlock_kids_create(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ha = answer(create_book_intent(library="adult"))
+    ok, _ = check_intent(create_book_intent(library="kids"),
+                         ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
+    assert not ok
+
+
+def test_guard7_kids_create_with_another_title_does_not_unlock(tmp_path):
+    """Final review M5: a kids create_book answer unlocks only the book the
+    human saw -- title and first author (normalised) must match too."""
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ha = answer(create_book_intent(library="kids", title="Some Other Title"))
+    assert ha["choice"] == "kids"
+    ok, _ = check_intent(create_book_intent(library="kids", title="The Real Title"),
+                         ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
+    assert not ok
+
+
+def test_guard7_kids_create_with_another_first_author_does_not_unlock(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ha = answer(create_book_intent(library="kids", authors=["Someone Else", "Martha Wells"]))
+    ok, _ = check_intent(create_book_intent(library="kids", authors=["Martha Wells"]),
+                         ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
+    assert not ok
+
+
+def test_guard7_kids_create_matches_title_and_author_normalised(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ha = answer(create_book_intent(library="kids", title="  the REAL  title ",
+                                   authors=["martha  WELLS", "Co Author"]))
+    ok, msg = check_intent(create_book_intent(library="kids", title="The Real Title",
+                                              authors=["Martha Wells"]),
+                           ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
+    assert ok, msg
+    assert "human" in msg
+
+
+def test_guard7_kids_create_option_without_metadata_does_not_unlock(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    dossier = _dossier_for_kids(fresh_series="x")
+    ha = answer({"kind": "create_book", "library": "kids"})
+    ok, _ = check_intent(create_book_intent(library="kids"),
+                         ctx(dossier, FakeIndex({}), lists=lists, human_answer=ha))
+    assert not ok
+
+def test_guard7_attach_option_for_another_kids_book_does_not_unlock(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks"),
+                       3: make_book(3, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(candidates=[candidate(2), candidate(3)], fresh_series="x")
+    ok, _ = check_intent(attach_intent(2),
+                         ctx(dossier, index, lists=lists, human_answer=answer(attach_intent(3))))
+    assert not ok
+
+
+def test_guard7_update_metadata_paired_with_answered_attach_allowed(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, _ = check_intent(update_metadata_intent(2),
+                         ctx(dossier, index, lists=lists, human_answer=answer(attach_intent(2))))
+    assert ok
+
+
+def test_guard7_update_metadata_for_another_book_than_answered_attach_rejected(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks"),
+                       3: make_book(3, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, _ = check_intent(update_metadata_intent(2),
+                         ctx(dossier, index, lists=lists, human_answer=answer(attach_intent(3))))
+    assert not ok
+
+
+def test_guard7_update_metadata_needs_an_attach_answer_not_a_create(tmp_path):
+    lists = _kids_dir_lists(tmp_path, deny_series=("x",))
+    index = FakeIndex({2: make_book(2, library="Kids Audiobooks")})
+    dossier = _dossier_for_kids(fresh_series="x")
+    ok, _ = check_intent(update_metadata_intent(2),
+                         ctx(dossier, index, lists=lists,
+                             human_answer=answer(create_book_intent(library="kids"))))
+    assert not ok

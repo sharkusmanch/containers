@@ -30,8 +30,11 @@ OUTCOMES = frozenset({OK, RETRYABLE, FAILED, NEEDS_DECISION, UPLOADING})
 # Cleared whenever `outcome` changes, so a later record cannot inherit a stale
 # bookorbit_id (which would make a failed book look uploaded and licence
 # deleting the device copy) or a stale error (which would report a reason on a
-# successful upload).
-_PER_ATTEMPT = ("error", "bookorbit_id", "detail")
+# successful upload). The intake hand-off markers are per-attempt for the same
+# reason: a stale `handoff` on a later upload record would swap BookOrbit
+# verification out of the cleanup gate.
+_PER_ATTEMPT = ("error", "bookorbit_id", "detail",
+                "handoff", "intake_path", "artifact_sha256")
 
 
 class LedgerCorrupt(Exception):

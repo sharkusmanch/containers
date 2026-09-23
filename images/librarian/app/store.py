@@ -23,6 +23,10 @@ Differences from ledger.py:
     dict on another thread can otherwise raise "dictionary changed size
     during iteration"; this is a real race under concurrent requests (e.g.
     app/api.py's `_visible_arrivals`/`IntentBook.proposals` path)
+  * `compact(keep)` (Task 5 fix round 1) is the one exception to
+    append-only: an atomic temp-file + fsync + `os.replace` rewrite for a
+    store whose old terminal records are safe to drop (the notification
+    outbox) -- see its own docstring below
 
 Durability rules (unchanged from ledger.py):
   * append-only: a torn final line is discarded, and the damage from a
@@ -213,3 +217,38 @@ class Store:
                 s = r.get("state", "unknown")
                 c[s] = c.get(s, 0) + 1
             return c
+
+    # --- compaction (fix round 1, Task 5) -------------------------------------
+    # `record()` is append-only by design (the file IS the history); a store
+    # that only ever grows a terminal, no-longer-interesting tail (Task 5's
+    # notification outbox: sent/failed pushes) needs a way to actually drop
+    # old lines. `compact` is the one place this module rewrites the file
+    # instead of appending to it -- kept rare and explicit rather than folded
+    # into `record`.
+
+    def compact(self, keep) -> int:
+        """Rewrite the store file to contain only records for which
+        `keep(record)` is true, atomically: write every kept record to a
+        temp file, fsync it, then `os.replace` it over the real path (atomic
+        on the same filesystem -- a crash before the replace leaves the
+        original file untouched; nothing observes a partially-written file
+        at the real path either way). Returns the count removed.
+
+        Held under the same lock as `record()`/`all()`, so a compaction
+        never races a concurrent write or a reader mid-snapshot.
+        """
+        with self._lock:
+            kept = {k: r for k, r in self._state.items() if keep(r)}
+            removed = len(self._state) - len(kept)
+            if removed == 0:
+                return 0
+            tmp = f"{self.path}.tmp{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as f:
+                for r in kept.values():
+                    f.write(json.dumps(r, sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path)
+            fsync_dir(self.path)
+            self._state = kept
+            return removed

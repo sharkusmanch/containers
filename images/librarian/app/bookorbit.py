@@ -46,7 +46,7 @@ QUERY_PAGE_SIZE = 100
 
 class BookorbitClient:
     def __init__(self, base_url, username, password, transport=None, cookie_path=None,
-                 clock=time.time):
+                 clock=time.time, writable: bool = False):
         self.base_url = base_url.rstrip("/")
         self._username = username
         self._password = password
@@ -54,6 +54,11 @@ class BookorbitClient:
         self._token_obtained_at = 0.0
         self._clock = clock
         self._login_blocked_until = 0.0
+        # Fix round 1 (Important #6): a plain BookorbitClient is read-only by
+        # default -- _write() refuses regardless of path unless this is set.
+        # Only the executor constructs a writable=True instance; the P1
+        # read-only index client must never be able to reach _write at all.
+        self._writable = writable
 
         if not cookie_path:
             raise ValueError("cookie_path is required")
@@ -93,6 +98,10 @@ class BookorbitClient:
     @property
     def token_age_seconds(self):
         return self._clock() - self._token_obtained_at
+
+    @property
+    def writable(self):
+        return self._writable
 
     def has_refresh_credential(self):
         """True if a stored refresh_token cookie is available to trade in."""
@@ -156,6 +165,254 @@ class BookorbitClient:
                 f"(writes ship in a later plan)")
         self._ensure_fresh()
         return self._call("POST", path, payload)
+
+    # --- writes (Plan 2) --------------------------------------------------
+    # Used ONLY by BookorbitWriter, a separate instance constructed by the
+    # executor. get()/post() above are untouched -- the P1 read-only client
+    # stays read-only. Every write goes through this one chokepoint so the
+    # allowlist below is the single place that can ever mutate BookOrbit.
+    def _write(self, method, path, payload=None):
+        # Fix round 1 (Important #6): refuse outright unless this instance
+        # was constructed with writable=True -- checked BEFORE the allowlist
+        # so a stray writer bug can never fall through to "allowed path,
+        # wrong client".
+        if not self._writable:
+            raise PermissionError(
+                "this BookorbitClient was constructed without writable=True: "
+                "writes are only permitted on the executor's dedicated writer "
+                "client, never the P1 read-only index client")
+        if not _write_path_allowed(method, path):
+            raise PermissionError(
+                f"{method} {path} is not permitted: not in the writer allowlist")
+        self._ensure_fresh()
+        if not self._token:
+            raise RuntimeError("not authenticated: call authenticate() first")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + self._token,
+        }
+        body = json.dumps(payload).encode() if payload is not None else None
+        status, text = self._transport(method, self.base_url + path, body, headers)
+        if status >= 400:
+            # Distinguishable from _call()'s RuntimeError so callers (namely
+            # BookorbitWriter.scan()) can special-case 409 "scan already
+            # running" without string-matching the body.
+            raise BookorbitHTTPError(method, path, status, text)
+        return json.loads(text) if text else {}
+
+
+class BookorbitHTTPError(RuntimeError):
+    """Raised by BookorbitClient._write() on any HTTP status >= 400, with the
+    status code available for callers that need to distinguish e.g. 409
+    (scan already running) from a hard failure.
+
+    Callers should log/report `str(e)` only -- it already includes the
+    method, path and status and truncates the body to 400 chars. `.body` is
+    kept for callers that specifically need the raw response (e.g. surfacing
+    `errorMessage` from a JSON error body), but is NOT pre-sanitized and may
+    contain arbitrary server-supplied content.
+    """
+
+    def __init__(self, method, path, status, body):
+        super().__init__(f"{method} {path} -> HTTP {status}: {(body or '')[:400]}")
+        self.method = method
+        self.path = path
+        self.status = status
+        self.body = body
+
+
+class ScanError(RuntimeError):
+    """Raised by BookorbitWriter when a scan fails or does not complete
+    within the bounded wait. `kind` lets callers (the executor's guard/
+    escalation path) branch without string-matching the message:
+    - "failed": BookOrbit itself reported the scan as failed, or refused a
+      retriggered scan a second time (still 409 after we already waited).
+    - "timeout": we gave up waiting within the bounded window.
+    """
+
+    def __init__(self, message, *, kind):
+        assert kind in ("failed", "timeout"), f"invalid ScanError kind: {kind!r}"
+        super().__init__(message)
+        self.kind = kind
+
+
+# Writer allowlist (Plan 2 review amendment): only these method+path
+# combinations may ever go through BookorbitClient._write. Everything else --
+# including refresh-metadata, the ABS migration adapter, and any patch/
+# delete/post outside this list -- is rejected, per the global constraints.
+# `[0-9]+` (not `\d+`) so a Unicode decimal digit outside ASCII can't sneak
+# a path past the allowlist; `fullmatch` (not `match`) so a trailing
+# newline, extra path segment, query string or slash can't either -- `match`
+# would have let `$` match just before a trailing "\n" and call that a full
+# match, which it is not.
+_WRITE_PATHS = (
+    ("POST", re.compile(r"^/scanner/libraries/(?:7|8)/scan$")),
+    ("POST", re.compile(r"^/books/[0-9]+/rename-files$")),
+    ("PATCH", re.compile(r"^/books/[0-9]+/metadata-and-locks$")),
+)
+
+
+def _write_path_allowed(method, path):
+    return any(method == m and rx.fullmatch(path) for m, rx in _WRITE_PATHS)
+
+
+# Scan-history status values that mean "not running any more" (a running
+# scan is presumed to report something outside this set, e.g. "running" /
+# "in_progress" -- never compare on that value, only on membership here).
+_TERMINAL_SCAN_STATUSES = frozenset({"completed", "failed"})
+
+_WRITER_LIBRARY_IDS = frozenset({7, 8})
+
+
+class BookorbitWriter:
+    """Tightly allowlisted write path for the executor (Task 2). Wraps an
+    authenticated BookorbitClient instance that is separate from the P1
+    read-only index client -- construct one only in the executor.
+    """
+
+    def __init__(self, client):
+        # Fix round 1 (Important #6): construction-time guard, so a caller
+        # can't accidentally wrap the P1 read-only client and only discover
+        # the mistake at the first _write() call.
+        if not getattr(client, "writable", False):
+            raise ValueError(
+                "BookorbitWriter requires a BookorbitClient constructed with "
+                "writable=True (the executor's dedicated writer instance) -- "
+                "the P1 read-only index client must never reach here")
+        self._client = client
+
+    def _check_library(self, library_id):
+        if library_id not in _WRITER_LIBRARY_IDS:
+            raise ValueError(
+                f"library_id must be one of {sorted(_WRITER_LIBRARY_IDS)}: {library_id!r}")
+
+    def _scan_history(self, library_id):
+        return self._client.get(f"/scanner/libraries/{library_id}/scan-history")
+
+    def _max_history_id(self, library_id):
+        history = self._scan_history(library_id)
+        return max((h["id"] for h in history), default=0)
+
+    def scan_running(self, library_id):
+        self._check_library(library_id)
+        history = self._scan_history(library_id)
+        if not history:
+            return False
+        latest = max(history, key=lambda h: h["id"])
+        return latest["status"] not in _TERMINAL_SCAN_STATUSES
+
+    def _wait_until_idle(self, library_id, deadline, sleep, clock):
+        """Poll until scan_running() is False, or raise ScanError once
+        `clock()` reaches `deadline`. `deadline` (not a fresh `timeout`) is
+        passed in so scan() can share ONE deadline across both of its
+        potential waits -- see the fix-round-1 shared-deadline note there."""
+        while self.scan_running(library_id):
+            if clock() >= deadline:
+                raise ScanError(
+                    f"library {library_id} scan did not finish before the deadline",
+                    kind="timeout")
+            sleep(5)
+
+    def wait_scan(self, library_id, after_id, timeout=1200, sleep=time.sleep,
+                  clock=time.monotonic):
+        """Wait for the first scan-history entry with id > after_id to reach
+        a terminal status, and return it. Raises ScanError if it fails, or
+        if none appears within `timeout` seconds. Never compares timestamps
+        (clock skew) -- only ids and status."""
+        self._check_library(library_id)
+        deadline = clock() + timeout
+        while True:
+            history = self._scan_history(library_id)
+            candidates = [
+                h for h in history
+                if h["id"] > after_id and h["status"] in _TERMINAL_SCAN_STATUSES
+            ]
+            if candidates:
+                entry = min(candidates, key=lambda h: h["id"])
+                if entry["status"] == "failed":
+                    raise ScanError(
+                        f"library {library_id} scan {entry['id']} failed: "
+                        f"{entry.get('errorMessage')}", kind="failed")
+                return entry
+            if clock() >= deadline:
+                raise ScanError(
+                    f"library {library_id} scan did not complete within {timeout}s",
+                    kind="timeout")
+            sleep(5)
+
+    def scan(self, library_id, timeout=1200, sleep=time.sleep, clock=time.monotonic):
+        """Trigger a scan of `library_id`, returning the max scan-history id
+        recorded immediately before the successful trigger (pass this as
+        `after_id` to wait_scan() to wait for completion).
+
+        If a scan is already running -- caught either up front via
+        scan_running() or reactively via a 409 on the POST -- waits for it
+        to finish, THEN records the max id and triggers.
+
+        `timeout` bounds the WHOLE call, not each wait separately: both
+        potential waits below share one `deadline` computed once at entry
+        (fix round 1 #3) -- a proactive wait followed by a raced 409 can
+        together wait at most `timeout` seconds, never up to 2x.
+        """
+        self._check_library(library_id)
+        deadline = clock() + timeout
+        scan_path = f"/scanner/libraries/{library_id}/scan"
+        if self.scan_running(library_id):
+            self._wait_until_idle(library_id, deadline, sleep, clock)
+        max_id = self._max_history_id(library_id)
+        try:
+            self._client._write("POST", scan_path, {})
+        except BookorbitHTTPError as e:
+            if e.status != 409:
+                raise
+            self._wait_until_idle(library_id, deadline, sleep, clock)
+            max_id = self._max_history_id(library_id)
+            try:
+                self._client._write("POST", scan_path, {})
+            except BookorbitHTTPError as e2:
+                # Fix round 1 #4: a second 409 here means BookOrbit is still
+                # refusing to scan even after we waited out the first
+                # running scan -- that's not something the caller can
+                # retry its way out of, so surface it as ScanError like any
+                # other scan failure rather than leaking a raw HTTP error.
+                if e2.status == 409:
+                    raise ScanError(
+                        f"library {library_id} still refuses to scan (409) "
+                        f"even after waiting for the previously-running scan "
+                        f"to finish", kind="failed") from e2
+                raise
+        return max_id
+
+    def rename_files(self, book_id):
+        if type(book_id) is not int:
+            raise TypeError(f"book_id must be an int, got {book_id!r}")
+        return self._client._write("POST", f"/books/{book_id}/rename-files", {})
+
+    def patch_metadata(self, book_id, metadata, locked):
+        """PATCH /books/{id}/metadata-and-locks. lockedFields REPLACES the
+        whole lock set server-side, so this always sends a fresh GET's
+        current lockedFields unioned with the newly requested ones -- never
+        drops an existing lock (e.g. a Kindle 'tags' lock).
+
+        Fix round 1 (Important #1): a missing/null lockedFields on the fresh
+        GET must NOT be silently treated as an empty list -- that would
+        merge to just `locked` and the PATCH would replace-and-drop every
+        existing lock. Refuse instead: no GET-shaped response, no PATCH.
+        """
+        if type(book_id) is not int:
+            raise TypeError(f"book_id must be an int, got {book_id!r}")
+        current = self._client.get(f"/books/{book_id}")
+        current_locks = current.get("lockedFields")
+        if not isinstance(current_locks, list):
+            raise RuntimeError(
+                f"refusing to PATCH metadata for book {book_id}: GET /books/{book_id} "
+                f"returned lockedFields={current_locks!r} (not a list) -- patching "
+                f"now would replace the whole lock set and could silently drop an "
+                f"existing lock")
+        merged = sorted(set(current_locks) | set(locked))
+        return self._client._write(
+            "PATCH", f"/books/{book_id}/metadata-and-locks",
+            {"metadata": metadata, "lockedFields": merged})
 
 
 # --- LibraryIndex ------------------------------------------------------------

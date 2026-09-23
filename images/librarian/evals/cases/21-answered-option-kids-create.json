@@ -1,0 +1,136 @@
+{
+  "name": "answered-option-kids-create",
+  "note": "The Wild Robot was escalated (off-allowlist children's title); the human replied \"2\", selecting the Kids create_book option. The librarian must submit exactly that option's create_book (library kids); guard 7 honours it only on an exact match.",
+  "arrival": {
+    "source": "libation",
+    "source_id": "B01MQ0ZNRH",
+    "folder": "The Wild Robot [B01MQ0ZNRH]",
+    "files": [
+      {
+        "name": "The Wild Robot.m4b",
+        "kind": "m4b",
+        "size": 8000,
+        "probe": {
+          "duration": 13680,
+          "tags": {
+            "title": "The Wild Robot",
+            "album": "The Wild Robot",
+            "artist": "Peter Brown",
+            "album_artist": "Kate Atwater",
+            "series": "The Wild Robot",
+            "series-part": "1",
+            "genre": "Children's Audiobooks",
+            "date": "2016",
+            "audible_asin": "B01MQ0ZNRH"
+          },
+          "chapters": [
+            "Opening Credits",
+            "1. The Ocean",
+            "2. The Island"
+          ],
+          "chapter_count": 80
+        }
+      }
+    ]
+  },
+  "library": [
+    {
+      "id": 1201,
+      "title": "Magic Tree House: Dinosaurs Before Dark",
+      "authors": [
+        "Mary Pope Osborne"
+      ],
+      "files": [
+        {
+          "format": "m4b",
+          "filename": "1. Dinosaurs Before Dark.m4b",
+          "sizeBytes": 300000000,
+          "durationSeconds": 3000
+        }
+      ],
+      "libraryName": "Kids Audiobooks",
+      "seriesName": "Magic Tree House",
+      "seriesIndex": 1,
+      "publishedYear": 1992
+    }
+  ],
+  "kids_lists": {
+    "allow": {
+      "series": [
+        "Magic Tree House"
+      ],
+      "asins": [],
+      "authors": []
+    },
+    "deny": {
+      "series": [],
+      "asins": [],
+      "authors": []
+    }
+  },
+  "answered": {
+    "escalation": {
+      "question": "\"The Wild Robot\" by Peter Brown (audiobook, 3.8 h, Audible genre Children's Audiobooks) matches nothing in the library and its series is not on the Kids allowlist. Which library should it go in?",
+      "options": [
+        {
+          "label": "1. New book in Library (adult)",
+          "intent": {
+            "kind": "create_book",
+            "library": "adult",
+            "metadata": {
+              "title": "The Wild Robot",
+              "authors": [
+                "Peter Brown"
+              ],
+              "series": "The Wild Robot",
+              "seriesIndex": 1,
+              "publishedYear": 2016,
+              "language": "en",
+              "audibleId": "B01MQ0ZNRH",
+              "narrators": [
+                "Kate Atwater"
+              ]
+            },
+            "reason": "New book; the human chose the adult library.",
+            "readalong": true
+          }
+        },
+        {
+          "label": "2. New book in Kids Audiobooks",
+          "intent": {
+            "kind": "create_book",
+            "library": "kids",
+            "metadata": {
+              "title": "The Wild Robot",
+              "authors": [
+                "Peter Brown"
+              ],
+              "series": "The Wild Robot",
+              "seriesIndex": 1,
+              "publishedYear": 2016,
+              "language": "en",
+              "audibleId": "B01MQ0ZNRH",
+              "narrators": [
+                "Kate Atwater"
+              ]
+            },
+            "reason": "Children's novel; the human chose Kids.",
+            "readalong": true
+          }
+        },
+        {
+          "label": "3. Leave it in intake for me"
+        }
+      ],
+      "recommendation": "2. New book in Kids Audiobooks — it is a children's novel (Audible genre Children's Audiobooks)."
+    },
+    "reply": "2"
+  },
+  "expect": {
+    "kind_in": [
+      "create_book"
+    ],
+    "library": "kids",
+    "title_contains": "The Wild Robot"
+  }
+}

@@ -17,10 +17,13 @@ FILED = "filed"
 DUPLICATE = "duplicate"
 FAILED = "failed"
 RETRYABLE = "retryable"
+# Plan 2: the executor is mid-filing. The arrival's `exec` journal says which
+# step; app/executor.py's Executor.resume() owns every arrival in this state.
+EXECUTING = "executing"
 
 ARRIVAL_STATES = frozenset({
     READY, PROPOSED, NEEDS_DECISION, ANSWERED, DEFERRED, SIMULATED,
-    FILED, DUPLICATE, FAILED, RETRYABLE,
+    FILED, DUPLICATE, FAILED, RETRYABLE, EXECUTING,
 })
 
 # An arrival is offerable to the librarian run when it's freshly ready or has
@@ -35,16 +38,23 @@ APPROVED = "approved"
 REJECTED = "rejected"
 GUARD_REJECTED = "guard-rejected"
 SIMULATED_I = "simulated"
+EXECUTED = "executed"          # Plan 2: the executor filed it
+EXEC_FAILED = "exec-failed"    # Plan 2: the executor gave up (human looks)
 
-INTENT_STATES = frozenset({PROPOSED_I, APPROVED, REJECTED, GUARD_REJECTED, SIMULATED_I})
+INTENT_STATES = frozenset({
+    PROPOSED_I, APPROVED, REJECTED, GUARD_REJECTED, SIMULATED_I, EXECUTED, EXEC_FAILED,
+})
 
-# --- intent kinds (P1 set; update_metadata arrives in Plan 2) -------------
+# --- intent kinds -----------------------------------------------------------
 ATTACH = "attach"
 CREATE_BOOK = "create_book"
 ESCALATE = "escalate"
 DEFER = "defer"
+# Plan 2, Task 3: correct identity/series metadata on the book an arrival is
+# attached to, in the same run as that attach.
+UPDATE_METADATA = "update_metadata"
 
-INTENT_KINDS = frozenset({ATTACH, CREATE_BOOK, ESCALATE, DEFER})
+INTENT_KINDS = frozenset({ATTACH, CREATE_BOOK, ESCALATE, DEFER, UPDATE_METADATA})
 
 
 @dataclass

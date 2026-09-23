@@ -43,6 +43,8 @@ on `POLL_INTERVAL`; an unreachable device is a normal state, not an error.
 | `STATE_DIR` | `/state` | ledger (Longhorn, backed up) |
 | `CLEANUP_ENABLED` | `false` | delete device sources after verified upload |
 | `MAX_DELETES_PER_CYCLE` | `10` | cap on device deletions |
+| `HANDOFF_MODE` | `upload` | `upload` (BookOrbit) or `intake` (EPUBs + `<ASIN>.json` sidecar go to `INTAKE_DIR` for the librarian; comics still upload). Never switch back to `upload` while handed-off files sit in the intake |
+| `INTAKE_DIR` | `/intake` | librarian intake folder (files written 0664 for the shared group) |
 | `CONVERT_TIMEOUT` | `1800` | per-book conversion cap |
 | `METRICS_PORT` | `9090` | `/metrics` and `/healthz` |
 

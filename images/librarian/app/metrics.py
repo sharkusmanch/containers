@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 
-from app.states import ARRIVAL_STATES
+from app.states import ARRIVAL_STATES, NEEDS_DECISION
 
 HEARTBEAT = Gauge("librarian_heartbeat_timestamp", "Unix time of the last loop heartbeat")
 ARRIVALS = Gauge("librarian_arrivals", "Arrivals by state (rebuilt from the store each tick)", ["state"])
@@ -22,6 +22,27 @@ RUNS = Counter("librarian_runs", "claude -p runs by mode and outcome", ["mode", 
 RUN_COST = Counter("librarian_run_cost_usd", "Reported claude -p cost in USD")
 INTENTS = Counter("librarian_intents", "Intents by kind and final status", ["kind", "status"])
 INDEX_BOOKS = Gauge("librarian_index_books", "Books in the BookOrbit library index")
+NOTIFY_FAILURES = Counter("librarian_notify_failures_total",
+                          "Apprise pushes that gave up after MAX_ATTEMPTS retries")
+
+VIKUNJA_ERRORS = Counter("librarian_vikunja_errors_total",
+                         "Vikunja API calls that failed (escalation tasks, replies, closes)")
+
+# Final review I4: alerting. Outcome counters carry `source`; every label is
+# created at 0 up front so `increase()` sees the first filing/failure
+# (a labelled counter that appears at 1 has no increase to measure).
+FILED = Counter("librarian_filed_total", "Arrivals the executor filed into BookOrbit", ["source"])
+EXEC_FAILED = Counter("librarian_exec_failed_total",
+                      "Filings the executor gave up on (arrival failed; a human must look)", ["source"])
+_SOURCE_LABELS = ("manual", "libation", "kindle")      # app.config.SOURCES
+for _src in _SOURCE_LABELS:
+    FILED.labels(source=_src)
+    EXEC_FAILED.labels(source=_src)
+ESCALATIONS_OPEN = Gauge("librarian_escalations_open",
+                         "needs-decision arrivals a human is being asked about (live sources)")
+ESCALATION_OLDEST_AGE = Gauge("librarian_escalation_oldest_age_seconds",
+                              "Age of the oldest open question (seconds since its escalation "
+                              "was recorded); 0 when none is open")
 
 _started = time.time()
 _last_beat = 0.0   # mirrors HEARTBEAT without reaching into prometheus internals
@@ -39,6 +60,44 @@ def rebuild_arrivals(store) -> None:
     counts = store.counts()
     for state in ARRIVAL_STATES:
         ARRIVALS.labels(state=state).set(counts.get(state, 0))
+
+
+def count_outcome(counter, source) -> None:
+    """Increment an outcome counter; an unknown source is labelled "other"."""
+    counter.labels(source=source if source in _SOURCE_LABELS else "other").inc()
+
+
+def rebuild_escalations(arrivals, intents, asked, now: float | None = None,
+                        live_since=None) -> None:
+    """`librarian_escalations_open` / `..._oldest_age_seconds` from the
+    durable stores: needs-decision arrivals for which `asked(rec)` is true
+    (live sources -- non-live ones wait silently and must not page), aged
+    from their latest escalation's record time (wall clock, like the
+    store's own `ts`) -- or from the source's go-live (`live_since(source)`,
+    the live-since marker time) when that is later, so an escalation
+    recorded during the dry run does not page the moment its source goes
+    live."""
+    now = time.time() if now is None else now
+    open_n = 0
+    oldest = 0.0
+    for rec in arrivals.by_state(NEEDS_DECISION):
+        if not asked(rec):
+            continue
+        open_n += 1
+        try:
+            esc = intents.latest_escalation(rec["key"])
+        except Exception:          # a bad record must not cost the tick its metrics
+            esc = None
+        since = (esc or {}).get("ts") or rec.get("ts") or now
+        try:
+            went_live = live_since(rec.get("source")) if live_since is not None else None
+        except Exception:
+            went_live = None
+        if isinstance(went_live, (int, float)):
+            since = max(since, went_live)
+        oldest = max(oldest, now - since)
+    ESCALATIONS_OPEN.set(open_n)
+    ESCALATION_OLDEST_AGE.set(max(0.0, oldest))
 
 
 class _Handler(BaseHTTPRequestHandler):
