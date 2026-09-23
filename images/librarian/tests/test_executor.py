@@ -927,6 +927,87 @@ def test_resume_after_link_before_unlink_different_inode_fails(env, monkeypatch)
     assert env.fake.scans() == []
 
 
+def _unlinks_recorded(monkeypatch):
+    real = os.unlink
+    calls = []
+
+    def unlink(p, *a, **k):
+        calls.append(str(p))
+        return real(p, *a, **k)
+    monkeypatch.setattr(executor_mod.os, "unlink", unlink)
+    return calls
+
+
+def test_resume_symlink_at_dst_pointing_to_src_fails_and_unlinks_nothing(env, monkeypatch):
+    """Final review C1: os.path.samefile follows symlinks, so a symlink at
+    dst pointing at src read as "our own hard link" and src -- the only
+    real copy -- was unlinked. lstat identity + regular files only."""
+    arr, rec = _crash_between_link_and_unlink(env, monkeypatch)
+    src, dst = rec["exec"]["src"], rec["exec"]["dst"]
+    os.unlink(dst)
+    os.symlink(src, dst)
+    calls = _unlinks_recorded(monkeypatch)
+
+    r = env.executor().resume(rec)
+
+    assert r.state == "failed", r.detail
+    assert calls == []
+    assert os.path.isfile(src) and not os.path.islink(src)
+    assert os.path.islink(dst)
+    assert env.fake.scans() == []
+
+
+def test_resume_symlink_at_src_pointing_to_dst_fails_and_unlinks_nothing(env, monkeypatch):
+    arr, rec = _crash_between_link_and_unlink(env, monkeypatch)
+    src, dst = rec["exec"]["src"], rec["exec"]["dst"]
+    os.unlink(src)
+    os.symlink(dst, src)
+    calls = _unlinks_recorded(monkeypatch)
+
+    r = env.executor().resume(rec)
+
+    assert r.state == "failed", r.detail
+    assert calls == []
+    assert os.path.islink(src) and os.path.isfile(dst)
+    assert env.fake.scans() == []
+
+
+def test_resume_same_inode_with_changed_content_fails_before_unlink(env, monkeypatch):
+    """Same inode but the bytes are no longer the arrival's: re-hash dst
+    against arrival.sha256 before the irreversible unlink."""
+    arr, rec = _crash_between_link_and_unlink(env, monkeypatch)
+    src, dst = rec["exec"]["src"], rec["exec"]["dst"]
+    with open(dst, "ab") as f:
+        f.write(b"tampered")
+    calls = _unlinks_recorded(monkeypatch)
+
+    r = env.executor().resume(rec)
+
+    assert r.state == "failed", r.detail
+    assert "sha256" in r.detail
+    assert calls == []
+    assert os.path.isfile(src) and os.path.isfile(dst)
+    assert env.fake.scans() == []
+
+
+def test_resume_dst_symlink_with_src_gone_fails(env, monkeypatch):
+    """src absent, dst a symlink to a file with the arrival's bytes: never
+    treated as a completed move (dst must be a regular file)."""
+    arr, rec = _crash_between_link_and_unlink(env, monkeypatch)
+    src, dst = rec["exec"]["src"], rec["exec"]["dst"]
+    elsewhere = env.tmp / "elsewhere.m4b"
+    os.link(dst, elsewhere)
+    os.unlink(dst)
+    os.unlink(src)
+    os.symlink(elsewhere, dst)
+
+    r = env.executor().resume(rec)
+
+    assert r.state == "failed", r.detail
+    assert os.path.islink(dst) and elsewhere.exists()
+    assert env.fake.scans() == []
+
+
 def test_resume_before_link_is_retryable_and_restores_arrival(env, monkeypatch):
     arr = env.libation(asin="B0NEWBOOK1", title="New Book")
     ex = env.executor()

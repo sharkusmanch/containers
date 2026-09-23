@@ -35,6 +35,7 @@ and `os.rmdir` of our OWN still-empty `[lib-<sha12>]` dir on a failed create.
 """
 import errno
 import os
+import stat
 import threading
 import time
 from dataclasses import dataclass, field
@@ -94,6 +95,28 @@ class _Integrity(_Fail):
 MAX_ATTEMPTS = 5                 # after-move attempts before `failed` (spec: 5 retries)
 HASH_BEAT_BYTES = 64 << 20       # beat() at least every 64 MiB while hashing
 _PERMANENT_ERRNOS = frozenset({errno.ENAMETOOLONG, errno.EACCES, errno.EPERM, errno.EROFS})
+
+
+def _is_regular(path) -> bool:
+    """A regular file itself -- never through a symlink (lstat)."""
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
+
+
+def _not_our_hard_link(src, dst) -> str | None:
+    """None iff `src` and `dst` are both regular files (lstat, symlinks not
+    followed) sharing one (st_dev, st_ino); else why not."""
+    try:
+        s, d = os.lstat(src), os.lstat(dst)
+    except OSError as e:
+        return f"cannot lstat source/destination: {type(e).__name__}"
+    if not (stat.S_ISREG(s.st_mode) and stat.S_ISREG(d.st_mode)):
+        return "source or destination is not a regular file (symlink?)"
+    if (s.st_dev, s.st_ino) != (d.st_dev, d.st_ino):
+        return "source and destination are different files"
+    return None
 
 
 class Executor:
@@ -774,8 +797,15 @@ class Executor:
                 if src_p and not dst_p and step != "scanned":
                     return restore()
                 if src_p and dst_p and step in ("linked", "unlinked"):
-                    if not os.path.samefile(src, dst):
-                        return fail("source and destination are different files")
+                    # final review C1: lstat identity, never samefile (which
+                    # follows symlinks -- a symlink at dst pointing at src
+                    # would have passed and src, the only copy, been unlinked)
+                    why = _not_our_hard_link(src, dst)
+                    if why:
+                        return fail(why)
+                    if self._hash(dst) != ctx.get("sha256"):
+                        return fail("the destination's sha256 does not match the arrival; "
+                                    "nothing unlinked")
                     # our own hard link: finishing the unlink is the rest of the move
                     fsops.require_under(src, ctx["staging_dir"], "unlink source")
                     ctx["linked"] = True
@@ -784,6 +814,8 @@ class Executor:
                     ctx["moved"] = True
                     return self._continue(ctx, "scanned")
                 if not src_p and dst_p:
+                    if not _is_regular(dst):
+                        return fail("the destination is not a regular file")
                     if self._hash(dst) != ctx.get("sha256"):
                         return fail("the destination's sha256 does not match the arrival")
                     ctx["moved"] = True
