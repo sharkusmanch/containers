@@ -266,7 +266,7 @@ def test_second_tick_without_changes_starts_no_run(tmp_path, svc_factory):
         clock.t += 500
         svc.tick()
     assert model.calls == ["librarian"]
-    assert svc.arrivals.get(only_key(svc))["state"] == states.READY
+    assert svc.arrivals.get(only_key(svc))["state"] == states.NEEDS_DECISION   # final review I2: left alone -> escalated, not re-run
 
 
 def test_burst_of_arrivals_is_one_run(tmp_path, svc_factory):
@@ -321,8 +321,8 @@ def test_guard_rejected_only_run_does_not_reoffer_until_change(tmp_path, svc_fac
         svc.tick()
     assert model.calls == ["librarian"]
     key = only_key(svc)
-    assert [r["state"] for r in svc.intents.store.all()] == [states.GUARD_REJECTED]
-    assert svc.arrivals.get(key)["state"] == states.READY
+    assert [r["state"] for r in svc.intents.store.all()] == [states.GUARD_REJECTED, states.SIMULATED_I]
+    assert svc.arrivals.get(key)["state"] == states.NEEDS_DECISION   # final review I2: left alone -> escalated, not re-run
     for _ in range(3):
         clock.t += 4000                                      # well past retry_after too
         svc.tick()
@@ -835,7 +835,7 @@ def test_restart_does_not_reoffer_arrival_the_last_run_left_alone(tmp_path, svc_
         clock.t += 4000
         svc2.tick()
     assert model2.calls == []
-    assert svc2.arrivals.get(only_key(svc2))["state"] == states.READY
+    assert svc2.arrivals.get(only_key(svc2))["state"] == states.NEEDS_DECISION   # final review I2: left alone -> escalated, not re-run
 
 
 def test_restart_still_offers_never_offered_arrival(tmp_path, svc_factory):
@@ -990,7 +990,7 @@ def test_interrupted_run_is_not_rehold_on_every_restart(tmp_path, svc_factory):
     clock.t += 3600 + 11
     svc1.tick()
     assert model1.calls == ["librarian"]
-    assert svc1.arrivals.get(key)["state"] == states.READY
+    assert svc1.arrivals.get(key)["state"] == states.NEEDS_DECISION   # final review I2: left alone -> escalated, not re-run
     svc1.stop()
     from app.store import read_records
     synthetic = [r for r in read_records(svc1.runs_path) if r.get("outcome") == "interrupted"]

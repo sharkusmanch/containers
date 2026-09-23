@@ -25,7 +25,8 @@ so the run's own state changes never re-trigger it. A run starts only when
 some marked, offerable key exists and the newest mark is at least
 `debounce` seconds old -- a burst of arrivals becomes one run, and an
 arrival the librarian looked at and left alone is not offered again until
-something about it changes. The markers are in-memory, but a restart
+something about it changes -- which is why finalize escalates such an
+arrival to a human (final review I2, `execution.escalate_undecided`). The markers are in-memory, but a restart
 rebuilds them from runs.jsonl (`_seed_debounce`, final review I3): an
 arrival the last run offered and left alone stays unmarked, and the
 arrivals of an interrupted or failed run stay held for `retry_after` -- a
@@ -186,6 +187,21 @@ class Service:
                     last[k] = r
         pending: dict[str, set] = {}
         intents = self.intents.store.all()
+        # final review I2: an arrival the run left alone (still offerable,
+        # unchanged since the run started) is escalated like finalize does
+        undecided: dict[str, list] = {}
+        for rec in self.arrivals.all():
+            if rec.get("state") not in states.OFFERABLE:
+                continue
+            r = last.get(rec["key"])
+            if r is None or "outcome" not in r or r.get("failed", r.get("outcome") != "ok"):
+                continue
+            if (rec.get("ts") or 0) <= (r.get("started_ts") or 0):
+                undecided.setdefault(r.get("run_id"), []).append(rec["key"])
+        for run_id, keys in sorted(undecided.items()):
+            ts = next((r.get("started_ts") for r in runs if r.get("run_id") == run_id
+                       and "outcome" in r), None)
+            execution.escalate_undecided(self, run_id, sorted(keys), unchanged_since=ts or 0)
         for rec in self.arrivals.by_state(states.PROPOSED):
             key = rec["key"]
             r = last.get(key)

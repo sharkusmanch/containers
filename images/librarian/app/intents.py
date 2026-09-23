@@ -342,7 +342,7 @@ class IntentBook:
     # --- executor escalations (Plan 2 Task 4) ------------------------------------
 
     def record_escalation(self, run_id: str, arrival: str, question: str, *, reason: str,
-                          options: list | None = None) -> str:
+                          options: list | None = None, origin: str = "executor") -> str:
         """File a code-authored escalation for a human (the executor failed,
         a pre-execution guard refused, a filing needs a look). Terminal at
         once (`simulated`: the "would do" is recorded) exactly like the
@@ -352,7 +352,7 @@ class IntentBook:
         payload = {
             "kind": ESCALATE, "arrival": arrival, "question": question,
             "options": options or [{"label": "Leave it for me"}],
-            "recommendation": "decide", "origin": "executor",
+            "recommendation": "decide", "origin": origin,
         }
         esc_id = self._next_id(run_id)
         self.store.record(esc_id, SIMULATED_I, run_id=run_id, arrival=arrival, kind=ESCALATE,

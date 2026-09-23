@@ -98,13 +98,52 @@ def finalize(svc, run_id: str, keys: list) -> None:
     live, other = split_live(svc, keys)
     if not live:
         svc.intents.finalize_dry_run(run_id, index=svc.index)     # P1 behaviour, all of it
+        escalate_undecided(svc, run_id, keys)
         return
     if other:
         svc.intents.finalize_dry_run(run_id, index=svc.index, only_arrivals=set(other))
     queued = svc.intents.finalize_live(run_id, index=svc.index, only_arrivals=set(live),
                                        now=svc.clock())
+    escalate_undecided(svc, run_id, keys)
     if svc.executor is not None:
         run_due(svc, prefer=queued)
+
+
+def escalate_undecided(svc, run_id: str, keys, *, unchanged_since=None) -> list:
+    """Final review I2: an arrival the run was offered that ends it with no
+    accepted intent -- still `ready` or `answered` -- is never offered
+    again by itself (the debounce treats "offered and left alone" as
+    settled), so it would be stuck. It becomes `needs-decision` with a
+    fresh core escalation ("the librarian made no decision: <guard
+    reasons>") and its human answer is cleared: the human is asked again,
+    no paid re-run happens by itself. `unchanged_since` (startup repair)
+    skips an arrival whose record changed after that store timestamp."""
+    done = []
+    with svc.lock:
+        intents = svc.intents.store.all()
+        for key in keys:
+            rec = svc.arrivals.get(key)
+            if rec is None or rec.get("state") not in states.OFFERABLE:
+                continue
+            if unchanged_since is not None and (rec.get("ts") or 0) > unchanged_since:
+                continue
+            reasons = []
+            for r in intents:
+                if (r.get("run_id") == run_id and r.get("arrival") == key
+                        and r.get("state") == states.GUARD_REJECTED and r.get("reason")):
+                    why = f"{r.get('kind')} refused: {r.get('reason')}"
+                    if why not in reasons:
+                        reasons.append(why)
+            question = "The librarian made no decision"
+            question += (": " + "; ".join(reasons)) if reasons else " (it submitted no accepted intent)."
+            if rec.get("state") == states.ANSWERED:
+                question += " Your earlier answer was not enough to act on; please answer again."
+            svc.intents.record_escalation(run_id, key, question, reason="no decision", origin="core")
+            svc.arrivals.record(key, states.NEEDS_DECISION, human_answer=None,
+                                detail="the librarian made no decision")
+            logger.warning("arrival %s: the librarian made no decision; escalated", log_safe(key))
+            done.append(key)
+    return done
 
 
 # --- the queue ------------------------------------------------------------------------
