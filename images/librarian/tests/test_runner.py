@@ -10,6 +10,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 
 import pytest
 
@@ -101,8 +102,10 @@ def test_child_env_excludes_bookorbit_includes_oauth(tmp_path):
     assert not any(k.startswith("BOOKORBIT") for k in env)
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-secret-token"
     assert env["PATH"] == "/usr/bin"
-    assert env["HOME"] == run_dir
-    assert env["CLAUDE_CONFIG_DIR"] == os.path.join(run_dir, "claude-config")
+    # HOME/CLAUDE_CONFIG_DIR are derived from the RESOLVED run_dir (fix
+    # round 2 cheap item), not whatever spelling the caller passed.
+    assert env["HOME"] == os.path.realpath(run_dir)
+    assert env["CLAUDE_CONFIG_DIR"] == os.path.join(os.path.realpath(run_dir), "claude-config")
     assert env["TZ"] == "America/Los_Angeles"
 
 
@@ -118,9 +121,9 @@ def test_child_env_ignores_base_env_home_and_config_dir(tmp_path):
         "CLAUDE_CONFIG_DIR": "/root/.claude",
     }
     env = child_env(settings, base_env, run_dir)
-    assert env["HOME"] == run_dir
+    assert env["HOME"] == os.path.realpath(run_dir)
     assert env["HOME"] != "/root"
-    assert env["CLAUDE_CONFIG_DIR"] == os.path.join(run_dir, "claude-config")
+    assert env["CLAUDE_CONFIG_DIR"] == os.path.join(os.path.realpath(run_dir), "claude-config")
     assert env["CLAUDE_CONFIG_DIR"] != "/root/.claude"
 
 
@@ -194,6 +197,17 @@ def test_granted_tools_empty_when_no_init_line(tmp_path):
 def test_granted_tools_empty_transcript(tmp_path):
     path = tmp_path / "transcript.jsonl"
     path.write_text("")
+    assert granted_tools(str(path)) == []
+
+
+def test_granted_tools_ignores_non_list_tools_value(tmp_path):
+    """Fix round 2, cheap item: a malformed `tools` field (not a list)
+    must not be silently reinterpreted -- e.g. `list("mcp__x")` would
+    wrongly explode a string into single characters, which would then
+    (wrongly) look like every "tool" fails the mcp__librarian__ prefix
+    check."""
+    path = tmp_path / "transcript.jsonl"
+    path.write_text(json.dumps({"type": "system", "subtype": "init", "tools": "mcp__librarian__x"}) + "\n")
     assert granted_tools(str(path)) == []
 
 
@@ -359,6 +373,51 @@ def test_run_claude_timeout_kills_process_group(tmp_path, monkeypatch):
     assert killpg_calls == [(13131, signal.SIGKILL)]
     # timeout (0.1s) is far shorter than the 30s tick interval.
     assert ticks == []
+
+
+def test_run_claude_returns_promptly_with_real_pipe_reader_never_stops(tmp_path):
+    """Fix round 2, Important (regression): a prior version of run_claude
+    force-closed proc.stdout from the main thread to unstick a wedged
+    reader. Closing a REAL pipe's read end while the reader thread is
+    blocked inside a read() syscall on that exact fd is a race that can
+    HANG instead of unblocking (this hung the test suite outright during
+    development). run_claude must never do that -- it should return
+    within its own deadline (plus one bounded reader-join) by abandoning
+    the daemon reader thread instead, even with a genuinely-blocked real
+    pipe."""
+    read_fd, write_fd = os.pipe()  # write end intentionally never closed/written
+
+    class _RealPipeNeverExitsProc:
+        def __init__(self, pid=24680):
+            self.stdout = os.fdopen(read_fd, "rb")
+            self.pid = pid
+
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired(cmd="fake", timeout=timeout or 0)
+
+    def fake_popen(argv, **kwargs):
+        return _RealPipeNeverExitsProc()
+
+    started = time.monotonic()
+    try:
+        result = run_claude(
+            ["claude", "-p", "x"],
+            cwd=str(tmp_path),
+            env={},
+            timeout=1,
+            transcript_path=str(tmp_path / "t.jsonl"),
+            popen=fake_popen,
+            killpg=lambda *a, **k: None,
+        )
+    finally:
+        # Release the write end so the abandoned reader thread can
+        # eventually see EOF and exit cleanly instead of blocking forever
+        # in the background for the rest of the test session.
+        os.close(write_fd)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 10, f"run_claude took {elapsed}s -- it must not hang waiting on the reader thread"
+    assert result.timed_out is True
 
 
 def test_run_claude_stdout_eof_but_process_never_exits_times_out(tmp_path):
@@ -579,6 +638,38 @@ def test_run_claude_null_usage_and_result_default_to_empty(tmp_path):
     assert result.result_text == ""
     assert result.usage == {}
     assert result.ok is True  # exit 0, not is_error, not timed out, got a result
+
+
+def test_run_claude_transcript_write_failure_keeps_draining_and_marks_result(tmp_path):
+    """Fix round 2, minor 3: a transcript-write failure (e.g. ENOSPC) must
+    be logged and recorded, not silently swallowed -- and must not stop
+    draining stdout (an unread child pipe eventually fills and blocks the
+    child). Simulated here by pointing transcript_path at a directory, so
+    the reader's `open(transcript_path, "w")` fails immediately with
+    IsADirectoryError; the result line must still be parsed from stdout
+    even though nothing could be written to disk."""
+    transcript_path_is_a_dir = tmp_path / "t.jsonl"
+    transcript_path_is_a_dir.mkdir()
+
+    def fake_popen(argv, **kwargs):
+        return _FakeProc([RESULT_LINE])
+
+    result = run_claude(
+        ["claude", "-p", "x"],
+        cwd=str(tmp_path),
+        env={},
+        timeout=5,
+        transcript_path=str(transcript_path_is_a_dir),
+        popen=fake_popen,
+        killpg=lambda *a, **k: None,
+    )
+    assert result.error_reason == "transcript_write_failed"
+    assert result.ok is False
+    # stdout was still drained and parsed even though nothing could be
+    # written to disk -- proves the reader didn't just bail.
+    assert result.result_text == "done"
+    assert result.exit_code == 0
+    assert result.timed_out is False
 
 
 def test_run_claude_rejects_oversized_argv_element(tmp_path):

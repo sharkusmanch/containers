@@ -192,7 +192,7 @@ def main() -> None:
             # Belt-and-suspenders: BookOrbit creds must never reach here even
             # though child_env already allowlists them out.
             assert not any(k.startswith("BOOKORBIT") for k in env), "child_env leaked BookOrbit creds"
-            assert env["HOME"] == run_dir, "child_env did not derive HOME from run_dir"
+            assert env["HOME"] == os.path.realpath(run_dir), "child_env did not derive HOME from the resolved run_dir"
 
             argv = claude_argv(settings, prompt, mcp_config, MODEL)
             expected_argv = [
