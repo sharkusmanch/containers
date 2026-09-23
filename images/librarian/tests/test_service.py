@@ -699,3 +699,62 @@ def test_invalid_kids_lists_logged_once(tmp_path, svc_factory, caplog):
     for _ in range(3):
         svc.tick()
     assert sum("kids lists invalid" in r.getMessage() for r in caplog.records) == 1
+
+
+# --- final review I1: reviewer trailer counts filings only ------------------------
+
+
+def test_reviewer_trailer_counts_filings_only(tmp_path, svc_factory):
+    prompts = []
+
+    def librarian(call):
+        _, arrivals = call("GET", "/arrivals")
+        keys = sorted(a["key"] for a in arrivals)
+        call("GET", f"/arrivals/{q(keys[0])}")
+        st, body = call("POST", "/intents", {"kind": "attach", "arrival": keys[0], "book_id": 2,
+                                             "reason": "same audible asin"})
+        assert st == 200 and body["status"] == states.PROPOSED_I, body
+        st, body = call("POST", "/intents", {"kind": "escalate", "arrival": keys[1], "question": "which?",
+                                             "options": [{"label": "a"}, {"label": "b"}],
+                                             "recommendation": "a"})
+        assert st == 200 and body["status"] == states.PROPOSED_I, body
+
+    def reviewer(call):
+        st, props = call("GET", "/proposals")
+        assert [p["kind"] for p in props] == ["attach"]
+
+    class Capture(FakeModel):
+        def __call__(self, argv, **kw):
+            prompts.append(argv[argv.index("-p") + 1])
+            return super().__call__(argv, **kw)
+
+    model = Capture(librarian=librarian, reviewer=reviewer)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    add_libation(tmp_path, asin="B0SECOND00", data=b"OTHER" * 50, title="Second")
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian", "reviewer"]
+    assert "1 proposal(s)" in prompts[1]
+
+
+def test_escalation_only_run_launches_no_reviewer(tmp_path, svc_factory):
+    def librarian(call):
+        _, arrivals = call("GET", "/arrivals")
+        for a in arrivals:
+            st, body = call("POST", "/intents", {"kind": "escalate", "arrival": a["key"], "question": "?",
+                                                 "options": [{"label": "a"}, {"label": "b"}],
+                                                 "recommendation": "a"})
+            assert st == 200, body
+
+    model = FakeModel(librarian=librarian)
+    clock = Clock()
+    svc = svc_factory(model, clock)
+    add_libation(tmp_path)
+    for dt in (0, 1, 11):
+        clock.t += dt
+        svc.tick()
+    assert model.calls == ["librarian"]
+    assert svc.arrivals.get(only_key(svc))["state"] == states.NEEDS_DECISION

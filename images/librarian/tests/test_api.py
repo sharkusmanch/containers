@@ -971,3 +971,65 @@ def test_invalid_utf8_body_is_400_not_500(tmp_path):
         assert json_body_of(resp)["error"] == "bad_request"
     finally:
         srv.stop()
+
+
+# --- final review I1: reviewer sees and rules on filings only ------------------
+
+
+def test_reviewer_cannot_see_or_rule_on_escalations(tmp_path):
+    lib_run = Run(run_id="lib1", token="libtok", mode="librarian", arrival_keys=["a1", "a2"])
+    core = FakeCore(tmp_path, lib_run)
+    core._dossiers["a1"] = make_dossier("a1", primary_kind="epub", candidates=[2])
+    core._dossiers["a2"] = make_dossier("a2")
+    srv, port = start(core)
+    try:
+        status, filing = _submit_via_api(port, "libtok", "a1", 2)
+        assert status == 200 and filing["status"] == PROPOSED_I
+        status, esc = request(port, "POST", "/intents", token="libtok", body={
+            "kind": "escalate", "arrival": "a2", "question": "which?",
+            "options": [{"label": "a"}, {"label": "b"}], "recommendation": "a"})
+        assert status == 200 and esc["status"] == PROPOSED_I, esc
+
+        core._run = Run(run_id="rev1", token="revtok", mode="reviewer", arrival_keys=[], review_of="lib1")
+        status, proposals = request(port, "GET", "/proposals", token="revtok")
+        assert status == 200
+        assert [p["intent_id"] for p in proposals] == [filing["intent_id"]]
+        status, arrivals = request(port, "GET", "/arrivals", token="revtok")
+        assert [a["key"] for a in arrivals] == ["a1"]
+
+        status, result = request(port, "POST", "/reviews", token="revtok",
+                                  body={"intent_id": esc["intent_id"], "verdict": "reject", "argument": "no"})
+        assert status == 409, result
+        assert core.intents.store.get(esc["intent_id"])["state"] == PROPOSED_I
+    finally:
+        srv.stop()
+
+
+# --- final review minor 13: unreadable EPUB is a 404, not a 500 --------------
+
+
+def test_book_search_missing_epub_file_is_404_json(tmp_path):
+    run = Run(run_id="r1", token="tok", mode="librarian", arrival_keys=["a1"])
+    core = FakeCore(tmp_path, run)          # no epub_root fixture: the file does not exist
+    srv, port = start(core)
+    try:
+        status, payload = request(port, "GET", "/books/3/search?q=dragon", token="tok")
+        assert status == 404
+        assert payload["error"] == "not_found"
+    finally:
+        srv.stop()
+
+
+def test_book_search_corrupt_epub_is_404_json(tmp_path):
+    d = tmp_path / "media" / "books" / "Library" / "Author Three" / "Book Three"
+    os.makedirs(d, exist_ok=True)
+    (d / "book3.epub").write_bytes(b"this is not a zip file")
+    run = Run(run_id="r1", token="tok", mode="librarian", arrival_keys=["a1"])
+    core = FakeCore(tmp_path, run)
+    srv, port = start(core)
+    try:
+        status, payload = request(port, "GET", "/books/3/search?q=dragon", token="tok")
+        assert status == 404
+        assert payload["error"] == "not_found"
+    finally:
+        srv.stop()

@@ -406,3 +406,53 @@ def test_would_do_attach_without_index_does_not_crash():
     intent = attach_intent(412)
     steps = would_do(intent)
     assert any("scan" in s for s in steps)
+
+
+# --- final review I1: the reviewer rules on filings only ----------------------
+
+
+def test_proposals_excludes_escalate_and_defer(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+
+    book.submit(run, attach_intent(412), ctx_factory_for(dossier, index, run))
+    book.submit(run, escalate_intent(arrival=OTHER_ARRIVAL),
+                ctx_factory_for(make_dossier(key=OTHER_ARRIVAL), index, run))
+
+    props = book.proposals(run.run_id)
+    assert [p["kind"] for p in props] == [ATTACH]
+
+
+def test_apply_review_refuses_escalate_and_defer(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    index = FakeIndex({})
+    esc = book.submit(run, escalate_intent(), ctx_factory_for(make_dossier(), index, run))
+    dfr = book.submit(run, defer_intent(arrival=OTHER_ARRIVAL),
+                      ctx_factory_for(make_dossier(key=OTHER_ARRIVAL), index, run))
+    reviewer_run = make_run(run_id="review1", mode="reviewer", review_of=run.run_id)
+
+    for submitted in (esc, dfr):
+        for verdict in ("approve", "reject"):
+            result = book.apply_review(reviewer_run, submitted["intent_id"], verdict, "x")
+            assert result.get("error") == "conflict", result
+        assert intents_store.get(submitted["intent_id"])["state"] == PROPOSED_I
+    # no auto-escalation was filed for them either
+    assert len(intents_store.all()) == 2
+
+
+def test_apply_review_refuses_a_reviewer_auto_escalation(tmp_path):
+    book, intents_store, arrivals_store = make_intent_book(tmp_path)
+    run = make_run()
+    dossier = make_dossier(candidates=[candidate(412)])
+    index = FakeIndex({412: make_book(412)})
+    submitted = book.submit(run, attach_intent(412), ctx_factory_for(dossier, index, run))
+    reviewer_run = make_run(run_id="review1", mode="reviewer", review_of=run.run_id)
+    esc_id = book.apply_review(reviewer_run, submitted["intent_id"], "reject", "wrong")["escalation_id"]
+
+    result = book.apply_review(reviewer_run, esc_id, "reject", "overrule the human")
+    assert result.get("error") == "conflict"
+    assert intents_store.get(esc_id)["state"] == PROPOSED_I
+

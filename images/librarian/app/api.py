@@ -445,7 +445,11 @@ def _build_handler(core):
                 return self._error(404, "not_found", "no plain EPUB for this book")
 
             q = (qs.get("q") or [""])[0]
-            hits = search_epub(real, q)
+            try:
+                hits = search_epub(real, q)
+            except Exception as e:  # missing/corrupt EPUB: a 404, not a 500
+                logger.warning("search in book %s failed: %s", book_id, type(e).__name__)
+                return self._error(404, "not_found", "EPUB is missing or unreadable")
             self._send_json(200, hits)
 
         # --- POST /intents -----------------------------------------------------

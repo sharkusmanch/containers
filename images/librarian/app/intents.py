@@ -59,6 +59,9 @@ from app.states import (
 _LIBRARY_NAME_FOR = {"adult": "Library", "kids": "Kids Audiobooks"}
 _LIBRARY_IDS = {"Library": 7, "Kids Audiobooks": 8}
 
+# Only filing intents are ever put before the reviewer (final review I1).
+_REVIEWABLE = frozenset({ATTACH, CREATE_BOOK})
+
 
 class IntentBook:
     def __init__(self, store, arrivals, lock, clock=time.time):
@@ -129,9 +132,17 @@ class IntentBook:
     # --- queries ---------------------------------------------------------------
 
     def proposals(self, run_id: str) -> list:
+        """The run's FILING intents still awaiting a reviewer verdict.
+
+        Escalations and deferrals are never reviewable (final review I1):
+        the reviewer argues against filings only (spec §3.5 step 4). Letting
+        it "approve"/"reject" an escalate would let it overrule a human
+        question -- including the auto-escalation its own rejection filed.
+        """
         return [
             r for r in self.store.all()
             if r.get("run_id") == run_id and r.get("state") == PROPOSED_I
+            and r.get("kind") in _REVIEWABLE
         ]
 
     # --- reviewer verdicts -------------------------------------------------------
@@ -166,7 +177,8 @@ class IntentBook:
             rec = self.store.get(intent_id)
             if rec is None:
                 return {"error": "not_found", "reason": f"no such intent {intent_id!r}"}
-            if rec.get("state") != PROPOSED_I or intent_id in run.reviewed:
+            if (rec.get("state") != PROPOSED_I or rec.get("kind") not in _REVIEWABLE
+                    or intent_id in run.reviewed):
                 return {"error": "conflict", "reason": "intent is not awaiting review"}
 
             run.reviewed.add(intent_id)

@@ -254,8 +254,10 @@ def _cycle(svc, keys, pre, lib_run, lib_prompt, rev_prompt, record) -> bool:
                   else f"librarian run {lib_outcome}")
         discard(svc, lib_run.run_id, pre, reason)
     else:
+        # proposals() is filings only (attach/create_book) -- escalations and
+        # deferrals are never put before the reviewer (final review I1).
         proposals = svc.intents.proposals(lib_run.run_id)
-        if any(p.get("kind") in (states.ATTACH, states.CREATE_BOOK) for p in proposals):
+        if proposals:
             rev_keys = []
             for p in proposals:
                 if p.get("arrival") not in rev_keys:
