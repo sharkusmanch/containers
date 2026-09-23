@@ -39,7 +39,6 @@ from dataclasses import dataclass, field
 from app import bookmeta, fsops, metrics, states
 from app.bookorbit import ScanError
 from app.fsops import sha12
-from app.intake import sha256_file
 from app.logutil import log_safe
 from app.policy import render_folder
 
@@ -82,6 +81,17 @@ class _Stop(Exception):
     """The service is stopping: never start another step."""
 
 
+class _Integrity(_Fail):
+    """A correctness failure retrying cannot fix (hash mismatch, ambiguous
+    locate, source still present after the move): failed at once, never
+    counted against the retry budget."""
+
+
+MAX_ATTEMPTS = 5                 # after-move attempts before `failed` (spec: 5 retries)
+HASH_BEAT_BYTES = 64 << 20       # beat() at least every 64 MiB while hashing
+_PERMANENT_ERRNOS = frozenset({errno.ENAMETOOLONG, errno.EACCES, errno.EPERM, errno.EROFS})
+
+
 class Executor:
     def __init__(self, settings, writer, index, arrivals, clock=time.time, sleep=time.sleep,
                  beat=metrics.beat, stopping=lambda: False):
@@ -113,12 +123,16 @@ class Executor:
                 return ExecResult(False, "failed", None,
                                   f"arrival {key} has an open journal for intent "
                                   f"{j.get('intent_id')}; refusing to start {iid}")
-            if isinstance(j, dict) and j.get("intent_id") == iid and (
+            if isinstance(j, dict) and (
                     (j.get("outcome") or {}).get("state") == "filed"
                     or j.get("moved") or j.get("linked")):
-                # filed, or failed after the file reached the library: replay
-                # the recorded outcome -- never restage or refile
-                return self._resume_locked(cur)
+                # filed, or the file already reached the library: never
+                # restage or refile, and never overwrite that journal
+                if j.get("intent_id") == iid:
+                    return self._resume_locked(cur)       # replays the outcome
+                return ExecResult(False, "failed", j.get("book_id"),
+                                  f"refusing intent {iid}: arrival {key} was already handled by "
+                                  f"intent {j.get('intent_id')} (its file reached the library)")
             return self._execute(iid, payload, cur)
 
     def resume(self, rec: dict) -> ExecResult:
@@ -141,8 +155,12 @@ class Executor:
 
     def _moves(self, ctx) -> list:
         if ctx.get("moved"):
-            return [(ctx["orig_primary"], ctx["dst"], ctx["size"])]
+            return [(ctx["orig_primary"], ctx.get("final_path") or ctx["dst"], ctx["size"])]
         return []
+
+    def _hash(self, path) -> str:
+        """sha256 of a (possibly multi-GB) file, beating the heartbeat."""
+        return fsops.hash_file(path, self.beat, HASH_BEAT_BYTES)
 
     # --- liveness -----------------------------------------------------------
     def _sleep(self, s):
@@ -207,6 +225,8 @@ class Executor:
                 self._prepare_create(ctx, payload, arrival)
             self._guard2(ctx["library_id"])
             self._check_stop()
+            if kind == states.ATTACH:
+                self._prepare_attach(ctx, payload)     # re-snapshot AFTER the wait
 
             sdir, items, staged_primary = fsops.plan_staging(arrival, self.intake_root)
             ctx.update(staging_dir=sdir, staged=items, src=staged_primary,
@@ -218,7 +238,7 @@ class Executor:
             except FileExistsError as e:
                 raise _Fail(f"cannot stage the arrival: {e}")
 
-            if sha256_file(ctx["src"]) != ctx["sha256"]:
+            if self._hash(ctx["src"]) != ctx["sha256"]:
                 raise _Fail(f"sha256 of {ctx['src']} no longer matches the arrival record")
             ctx["size"] = os.path.getsize(ctx["src"])
             self._check_stop()
@@ -236,7 +256,9 @@ class Executor:
 
             self._journal(ctx, "linked")
             if kind == states.CREATE_BOOK:
-                os.makedirs(os.path.dirname(ctx["dst_dir"]), exist_ok=True)
+                author_dir = os.path.dirname(ctx["dst_dir"])
+                ctx["created_author"] = not os.path.lexists(author_dir)
+                os.makedirs(author_dir, exist_ok=True)
                 try:
                     os.mkdir(ctx["dst_dir"])                   # exclusive
                 except FileExistsError:
@@ -253,7 +275,7 @@ class Executor:
                     raise _Fail(f"EXDEV: {ctx['src']} and {ctx['dst']} are on different "
                                 f"filesystems; refusing to copy")
                 raise
-            if sha256_file(ctx["dst"]) != ctx["sha256"]:
+            if self._hash(ctx["dst"]) != ctx["sha256"]:
                 return self._close(ctx, ExecResult(
                     False, "failed", ctx["book_id"],
                     f"linked {ctx['src']} -> {ctx['dst']} but the destination hash does not "
@@ -323,7 +345,9 @@ class Executor:
 
     # --- error handling -------------------------------------------------------
     def _before_move_error(self, ctx, e, staged) -> ExecResult:
-        state = "failed" if isinstance(e, (_Fail, fsops.UnsafePath)) else "retryable"
+        permanent = isinstance(e, (_Fail, fsops.UnsafePath)) or (
+            isinstance(e, OSError) and e.errno in _PERMANENT_ERRNOS)
+        state = "failed" if permanent else "retryable"
         msg = str(e) if isinstance(e, (_Retry, _Stop, _Fail, fsops.UnsafePath)) else \
             f"{type(e).__name__}: {log_safe(e)}"
         notes = []
@@ -331,6 +355,11 @@ class Executor:
             note = self._rmdir_own(ctx)
             if note:
                 notes.append(note)
+            author_dir = os.path.dirname(ctx.get("dst_dir") or "")
+            if author_dir and ctx.get("created_author") and os.path.isdir(author_dir) \
+                    and not os.listdir(author_dir):
+                notes.append(f"empty author dir {author_dir} left in the library (created by "
+                             f"this attempt; not removed)")
         if staged:
             err = fsops.unstage(ctx["staging_dir"], ctx["staged"], self.intake_root)
             if err:
@@ -343,15 +372,31 @@ class Executor:
         return self._close(ctx, res)
 
     def _after_move_error(self, ctx, e) -> ExecResult:
-        where = f"file is at {ctx['dst']} (from {ctx['orig_primary']}); staging {ctx.get('staging_dir')}"
-        if isinstance(e, (_Retry, _Stop, ScanError)):
-            ctx["last_error"] = str(e)
-            self._journal(ctx)              # stays open: resume continues at this step
+        """The file is in the library. Integrity failures close as `failed`
+        at once; anything else keeps the journal open at the current step
+        (resume continues there, never re-moving) until MAX_ATTEMPTS."""
+        where = (f"file is at {ctx.get('final_path') or ctx['dst']} (from {ctx['orig_primary']}); "
+                 f"staging {ctx.get('staging_dir')}")
+        msg = str(e) if isinstance(e, (_Retry, _Stop, _Fail, ScanError)) else \
+            f"{type(e).__name__}: {log_safe(e)}"
+        if isinstance(e, _Integrity):
+            return self._close(ctx, ExecResult(False, "failed", ctx.get("book_id"),
+                                               f"step {ctx['step']}: {msg}; {where}", self._moves(ctx)))
+        if isinstance(e, _Stop):
+            self._journal(ctx)              # a stop is not an attempt
             return ExecResult(False, "retryable", ctx.get("book_id"),
-                              f"step {ctx['step']} pending: {e}; {where}", self._moves(ctx))
-        msg = str(e) if isinstance(e, _Fail) else f"{type(e).__name__}: {log_safe(e)}"
-        return self._close(ctx, ExecResult(False, "failed", ctx.get("book_id"),
-                                           f"step {ctx['step']}: {msg}; {where}", self._moves(ctx)))
+                              f"step {ctx['step']} pending: {msg}; {where}", self._moves(ctx))
+        ctx["attempts"] = int(ctx.get("attempts") or 0) + 1
+        ctx["last_error"] = msg
+        if ctx["attempts"] >= MAX_ATTEMPTS:
+            return self._close(ctx, ExecResult(
+                False, "failed", ctx.get("book_id"),
+                f"step {ctx['step']} failed {ctx['attempts']} times, last: {msg}; {where}",
+                self._moves(ctx)))
+        self._journal(ctx)                  # stays open: resume continues at this step
+        return ExecResult(False, "retryable", ctx.get("book_id"),
+                          f"step {ctx['step']} pending (attempt {ctx['attempts']}/{MAX_ATTEMPTS}): "
+                          f"{msg}; {where}", self._moves(ctx))
 
     def _rmdir_own(self, ctx) -> str | None:
         d = ctx.get("dst_dir")
@@ -389,8 +434,13 @@ class Executor:
                 elif step == "renamed":
                     escalate = self._rename(ctx)
                 elif step == "cleaned":
-                    summary = fsops.cleanup(ctx["source"], ctx["staging_dir"], self.intake_root,
-                                            self._supplement_id(ctx))
+                    try:
+                        summary = fsops.cleanup(ctx["source"], ctx["staging_dir"],
+                                                self.intake_root, self._supplement_id(ctx))
+                    except Exception as ce:     # the book IS filed and verified
+                        note = (f"intake cleanup of {ctx['staging_dir']} failed: "
+                                f"{type(ce).__name__}: {log_safe(ce)}")
+                        escalate = f"{escalate}; {note}" if escalate else note
         except Exception as e:
             return self._after_move_error(ctx, e)
         detail = f"filed {ctx['dst']} into book {ctx['book_id']}"
@@ -440,14 +490,14 @@ class Executor:
         files = [f for f in d.get("files") or [] if isinstance(f, dict)]
         exact = [f for f in files if f.get("filename") == name and f.get("sizeBytes") == size]
         if len(exact) == 1:
-            return exact[0]
+            return exact[0], False
         before = {tuple(x) for x in (ctx.get("snapshot") or {}).get("files") or []}
         loose = [f for f in files if f.get("sizeBytes") == size
                  and str(f.get("filename") or "").lower().endswith(ext)
                  and (f.get("filename"), f.get("sizeBytes")) not in before]
-        return loose[0] if len(loose) == 1 else None
+        return (loose[0], True) if len(loose) == 1 else (None, False)
 
-    def _verify_local(self, d, f, ctx) -> str:
+    def _verify_local(self, d, f, ctx, loose=False) -> str:
         folder = self._local_folder(d, ctx["library"])
         p = os.path.join(folder, f["filename"])
         if not fsops.is_under(p, self._lib_root(ctx["library"])):
@@ -455,21 +505,24 @@ class Executor:
         if os.path.islink(p) or not os.path.isfile(p) or os.path.getsize(p) != ctx["size"]:
             raise _Fail(f"BookOrbit lists {p} for book {d.get('id')} but it is missing or the "
                         f"wrong size on disk")
+        if loose and self._hash(p) != ctx["sha256"]:
+            # matched only by size+extension (a rename happened): prove it's ours
+            raise _Integrity(f"{p} matched by size only and its sha256 is not the arrival's")
         return p
 
     def _locate(self, ctx):
         if ctx.get("book_id") is not None:
             d = self.index.detail(ctx["book_id"], fresh=True)
-            f = self._match(d, ctx)
+            f, loose = self._match(d, ctx)
             if f is None:
                 raise _Fail(f"book {ctx['book_id']} does not list {ctx['filename']} "
                             f"({ctx['size']} bytes) after the scan")
         else:
-            d, f = self._find_new_book(ctx)
+            d, f, loose = self._find_new_book(ctx)
         if d.get("libraryName") != ctx["library"]:
             raise _Fail(f"book {d.get('id')} is in {d.get('libraryName')!r}, expected {ctx['library']!r}")
         ctx["book_id"] = d["id"]
-        ctx["final_path"] = self._verify_local(d, f, ctx)
+        ctx["final_path"] = self._verify_local(d, f, ctx, loose)
         return d
 
     def _find_new_book(self, ctx):
@@ -494,19 +547,24 @@ class Executor:
                 elif new and str(f.get("filename") or "").lower().endswith(ext):
                     loose.append((b, f))
         pick = exact if exact else loose
-        if len(pick) != 1:
+        if len(pick) > 1:
+            raise _Integrity(f"could not locate exactly one new book holding {ctx['filename']} "
+                             f"({size} bytes); found {len(pick)}: "
+                             f"{sorted(b.get('id') for b, _f in pick)}")
+        if not pick:
             raise _Fail(f"could not locate exactly one new book holding {ctx['filename']} "
-                        f"({size} bytes); found {len(pick)}")
+                        f"({size} bytes); found none")
         b, f = pick[0]
-        return self.index.detail(b["id"], fresh=True), f
+        return self.index.detail(b["id"], fresh=True), f, not exact
 
     # --- metadata ---------------------------------------------------------------
     def _guard9(self, ctx):
         """Re-apply any identity field the new file changed, lock, verify."""
         snap = ctx["snapshot"]
         d = self.index.detail(ctx["book_id"], fresh=True)
-        cur = bookmeta.identity(d)
-        changed = [k for k in IDENTITY if cur[k] != snap[k]]
+        norm_snap = bookmeta.norm_for_compare(snap)
+        cur = bookmeta.norm_for_compare(bookmeta.identity(d))
+        changed = [k for k in IDENTITY if cur[k] != norm_snap[k]]
         if not changed:
             return
         if "seriesName" in changed or "seriesIndex" in changed:
@@ -514,7 +572,8 @@ class Executor:
         self._guard2(ctx["library_id"])
         self.writer.patch_metadata(ctx["book_id"], {k: snap[k] for k in changed}, list(BASE_LOCKS))
         after = self.index.detail(ctx["book_id"], fresh=True)
-        still = [k for k in IDENTITY if bookmeta.identity(after)[k] != snap[k]]
+        got = bookmeta.norm_for_compare(bookmeta.identity(after))
+        still = [k for k in IDENTITY if got[k] != norm_snap[k]]
         if still:
             raise _Fail(f"guard 9: could not restore {', '.join(still)} on book {ctx['book_id']}")
         self._check_locks(after, set(BASE_LOCKS) | set(snap.get("lockedFields") or []))
@@ -531,9 +590,9 @@ class Executor:
         self._guard2(ctx["library_id"])
         self.writer.patch_metadata(ctx["book_id"], meta, sorted(locks))
         after = self.index.detail(ctx["book_id"], fresh=True)
-        got = bookmeta.identity(after)
-        bad = [k for k in ("title", "subtitle", "authors", "seriesName", "seriesIndex",
-                           "publishedYear", "language") if k in meta and got[k] != meta[k]]
+        got = bookmeta.norm_for_compare(bookmeta.identity(after))
+        want = bookmeta.norm_for_compare(meta)
+        bad = [k for k in want if got[k] != want[k]]
         if "audibleId" in meta and bookmeta.audible_of(after) != meta["audibleId"]:
             bad.append("audibleId")
         if tag and f"asin:{tag}" not in bookmeta.tag_names(after):
@@ -562,25 +621,20 @@ class Executor:
                                      d.get("seriesIndex"), ident["title"])
         except (IndexError, TypeError, ValueError) as e:
             return f"rename-files skipped for book {ctx['book_id']}: cannot render its folder ({e})"
-        prefix = f"/books/{library}/"
-        for b in self.index.books():
-            if b.get("id") == ctx["book_id"] or b.get("libraryName") != library:
-                continue
-            fp = b.get("folderPath") or ""
-            tail = fp[len(prefix):] if fp.startswith(prefix) else fp
-            if tail.casefold() == rendered.casefold():
-                return (f"rename-files skipped for book {ctx['book_id']}: {rendered!r} is book "
-                        f"{b.get('id')}'s folder")
-        target = os.path.join(self._lib_root(library), rendered)
-        if not fsops.is_under(target, self._lib_root(library)):
-            return f"rename-files skipped for book {ctx['book_id']}: {rendered!r} escapes the library"
         own = self._local_folder(d, library)
-        if os.path.lexists(target) and os.path.realpath(target) != os.path.realpath(own):
-            return (f"rename-files skipped for book {ctx['book_id']}: {target} already exists "
-                    f"on disk")
+        clash = fsops.rename_collision(self.index, ctx["book_id"], library, rendered,
+                                       self._lib_root(library), own)
+        if clash:
+            return f"rename-files skipped for book {ctx['book_id']}: {clash}"
         self._guard2(ctx["library_id"])
         self.writer.rename_files(ctx["book_id"])
-        self._locate(ctx)                       # re-read folderPath + verify on disk
+        after = self._locate(ctx)               # re-read folderPath + verify on disk
+        if ctx["kind"] == states.CREATE_BOOK and ctx.get("dst_dir"):
+            new_folder = self._local_folder(after, library)
+            if os.path.realpath(ctx["dst_dir"]) != os.path.realpath(new_folder):
+                note = self._rmdir_own(ctx)     # our [lib-] dir, now empty
+                if note:
+                    return f"after rename-files: {note}"
         return None
 
     # --- resume -----------------------------------------------------------------
@@ -625,8 +679,18 @@ class Executor:
             if step in ("linked", "unlinked", "scanned"):
                 if src_p and not dst_p and step != "scanned":
                     return restore()
+                if src_p and dst_p and step in ("linked", "unlinked"):
+                    if not os.path.samefile(src, dst):
+                        return fail("source and destination are different files")
+                    # our own hard link: finishing the unlink is the rest of the move
+                    fsops.require_under(src, ctx["staging_dir"], "unlink source")
+                    ctx["linked"] = True
+                    self._journal(ctx, "unlinked")
+                    os.unlink(src)
+                    ctx["moved"] = True
+                    return self._continue(ctx, "scanned")
                 if not src_p and dst_p:
-                    if sha256_file(dst) != ctx.get("sha256"):
+                    if self._hash(dst) != ctx.get("sha256"):
                         return fail("the destination's sha256 does not match the arrival")
                     ctx["moved"] = True
                     return self._continue(ctx, "scanned")
@@ -636,8 +700,8 @@ class Executor:
                     ctx["moved"] = True
                     try:
                         self._locate(ctx)
-                    except _Fail as e:
-                        return fail(f"destination gone and BookOrbit does not list it ({e})")
+                    except _Integrity as e:
+                        return fail(str(e))
                     return self._continue(ctx, "located")
                 return fail("source/destination are not in a state resume can act on")
 

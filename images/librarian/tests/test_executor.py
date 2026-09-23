@@ -48,6 +48,8 @@ class FakeBookorbit:
         self.on_scan = None                  # hook(fake, library_id) after indexing
         self.rename_leaves_old_dir = True
         self.crash_on = {}                   # (method, path-suffix) -> exception to raise
+        self.on_idle = None                  # hook(fake) when a foreign running scan ends
+        self.on_patch = None                 # hook(fake, book) after a PATCH is applied
         self._pending = {}                   # hist id -> polls left
 
     # helpers --------------------------------------------------------------
@@ -189,6 +191,8 @@ class FakeBookorbit:
                     else:
                         b[k] = v
                 b["lockedFields"] = list(payload["lockedFields"])
+                if self.on_patch:
+                    self.on_patch(self, b)
                 self._touch(b)
                 return 200, "{}"
         return 500, f"unhandled {method} {path}"
@@ -196,6 +200,8 @@ class FakeBookorbit:
     def _history(self, lib):
         if self.running_polls[lib] > 0:
             self.running_polls[lib] -= 1
+            if self.running_polls[lib] == 0 and self.on_idle:
+                self.on_idle(self)
             return self.history[lib] + [{"id": 1, "status": "running"}]
         for h in self.history[lib]:
             if h["status"] == "running" and not self.scan_never_finishes:
@@ -482,22 +488,33 @@ def test_guard9_restores_identity_fields_changed_by_scan(env):
     assert "restored" in r.detail
 
 
-def test_attach_file_not_listed_after_scan_fails_and_keeps_intake(env):
+def test_after_move_errors_retry_four_times_then_fail_on_fifth(env, monkeypatch):
     attach_target(env)
     arr = env.libation(title="Artificial Condition")
     ex = env.executor()
     env.snapshot_tree()
     env.fake.scan_enabled = False
-
-    r = ex.execute(intent_attach(arr, 7001), arr, {})
-
+    intent = intent_attach(arr, 7001)
     dst = env.books_root / "Library" / "Martha Wells" / "Artificial Condition" / "Artificial Condition.m4b"
-    assert r.state == "failed" and str(dst) in r.detail
+
+    r = ex.execute(intent, arr, {})
+    assert r.state == "retryable" and str(dst) in r.detail
+    links = []
+    real_link = os.link
+    monkeypatch.setattr(executor_mod.os, "link", lambda *a, **k: links.append(a) or real_link(*a, **k))
+    results = [r]
+    for _ in range(4):
+        env.arrivals.record(arr["key"], states.RETRYABLE)
+        results.append(ex.execute(intent, env.arrivals.get(arr["key"]), {}))
+
+    assert [x.state for x in results] == ["retryable"] * 4 + ["failed"]
+    j = env.arrivals.get(arr["key"])["exec"]
+    assert j["attempts"] == 5 and j["open"] is False
+    assert links == [] and len(env.fake.scans()) == 1         # nothing moved or scanned again
     assert dst.is_file()                                     # never auto-moved back
     staging = env.intake / ".executing" / sha12(arr["key"])
     assert (staging / "cover.jpg").is_file()                 # no cleanup without verify
     assert env.fake.renames() == []
-    assert env.arrivals.get(arr["key"])["exec"]["open"] is False
 
 
 def test_rename_skipped_on_local_collision_and_escalated(env):
@@ -560,7 +577,9 @@ def test_create_book_locates_patches_and_renames(env):
     assert b["folderPath"] == "/books/Library/Jane Author/Saga/2. New Book"
     assert (env.books_root / "Library" / "Jane Author" / "Saga" / "2. New Book" / "2. New Book.m4b").is_file()
     made = env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]"
-    assert r.moves == [(arr["primary"], str(made / "New Book.m4b"), 5000)]
+    final = env.books_root / "Library" / "Jane Author" / "Saga" / "2. New Book" / "2. New Book.m4b"
+    assert r.moves == [(arr["primary"], str(final), 5000)]
+    assert not made.exists()                      # our emptied [lib-] dir removed after rename
     patch = env.fake.patches()
     assert len(patch) == 1
 
@@ -620,7 +639,7 @@ def _crash_unlink_of(monkeypatch, needle):
     monkeypatch.setattr(executor_mod.os, "unlink", unlink)
 
 
-def test_resume_after_link_before_unlink_fails_without_touching_files(env, monkeypatch):
+def _crash_between_link_and_unlink(env, monkeypatch):
     attach_target(env)
     arr = env.libation(title="Artificial Condition")
     ex = env.executor()
@@ -629,14 +648,40 @@ def test_resume_after_link_before_unlink_fails_without_touching_files(env, monke
     with pytest.raises(Crash):
         ex.execute(intent_attach(arr, 7001), arr, {})
     monkeypatch.undo()
-
     rec = env.arrivals.get(arr["key"])
     assert rec["state"] == states.EXECUTING and rec["exec"]["step"] == "unlinked"
+    return arr, rec
+
+
+def test_resume_after_link_before_unlink_same_inode_completes_the_move(env, monkeypatch):
+    arr, rec = _crash_between_link_and_unlink(env, monkeypatch)
+    ex = env.executor()
+    links = []
+    real_link = os.link
+    monkeypatch.setattr(executor_mod.os, "link", lambda *a, **k: links.append(a) or real_link(*a, **k))
+
+    r = ex.resume(rec)
+
+    assert r.state == "filed", r.detail
+    assert [a for a in links if str(env.books_root) in str(a[1])] == []   # no second link into the library
+    assert len(env.fake.scans()) == 1
+    assert not os.path.exists(rec["exec"]["src"])
+    assert os.path.isfile(r.moves[0][1])
+
+
+def test_resume_after_link_before_unlink_different_inode_fails(env, monkeypatch):
+    arr, rec = _crash_between_link_and_unlink(env, monkeypatch)
+    dst = rec["exec"]["dst"]
+    data = open(dst, "rb").read()
+    os.unlink(dst)                        # test setup: replace with an unrelated copy
+    with open(dst, "wb") as f:
+        f.write(data)
+
     r = env.executor().resume(rec)
 
     assert r.state == "failed"
-    assert rec["exec"]["src"] in r.detail and rec["exec"]["dst"] in r.detail
-    assert os.path.isfile(rec["exec"]["src"]) and os.path.isfile(rec["exec"]["dst"])
+    assert rec["exec"]["src"] in r.detail and dst in r.detail
+    assert os.path.isfile(rec["exec"]["src"]) and os.path.isfile(dst)
     assert env.fake.scans() == []
 
 
@@ -720,7 +765,7 @@ def test_scan_timeout_after_move_is_retryable_and_rescans_on_retry(env):
     r2 = ex2.execute(intent_attach(arr, 7001), env.arrivals.get(arr["key"]), {})
 
     assert r2.state == "filed", r2.detail
-    assert r2.moves == r.moves
+    assert r2.moves[0][0] == r.moves[0][0] and r2.moves[0][2] == r.moves[0][2]
 
 
 def test_resume_of_closed_journal_returns_recorded_outcome(env):
@@ -776,6 +821,7 @@ def test_create_exdev_removes_own_empty_dir(env, monkeypatch):
     r = ex.execute(intent_create(arr), arr, {})
 
     assert r.state == "failed" and "EXDEV" in r.detail
+    assert "empty author dir" in r.detail
     made = env.books_root / "Library" / "Jane Author" / f"New Book [lib-{sha12(arr['key'])}]"
     assert not made.exists()
     assert os.path.isfile(arr["primary"])
@@ -864,7 +910,7 @@ def test_partial_kindle_staging_is_restored(env, monkeypatch):
     r = ex.execute(intent_create(arr, title="Kindle Book", series=None, seriesIndex=None), arr, {})
 
     monkeypatch.undo()
-    assert r.state == "retryable", r.detail
+    assert r.state == "failed", r.detail          # EACCES is not transient
     assert (env.intake / "kindle" / "B0KINDLE01.epub").is_file()
     assert (env.intake / "kindle" / "B0KINDLE01.json").is_file()
     assert not os.path.exists(env.intake / ".executing" / sha12(arr["key"]))
@@ -878,7 +924,8 @@ def test_execute_after_failed_post_move_replays_and_never_restages(env):
     env.fake.scan_enabled = False
     intent = intent_attach(arr, 7001)
     intent["payload"]["book_id"] = 7001
-    r = ex.execute(intent, arr, {})
+    for _ in range(5):
+        r = ex.execute(intent, env.arrivals.get(arr["key"]), {})
     assert r.state == "failed" and r.moves
     staged_side = env.intake / ".executing" / sha12(arr["key"]) / "B0KINDLE01.json"
     assert staged_side.is_file()
@@ -888,3 +935,242 @@ def test_execute_after_failed_post_move_replays_and_never_restages(env):
     assert r2.state == "failed" and r2.detail == r.detail
     assert staged_side.is_file()
     assert not (env.intake / "kindle" / "B0KINDLE01.json").exists()
+
+
+# --- fix round 1 ------------------------------------------------------------------
+
+
+def test_normalised_readback_accepts_server_echo(env):
+    def echo(fake, b):
+        if b.get("title") == "New Book":
+            b["title"] = " New Book "
+        if b.get("seriesIndex") == "2":
+            b["seriesIndex"] = "2.0"
+    env.fake.on_patch = echo
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.state == "filed", r.detail
+
+
+def test_rename_skipped_when_it_would_nest_inside_another_book(env):
+    env.fake.add_book(70, 7, "Frank Herbert/Dune", "Dune", ["Frank Herbert"],
+                      files=(("Dune.epub", b"dune"),))
+    arr = env.libation(asin="B0MESSIAH1", title="Dune Messiah")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, title="Dune Messiah", authors=["Frank Herbert"],
+                                 series="Dune", seriesIndex=2), arr, {})
+
+    assert r.state == "filed" and r.escalate and "book 70" in r.escalate, r.detail
+    assert env.fake.renames() == []
+
+
+def test_rename_skipped_when_another_book_would_nest_inside_ours(env):
+    env.fake.add_book(71, 7, "Jane Author/Saga/2. New Book/Extras", "Extras", ["Jane Author"],
+                      files=(("x.epub", b"x"),))
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.state == "filed" and r.escalate and "book 71" in r.escalate, r.detail
+    assert env.fake.renames() == []
+
+
+def test_guard8_collision_from_index_data_only(env):
+    attach_target(env, rel="Martha Wells/odd folder")
+    # a differently-cased folder: absent on this case-sensitive disk at the
+    # rendered path, so only the index comparison can catch it
+    env.fake.add_book(72, 7, "martha wells/artificial condition/", "Other", ["x"],
+                      files=(("o.epub", b"o"),))
+    env.fake.books[72]["folderPath"] = "/books/Library/martha wells/artificial condition/"
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.state == "filed" and r.escalate and "book 72" in r.escalate, r.detail
+    assert env.fake.renames() == []
+
+
+def test_locate_ambiguity_fails(env):
+    def twin(fake, lib):
+        new = [b for b in fake.books.values() if b["title"] == "New Book"]
+        if new and 5555 not in fake.books:
+            fake.books[5555] = dict(new[0], id=5555, folderPath="/books/Library/Elsewhere/Twin")
+    env.fake.on_scan = twin
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    assert r.state == "failed" and "exactly one" in r.detail
+    assert env.fake.patches() == []
+
+
+def _crash_at_scan_then_autorename(env, content=None):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.crash_on[("POST", "/libraries/7/scan")] = Crash()
+    with pytest.raises(Crash):
+        ex.execute(intent_attach(arr, 7001), arr, {})
+    rec = env.arrivals.get(arr["key"])
+    assert rec["exec"]["step"] == "scanned"
+    # BookOrbit's scan (fileRenameEnabled) renamed the file under us
+    dst = rec["exec"]["dst"]
+    renamed = os.path.join(os.path.dirname(dst), "AC renamed.m4b")
+    os.rename(dst, renamed)
+    if content is not None:
+        with open(renamed, "wb") as f:
+            f.write(content)
+    env.fake._index_library(7)
+    return arr, rec
+
+
+def test_resume_at_scanned_with_both_paths_absent_locates_via_bookorbit(env):
+    arr, rec = _crash_at_scan_then_autorename(env)
+    scans = len(env.fake.scans())
+
+    r = env.executor().resume(rec)
+
+    assert r.state == "filed", r.detail
+    assert len(env.fake.scans()) == scans            # verified via BookOrbit, no re-scan
+
+
+def test_loose_locate_match_is_hash_verified(env):
+    arr, rec = _crash_at_scan_then_autorename(env, content=b"Z" * 5000)   # same size, other bytes
+
+    r = env.executor().resume(rec)
+
+    assert r.state == "failed" and "sha256" in r.detail
+    assert env.fake.renames() == []
+
+
+def test_resume_at_renamed_step(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.crash_on[("POST", "/rename-files")] = Crash()
+    with pytest.raises(Crash):
+        ex.execute(intent_attach(arr, 7001), arr, {})
+    rec = env.arrivals.get(arr["key"])
+    assert rec["exec"]["step"] == "renamed"
+
+    r = env.executor().resume(rec)
+
+    assert r.state == "filed", r.detail
+    assert len(env.fake.scans()) == 1
+
+
+def test_resume_at_cleaned_step(env, monkeypatch):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    def crash(*a, **k):
+        raise Crash()
+    monkeypatch.setattr(executor_mod.fsops, "cleanup", crash)
+    with pytest.raises(Crash):
+        ex.execute(intent_attach(arr, 7001), arr, {})
+    monkeypatch.undo()
+    rec = env.arrivals.get(arr["key"])
+    assert rec["exec"]["step"] == "cleaned"
+
+    r = env.executor().resume(rec)
+
+    assert r.state == "filed", r.detail
+    assert not os.path.exists(env.intake / ".executing" / sha12(arr["key"]))
+    assert len(env.fake.scans()) == 1 and len(env.fake.renames()) == 1
+
+
+def test_execute_when_staging_dir_already_exists_fails_untouched(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    foreign = env.intake / ".executing" / sha12(arr["key"])
+    foreign.mkdir(parents=True)
+    (foreign / "leftover.bin").write_bytes(b"l")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.state == "failed"
+    assert os.path.isfile(arr["primary"])
+    assert (foreign / "leftover.bin").read_bytes() == b"l"
+    assert env.fake.scans() == []
+
+
+def test_closed_moved_journal_refuses_a_different_intent_without_rewriting(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+    ex.execute(intent_attach(arr, 7001), arr, {})
+    before = env.arrivals.get(arr["key"])["exec"]
+
+    r = ex.execute(intent_attach(arr, 7001, iid="r9:1"), env.arrivals.get(arr["key"]), {})
+
+    assert r.state == "failed" and "refus" in r.detail
+    assert env.arrivals.get(arr["key"])["exec"] == before
+
+
+def test_cleanup_error_after_verified_filing_is_filed_with_escalation(env, monkeypatch):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    def boom(*a, **k):
+        raise OSError(errno.EIO, "io")
+    monkeypatch.setattr(executor_mod.fsops, "cleanup", boom)
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.state == "filed" and r.ok and r.escalate and "cleanup" in r.escalate
+
+
+def test_enametoolong_before_move_is_failed(env, monkeypatch):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    def mkdir(p, *a, **k):
+        raise OSError(errno.ENAMETOOLONG, "File name too long")
+    monkeypatch.setattr(executor_mod.os, "mkdir", mkdir)
+
+    r = ex.execute(intent_create(arr), arr, {})
+
+    monkeypatch.undo()
+    assert r.state == "failed"
+    assert os.path.isfile(arr["primary"])
+
+
+def test_attach_snapshot_is_taken_after_the_guard2_wait(env):
+    attach_target(env)
+    arr = env.libation(title="Artificial Condition")
+    ex = env.executor()
+    env.snapshot_tree()
+    env.fake.running_polls[7] = 2
+
+    def human_edit(fake):
+        fake.books[7001]["subtitle"] = "Murderbot 2"
+        fake._touch(fake.books[7001])
+    env.fake.on_idle = human_edit
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.state == "filed", r.detail
+    assert env.fake.patches() == []                   # the human's edit is not reverted
+    assert env.fake.books[7001]["subtitle"] == "Murderbot 2"

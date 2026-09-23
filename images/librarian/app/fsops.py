@@ -6,6 +6,7 @@ leftovers after a verified filing. Every destructive call asserts its path is
 under the intake root first -- nothing in this module may delete, overwrite or
 rename anything under `/media/books`. The one library-side move (the primary
 file into a book folder) lives in app/executor.py, where it is journaled.
+`hash_file` and `rename_collision` also look at library paths, read-only.
 
 Moves use `os.link` + `os.unlink` (never `os.rename` onto a path that might
 exist): `link` fails atomically with EEXIST instead of silently replacing,
@@ -172,3 +173,70 @@ def cleanup(source: str, sdir: str, intake_root: str, supplement_id: str) -> dic
     except OSError:
         pass
     return out
+
+
+def hash_file(path: str, beat, beat_every: int) -> str:
+    """sha256 of `path`, calling `beat()` at least every `beat_every` bytes
+    so hashing a multi-GB audiobook never reads as a stalled loop."""
+    h = hashlib.sha256()
+    since = 0
+    with open(path, "rb") as fh:
+        while True:
+            buf = fh.read(8 << 20)
+            if not buf:
+                break
+            h.update(buf)
+            since += len(buf)
+            if since >= beat_every:
+                beat()
+                since = 0
+    beat()
+    return h.hexdigest()
+
+
+def rename_collision(index, book_id, library: str, rendered: str, lib_root: str, own: str) -> str | None:
+    """Guard 8 before rename-files, on FRESH index data. Returns why the
+    rename must be skipped, or None. Collisions (folder paths casefolded,
+    trailing "/" stripped):
+      * another book in the library already has the rendered folder;
+      * another book's folder is an ANCESTOR of it (ours would nest inside);
+      * the rendered folder is an ancestor of another book's folder;
+      * the rendered path escapes the library root;
+      * any directory between the author dir and the target is a known book
+        folder on disk (realpath, any library);
+      * `<root>/<rendered>` already exists on disk and is not our own folder.
+    Read-only: never touches the filesystem beyond stat/realpath."""
+    prefix = f"/books/{library}/"
+    want = rendered.casefold().rstrip("/")
+    others = {}                                  # realpath of another book's folder -> id
+    for b in index.books():
+        if b.get("id") == book_id:
+            continue
+        fp = b.get("folderPath") or ""
+        try:
+            others[os.path.realpath(index.local_path(fp.rstrip("/")))] = b.get("id")
+        except ValueError:
+            pass
+        if b.get("libraryName") != library:
+            continue
+        tail = (fp[len(prefix):] if fp.startswith(prefix) else fp).casefold().rstrip("/")
+        if not tail:
+            continue
+        if tail == want:
+            return f"{rendered!r} is book {b.get('id')}'s folder"
+        if want.startswith(tail + "/"):
+            return f"{rendered!r} would nest inside book {b.get('id')}'s folder"
+        if tail.startswith(want + "/"):
+            return f"book {b.get('id')}'s folder would nest inside {rendered!r}"
+    target = os.path.join(lib_root, rendered)
+    if not is_under(target, lib_root):
+        return f"{rendered!r} escapes the library"
+    anc = os.path.dirname(target)
+    while is_under(anc, lib_root):
+        bid = others.get(os.path.realpath(anc))
+        if bid is not None:
+            return f"{anc} on the way to {rendered!r} is book {bid}'s folder"
+        anc = os.path.dirname(anc)
+    if os.path.lexists(target) and os.path.realpath(target) != os.path.realpath(own):
+        return f"{target} already exists on disk"
+    return None

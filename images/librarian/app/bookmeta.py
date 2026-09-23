@@ -92,3 +92,41 @@ def create_metadata(md, arrival) -> dict:
     if arrival.get("source") == "kindle" and isinstance(sid, str) and ASIN_RE.match(sid):
         asin_tag = sid
     return {"fields": meta, "asin_tag": asin_tag}
+
+
+def _norm_str(v):
+    if v is None:
+        return None
+    v = str(v).strip()
+    return v or None
+
+
+def norm_for_compare(d: dict) -> dict:
+    """Identity fields normalised for comparison only (never for writing), so
+    a server echo like " Title " or seriesIndex "2.0" is not a change:
+    strings stripped with empty -> None; authors a list of stripped names;
+    seriesIndex a float (or None); publishedYear an int (or None). Only the
+    IDENTITY keys present in `d` are returned. Unparseable numbers fall back
+    to their stripped string so they still compare unequal to a real value."""
+    out = {}
+    for k in IDENTITY:
+        if k not in d:
+            continue
+        v = d[k]
+        if k == "authors":
+            out[k] = [n for n in (_norm_str(x) for x in names(v)) if n]
+        elif k == "seriesIndex":
+            s = _norm_str(v)
+            try:
+                out[k] = float(s) if s is not None else None
+            except ValueError:
+                out[k] = s
+        elif k == "publishedYear":
+            s = _norm_str(v)
+            try:
+                out[k] = int(float(s)) if s is not None else None
+            except ValueError:
+                out[k] = s
+        else:
+            out[k] = _norm_str(v)
+    return out
