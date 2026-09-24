@@ -1036,3 +1036,70 @@ def test_crash_after_filing_simulated_sets_arrival_simulated(tmp_path, live_fact
     svc2 = live_factory(FakeModel(), None, clock, dry_run=True)
     rec = svc2.arrivals.get(key)
     assert rec["state"] == states.SIMULATED and any("mv <primary>" in s for s in rec["would_do"])
+
+
+# --- P4 trigger: a filing asks the read-along worker to look at the book -------------------
+
+
+def test_a_filing_asks_the_readalong_worker_to_look(tmp_path, live_factory):
+    wanted_dir = tmp_path / "wanted"
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all), FakeExecutor(),
+                       readalong_trigger=True, readalong_wanted_dir=str(wanted_dir))
+    add_libation(tmp_path)
+    drive(svc, svc.clock)
+    key = only_key(svc)
+    assert svc.arrivals.get(key)["state"] == states.FILED
+    marker = json.load(open(wanted_dir / "2.json"))
+    assert marker["book"] == 2 and marker["arrival"] == key
+
+
+def test_no_marker_unless_the_trigger_is_on(tmp_path, live_factory):
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all), FakeExecutor(),
+                       readalong_wanted_dir=str(tmp_path / "wanted"))
+    add_libation(tmp_path)
+    drive(svc, svc.clock)
+    assert svc.arrivals.get(only_key(svc))["state"] == states.FILED
+    assert not (tmp_path / "wanted").exists()
+
+
+@pytest.mark.parametrize("result", [retryable(), failed()])
+def test_no_marker_for_a_filing_that_did_not_file(tmp_path, live_factory, result):
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all), FakeExecutor([result]),
+                       readalong_trigger=True, readalong_wanted_dir=str(tmp_path / "wanted"))
+    add_libation(tmp_path)
+    drive(svc, svc.clock)
+    assert svc.arrivals.get(only_key(svc))["state"] != states.FILED
+    assert not (tmp_path / "wanted").exists()
+
+
+def test_a_marker_that_cannot_be_written_never_fails_the_filing(tmp_path, live_factory, caplog):
+    (tmp_path / "wanted").write_text("a file where the directory should be")
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all), FakeExecutor(),
+                       readalong_trigger=True, readalong_wanted_dir=str(tmp_path / "wanted"))
+    add_libation(tmp_path)
+    drive(svc, svc.clock)
+    assert svc.arrivals.get(only_key(svc))["state"] == states.FILED
+    assert "read-along marker for book 2 not written" in caplog.text
+
+
+def test_a_filing_finished_by_startup_resume_also_asks(tmp_path, live_factory):
+    svc = None
+
+    def die_mid_move(intent, rec):
+        svc.arrivals.record(rec["key"], states.EXECUTING,
+                            exec={"intent_id": intent["intent_id"], "open": True, "step": "scanned"})
+        raise Crash()
+
+    clock = Clock()
+    svc = live_factory(FakeModel(librarian=attach_script(), reviewer=approve_all),
+                       FakeExecutor([die_mid_move]), clock,
+                       readalong_trigger=True, readalong_wanted_dir=str(tmp_path / "wanted"))
+    add_libation(tmp_path)
+    with pytest.raises(Crash):
+        drive(svc, clock)
+    assert not (tmp_path / "wanted").exists()
+    svc.stop()
+    svc2 = live_factory(FakeModel(), FakeExecutor(resume_result=filed()), clock,
+                        readalong_trigger=True, readalong_wanted_dir=str(tmp_path / "wanted"))
+    svc2.tick()
+    assert json.load(open(tmp_path / "wanted" / "2.json"))["book"] == 2

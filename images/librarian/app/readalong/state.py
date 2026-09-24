@@ -37,15 +37,24 @@ class State:
         self.pending_push = data.get("pending_push")
         # uuids of our own Storyteller books whose delete failed: retried every run
         self.to_release = data.get("to_release", {})
+        # the nightly run of a local date: {"date", "started", "done"} -- a restart resumes it, never repeats it
+        self.last_nightly = data.get("last_nightly") or {}
+        # {kind: unix time} of the last good nightly / on-demand run / tick (the metrics survive restarts)
+        self.last_success = data.get("last_success") or {}
+        self.tick_failure_told = data.get("tick_failure_told")      # a local date: told once a day
         # this Job's run window, shared with its retry pods: {"job", "started", "failure_told"}
         self.run = data.get("run") or {}
 
     @classmethod
-    def load(cls, path) -> "State":
+    def load(cls, path, *, required=False) -> "State":
+        """`required`: a missing file is an error -- a mis-mounted or mis-set
+        state dir must never look like a fresh start that forgets refusals."""
         try:
             with open(path, encoding="utf-8") as fh:
                 data = json.load(fh)
         except FileNotFoundError:
+            if required:
+                raise RuntimeError(f"the read-along state {path} is missing (STATE_REQUIRED)") from None
             return cls(path, {})
         except (OSError, ValueError) as e:
             raise RuntimeError(f"cannot read the read-along state {path}: {e}") from None
@@ -57,7 +66,8 @@ class State:
         data = {"in_flight": self.in_flight, "refused": self.refused, "errors": self.errors,
                 "history": self.history[-HISTORY_MAX:], "foreign_busy_since": self.foreign_busy_since,
                 "foreign_told": self.foreign_told, "blocked": self.blocked, "pending_push": self.pending_push,
-                "run": self.run, "to_release": self.to_release}
+                "run": self.run, "to_release": self.to_release, "last_nightly": self.last_nightly,
+                "last_success": self.last_success, "tick_failure_told": self.tick_failure_told}
         d = os.path.dirname(self.path) or "."
         tmp = f"{self.path}.tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -104,6 +114,12 @@ class State:
         e = self.errors.get(str(book))
         return bool(e) and e.get("pair") == _pair(pair) and e["count"] >= ERROR_LIMIT \
             and now - e.get("at", 0) < GIVE_UP_DAYS * 86400
+
+    def recent_error(self, book, pair, now, interval) -> bool:
+        """A failure on this pair counted within `interval`: the nightly run owns its retry."""
+        e = self.errors.get(str(book))
+        return bool(e) and e.get("pair") == _pair(pair) and e.get("count", 0) > 0 \
+            and now - e.get("at", 0) < interval
 
     def clear_error(self, book) -> None:
         self.errors.pop(str(book), None)

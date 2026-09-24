@@ -79,3 +79,18 @@ def test_a_give_up_expires(tmp_path):
     st.add_error(1, (1, 100, 2, 200), "boom again", now=NOW)      # one more failure: given up again
     chosen, funnel = select([book(1, PAIR)], st, NOW, quiet_hours=2)
     assert chosen == [] and funnel["error_limit"] == 1
+
+
+def test_wanted_books_skip_the_quiet_period_and_come_first(tmp_path):
+    """The librarian just filed and verified them: no need to wait out the quiet hours."""
+    st = State.load(str(tmp_path / "s.json"))
+    books = [
+        book(1, PAIR, updated="2026-09-24T07:25:00.000Z"),                         # wanted, fresh
+        book(2, [f(21, "epub", 1, False), f(22, "m4b", 2)], updated="2026-09-23T10:00:00.000Z"),
+        book(3, [f(31, "epub", 1, False), f(32, "m4b", 2)], updated="2026-09-24T07:29:00.000Z"),  # fresh
+        book(4, [f(41, "epub", 1, False), f(42, "m4b", 2)], updated="2026-09-22T10:00:00.000Z"),  # wanted
+        book(5, [f(51, "epub", 1, True), f(52, "epub", 1, False), f(53, "m4b", 1)]),               # wanted, done
+    ]
+    chosen, funnel = select(books, st, NOW, quiet_hours=2, wanted={1: NOW - 600, 4: NOW - 900, 5: NOW - 60})
+    assert [b["id"] for b in chosen] == [4, 1, 2]           # wanted oldest-asked first, then the rest
+    assert funnel["too_recent"] == 1 and funnel["has_readalong"] == 1 and funnel["wanted"] == 2

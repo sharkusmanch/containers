@@ -48,9 +48,13 @@ def _updated_epoch(b):
         return None
 
 
-def select(books, state, now, *, quiet_hours, only=frozenset()):
+def select(books, state, now, *, quiet_hours, only=frozenset(), wanted=None):
+    """`wanted` ({book id: asked at}): books the librarian just filed. They
+    skip the quiet period (the filing is finished and verified) and come first,
+    oldest ask first; every other test still applies."""
+    wanted = wanted or {}
     funnel = Counter(total=len(books))
-    chosen = []
+    chosen, first = [], []
     for b in books:
         files = b.get("files") or []
         if only and b.get("id") not in only:
@@ -72,11 +76,17 @@ def select(books, state, now, *, quiet_hours, only=frozenset()):
         if state.gave_up(b["id"], pair, now):
             funnel["error_limit"] += 1
             continue
+        if b.get("id") in wanted:
+            funnel["wanted"] += 1
+            first.append((wanted[b["id"]], b))
+            continue
         updated = _updated_epoch(b)
         if updated is None or now - updated < quiet_hours * 3600:
             funnel["too_recent"] += 1
             continue
         chosen.append((updated, b))
+    first.sort(key=lambda x: x[0])
     chosen.sort(key=lambda x: -x[0])
-    funnel["eligible"] = len(chosen)
-    return [b for _u, b in chosen], {k: v for k, v in funnel.items() if v or k in ("total", "eligible")}
+    funnel["eligible"] = len(first) + len(chosen)
+    return [b for _a, b in first] + [b for _u, b in chosen], \
+        {k: v for k, v in funnel.items() if v or k in ("total", "eligible")}

@@ -50,9 +50,11 @@ class FakeStoryteller:
         self.report_missing = False
         self.downloads = 0
         self.imports = 0
+        self.token = None
 
     def login(self, u, p):
         self.calls.append(("login",))
+        self.token = "token"                       # the real client keeps it: later ticks skip the login
 
     def relogin(self):
         self.calls.append(("relogin",))
@@ -161,13 +163,14 @@ def env(tmp_path):
     st = FakeStoryteller(clock, library_root=books)
     pushes = []
 
-    def make(**extra):
+    def make(window=None, **extra):
         s = Settings.from_env({**ENV, "STATE_DIR": str(tmp_path / "state"), "MEDIA_BOOKS": str(books),
-                               "STAGING_DIR": str(tmp_path / "staging"), **extra})
+                               "STAGING_DIR": str(tmp_path / "staging"), "STATE_REQUIRED": "false",
+                               "WANTED_DIR": str(tmp_path / "wanted"), **extra})
         os.makedirs(s.state_dir, exist_ok=True)
         return Job(s, bo=lib, st=st, push=lambda url, t, b: pushes.append((t, b)) or True,
                    clock=clock, sleep=clock.sleep, monotonic=clock, duration=lambda path: 40.0,
-                   tools=lambda: None)
+                   tools=lambda: None, window=window)
     return lib, st, clock, pushes, make, tmp_path
 
 
@@ -325,28 +328,17 @@ def test_a_book_too_long_for_the_rest_of_the_run_waits(env):
     assert creates(st) == 1
 
 
-def test_a_retry_pod_continues_its_jobs_window(env):
+def test_the_window_is_the_callers(env):
     lib, st, clock, pushes, make, tmp = env
-    first = make(JOB_ID="readalong-1")
-    first._push = lambda url, t, b: False            # exit 1: the Job starts a retry pod
-    assert first.run() == 1
-    clock.t += 2 * 3600
-    assert make(JOB_ID="readalong-1").t0 == first.t0          # not a fresh 3.5 h to start books in
-    assert make(JOB_ID="readalong-2").t0 == clock.t           # another Job is another window
-    assert make().t0 == clock.t
+    started = clock.t - 2 * 3600
+    job = make(window=("night-2027-01-15", started))              # a nightly resumed after a restart
+    assert job.t0 == started and job.window_id == "night-2027-01-15"
+    assert make().t0 == clock.t                                    # by default a window starts now
+    job.run()
+    assert state_of(tmp)["run"]["id"] == "night-2027-01-15"
 
 
-def test_an_evening_manual_run_does_not_eat_the_nightly_window(env):
-    lib, st, clock, pushes, make, tmp = env
-    manual = make(JOB_ID="readalong-manual-1")     # the owner runs it by hand at ~20:00
-    assert manual.run() == 0 and has_readalong(lib, 111)
-    add_other(lib)
-    clock.t = manual.t0 + 4.5 * 3600                 # the CronJob's own Job at 00:30
-    assert make(JOB_ID="librarian-readalong-29801234").run() == 0
-    assert has_readalong(lib, 222)
-
-
-def test_a_retry_pod_after_a_full_run_only_finishes_up(env):
+def test_a_resumed_window_past_its_end_only_finishes_up(env):
     lib, st, clock, pushes, make, tmp = env
     add_other(lib)
     real_report = st.alignment_report
@@ -358,14 +350,14 @@ def test_a_retry_pod_after_a_full_run_only_finishes_up(env):
         if uuid == "u2":
             st.books_[uuid]["left"] = 10 ** 6
     st.process = process
-    first = make(JOB_ID="j")
-    first._push = lambda url, t, b: False            # the end-of-run push fails -> exit 1 -> a retry pod
+    first = make(window=("night-1", clock.t))
+    first._push = lambda url, t, b: False            # the end-of-run push fails: kept for the next run
     assert first.run() == 1
     clock.t += 10
-    st.books_["u2"]["left"] = 1                      # 222 finishes just as the retry pod starts
-    retry = make(JOB_ID="j")
-    assert retry.run() == 0
-    assert retry.t0 == first.t0 and not has_readalong(lib, 222)  # past the window: no publish begins
+    st.books_["u2"]["left"] = 1                      # 222 finishes just as the worker restarts
+    resumed = make(window=("night-1", first.t0))     # the same night, resumed past its end
+    assert resumed.run() == 0
+    assert resumed.t0 == first.t0 and not has_readalong(lib, 222)  # past the window: no publish begins
     assert "1 refused" in pushes[-1][0] and "grade D" in pushes[-1][1]        # but the news goes out
 
 
@@ -869,9 +861,9 @@ def test_a_run_failure_is_told_once_per_window(env):
     def down():
         raise ConnectionError("storyteller is down")
     st.books = down
-    assert make(JOB_ID="j").run() == 1
+    assert make(window=("w", 1_800_000_000.0)).run() == 1
     clock.t += 600
-    assert make(JOB_ID="j").run() == 1             # the retry pod: same failure, not told again
+    assert make(window=("w", 1_800_000_000.0)).run() == 1             # the retry pod: same failure, not told again
     assert len([b for _t, b in pushes if "run failed" in b]) == 1
     st.books = real_books
 
@@ -953,11 +945,11 @@ class _Writer:
         self.calls.append(("running", lib))
         return False
 
-    def scan(self, lib, timeout):
+    def scan(self, lib, timeout, sleep=None):
         self.calls.append(("scan", lib, timeout))
         return 41
 
-    def wait_scan(self, lib, after, timeout):
+    def wait_scan(self, lib, after, timeout, sleep=None):
         self.calls.append(("wait", lib, after, timeout))
 
     def patch_metadata(self, book_id, metadata, locked):
@@ -1323,11 +1315,11 @@ def test_a_cancel_that_does_not_stop_is_parked_not_deleted(env):
 def test_a_retry_pod_does_not_retell_a_counted_failure(env):
     lib, st, clock, pushes, make, tmp = env
     lib.scan_fails = True
-    first = make(JOB_ID="j")
+    first = make(window=("w", 1_800_000_000.0))
     first._push = lambda url, t, b: False            # exit 1 -> the retry pod
     assert first.run() == 1
     clock.t += 60
-    make(JOB_ID="j").run()
+    make(window=("w", 1_800_000_000.0)).run()
     lines = [ln for _t, b in pushes for ln in b.splitlines() if "A Little Hatred" in ln]
     assert len(lines) == 1 and state_of(tmp)["errors"]["111"]["count"] == 1
 

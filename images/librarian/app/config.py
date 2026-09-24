@@ -119,6 +119,11 @@ class Settings:
     # this directory (app/runner.py's child_env enforces it) -- the fence
     # against a run_dir that somehow escapes to the host's real ~/.claude.
     runs_root: str = "/tmp/runs"
+    # P4 trigger: after every filing, drop a "wanted" marker for the book; the
+    # read-along worker judges within minutes whether it now holds an EPUB + m4b
+    # pair and aligns it then instead of at night (app/readalong/wanted.py).
+    readalong_trigger: bool = False
+    readalong_wanted_dir: str = "/media/library_intake/.readalong/wanted"
 
     def __post_init__(self):
         for name in ("max_attempts", "max_exec_per_tick"):
@@ -164,4 +169,6 @@ class Settings:
             vikunja_public_url=_s(env, "VIKUNJA_PUBLIC_URL", ""),
             bookorbit_public_url=_s(env, "BOOKORBIT_PUBLIC_URL", ""),
             runs_root=_s(env, "RUNS_ROOT", "/tmp/runs"),
+            readalong_trigger=_b(env, "READALONG_TRIGGER", False),
+            readalong_wanted_dir=_s(env, "READALONG_WANTED_DIR", "/media/library_intake/.readalong/wanted"),
         )

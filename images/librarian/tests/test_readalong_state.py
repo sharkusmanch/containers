@@ -94,7 +94,7 @@ def test_a_second_run_exits_while_the_first_holds_the_lock(tmp_path):
     state.mkdir()
     held = open(state / "readalong.lock", "w")
     fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    assert main({**ENV, "STATE_DIR": str(state)}) == 0       # another run's window: not an error; no network
+    assert main({**ENV, "STATE_DIR": str(state)}) == 1       # a second worker never starts; no network
 
 
 
@@ -130,6 +130,28 @@ def test_settings_refuse_a_window_with_no_room_to_publish():
             "STORYTELLER_USER": "u", "STORYTELLER_PASS": "p", "APPRISE_URL": "a"}
     with pytest.raises(ValueError, match="FINISH_HOURS"):
         Settings.from_env({**base, "RUN_HOURS": "1", "START_HOURS": "1"})       # the default finish is 1 h
-    s = Settings.from_env({**base, "RUN_HOURS": "1", "START_HOURS": "1", "FINISH_HOURS": "0.5",
-                           "JOB_ID": "5f0c6f8e-0000-4000-8000-000000000001"})
-    assert s.finish_hours == 0.5 and s.job_id == "5f0c6f8e-0000-4000-8000-000000000001"
+    s = Settings.from_env({**base, "RUN_HOURS": "1", "START_HOURS": "1", "FINISH_HOURS": "0.5"})
+    assert s.finish_hours == 0.5
+
+
+def test_settings_for_the_worker():
+    import pytest
+    from app.readalong.config import Settings
+    base = {"BOOKORBIT_URL": "u", "BOOKORBIT_USER": "u", "BOOKORBIT_PASS": "p", "STORYTELLER_URL": "s",
+            "STORYTELLER_USER": "u", "STORYTELLER_PASS": "p", "APPRISE_URL": "a"}
+    s = Settings.from_env(base)
+    assert (s.state_required, s.tick_seconds, s.marker_settle, s.nightly_at, s.nightly_until) == \
+        (True, 60, 300, "00:30", "04:00")
+    s = Settings.from_env({**base, "STATE_REQUIRED": "false", "TICK_SECONDS": "30", "NIGHTLY_AT": "01:15",
+                           "WANTED_DIR": "/w"})
+    assert (s.state_required, s.tick_seconds, s.nightly_at, s.wanted_dir) == (False, 30, "01:15", "/w")
+    for bad in ({"NIGHTLY_AT": "05:00"}, {"NIGHTLY_UNTIL": "25:00"}, {"TICK_SECONDS": "1"}):
+        with pytest.raises(ValueError):
+            Settings.from_env({**base, **bad})
+
+
+def test_a_required_state_file_that_is_missing_is_an_error(tmp_path):
+    import pytest
+    with pytest.raises(RuntimeError, match="STATE_REQUIRED"):
+        State.load(str(tmp_path / "s.json"), required=True)
+    assert State.load(str(tmp_path / "s.json")).in_flight is None             # not required: empty

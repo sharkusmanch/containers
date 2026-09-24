@@ -28,7 +28,6 @@ import json
 import logging
 import os
 import re
-import signal
 import socket
 import subprocess
 import time
@@ -36,7 +35,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from app.readalong import gate, patch, smil
+from app.readalong import gate, patch, smil, wanted
 from app.readalong.candidates import OPT_OUT_TAG, is_readalong_file, opted_out, pair_key, select
 from app.readalong.flag import field_id, sync_flags
 from app.readalong.publish import (FilesChanged, PublishConflict, PublishError, local_path, publish, rekey,
@@ -51,7 +50,7 @@ QUERY_PAGE = 100
 # CPU Storyteller (4 cores, CTC): ~3-5 min per audio-hour, measured on the pilot.
 MINUTES_PER_AUDIO_HOUR = 6
 EARLY_START_HOURS = 0.25          # a book too long for any night still starts at the top of a run
-ERROR_INTERVAL = 6 * 3600         # count at most one failure per book per night (the Job's retry pods)
+ERROR_INTERVAL = 20 * 3600        # count at most one failure per book per night; ticks leave it alone
 ADOPT_SLACK = 120                 # seconds of clock skew allowed when adopting an import
 ADOPT_WINDOW = 3600               # an import lands within this of its request (the POST copies the m4b first)
 CANCEL_WAIT = 120                 # a cancel only signals the alignment to stop: wait before deleting
@@ -147,8 +146,9 @@ _DETAIL_404 = re.compile(r"GET /books/\d+ -> HTTP 404:")
 
 
 class Bookorbit:
-    def __init__(self, client, writer, *, scan_timeout=900):
-        self.client, self.writer, self.scan_timeout = client, writer, scan_timeout
+    def __init__(self, client, writer, *, scan_timeout=900, sleep=time.sleep):
+        # `sleep`: the worker's heartbeat-beating sleep, so a long scan wait is not a "stall"
+        self.client, self.writer, self.scan_timeout, self.sleep = client, writer, scan_timeout, sleep
 
     def books(self):
         out, page = [], 0
@@ -174,8 +174,8 @@ class Bookorbit:
         return self.writer.scan_running(library_id)
 
     def scan(self, library_id):
-        after = self.writer.scan(library_id, timeout=self.scan_timeout)
-        self.writer.wait_scan(library_id, after, timeout=self.scan_timeout)
+        after = self.writer.scan(library_id, timeout=self.scan_timeout, sleep=self.sleep)
+        self.writer.wait_scan(library_id, after, timeout=self.scan_timeout, sleep=self.sleep)
 
     def set_flag(self, book_id, fid, value):
         self.writer.patch_metadata(book_id, {"customMetadata": [{"fieldId": fid, "value": value}]}, [])
@@ -207,25 +207,19 @@ def send_push(url, title, body, *, post=requests.post, sleep=time.sleep):
 
 class Job:
     def __init__(self, settings, *, bo, st, push=send_push, clock=time.time, sleep=time.sleep,
-                 monotonic=time.monotonic, duration=m4b_seconds, tools=check_tools):
+                 monotonic=time.monotonic, duration=m4b_seconds, tools=check_tools, window=None):
+        """One unit of work -- a nightly or on-demand run, or a tick -- over a
+        freshly loaded state: build a new Job for every unit, never reuse one.
+        `window` = (id, start): the worker's (a nightly resumed after a restart
+        keeps its start); by default a new window starting now."""
         self.s, self.bo, self.st, self._push = settings, bo, st, push
         self.clock, self.sleep, self.monotonic, self.duration = clock, sleep, monotonic, duration
         self.tools = tools
         self.stopping = False
         self.starts_stalled = False
         self.handled = set()
-        self.state = State.load(os.path.join(settings.state_dir, "readalong.json"))
-        self.t0 = clock()
-        run = self.state.run or {}
-        # a retry pod of the same Job (same uid) continues its window; any other run opens its own
-        self.resumed_window = (bool(settings.job_id) and not settings.dry_run
-                               and run.get("job") == settings.job_id
-                               and isinstance(run.get("started"), (int, float)))
-        if self.resumed_window:
-            self.t0 = run["started"]
-            logger.info("continuing the window of Job %s, %.1f h in", settings.job_id, (clock() - self.t0) / 3600)
-        elif not settings.job_id and not settings.dry_run:
-            logger.warning("JOB_ID is not set: a retry pod would open a fresh window")
+        self.state = State.load(os.path.join(settings.state_dir, "readalong.json"), required=settings.state_required)
+        self.window_id, self.t0 = window or (f"run-{int(clock())}", clock())
 
     def on_sigterm(self, *_):
         logger.warning("SIGTERM: stopping at the next safe point")
@@ -435,15 +429,17 @@ class Job:
         return True
 
     # a tracked book (in flight, or blocked) ----------------------------------------------
-    def advance(self, fl):
+    def advance(self, fl, poll=True):
         """Move one tracked book as far as it goes in this run. An in-flight
         book may stay in flight: still aligning, failed and kept, done too late
-        in the run to publish, or an import that may still be landing."""
+        in the run to publish, or an import that may still be landing.
+        `poll=False` (a tick): one look, never a sleep, and a failed alignment
+        is left to the nightly run -- never re-processed, never counted."""
         if fl.get("closing"):
             self._close(fl, fl["closing"], {"uuid": fl.get("uuid"), "resumed": True}, fl.get("closing_line"))
             return
         if not fl.get("uuid"):
-            return self._adopt(fl)
+            return self._adopt(fl, poll)
         d = self.bo.detail(fl["book"])
         stage = self._stage(fl, d)
         if stage != "linked" and self._moot(fl, d, stage):
@@ -462,6 +458,8 @@ class Job:
             p = phase(b)
             if p == DONE:
                 return self.finish(fl)
+            if p == FAILED and not poll:
+                return                          # the nightly run owns retries
             if p == FAILED:
                 stopped = str((b.get("readaloud") or {}).get("status") or "").upper() == "STOPPED"
                 self._fail(fl, "stopped in Storyteller (cancelled or restarted); tag the book no-readalong "
@@ -487,6 +485,8 @@ class Job:
             if p == NOT_STARTED and not resumed:
                 self._st(self.st.process, fl["uuid"])
                 resumed = True
+            if not poll:
+                return
             if self.must_stop():
                 hours = (self.clock() - fl["started"]) / 3600
                 if hours > STUCK_HOURS and not fl.get("stuck_told"):
@@ -495,7 +495,7 @@ class Job:
                 return
             self.sleep(self.s.poll_seconds)
 
-    def _adopt(self, fl):
+    def _adopt(self, fl, poll=True):
         """A run died between recording the import and learning its uuid. Adopt
         only a Storyteller book absent from the snapshot taken just before the
         import, never processed, created within ADOPT_WINDOW of the request,
@@ -521,7 +521,7 @@ class Job:
             fl["staged"] = os.path.join(self.s.staging_dir, f"{fl['book']}-{fl['uuid']}.epub")
             self._save()
             logger.info("adopted Storyteller book %s for book %s", fl["uuid"], fl["book"])
-            return self.advance(fl)             # an incomplete one is dropped there
+            return self.advance(fl, poll)       # an incomplete one is dropped there
         if not mine and self.clock() < hi:
             logger.info("book %s: its import may still be landing; looking again next run", fl["book"])
             return
@@ -764,8 +764,9 @@ class Job:
             raise JobError("the book listing no longer carries files[].mediaOverlay; refusing to judge flags")
         self._fid = field_id(self.bo.client)
         # selection uses the listing from BEFORE the flag sync (a flag PATCH bumps updatedAt)
+        asked = wanted.read(self.s.wanted_dir, now=self.clock(), settle=self.s.marker_settle)
         chosen, funnel = select(books, self.state, self.clock(), quiet_hours=self.s.quiet_hours,
-                                only=self.s.only)
+                                only=self.s.only, wanted=asked)
         changed, failed = sync_flags(self.bo, books, self._fid, libraries=self.s.libraries,
                                      dry_run=self.s.dry_run)
         logger.info("Read-Along flags: %d set, %d failed", changed, failed)
@@ -780,8 +781,8 @@ class Job:
             if self.state.in_flight:
                 logger.info("in flight: %s", self.state.in_flight)
             return 0
-        if not self.resumed_window:
-            self.state.run = {"job": self.s.job_id, "started": self.t0}
+        if self.state.run.get("id") != self.window_id:
+            self.state.run = {"id": self.window_id, "started": self.t0}
         self._save()
         try:
             self._free_parked()
@@ -824,6 +825,8 @@ class Job:
                     continue
                 in_a_row = 0
                 started += 1
+                if rec["id"] in asked:
+                    self._drop_ask(rec["id"], asked[rec["id"]], "started by the nightly run")
                 self._guard(self.state.in_flight, self.advance)
                 if self.state.in_flight:         # one book at a time: never orphan the kept one
                     break
@@ -836,6 +839,123 @@ class Job:
             return 1
         rc = self.report()
         return 1 if self.starts_stalled else rc  # three books in a row: fail the Job so it alerts
+
+    # a tick: one look, never a sleep ------------------------------------------------------
+    def tick(self):
+        """The worker's look between nightly runs, every TICK_SECONDS: the
+        in-flight book once (published as soon as Storyteller is done), then
+        at most one start of a book the librarian asked for. Idle -- no ask,
+        nothing in flight -- it makes no network call at all. A failure is not
+        charged to a book: it fails the tick (counted, told once a day), and
+        a book with a failure counted within ERROR_INTERVAL is left to the
+        nightly run. Returns 0, or 1 when the tick failed."""
+        asks = wanted.read(self.s.wanted_dir, now=self.clock(), settle=self.s.marker_settle)
+        fl = self.state.in_flight
+        if not asks and not fl:
+            if (self.state.pending_push or {}).get("lines") and not self.s.dry_run:
+                return self.report()            # an undelivered push goes out as soon as Apprise is back
+            return 0
+        if self.s.dry_run:
+            logger.info("dry run: would look at book %s and the asks for %s", (fl or {}).get("book"), sorted(asks))
+            return 0
+        try:
+            self._ensure_login()
+            if fl and not self.state.recent_error(fl["book"], fl["pair"], self.clock(), ERROR_INTERVAL):
+                self._look(fl)
+            if self.state.in_flight is None and asks:
+                self._start_asked(asks)
+        except Exception as e:
+            logger.exception("read-along tick failed")
+            return self._tick_failed(e)
+        return self.report()
+
+    def _ensure_login(self):
+        if not getattr(self.st, "token", None):
+            self.st.login(self.s.storyteller_user, self.s.storyteller_pass)
+
+    def _look(self, fl):
+        try:
+            self.advance(fl, poll=False)
+        except BookGone:
+            self._close(fl, "abandoned", {"uuid": fl.get("uuid"), "why": "book deleted"},
+                        f"🗑️ {self._title(fl)} — deleted from BookOrbit; its alignment is dropped")
+
+    def _not_candidate(self, d):
+        """Why an asked-for book is not (yet) to be aligned; None when it is."""
+        files = d.get("files") or []
+        if d.get("libraryId") not in self.s.libraries:
+            return "not in a read-along library"
+        if opted_out(d):
+            return f"tagged {OPT_OUT_TAG}"
+        if str(d.get("id")) in self.state.blocked:
+            return "blocked (the nightly run retries it)"
+        if any(is_readalong_file(f) for f in files):
+            return "already has a read-along"
+        pair = pair_key(files)
+        if pair is None:
+            return "no single EPUB + m4b pair"
+        now = self.clock()
+        if self.state.is_refused(d["id"], pair):
+            return "refused for these files"
+        if self.state.gave_up(d["id"], pair, now):
+            return "given up for these files"
+        if self.state.recent_error(d["id"], pair, now, ERROR_INTERVAL):
+            return "failed recently (the nightly run retries it)"
+        return None
+
+    def _start_asked(self, asks):
+        """At most one start: the oldest ask whose book is a candidate. An ask
+        is done (dropped) unless it has to wait for Storyteller or for ONLY."""
+        preflighted = False
+        for bid, at in sorted(asks.items(), key=lambda kv: kv[1]):
+            if self.s.only and bid not in self.s.only:
+                continue                        # a temporary restriction: kept for later
+            try:
+                d = self.bo.detail(bid)
+            except BookGone:
+                self._drop_ask(bid, at, "the book is gone")
+                continue
+            why = self._not_candidate(d)
+            if why:
+                self._drop_ask(bid, at, why)
+                continue
+            if not preflighted:
+                self.preflight()                # a failure here is the job's: the tick fails, the ask stays
+                preflighted = True
+            busy = self.storyteller_busy()
+            if busy:
+                logger.info("asked for book %s; Storyteller is busy with %s", bid, busy)
+                return
+            rec = {"id": bid, "title": d.get("title"), "files": d.get("files") or []}
+            try:
+                started = self.start(rec)
+            except Exception as e:
+                fl = self.state.in_flight
+                if fl and fl["book"] == bid:    # the import may exist: kept for the next look / adoption
+                    logger.exception("start of asked book %s failed after its import was requested", bid)
+                    self._fail(fl, f"start: {type(e).__name__}: {e}")
+                else:
+                    logger.exception("start of asked book %s failed", bid)
+                    self._start_failed(rec, e)
+                self._drop_ask(bid, at, "its start failed (the nightly run retries it)")
+                return
+            self._drop_ask(bid, at, "started" if started else "not started")
+            return
+
+    def _drop_ask(self, bid, at, why):
+        """Done with an ask -- unless the librarian asked again meanwhile."""
+        if wanted.asked_at(self.s.wanted_dir, bid) == at:
+            wanted.drop(self.s.wanted_dir, bid)
+            logger.info("ask for book %s done: %s", bid, why)
+
+    def _tick_failed(self, e):
+        today = time.strftime("%Y-%m-%d", time.localtime(self.clock()))
+        if self.state.tick_failure_told != today:
+            self.state.tick_failure_told = today
+            self._tell(f"⚠️ read-along worker failing between runs: {type(e).__name__}: {str(e)[:150]} "
+                       f"(told once a day)")
+        self.report()
+        return 1
 
     def report(self):
         p = self.state.pending_push
@@ -854,6 +974,3 @@ class Job:
             return 0
         return 1                                 # kept: the next run sends it
 
-
-def install_sigterm(job):
-    signal.signal(signal.SIGTERM, job.on_sigterm)

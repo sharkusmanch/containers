@@ -44,7 +44,14 @@ class Settings:
     poll_seconds: int = 60
     dry_run: bool = False
     only: frozenset = field(default_factory=frozenset)
-    job_id: str = ""                           # the Kubernetes Job's uid (downward API): its retry pods share a window
+    wanted_dir: str = "/media/library_intake/.readalong/wanted"   # the librarian's asks (app/readalong/wanted.py)
+    marker_settle: int = 300                   # an ask is acted on once it is this old (BookOrbit settles)
+    tick_seconds: int = 60                     # the worker looks at asks and the in-flight book this often
+    nightly_at: str = "00:30"                  # local time the nightly run may start ...
+    nightly_until: str = "04:00"               # ... and no later: a night missed by then is skipped
+    state_required: bool = True                # a missing state file is an error, never a fresh start
+    metrics_port: int = 9090
+    stale_after: int = 3600                    # /healthz fails when the loop has not beaten for this long
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Settings":
@@ -61,8 +68,13 @@ class Settings:
         for k in ("START_HOURS", "RUN_HOURS", "FINISH_HOURS"):
             if env.get(k):
                 kw[k.lower()] = float(env[k])
-        if env.get("JOB_ID"):
-            kw["job_id"] = env["JOB_ID"]
+        for k in ("WANTED_DIR", "NIGHTLY_AT", "NIGHTLY_UNTIL"):
+            if env.get(k):
+                kw[k.lower()] = env[k]
+        for k in ("MARKER_SETTLE", "TICK_SECONDS", "METRICS_PORT", "STALE_AFTER"):
+            if env.get(k):
+                kw[k.lower()] = int(env[k])
+        kw["state_required"] = _bool(env.get("STATE_REQUIRED"), True)
         if env.get("LIBRARIES"):
             kw["libraries"] = _ints(env["LIBRARIES"])
         if env.get("QUIET_HOURS"):
@@ -79,4 +91,17 @@ class Settings:
         if not 0 <= s.finish_hours < s.run_hours:
             # else no publish could ever begin -- and nothing would say so
             raise ValueError(f"need 0 <= FINISH_HOURS < RUN_HOURS, got {s.finish_hours}, {s.run_hours}")
+        at, until = hhmm(s.nightly_at), hhmm(s.nightly_until)
+        if not at < until:
+            raise ValueError(f"need NIGHTLY_AT < NIGHTLY_UNTIL, got {s.nightly_at}, {s.nightly_until}")
+        if s.tick_seconds < 10:
+            raise ValueError(f"TICK_SECONDS too small: {s.tick_seconds}")
         return s
+
+
+def hhmm(v: str) -> tuple[int, int]:
+    """'00:30' -> (0, 30)."""
+    h, m = (int(x) for x in v.split(":"))
+    if not (0 <= h < 24 and 0 <= m < 60):
+        raise ValueError(f"not a time of day: {v!r}")
+    return h, m

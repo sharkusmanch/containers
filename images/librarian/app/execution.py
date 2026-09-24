@@ -59,6 +59,7 @@ from app.config import SOURCES
 from app.executor import ExecResult
 from app.logutil import log_safe
 from app.policy import GuardContext, KidsLists, check_intent
+from app.readalong import wanted
 
 logger = logging.getLogger(__name__)
 
@@ -395,6 +396,24 @@ def record_result(svc, key: str, intent: dict | None, res: ExecResult) -> None:
             _failed(svc, rec, intent, res.detail or f"executor returned {res.state!r}")
     if res.state == "filed" and intent is not None:
         run_updates(svc, key, run_id=intent.get("run_id"), book_id=res.book_id)
+    if res.state == "filed":
+        readalong_wanted(svc, key, res.book_id)
+
+
+def readalong_wanted(svc, key: str, book_id) -> None:
+    """P4 trigger: ask the read-along worker to look at `book_id` now. The
+    worker decides whether the book holds an EPUB + m4b pair (and everything
+    else), so this makes no BookOrbit call. Best effort, outside svc.lock: a
+    marker that cannot be written only means the book waits for the nightly
+    run, never a failed filing."""
+    s = svc.settings
+    if not s.readalong_trigger or book_id is None:
+        return
+    try:
+        wanted.write(s.readalong_wanted_dir, book_id, now=time.time(), arrival=key)
+        logger.info("asked the read-along worker to look at book %s", book_id)
+    except Exception as e:
+        logger.warning("read-along marker for book %s not written: %s", book_id, log_safe(e))
 
 
 def _intent_id(intent, rec) -> str:
