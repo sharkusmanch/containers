@@ -9,6 +9,9 @@ ARG ALPINE_VERSION=3.24
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_VERSION=2.1.280
 
+# renovate: datasource=npm depName=@openai/codex
+ARG CODEX_VERSION=0.156.1
+
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 ARG KUBECTL_VERSION=v1.37.0
 
@@ -31,6 +34,7 @@ FROM alpine:${ALPINE_VERSION} AS builder
 
 ARG PASEO_VERSION
 ARG CLAUDE_VERSION
+ARG CODEX_VERSION
 ARG KUBECTL_VERSION
 ARG HELM_VERSION
 ARG COSIGN_VERSION
@@ -87,6 +91,17 @@ RUN HOME=/opt/claude bash -c "curl -fsSL https://claude.ai/install.sh | bash -s 
     && test -x "$(readlink -f /opt/claude/.local/bin/claude)" \
     && chmod -R a+rX /opt/claude
 
+# Codex CLI — paseo's Codex provider finds `codex` on PATH and runs `codex app-server`.
+# OpenAI's standalone musl package, the layout its install.sh lays down (bin/codex +
+# codex-code-mode-host, bundled rg and bwrap); Codex finds the package from its
+# resolved path, so the /usr/local/bin symlink works. Release tags are rust-v<npm
+# version>. Root-owned, so it can't self-update; it only shows a notice.
+RUN mkdir -p /opt/codex \
+    && curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-package-x86_64-unknown-linux-musl.tar.gz" \
+      | tar -xz --no-same-owner -C /opt/codex \
+    && /opt/codex/bin/codex --version \
+    && chmod -R a+rX /opt/codex
+
 # ============================================================================
 # Runtime — minimal Alpine + paseo daemon (single foreground process under tini)
 # ============================================================================
@@ -101,7 +116,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/getpaseo/paseo" \
       org.opencontainers.image.title="paseo" \
-      org.opencontainers.image.description="Headless Paseo agent-orchestration daemon (claude + kubectl/helm/flux/kustomize/kubeconform/cosign GitOps toolchain baked)"
+      org.opencontainers.image.description="Headless Paseo agent-orchestration daemon (claude + codex + kubectl/helm/flux/kustomize/kubeconform/cosign GitOps toolchain baked)"
 
 # coreutils: paseo launcher shebang uses `env -S` (busybox env can't parse it).
 # libuv: node-pty runtime lib. libstdc++/libgcc: node + claude native binaries.
@@ -132,11 +147,13 @@ COPY --from=builder /usr/local/bin/cosign      /usr/local/bin/cosign
 COPY --from=builder /usr/local/bin/flux        /usr/local/bin/flux
 COPY --from=builder /usr/local/bin/kubeconform /usr/local/bin/kubeconform
 COPY --from=builder /opt/claude                /opt/claude
+COPY --from=builder /opt/codex                 /opt/codex
 # Recreate the launcher symlinks (do NOT COPY the npm bin symlink — COPY dereferences
 # it into a plain file, breaking the launcher's `import '../dist/index.js'` relative
 # resolution; Node must follow the symlink to the package's real bin/ to find dist/).
 RUN ln -sf ../lib/node_modules/@getpaseo/cli/bin/paseo /usr/local/bin/paseo \
-    && ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude
+    && ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude \
+    && ln -sf /opt/codex/bin/codex /usr/local/bin/codex
 
 # rootfs/ carries the entrypoint (seeds a default config.json, voice off, then execs
 # the daemon).

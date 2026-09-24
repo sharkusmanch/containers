@@ -3,7 +3,7 @@
 Headless [Paseo](https://github.com/getpaseo/paseo) daemon — orchestrates coding
 agents (Claude Code et al.) on cluster hardware, reachable from a phone/laptop/CLI.
 Minimal Alpine image with the paseo daemon (node-pty compiled from source for musl),
-Claude Code, a Kubernetes/GitOps toolchain (kubectl, helm, flux, kustomize, kubeconform),
+Claude Code, the Codex CLI, a Kubernetes/GitOps toolchain (kubectl, helm, flux, kustomize, kubeconform),
 image/secrets CLIs (cosign, skopeo, crane, openbao `bao`, sops, age, grype, syft), git, and a
 Python/jq/yq toolchain baked in. Single
 foreground process (`paseo daemon start --foreground`) under `tini`.
@@ -11,7 +11,7 @@ foreground process (`paseo daemon start --foreground`) under `tini`.
 ## Upstream
 
 - **Repository**: [getpaseo/paseo](https://github.com/getpaseo/paseo) (`@getpaseo/cli`)
-- **Version**: pinned in the Dockerfile (`PASEO_VERSION`); kubectl/helm/cosign/flux/kubeconform/Claude also pinned
+- **Version**: pinned in the Dockerfile (`PASEO_VERSION`); kubectl/helm/cosign/flux/kubeconform/Claude/Codex also pinned
 
 ## Usage
 
@@ -37,7 +37,7 @@ docker run -d \
 
 | Path | Description |
 |------|-------------|
-| `/config` | Home dir. `PASEO_HOME` (`.paseo/`) holds config, agent records, relay keypair, logs. Shared agent auth (`~/.claude`) lives here too. |
+| `/config` | Home dir. `PASEO_HOME` (`.paseo/`) holds config, agent records, relay keypair, logs. Shared agent auth (`~/.claude`, `~/.codex`) lives here too. |
 
 ## Convention exceptions
 
@@ -49,6 +49,11 @@ docker run -d \
   a musl/Alpine image).
 - **`tini` as PID 1** — paseo spawns agent CLIs (claude) via node-pty; tini reaps the
   grandchild processes so they don't accumulate as zombies under the daemon.
+- **Codex needs Full Access mode** — the Codex CLI is OpenAI's standalone musl package
+  in `/opt/codex`. Its `workspace-write`/`read-only` sandboxes use bubblewrap, which
+  needs user namespaces, and the default container seccomp profile denies those. So
+  under paseo's Default Permissions and Auto-review modes (`workspace-write`), shell
+  commands fail here; use Full Access (`danger-full-access`).
 - **No runtime patches** — `/opt/paseo-patches` (a `NODE_OPTIONS` preload holding
   `deflate.cjs` and `lease-hook.mjs`) was removed on 2026-09-22 with paseo 0.9.1. The
   lease patch is obsolete: 0.9.x pings every 10s, so the unchanged 45s lease has a 4.5x

@@ -18,7 +18,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 |-------|-------------|----------|
 | [autoshift](./images/autoshift/) | Automatic SHiFT code redemption for Borderlands | [Fabbi/autoshift](https://github.com/Fabbi/autoshift) |
 | [changedetection-mcp-sse](./images/changedetection-mcp-sse/) | ChangeDetection.io MCP server with SSE transport (k8s) | [rusty4444/changedetection-mcp](https://github.com/rusty4444/changedetection-mcp) |
-| [daedalus](./images/daedalus/) | Minimal self-owned SSH dev box (sshd + baked kubectl/helm/Claude toolchain) | [OpenSSH](https://www.openssh.com/) |
+| [daedalus](./images/daedalus/) | Minimal self-owned SSH dev box (sshd + baked kubectl/helm/Claude/Codex toolchain) | [OpenSSH](https://www.openssh.com/) |
 | [db-backup](./images/db-backup/) | Database dump toolbox (PostgreSQL/MariaDB/MongoDB clients + curl/jq) for backup CronJobs | Original |
 | [envsubst](./images/envsubst/) | Environment variable substitution with defaults | [a8m/envsubst](https://github.com/a8m/envsubst) |
 | [flareproxy](./images/flareproxy/) | HTTP proxy adapter for FlareSolverr | [mimnix/FlareProxy](https://github.com/mimnix/FlareProxy) |
@@ -29,7 +29,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [mcp-proxy](./images/mcp-proxy/) | Bridge stdio MCP servers to SSE/HTTP transport | [sparfenyuk/mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) |
 | [miniflux-mcp-sse](./images/miniflux-mcp-sse/) | Miniflux MCP server with SSE transport (k8s) | [tssujt/miniflux-mcp](https://github.com/tssujt/miniflux-mcp) |
 | [nextdns-rewrites-sync](./images/nextdns-rewrites-sync/) | Sync Tailscale devices + static entries to NextDNS rewrites API | Original |
-| [paseo](./images/paseo/) | Headless Paseo agent-orchestration daemon (claude/kubectl/helm baked) | [getpaseo/paseo](https://github.com/getpaseo/paseo) |
+| [paseo](./images/paseo/) | Headless Paseo agent-orchestration daemon (claude/codex/kubectl/helm baked) | [getpaseo/paseo](https://github.com/getpaseo/paseo) |
 | [pod-reaper](./images/pod-reaper/) | Rule-based Kubernetes pod cleanup controller | [target/pod-reaper](https://github.com/target/pod-reaper) |
 | [podcast-feed-filter](./images/podcast-feed-filter/) | Podcast RSS feed filter preserving enclosures | Original |
 | [redlib](./images/redlib/) | Private Reddit frontend | [redlib-org/redlib](https://github.com/redlib-org/redlib) (PR #509) |

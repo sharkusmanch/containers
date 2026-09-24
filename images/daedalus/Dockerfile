@@ -12,6 +12,9 @@ ARG HELM_VERSION=v4.3.0
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_VERSION=2.1.280
 
+# renovate: datasource=npm depName=@openai/codex
+ARG CODEX_VERSION=0.156.1
+
 # renovate: datasource=github-releases depName=sigstore/cosign
 ARG COSIGN_VERSION=v3.1.3
 
@@ -29,6 +32,7 @@ FROM alpine:${ALPINE_VERSION} AS builder
 ARG KUBECTL_VERSION
 ARG HELM_VERSION
 ARG CLAUDE_VERSION
+ARG CODEX_VERSION
 ARG COSIGN_VERSION
 ARG FLUX_VERSION
 ARG KUBECONFORM_VERSION
@@ -72,6 +76,16 @@ RUN HOME=/opt/claude bash -c "curl -fsSL https://claude.ai/install.sh | bash -s 
     && test -x "$(readlink -f /opt/claude/.local/bin/claude)" \
     && chmod -R a+rX /opt/claude
 
+# Codex CLI — OpenAI's standalone musl package, the layout its install.sh lays down
+# (bin/codex + codex-code-mode-host, bundled rg and bwrap). Codex finds the package
+# from its resolved path, so the /usr/local/bin symlink works. Release tags are
+# rust-v<npm version>. Root-owned, so it can't self-update; it only shows a notice.
+RUN mkdir -p /opt/codex \
+    && curl -fsSL "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/codex-package-x86_64-unknown-linux-musl.tar.gz" \
+      | tar -xz --no-same-owner -C /opt/codex \
+    && /opt/codex/bin/codex --version \
+    && chmod -R a+rX /opt/codex
+
 # ============================================================================
 # Runtime stage — minimal Alpine + sshd + dev toolchain (single process: sshd)
 # ============================================================================
@@ -86,7 +100,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://www.openssh.com/" \
       org.opencontainers.image.title="daedalus" \
-      org.opencontainers.image.description="Minimal self-owned SSH dev box (sshd + baked kubectl/helm/flux/kustomize/kubeconform/cosign/claude toolchain)"
+      org.opencontainers.image.description="Minimal self-owned SSH dev box (sshd + baked kubectl/helm/flux/kustomize/kubeconform/cosign/claude/codex toolchain)"
 
 # openssh (server+client; client needed for git-over-ssh), the dev toolchain, and
 # the runtime libs the Claude/node binaries need (libstdc++/libgcc).
@@ -115,7 +129,9 @@ COPY --from=builder /out/cosign      /usr/local/bin/cosign
 COPY --from=builder /out/flux        /usr/local/bin/flux
 COPY --from=builder /out/kubeconform /usr/local/bin/kubeconform
 COPY --from=builder /opt/claude      /opt/claude
-RUN ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude
+COPY --from=builder /opt/codex       /opt/codex
+RUN ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude \
+    && ln -sf /opt/codex/bin/codex /usr/local/bin/codex
 
 # Our sshd config + entrypoint
 COPY rootfs/ /

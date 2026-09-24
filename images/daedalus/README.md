@@ -2,7 +2,7 @@
 
 Minimal self-owned SSH dev box: a single-process `sshd` on Alpine with a baked
 development toolchain (kubectl, helm, flux, kustomize, kubeconform, cosign, skopeo, crane,
-openbao `bao`, sops, age, grype, syft, Claude Code, Go, Node, Python, git, tmux, uv, jq, yq).
+openbao `bao`, sops, age, grype, syft, Claude Code, Codex CLI, Go, Node, Python, git, tmux, uv, jq, yq).
 Used as a remote/mobile admin entry point into a Kubernetes cluster, exposed
 over Tailscale. Replaces a previous LinuxServer.io `openssh-server`-based image
 whose runtime package install (before sshd started) caused startup crashloops.
@@ -10,7 +10,7 @@ whose runtime package install (before sshd started) caused startup crashloops.
 ## Upstream
 
 - **Repository**: [OpenSSH](https://www.openssh.com/) (Alpine `openssh-server`)
-- **Version**: tracks the Alpine base (currently 3.24); kubectl/helm/cosign/flux/kubeconform/Claude pinned (see Dockerfile)
+- **Version**: tracks the Alpine base (currently 3.24); kubectl/helm/cosign/flux/kubeconform/Claude/Codex pinned (see Dockerfile)
 
 ## Usage
 
@@ -47,6 +47,11 @@ ssh -p 2222 abc@<host>
 - **Baked toolchain**: kubectl, helm, cosign, flux, and kubeconform are installed at
   pinned versions at build time (not at runtime); openbao (`bao`), skopeo, crane, kustomize,
   sops, age, grype, syft, plus Go/Node/Python/git/tmux/uv/jq/yq from Alpine.
+- **Codex CLI** is OpenAI's standalone musl package in `/opt/codex` (symlinked onto
+  PATH). Its `workspace-write`/`read-only` sandboxes use bubblewrap, which needs user
+  namespaces, and the default container seccomp profile denies those, so sandboxed
+  commands fail here. Run it with `--sandbox danger-full-access`, or set `sandbox_mode`
+  to that in `~/.codex/config.toml`.
 - **Host keys persist** under `/config/ssh_host_keys` to avoid client
   "host key changed" warnings across container recreates.
 
