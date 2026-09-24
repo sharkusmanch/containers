@@ -59,6 +59,8 @@ BLOCKED_TELL_AFTER = 20 * 3600    # a blocker often clears by itself (a scan, Bo
 RETELL_BLOCKED = 7 * 86400
 RELEASE_TELL_AFTER = 3 * 86400    # a Storyteller book we cannot delete, told once after this
 PUSH_LINES_MAX = 40
+LOOK_RETRY_FIRST = 1800           # a tick's failed look at the in-flight book waits 30 min, doubling
+                                  # up to ERROR_INTERVAL; the second failure in a row is charged
 PUSH_RETRY_FIRST = 1800           # an undelivered push is retried after 30 min, doubling ...
 PUSH_RETRY_MAX = 6 * 3600         # ... up to 6 h (ticks would otherwise retry it every minute)
 
@@ -190,17 +192,15 @@ def m4b_seconds(path, run=subprocess.run):
 
 
 def send_push(url, title, body, *, post=requests.post, sleep=time.sleep):
-    """Apprise answers 204 for an unknown key: only 200 counts as delivered. A
-    424 is a partial delivery (a long push split into parts, one failed):
-    re-sending would repeat the parts that arrived, so it counts as sent."""
+    """Only 200 counts as delivered: Apprise answers 204 for an unknown key and
+    424 when its one target (Bark) failed. A re-send after a 424 may repeat the
+    parts of a long, split push that did arrive -- better than a lost "gave up"
+    or "blocked" line; the caller's backoff keeps repeats rare."""
     last = None
     for attempt in range(3):
         try:
             r = post(url, json={"title": title, "body": body, "type": "info"}, timeout=30)
             if r.status_code == 200:
-                return True
-            if r.status_code == 424:
-                logger.warning("push partly delivered (HTTP 424); not re-sent")
                 return True
             last = f"HTTP {r.status_code}"
         except requests.RequestException as e:
@@ -447,8 +447,9 @@ class Job:
         if fl.get("closing"):
             self._close(fl, fl["closing"], {"uuid": fl.get("uuid"), "resumed": True}, fl.get("closing_line"))
             return
-        if poll:
-            fl.pop("look_failed_at", None)       # the nightly run has had its go: ticks may look again
+        if poll:                                 # the nightly run has had its go: ticks may look again
+            fl.pop("look_failed_at", None)
+            fl.pop("look_fails", None)
         if not fl.get("uuid"):
             return self._adopt(fl, poll)
         d = self.bo.detail(fl["book"])
@@ -847,10 +848,16 @@ class Job:
                 self._guard(self.state.in_flight, self.advance)
                 if self.state.in_flight:         # one book at a time: never orphan the kept one
                     break
-            # every ask read at the start has now had its night: a book still a candidate
-            # stays one, an ask that kept failing to evaluate blocks nothing any more
-            for bid, at in asked.items():
-                self._drop_ask(bid, at, "served by the nightly run")
+            # A started book's ask went at its start. A book that is no candidate by
+            # tonight's listing loses its ask (one that kept failing to evaluate blocks
+            # nothing any more). Every other ask -- a book not reached, one that did not
+            # fit, one whose start failed -- stays for the ticks, which judge it afresh.
+            # A stopped run keeps them all for the run that resumes it.
+            if not self.stopping:
+                candidates = {b["id"] for b in chosen}
+                for bid, at in asked.items():
+                    if bid not in candidates and (not self.s.only or bid in self.s.only):
+                        self._drop_ask(bid, at, "not a candidate (nightly run)")
             self.completed = not self.stopping
         except Exception as e:                   # not one book's failure (Storyteller or BookOrbit down)
             logger.exception("read-along run failed")
@@ -867,10 +874,10 @@ class Job:
         """The worker's look between nightly runs, every TICK_SECONDS: the
         in-flight book once (published as soon as Storyteller is done), then
         at most one start of a book the librarian asked for. Idle -- no ask,
-        nothing in flight -- it makes no network call at all. A failure is not
-        charged to a book: it fails the tick (counted, told once a day), and
-        a book with a failure counted within ERROR_INTERVAL is left to the
-        nightly run. Returns 0, or 1 when the tick failed."""
+        nothing in flight -- it makes no network call at all. A look at the
+        in-flight book that fails backs off (see _look); a failure outside it
+        (the login, the busy check) is not charged to a book: it fails the
+        tick (counted, told once a day). Returns 0, or 1 when the tick failed."""
         asks = wanted.read(self.s.wanted_dir, now=self.clock(), settle=self.s.marker_settle)
         fl = self.state.in_flight
         if not asks and not fl:
@@ -882,7 +889,7 @@ class Job:
             return 0
         try:
             self._ensure_login()
-            if fl and self.clock() - fl.get("look_failed_at", 0) >= ERROR_INTERVAL:
+            if fl and self._may_look(fl):
                 self._look(fl)
             if self.state.in_flight is None and asks:
                 self._start_asked(asks)
@@ -895,11 +902,18 @@ class Job:
         if not getattr(self.st, "token", None):
             self.st.login(self.s.storyteller_user, self.s.storyteller_pass)
 
+    def _may_look(self, fl):
+        n = fl.get("look_fails", 0)
+        return not n or self.clock() - fl.get("look_failed_at", 0) >= \
+            min(LOOK_RETRY_FIRST * 2 ** (n - 1), ERROR_INTERVAL)
+
     def _look(self, fl):
-        """One look at the in-flight book. A failure is charged like the nightly
-        run's (once per ERROR_INTERVAL) and parks the book for ticks for that
-        long: a failing download or publish must never repeat every minute.
-        The nightly run owns the retry."""
+        """One look at the in-flight book. A failed look backs off -- 30 min,
+        doubling up to ERROR_INTERVAL -- so a failing download or publish never
+        repeats every minute. One failure (a BookOrbit or Storyteller restart)
+        is only logged; the second in a row is charged like the nightly run's
+        (once per ERROR_INTERVAL, told). A clean look resets it, and so does
+        the nightly run, which owns the retries."""
         try:
             self.advance(fl, poll=False)
         except BookGone:
@@ -907,8 +921,17 @@ class Job:
                         f"🗑️ {self._title(fl)} — deleted from BookOrbit; its alignment is dropped")
         except Exception as e:
             logger.exception("book %s", fl["book"])
+            fl["look_fails"] = fl.get("look_fails", 0) + 1
             fl["look_failed_at"] = self.clock()
-            self._fail(fl, f"{type(e).__name__}: {e}")
+            if fl["look_fails"] >= 2:
+                self._fail(fl, f"{type(e).__name__}: {e}")
+            else:
+                self._save()
+        else:
+            if fl.pop("look_fails", None) is not None:
+                fl.pop("look_failed_at", None)
+                if self.state.in_flight is fl:
+                    self._save()
 
     def _not_candidate(self, d):
         """Why an asked-for book is not (yet) to be aligned; None when it is."""

@@ -219,21 +219,87 @@ def test_the_nightly_starts_asked_books_first_and_drops_their_asks(env):
     assert has_readalong(lib, 222) and has_readalong(lib, 111)
 
 
-def test_a_failing_look_is_charged_once_and_parks_the_book_for_ticks(env):
-    """A failure while looking (a download, a publish, Storyteller) must never repeat every minute."""
+def test_a_failing_look_backs_off_and_is_charged_from_the_second_failure(env):
+    """A failure while looking (a download, a publish, Storyteller) must never repeat
+    every minute, and one blip (a restart) must not charge the book or tell anyone."""
     lib, st, clock, pushes, make, tmp = env
     ask(tmp, 111, clock.t - 400)
     make().tick()
     calls = []
 
     def book(uuid):
-        calls.append(uuid)
+        calls.append(clock.t)
         raise StorytellerHTTPError(f"GET /api/v2/books/{uuid} -> 503: b'restarting'", 503)
     st.book = book
-    for _ in range(5):
-        clock.t += 60
-        make().tick()
-    assert len(calls) == 1                              # looked once, then left to the nightly run
+    t0 = clock.t
+
+    def tick_until(minutes):                            # a tick every minute up to t0 + minutes
+        while clock.t < t0 + minutes * 60:
+            clock.t += 60
+            make().tick()
+    tick_until(30)                                      # the first failure, then half an hour of ticks
+    assert [c - t0 for c in calls] == [60]
+    s = state_of(tmp)
+    assert s["errors"] == {} and s["in_flight"]["look_fails"] == 1 and not pushes   # a blip: logged only
+    tick_until(92)                                      # 30 min after it the second -> charged, told
+    assert [c - t0 for c in calls] == [60, 60 + 1800, 60 + 1800 + 3600]            # then 1 h
     s = state_of(tmp)
     assert s["errors"]["111"]["count"] == 1 and s["in_flight"]["uuid"] == "u1"
-    assert "failed" in pushes[-1][1]
+    assert len([b for _t, b in pushes if "failed" in b]) == 1                       # the third is not re-told
+    tick_until(3 * 24 * 60)                             # days of ticks alone (no nightly run to retry it):
+    gaps = [b - a for a, b in zip(calls, calls[1:])]    # the waits double up to ERROR_INTERVAL ...
+    assert gaps[:7] == [1800, 3600, 7200, 14400, 28800, 57600, 20 * 3600]
+    assert state_of(tmp)["in_flight"] is None           # ... and one count per 20 h gives up at the third
+    assert [b for _t, b in pushes if "gave up after 3 tries" in b]
+
+
+def test_a_clean_look_resets_the_backoff(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.polls_until_done = 10 ** 6                      # keeps aligning
+    ask(tmp, 111, clock.t - 400)
+    make().tick()
+    real = st.book
+    fail = {"on": True}
+
+    def book(uuid):
+        if fail["on"]:
+            raise StorytellerHTTPError(f"GET /api/v2/books/{uuid} -> 502: b'bad gateway'", 502)
+        return real(uuid)
+    st.book = book
+    clock.t += 60
+    make().tick()                                      # blip 1
+    fail["on"] = False
+    clock.t += 1800
+    make().tick()                                      # a clean look: reset
+    assert "look_fails" not in state_of(tmp)["in_flight"]
+    fail["on"] = True
+    clock.t += 60
+    make().tick()                                      # blip 2, not "the second in a row"
+    assert state_of(tmp)["errors"] == {} and state_of(tmp)["in_flight"]["look_fails"] == 1
+
+
+def test_the_nightly_clears_a_look_backoff(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.polls_until_done = 2
+    ask(tmp, 111, clock.t - 400)
+    make().tick()
+    real = st.book
+    st.book = lambda uuid: (_ for _ in ()).throw(StorytellerHTTPError("GET -> 503", 503))
+    clock.t += 60
+    make().tick()
+    st.book = real
+    assert state_of(tmp)["in_flight"]["look_fails"] == 1
+    assert make().run() == 0                            # the nightly polls it to the end
+    assert has_readalong(lib, 111) and state_of(tmp)["in_flight"] is None
+
+
+def test_a_nightly_stopped_before_its_starts_keeps_the_asks(env):
+    """A rollout or a node drain during the nightly (k3s patches land 00:00-06:00):
+    the asks it did not serve stay for the resumed run and the ticks."""
+    lib, st, clock, pushes, make, tmp = env
+    lib._books[111]["updatedAt"] = FRESH               # just filed: only the ask gets it aligned tonight
+    ask(tmp, 111, clock.t - 400)
+    job = make()
+    job.on_sigterm()                                   # before the first start
+    assert job.run() == 0
+    assert creates(st) == 0 and asked(tmp) == [111] and not job.completed

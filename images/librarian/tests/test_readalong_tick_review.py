@@ -201,3 +201,108 @@ def test_a_partially_delivered_push_is_not_resent_every_minute(env):
         j.tick()
     print("POSTs to Apprise in one idle hour:", len(posts))
     assert len(posts) <= 6
+
+
+# --- rv9 (review of 1df8809): asks the nightly run did not serve, a blip on a look, Apprise 424 --
+
+def test_a_nightly_stopped_mid_poll_keeps_the_asks_it_did_not_start(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    st.polls_until_done = 10_000                       # 111 keeps aligning
+    ask(tmp, 111, clock.t - 900)
+    ask(tmp, 222, clock.t - 400)
+    j = make()
+    real = j.sleep
+
+    def sleep(s):                                      # SIGTERM during the first poll of 111
+        j.on_sigterm()
+        real(s)
+    j.sleep = sleep
+    j.run()
+    assert asked(tmp) == [222] and not j.completed      # 111's went at its start; 222 was never reached
+
+
+def test_a_nightly_that_ends_with_a_book_aligning_leaves_the_rest_to_the_ticks(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    st.polls_until_done = 10_000
+    ask(tmp, 111, clock.t - 900)
+    ask(tmp, 222, clock.t - 400)
+    assert make(RUN_HOURS="1", START_HOURS="1", FINISH_HOURS="0.5").run() == 0
+    assert asked(tmp) == [222] and state_of(tmp)["in_flight"]["book"] == 111
+    for b in st.books_.values():                       # 111 finishes: the ticks publish it, then start 222
+        b["left"] = 0
+    for _ in range(3):
+        clock.t += 60
+        make().tick()
+    assert has_readalong(lib, 111) and state_of(tmp)["in_flight"]["book"] == 222 and asked(tmp) == []
+
+
+def test_one_blip_on_a_look_neither_parks_the_book_for_long_nor_charges_it(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.polls_until_done = 1
+    ask(tmp, 111, clock.t - 400)
+    make().tick()                                      # started
+    real = lib.detail
+    calls = {"n": 0}
+
+    def flaky(bid):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("GET /books/111 -> HTTP 502: bad gateway")   # BookOrbit restarting
+        return real(bid)
+    lib.detail = flaky
+    clock.t += 60
+    make().tick()                                      # the blip
+    for _ in range(30):                                # half an hour later it is looked at again
+        clock.t += 60
+        make().tick()
+    assert has_readalong(lib, 111) and state_of(tmp)["errors"] == {}
+    assert not [b for _t, b in pushes if "failed" in b]
+
+
+def test_the_nightly_drops_only_the_asks_of_books_that_are_no_candidates(env):
+    lib, st, clock, pushes, make, tmp = env
+    lib.add_book(333, "Solo/01. Solo", [(31, "01. Solo.epub", b"E")], title="Solo",
+                 updatedAt="2026-09-19T10:00:00.000Z", customMetadata=[{"fieldId": 2, "value": False}])
+    ask(tmp, 333, clock.t - 400)                       # no pair (yet): no candidate
+    ask(tmp, 999, clock.t - 400)                       # not in the listing (deleted, another library)
+    assert make().run() == 0
+    assert asked(tmp) == [] and has_readalong(lib, 111)
+
+
+def test_a_nightly_under_ONLY_keeps_the_other_asks(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    ask(tmp, 222, clock.t - 400)
+    assert make(ONLY="111").run() == 0
+    assert has_readalong(lib, 111) and asked(tmp) == [222]
+
+
+def test_an_asked_book_that_does_not_fit_the_run_keeps_its_ask(env):
+    lib, st, clock, pushes, make, tmp = env
+    ask(tmp, 111, clock.t - 400)
+    j = make()
+    j.fits = lambda seconds: False                     # too long for what is left of tonight's run
+    assert j.run() == 0
+    assert creates(st) == 0 and asked(tmp) == [111]
+    clock.t += 60
+    make().tick()                                      # a tick has no window: it starts it
+    assert creates(st) == 1 and asked(tmp) == []
+
+
+def test_a_424_is_not_delivered(env):
+    lib, st, clock, pushes, make, tmp = env
+
+    class R:
+        status_code = 424                              # Apprise: its one target (Bark) failed
+
+    assert jobmod.send_push("http://apprise", "t", "b", post=lambda url, json, timeout: R(),
+                            sleep=lambda s: None) is False
+    j = make()
+    j._push = lambda url, title, body: jobmod.send_push(url, title, body, post=lambda url, json, timeout: R(),
+                                                        sleep=lambda s: None)
+    j._tell("⚠️ Sharp Ends — gave up after 3 tries: x")
+    j.report()
+    p = state_of(tmp)["pending_push"]
+    assert p["lines"] == ["⚠️ Sharp Ends — gave up after 3 tries: x"] and p["tries"] == 1   # kept, backed off
