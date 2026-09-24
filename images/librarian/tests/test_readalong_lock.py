@@ -74,3 +74,42 @@ def test_a_resumed_publish_locks_again_harmlessly(env):
     make().run()
     assert has_readalong(lib, 111) and lib._books[111]["description"] == "CURATED"
     assert [b for b, _n in lib.lock_calls] == [111]
+
+
+def test_a_book_deleted_while_locking_is_closed_as_deleted(env):
+    """Review rv12 M4: the lock's GET 404s like detail() -- closed, not charged."""
+    lib, st, clock, pushes, make, tmp = env
+    real = lib.lock_all
+
+    def lock_all(book_id, **kw):
+        from app.readalong.job import BookGone
+        lib.remove_book(book_id)
+        raise BookGone(book_id)                     # what the adapter makes of the lock's 404
+    lib.lock_all = lock_all
+    make().run()
+    s = state_of(tmp)
+    assert s["in_flight"] is None and s["errors"] == {}
+    assert any("deleted" in b for _t, b in pushes)
+    lib.lock_all = real
+
+
+def test_the_stopped_alignment_hint_says_to_unlock_tags_first():
+    import inspect
+    from app.readalong import job
+    assert "unlock" in inspect.getsource(job.Job.advance).lower()
+
+
+def test_the_adapter_turns_a_404_while_locking_into_bookgone_and_nothing_else():
+    import pytest
+    from app.readalong.job import BookGone, Bookorbit
+
+    class Writer:
+        def __init__(self, msg):
+            self.msg = msg
+
+        def lock_all(self, book_id, **kw):
+            raise RuntimeError(self.msg)
+    with pytest.raises(BookGone):
+        Bookorbit(None, Writer("GET /books/111 -> HTTP 404: not found")).lock_all(111)
+    with pytest.raises(RuntimeError, match="502"):
+        Bookorbit(None, Writer("PATCH /books/111/metadata-and-locks -> HTTP 502: bad gateway")).lock_all(111)

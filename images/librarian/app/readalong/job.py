@@ -185,7 +185,12 @@ class Bookorbit:
         self.writer.patch_metadata(book_id, {"customMetadata": [{"fieldId": fid, "value": value}]}, [])
 
     def lock_all(self, book_id):
-        return self.writer.lock_all(book_id)          # a read-along book has its audio: lock it all
+        try:
+            return self.writer.lock_all(book_id)      # a read-along book has its audio: lock it all
+        except RuntimeError as e:        # deleted since the look: closed as such, like detail()
+            if _DETAIL_404.match(str(e)):
+                raise BookGone(book_id) from None
+            raise
 
 
 def m4b_seconds(path, run=subprocess.run):
@@ -483,7 +488,7 @@ class Job:
             if p == FAILED:
                 stopped = str((b.get("readaloud") or {}).get("status") or "").upper() == "STOPPED"
                 self._fail(fl, "stopped in Storyteller (cancelled or restarted); tag the book no-readalong "
-                               "to keep it out" if stopped else "Storyteller could not align it", d)
+                               "(unlock Tags first) to keep it out" if stopped else "Storyteller could not align it", d)
                 if self.state.in_flight is fl:  # not given up: Storyteller tries again, polled next run
                     try:
                         self._st(self.st.process, fl["uuid"])

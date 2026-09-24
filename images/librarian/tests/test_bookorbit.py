@@ -860,3 +860,11 @@ def test_lock_all_rejects_a_non_int_book_id(tmp_path):
     _c, w = _writer(tmp_path, _lock_transport([], {}))
     with pytest.raises(TypeError):
         w.lock_all("5")
+
+
+def test_lock_all_raises_when_an_existing_lock_was_lost(tmp_path):
+    from app.bookorbit import LOCK_FIELDS
+    sent = {}
+    _c, w = _writer(tmp_path, _lock_transport(["someFutureField"], sent, after_locks=list(LOCK_FIELDS)))
+    with pytest.raises(RuntimeError, match="did not take"):
+        w.lock_all(5)

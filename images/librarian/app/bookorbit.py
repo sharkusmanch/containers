@@ -472,8 +472,8 @@ class BookorbitWriter:
         self._client._write("PATCH", f"/books/{book_id}/metadata-and-locks",
                             {"lockedFields": sorted(set(current) | want)})
         after = self._client.get(f"/books/{book_id}").get("lockedFields")
-        missing = sorted(want - set(after if isinstance(after, list) else ()))
-        if missing:
+        missing = sorted((want | set(current)) - set(after if isinstance(after, list) else ()))
+        if missing:                      # a requested lock, or one the book already had
             raise RuntimeError(f"book {book_id}: metadata locks did not take (missing {', '.join(missing[:6])})")
         return True
 

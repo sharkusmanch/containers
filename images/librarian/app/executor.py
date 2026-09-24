@@ -618,6 +618,8 @@ class Executor:
                 attaching_audio = os.path.splitext(ctx["filename"])[1].lower() in _AUDIO_EXTS
                 if self.writer.lock_all(ctx["book_id"], audio=has_audio and not attaching_audio):
                     ctx["locked_all"] = True
+                    logger.info("locked the metadata of book %s before attaching %s", ctx["book_id"],
+                                log_safe(ctx["filename"]))
             ctx["dst"] = os.path.join(ctx["dst_dir"], ctx["filename"])
             if os.path.lexists(ctx["dst"]):
                 raise _Fail(f"destination {ctx['dst']} already exists; never overwriting")
