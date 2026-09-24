@@ -8,8 +8,11 @@ only ever reads names of the form `<digits>.json` whose content names the same
 book and carries a time; anything else is ignored and left alone.
 """
 import json
+import logging
 import os
 import re
+
+logger = logging.getLogger(__name__)
 
 _NAME = re.compile(r"^(\d+)\.json$")
 
@@ -39,6 +42,9 @@ def read(directory, *, now, settle) -> dict:
     try:
         names = os.listdir(directory)
     except FileNotFoundError:
+        return {}
+    except OSError as e:                         # not a directory, permissions, a stale NFS handle:
+        logger.warning("cannot read the asks in %s: %s", directory, e)   # never stops a run
         return {}
     out = {}
     for name in names:

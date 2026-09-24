@@ -39,6 +39,7 @@ class Worker:
         self.stopping = False
         self.job = None
         self.dry_nights = set()                  # DRY_RUN writes nothing: its nights are remembered here
+        self.missed = set()                      # nights already logged as missed
         self.state_path = os.path.join(settings.state_dir, "readalong.json")
         self.run_now_path = os.path.join(settings.state_dir, "run-now")
 
@@ -50,12 +51,17 @@ class Worker:
             self.job.on_sigterm()
 
     def sleep(self, seconds):
-        """Every wait beats the heartbeat (a wedged call does not)."""
+        """A wait inside a unit of work: it really waits (a wait that returned
+        at once after SIGTERM would turn every poll into a hot loop), beating
+        the heartbeat (a wedged call does not)."""
+        self._wait(seconds, interruptible=False)
+
+    def _wait(self, seconds, *, interruptible):
         end = self.monotonic() + seconds
         while True:
             self.beat()
             left = end - self.monotonic()
-            if left <= 0 or self.stopping:
+            if left <= 0 or (interruptible and self.stopping):
                 return
             self._sleep(min(left, 30))
 
@@ -74,12 +80,18 @@ class Worker:
         state = self._load()
         night, hm = self._night(now)
         ln = state.last_nightly
-        if ln.get("date") == night:
+        if night in self.dry_nights:
+            pass                                 # DRY_RUN: one look per night, whatever the state says
+        elif ln.get("date") == night:
             if not ln.get("done") and now >= ln.get("retry_at", 0) \
                     and now - ln.get("started", now) < self.s.run_hours * 3600:
                 return "nightly", (f"night-{night}", ln["started"])        # resumed, or its one retry
-        elif night not in self.dry_nights and hhmm(self.s.nightly_at) <= hm < hhmm(self.s.nightly_until):
+        elif hhmm(self.s.nightly_at) <= hm < hhmm(self.s.nightly_until):
             return "nightly", (f"night-{night}", now)
+        elif hm >= hhmm(self.s.nightly_until) and night not in self.missed:
+            self.missed.add(night)
+            logger.warning("the nightly run of %s was missed and is skipped (the worker was not running %s-%s)",
+                           night, self.s.nightly_at, self.s.nightly_until)
         if os.path.exists(self.run_now_path):
             return "now", (f"now-{int(now)}", now)
         return "tick", None
@@ -89,6 +101,8 @@ class Worker:
         job = Job(self.s, bo=self.bo, st=self.st, push=self.push, clock=self.clock, sleep=self.sleep,
                   monotonic=self.monotonic, duration=self.duration, tools=self.tools, window=window)
         self.job = job
+        if self.stopping:                        # SIGTERM arrived while the unit was being set up
+            job.on_sigterm()
         night = self._night(window[1])[0] if kind == "nightly" else None
         if kind == "nightly":
             if self.s.dry_run:
@@ -135,9 +149,10 @@ class Worker:
             return
         dirty = False
         ln = job.state.last_nightly
-        if kind == "nightly" and ln.get("date") == night and not self.stopping:
-            # stopped (a rollout): left open, the next pod resumes it. Failed before doing
-            # anything (BookOrbit or Storyteller unreachable): one retry. Otherwise the night is done.
+        if kind == "nightly" and ln.get("date") == night and (job.completed or not self.stopping):
+            # A run that reached its end is done, even if SIGTERM came during its push.
+            # Stopped earlier (a rollout): left open, the next pod resumes it. Failed before
+            # doing anything (BookOrbit or Storyteller unreachable): one retry. Else done.
             if nothing_ran and rc != 0 and not ln.get("attempts"):
                 ln.update(attempts=1, retry_at=now + NIGHTLY_RETRY_DELAY)
             else:
@@ -154,6 +169,11 @@ class Worker:
     # the loop -------------------------------------------------------------------------------------
     def serve(self):
         state = self._load()                     # fails fast on a missing or torn state
+        if "nightly" not in state.last_success and not self.s.dry_run:
+            # First start: count it as the last nightly success, so "no nightly success
+            # for two nights" can fire for a worker that never succeeds (the alert rule).
+            state.last_success["nightly"] = self.clock()
+            state.save()
         for k, ts in state.last_success.items():
             if k in metrics.KINDS and isinstance(ts, (int, float)):
                 metrics.LAST_SUCCESS.labels(kind=k).set(ts)
@@ -162,9 +182,10 @@ class Worker:
         while not self.stopping:
             self.beat()
             kind, window = self.next_unit()
+            if self.stopping:
+                break
             if kind != "tick":
                 logger.info("%s run %s", kind, window[0])
-            self.run_unit(kind or "tick", window)
-            if not self.stopping:
-                self.sleep(self.s.tick_seconds)
+            self.run_unit(kind, window)
+            self._wait(self.s.tick_seconds, interruptible=True)
         return 0

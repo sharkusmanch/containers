@@ -353,7 +353,7 @@ def test_a_resumed_window_past_its_end_only_finishes_up(env):
     first = make(window=("night-1", clock.t))
     first._push = lambda url, t, b: False            # the end-of-run push fails: kept for the next run
     assert first.run() == 1
-    clock.t += 10
+    clock.t += 1900                                  # past the push's first backoff (30 min)
     st.books_["u2"]["left"] = 1                      # 222 finishes just as the worker restarts
     resumed = make(window=("night-1", first.t0))     # the same night, resumed past its end
     assert resumed.run() == 0
@@ -1318,7 +1318,7 @@ def test_a_retry_pod_does_not_retell_a_counted_failure(env):
     first = make(window=("w", 1_800_000_000.0))
     first._push = lambda url, t, b: False            # exit 1 -> the retry pod
     assert first.run() == 1
-    clock.t += 60
+    clock.t += 1900                                  # past the push's backoff (30 min)
     make(window=("w", 1_800_000_000.0)).run()
     lines = [ln for _t, b in pushes for ln in b.splitlines() if "A Little Hatred" in ln]
     assert len(lines) == 1 and state_of(tmp)["errors"]["111"]["count"] == 1

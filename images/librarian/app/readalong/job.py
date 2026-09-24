@@ -59,6 +59,8 @@ BLOCKED_TELL_AFTER = 20 * 3600    # a blocker often clears by itself (a scan, Bo
 RETELL_BLOCKED = 7 * 86400
 RELEASE_TELL_AFTER = 3 * 86400    # a Storyteller book we cannot delete, told once after this
 PUSH_LINES_MAX = 40
+PUSH_RETRY_FIRST = 1800           # an undelivered push is retried after 30 min, doubling ...
+PUSH_RETRY_MAX = 6 * 3600         # ... up to 6 h (ticks would otherwise retry it every minute)
 
 
 class JobError(Exception):
@@ -188,12 +190,17 @@ def m4b_seconds(path, run=subprocess.run):
 
 
 def send_push(url, title, body, *, post=requests.post, sleep=time.sleep):
-    """Apprise answers 204 for an unknown key: only 200 counts as delivered."""
+    """Apprise answers 204 for an unknown key: only 200 counts as delivered. A
+    424 is a partial delivery (a long push split into parts, one failed):
+    re-sending would repeat the parts that arrived, so it counts as sent."""
     last = None
     for attempt in range(3):
         try:
             r = post(url, json={"title": title, "body": body, "type": "info"}, timeout=30)
             if r.status_code == 200:
+                return True
+            if r.status_code == 424:
+                logger.warning("push partly delivered (HTTP 424); not re-sent")
                 return True
             last = f"HTTP {r.status_code}"
         except requests.RequestException as e:
@@ -220,6 +227,8 @@ class Job:
         self.handled = set()
         self.state = State.load(os.path.join(settings.state_dir, "readalong.json"), required=settings.state_required)
         self.window_id, self.t0 = window or (f"run-{int(clock())}", clock())
+        self._fid = None                         # the Read-Along field's id, fetched when first needed
+        self.completed = False                   # a run that reached its end (a late SIGTERM changes nothing)
 
     def on_sigterm(self, *_):
         logger.warning("SIGTERM: stopping at the next safe point")
@@ -438,6 +447,8 @@ class Job:
         if fl.get("closing"):
             self._close(fl, fl["closing"], {"uuid": fl.get("uuid"), "resumed": True}, fl.get("closing_line"))
             return
+        if poll:
+            fl.pop("look_failed_at", None)       # the nightly run has had its go: ticks may look again
         if not fl.get("uuid"):
             return self._adopt(fl, poll)
         d = self.bo.detail(fl["book"])
@@ -580,6 +591,8 @@ class Job:
         fl["pair"] = list(pair)
         ra = next(f for f in done["files"] if is_readalong_file(f))
         try:
+            if self._fid is None:
+                self._fid = field_id(self.bo.client)
             self.bo.set_flag(fl["book"], self._fid, True)
         except Exception as e:                  # published all the same; the next run's flag sync repairs it
             logger.warning("Read-Along flag on book %s: %s", fl["book"], e)
@@ -744,14 +757,18 @@ class Job:
                 self.state.foreign_busy_since, self.state.foreign_told = None, False
                 self._save()
             return None
+        changed = False
         if self.state.foreign_busy_since is None:
             self.state.foreign_busy_since = self.clock()
+            changed = True
         hours = (self.clock() - self.state.foreign_busy_since) / 3600
         if hours > STUCK_HOURS and not self.state.foreign_told:
             self.state.foreign_told = True
             self._tell(f"⏳ Storyteller has been busy with {busy[0].get('title') or busy[0].get('uuid')} "
                        f"(not mine) for over {STUCK_HOURS} h; no read-alongs meanwhile", save=False)
-        self._save()
+            changed = True
+        if changed:
+            self._save()
         return busy[0].get("title") or busy[0].get("uuid")
 
     # the whole run --------------------------------------------------------------------
@@ -830,6 +847,11 @@ class Job:
                 self._guard(self.state.in_flight, self.advance)
                 if self.state.in_flight:         # one book at a time: never orphan the kept one
                     break
+            # every ask read at the start has now had its night: a book still a candidate
+            # stays one, an ask that kept failing to evaluate blocks nothing any more
+            for bid, at in asked.items():
+                self._drop_ask(bid, at, "served by the nightly run")
+            self.completed = not self.stopping
         except Exception as e:                   # not one book's failure (Storyteller or BookOrbit down)
             logger.exception("read-along run failed")
             if not self.state.run.get("failure_told"):
@@ -860,7 +882,7 @@ class Job:
             return 0
         try:
             self._ensure_login()
-            if fl and not self.state.recent_error(fl["book"], fl["pair"], self.clock(), ERROR_INTERVAL):
+            if fl and self.clock() - fl.get("look_failed_at", 0) >= ERROR_INTERVAL:
                 self._look(fl)
             if self.state.in_flight is None and asks:
                 self._start_asked(asks)
@@ -874,11 +896,19 @@ class Job:
             self.st.login(self.s.storyteller_user, self.s.storyteller_pass)
 
     def _look(self, fl):
+        """One look at the in-flight book. A failure is charged like the nightly
+        run's (once per ERROR_INTERVAL) and parks the book for ticks for that
+        long: a failing download or publish must never repeat every minute.
+        The nightly run owns the retry."""
         try:
             self.advance(fl, poll=False)
         except BookGone:
             self._close(fl, "abandoned", {"uuid": fl.get("uuid"), "why": "book deleted"},
                         f"🗑️ {self._title(fl)} — deleted from BookOrbit; its alignment is dropped")
+        except Exception as e:
+            logger.exception("book %s", fl["book"])
+            fl["look_failed_at"] = self.clock()
+            self._fail(fl, f"{type(e).__name__}: {e}")
 
     def _not_candidate(self, d):
         """Why an asked-for book is not (yet) to be aligned; None when it is."""
@@ -905,27 +935,33 @@ class Job:
 
     def _start_asked(self, asks):
         """At most one start: the oldest ask whose book is a candidate. An ask
-        is done (dropped) unless it has to wait for Storyteller or for ONLY."""
+        is dropped when its book is not one, or once it is started or its
+        start failed; it stays while Storyteller is busy, ONLY excludes it,
+        start() declines for now, or it cannot be evaluated (then it blocks
+        nothing: the next ask is tried, and the nightly run clears it)."""
+        busy = self.storyteller_busy()
+        if busy:
+            logger.info("asks for %s wait: Storyteller is busy with %s", sorted(asks), busy)
+            return
         preflighted = False
         for bid, at in sorted(asks.items(), key=lambda kv: kv[1]):
             if self.s.only and bid not in self.s.only:
                 continue                        # a temporary restriction: kept for later
             try:
                 d = self.bo.detail(bid)
+                why = self._not_candidate(d)
             except BookGone:
                 self._drop_ask(bid, at, "the book is gone")
                 continue
-            why = self._not_candidate(d)
+            except Exception as e:              # this ask only: the others still get their turn
+                logger.warning("ask for book %s could not be evaluated: %s", bid, e)
+                continue
             if why:
                 self._drop_ask(bid, at, why)
                 continue
             if not preflighted:
                 self.preflight()                # a failure here is the job's: the tick fails, the ask stays
                 preflighted = True
-            busy = self.storyteller_busy()
-            if busy:
-                logger.info("asked for book %s; Storyteller is busy with %s", bid, busy)
-                return
             rec = {"id": bid, "title": d.get("title"), "files": d.get("files") or []}
             try:
                 started = self.start(rec)
@@ -939,8 +975,9 @@ class Job:
                     self._start_failed(rec, e)
                 self._drop_ask(bid, at, "its start failed (the nightly run retries it)")
                 return
-            self._drop_ask(bid, at, "started" if started else "not started")
-            return
+            if started:
+                self._drop_ask(bid, at, "started")
+            return                              # declined for now (e.g. closed this tick): the next tick
 
     def _drop_ask(self, bid, at, why):
         """Done with an ask -- unless the librarian asked again meanwhile."""
@@ -967,10 +1004,16 @@ class Job:
         if len(lines) > PUSH_LINES_MAX:          # after an outage: tonight's news matters most
             lines = [f"… {len(lines) - PUSH_LINES_MAX} older lines dropped"] + lines[-PUSH_LINES_MAX:]
         body = "\n".join(lines)
+        now = self.clock()
+        if now < p.get("retry_at", 0):
+            return 0                             # Apprise failed recently: backing off
         logger.info("%s\n%s", title, body)
         if self._push(self.s.apprise_url, title, body):
             self.state.pending_push = None
             self._save()
             return 0
-        return 1                                 # kept: the next run sends it
+        tries = p.get("tries", 0) + 1            # kept, retried later: 30 min, doubling, at most 6 h
+        p.update(tries=tries, retry_at=now + min(PUSH_RETRY_FIRST * 2 ** (tries - 1), PUSH_RETRY_MAX))
+        self._save()
+        return 1
 

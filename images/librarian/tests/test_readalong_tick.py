@@ -158,9 +158,9 @@ def test_a_failing_tick_is_told_once_a_day(env):
     lib, st, clock, pushes, make, tmp = env
     ask(tmp, 111, clock.t - 400)
 
-    def down(bid):
-        raise RuntimeError("GET /books/111 -> HTTP 502: bad gateway")
-    lib.detail = down
+    def down():
+        raise StorytellerHTTPError("GET /api/v2/books -> 502: b'bad gateway'", 502)
+    st.books = down                                    # the busy check cannot tell: the tick fails
     assert make().tick() == 1
     clock.t += 60
     assert make().tick() == 1
@@ -219,16 +219,21 @@ def test_the_nightly_starts_asked_books_first_and_drops_their_asks(env):
     assert has_readalong(lib, 222) and has_readalong(lib, 111)
 
 
-def test_a_storyteller_error_on_the_look_fails_the_tick_not_the_book(env):
+def test_a_failing_look_is_charged_once_and_parks_the_book_for_ticks(env):
+    """A failure while looking (a download, a publish, Storyteller) must never repeat every minute."""
     lib, st, clock, pushes, make, tmp = env
     ask(tmp, 111, clock.t - 400)
     make().tick()
-    real_book = st.book
+    calls = []
 
     def book(uuid):
+        calls.append(uuid)
         raise StorytellerHTTPError(f"GET /api/v2/books/{uuid} -> 503: b'restarting'", 503)
     st.book = book
-    clock.t += 60
-    assert make().tick() == 1
-    assert state_of(tmp)["errors"] == {} and state_of(tmp)["in_flight"]["uuid"] == "u1"
-    st.book = real_book
+    for _ in range(5):
+        clock.t += 60
+        make().tick()
+    assert len(calls) == 1                              # looked once, then left to the nightly run
+    s = state_of(tmp)
+    assert s["errors"]["111"]["count"] == 1 and s["in_flight"]["uuid"] == "u1"
+    assert "failed" in pushes[-1][1]
