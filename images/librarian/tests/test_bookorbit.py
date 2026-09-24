@@ -783,3 +783,80 @@ def test_scan_history_requests_the_larger_page(tmp_path):
     _c, w = _writer(tmp_path, t)
     w.scan_running(7)
     assert urls[-1] == "http://b/api/v1/scanner/libraries/7/scan-history?limit=20"
+
+
+# --- lock_all: every metadata field locked before an import (2026-09-24) -------------------------
+
+def _lock_transport(get_locks, sent, after_locks=None):
+    """GET /books/5 answers `get_locks` first, then `after_locks` (default: what was PATCHed)."""
+    state = {"gets": 0}
+
+    def t(method, url, body, headers):
+        if url.endswith("/auth/login"):
+            return 200, json.dumps({"accessToken": "tok"})
+        if method == "GET" and url.endswith("/books/5"):
+            state["gets"] += 1
+            if state["gets"] == 1:
+                return 200, json.dumps({"id": 5, "lockedFields": get_locks} if get_locks is not ... else {"id": 5})
+            locks = after_locks if after_locks is not None else sent.get("payload", {}).get("lockedFields")
+            return 200, json.dumps({"id": 5, "lockedFields": locks})
+        if method == "PATCH" and url.endswith("/books/5/metadata-and-locks"):
+            sent["payload"] = json.loads(body)
+            return 200, json.dumps({"id": 5})
+        raise AssertionError((method, url))
+    return t
+
+
+def test_lock_fields_are_bookorbits_lock_list_but_rating():
+    from app.bookorbit import AUDIO_FIELDS, LOCK_FIELDS
+    assert len(LOCK_FIELDS) == len(set(LOCK_FIELDS)) == 44 and "rating" not in LOCK_FIELDS   # the UI's stars
+    for f in ("description", "genres", "tags", "pageCount", "publisher", "isbn13", "cover",
+              "googleBooksId", "goodreadsId", "hardcoverId", "hardcoverEditionId", "openLibraryId", "itunesId",
+              "title", "authors", "seriesName", "seriesIndex", "narrators", "durationSeconds"):
+        assert f in LOCK_FIELDS
+    assert set(AUDIO_FIELDS) < set(LOCK_FIELDS)
+
+
+def test_lock_all_without_audio_leaves_the_audio_fields_unlocked(tmp_path):
+    from app.bookorbit import AUDIO_FIELDS, LOCK_FIELDS
+    sent = {}
+    _c, w = _writer(tmp_path, _lock_transport(["tags"], sent))
+    assert w.lock_all(5, audio=False) is True
+    assert sent["payload"]["lockedFields"] == sorted((set(LOCK_FIELDS) - set(AUDIO_FIELDS)) | {"tags"})
+
+
+def test_lock_all_adds_every_field_keeping_the_existing_locks_and_sends_no_metadata(tmp_path):
+    from app.bookorbit import LOCK_FIELDS
+    sent = {}
+    _c, w = _writer(tmp_path, _lock_transport(["tags", "title", "someFutureField", "rating"], sent))
+    assert w.lock_all(5) is True
+    assert "metadata" not in sent["payload"]                       # locks only: no field is written
+    assert sent["payload"]["lockedFields"] == sorted(set(LOCK_FIELDS) | {"tags", "title", "someFutureField", "rating"})
+
+
+def test_lock_all_does_nothing_when_everything_is_locked(tmp_path):
+    from app.bookorbit import LOCK_FIELDS
+    sent = {}
+    _c, w = _writer(tmp_path, _lock_transport(list(LOCK_FIELDS), sent))
+    assert w.lock_all(5) is False and sent == {}
+
+
+def test_lock_all_refuses_without_a_lock_list(tmp_path):
+    sent = {}
+    _c, w = _writer(tmp_path, _lock_transport(..., sent))              # GET has no lockedFields
+    with pytest.raises(RuntimeError, match="refusing"):
+        w.lock_all(5)
+    assert sent == {}                                              # never replace an unknown lock set
+
+
+def test_lock_all_raises_when_the_locks_did_not_take(tmp_path):
+    sent = {}
+    _c, w = _writer(tmp_path, _lock_transport(["tags"], sent, after_locks=["tags", "title"]))
+    with pytest.raises(RuntimeError, match="did not take"):
+        w.lock_all(5)
+
+
+def test_lock_all_rejects_a_non_int_book_id(tmp_path):
+    _c, w = _writer(tmp_path, _lock_transport([], {}))
+    with pytest.raises(TypeError):
+        w.lock_all("5")

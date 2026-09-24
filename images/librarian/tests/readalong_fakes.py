@@ -25,6 +25,8 @@ class FakeLibrary:
         self.scan_fails = False
         self.hook_before_scan = None           # callable(fake) -> None, e.g. a concurrent change
         self.sync_pending = 0                  # detail() reports read-along sync "pending" this many times
+        self.lock_fails = False                # lock_all() raises (BookOrbit down)
+        self.lock_calls = []                   # (book id, the folder's file names at that moment)
 
     # setup -------------------------------------------------------------------
     def add_book(self, bid, rel_folder, files, library_id=7, **extra):
@@ -38,8 +40,10 @@ class FakeLibrary:
                 fh.write(data)
             recs.append(self._record(fid, p))
         self._books[bid] = {"id": bid, "libraryId": library_id,
-                           "folderPath": f"{self.prefix}/{rel_folder}", "files": recs, **extra}
+                           "folderPath": f"{self.prefix}/{rel_folder}", "files": recs,
+                           "lockedFields": [], **extra}
         self._derive(self._books[bid])
+        self._books[bid]["_primary"] = self._primary_id(self._books[bid])
 
     def _record(self, fid, path):
         st = os.stat(path)
@@ -53,6 +57,38 @@ class FakeLibrary:
 
     def _local(self, folder_path):
         return os.path.join(self.root, folder_path[len(self.prefix) + 1:])
+
+    # BookOrbit 3.0.0: when a NEW file becomes the primary, the scan writes the
+    # file's embedded metadata into every UNLOCKED field and nulls what it
+    # lacks (scanner.service.ts processCandidate -> persistBookMetadata).
+    EMBEDDED = {"description": "EMBEDDED BLURB", "genres": [], "tags": [], "pageCount": None,
+                "publisher": "Embedded House", "hardcoverId": None, "goodreadsId": None, "googleBooksId": None}
+
+    @staticmethod
+    def _primary_id(b):
+        return next((f["id"] for f in b["files"] if f["role"] == "primary"), None)
+
+    def _extract(self, b):
+        locked = set(b.get("lockedFields") or ())
+        for k, v in self.EMBEDDED.items():
+            if k not in locked:
+                b[k] = copy.deepcopy(v)
+
+    def lock_all(self, book_id, *, audio=True):
+        """The writer's lock_all: every field locked, existing locks kept."""
+        from app.bookorbit import AUDIO_FIELDS, LOCK_FIELDS
+        LOCK_ALL = set(LOCK_FIELDS) if audio else set(LOCK_FIELDS) - set(AUDIO_FIELDS)
+        if book_id not in self._books:
+            raise BookGone(book_id)
+        b = self._books[book_id]
+        folder = self._local(b["folderPath"])
+        self.lock_calls.append((book_id, sorted(os.listdir(folder)) if os.path.isdir(folder) else []))
+        if self.lock_fails:
+            raise RuntimeError("PATCH /books/%d/metadata-and-locks -> HTTP 502: bad gateway" % book_id)
+        if set(LOCK_ALL) <= set(b["lockedFields"]):
+            return False
+        b["lockedFields"] = sorted(set(b["lockedFields"]) | set(LOCK_ALL))
+        return True
 
     def _derive(self, b):
         ra = [f for f in b["files"] if f["mediaOverlay"]["available"]]
@@ -100,6 +136,7 @@ class FakeLibrary:
         if bid not in self._books:
             raise BookGone(bid)                 # what the job's BookOrbit adapter raises on a 404
         b = copy.deepcopy(self._books[bid])
+        b.pop("_primary", None)
         for f in b["files"]:
             f.pop("_ino", None)
         if self.sync_pending > 0 and b["readAloudSync"]["state"] == "enabled":
@@ -128,7 +165,7 @@ class FakeLibrary:
             on_disk = sorted(os.listdir(folder)) if os.path.isdir(folder) else []
             by_name = {f["filename"]: f for f in b["files"]}
             by_ino = {f["_ino"]: f for f in b["files"]}
-            kept = []
+            kept, created = [], set()
             for name in on_disk:
                 p = os.path.join(folder, name)
                 if not os.path.isfile(p):            # a sub-folder is not one of the book's files
@@ -142,7 +179,13 @@ class FakeLibrary:
                 if rec is None:
                     self._next_id += 1
                     rec = {"id": self._next_id}
+                    created.add(rec["id"])
                 rec.update({k: v for k, v in self._record(rec["id"], p).items() if k != "id"})
                 kept.append(rec)
             b["files"] = kept                        # anything unmatched is pruned
+            before = b.get("_primary")
             self._derive(b)
+            now = self._primary_id(b)
+            if now is not None and (now != before or now in created):
+                self._extract(b)                     # a new primary: embedded metadata over unlocked fields
+            b["_primary"] = now

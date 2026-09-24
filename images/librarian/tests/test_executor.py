@@ -65,7 +65,9 @@ class FakeBookorbit:
         self.fetch_delay = 7.0
         self._due = []                       # [(due, kind, book_id)]
         self.rename_log = []                 # (book_id, "moved"|"skipped"|"unchanged", why)
-        self.patch_bodies = []               # (time, book_id, body)
+        self.patch_bodies = []               # (time, book_id, body) -- metadata writes
+        self.lock_bodies = []                # (time, book_id, body) -- lock-only PATCHes (lock_all)
+        self.on_lock = None                  # hook(fake, book) after a lock-only PATCH
         self.renamed_away = set()            # dirs a rename moved or emptied
         # BookOrbit naming settings the executor checks before any PATCH/rename
         self.libraries = {lid: {"id": lid, "name": name, "fileRenameEnabled": True,
@@ -269,10 +271,20 @@ class FakeBookorbit:
             if parts[3] == "rename-files" and method == "POST":
                 self._rename_files(bid)
                 return 204, ""
+            if parts[3] == "metadata-and-locks" and method == "PATCH" and "metadata" not in payload:
+                # a lock-only PATCH (lock_all): recorded apart, so patches()/patch_bodies stay
+                # "metadata writes" for the tests that assert there were none
+                b = self.books[bid]
+                self.calls[-1] = ("LOCK", path)
+                self.lock_bodies.append((self._now(), bid, payload))
+                b["lockedFields"] = list(payload["lockedFields"])
+                if self.on_lock:
+                    self.on_lock(self, b)
+                return 200, json.dumps(b)
             if parts[3] == "metadata-and-locks" and method == "PATCH":
                 b = self.books[bid]
                 self.patch_bodies.append((self._now(), bid, payload))
-                for k, v in payload["metadata"].items():
+                for k, v in (payload.get("metadata") or {}).items():     # optional in the real DTO
                     if k == "authors":
                         b["authors"] = [{"id": i, "name": n, "sortName": n} for i, n in enumerate(v)]
                     elif k == "audibleId":
@@ -283,7 +295,7 @@ class FakeBookorbit:
                 if self.on_patch:
                     self.on_patch(self, b)
                 self._touch(b)
-                if self.auto_rename and any(k in payload["metadata"]
+                if self.auto_rename and any(k in (payload.get("metadata") or {})
                                             for k in bo_render.RENAME_RELEVANT_FIELDS):
                     self._schedule("rename", bid, self.rename_delay)
                 return 200, json.dumps(b)
@@ -720,7 +732,7 @@ def test_attach_happy_path_files_scans_renames_and_cleans(env):
     assert (folder / "Artificial Condition.m4b").stat().st_size == 5000
     assert r.moves == [(arr["primary"], str(folder / "Artificial Condition.m4b"), 5000)]
     assert len(env.fake.scans()) == 1 and len(env.fake.renames()) == 1
-    assert env.fake.patches() == []            # nothing changed -> no guard-9 write
+    assert env.fake.patches() == [] and len(env.fake.lock_bodies) == 1   # the lock only: no guard-9 write
     # intake: arrival folder gone, staging gone, deletables deleted, rest supplemented
     assert not os.path.exists(arr["path"])
     assert not os.path.exists(env.intake / ".executing" / sha12(arr["key"]))
@@ -2969,3 +2981,80 @@ def test_link_refused_matches_protected_hardlinks(tmp_path, monkeypatch):
     f.chmod(0o444)
     if os.getuid() != 0:
         assert fsops.link_refused(str(f)) is True        # another account's, read-only
+
+
+# --- every metadata field locked before an ebook enters an existing book (2026-09-24) -------------
+# BookOrbit re-extracts a new PRIMARY file's embedded metadata over every unlocked field and
+# nulls what the file lacks (646 lost its provider ids, genres and tags to a Kindle attach).
+
+def _lock_patches(env, fields=None):
+    from app.bookorbit import AUDIO_FIELDS, LOCK_FIELDS
+    want = set(fields or (set(LOCK_FIELDS) - set(AUDIO_FIELDS)))
+    return [b for _t, _bid, b in env.fake.lock_bodies if want <= set(b.get("lockedFields") or ())]
+
+
+def test_attaching_an_ebook_locks_every_metadata_field_before_the_file_moves(env):
+    from app.bookorbit import LOCK_FIELDS as LOCK_ALL
+    attach_target(env, files=(("Artificial Condition.m4b", b"A" * 10),), lockedFields=["narrators"])
+    arr = env.kindle()
+    folder = env.books_root / "Library" / "Martha Wells" / "Artificial Condition"
+    seen = []
+    env.fake.on_lock = lambda fake, b: seen.append(sorted(os.listdir(folder)))
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.state == "filed", r.detail
+    lock, = _lock_patches(env, LOCK_ALL)                           # the book has audio: all of it
+    assert "metadata" not in lock                                  # locks only
+    assert set(lock["lockedFields"]) == set(LOCK_ALL) | {"narrators"}
+    assert seen[0] == ["Artificial Condition.m4b"]                 # locked before the EPUB arrived
+    assert set(LOCK_ALL) <= set(env.fake.books[7001]["lockedFields"])
+
+
+def test_attaching_audio_locks_all_but_the_audio_fields(env):
+    from app.bookorbit import AUDIO_FIELDS
+    attach_target(env)                                             # an ebook-only book
+    arr = env.libation(title="Artificial Condition")
+    env.snapshot_tree()
+    r = env.executor().execute(intent_attach(arr, 7001), arr, {})
+    assert r.state == "filed", r.detail
+    lock, = _lock_patches(env)                                     # insurance: an m4b could become primary
+    assert not set(AUDIO_FIELDS) & set(lock["lockedFields"])       # BookOrbit fills duration/narrators
+    assert env.fake.patches() == []                                # and no metadata is written
+
+
+def test_attaching_an_ebook_to_a_book_without_audio_leaves_the_audio_fields_unlocked(env):
+    from app.bookorbit import AUDIO_FIELDS
+    attach_target(env, files=(("Artificial Condition.pdf", b"P" * 10),))
+    arr = env.kindle()
+    env.snapshot_tree()
+    r = env.executor().execute(intent_attach(arr, 7001), arr, {})
+    assert r.state == "filed", r.detail
+    lock, = _lock_patches(env)
+    assert not set(AUDIO_FIELDS) & set(lock["lockedFields"])       # a later m4b can still fill them
+
+
+def test_creating_a_book_locks_nothing_extra(env):
+    arr = env.kindle()
+    env.snapshot_tree()
+    r = env.executor().execute(intent_create(arr, title="New Book", authors=["Some One"]), arr, {})
+    assert r.state == "filed", r.detail
+    assert _lock_patches(env) == []                                # a new book has nothing to protect
+
+
+def test_a_lock_failure_moves_nothing_and_is_retryable(env):
+    attach_target(env, files=(("Artificial Condition.m4b", b"A" * 10),))
+    arr = env.kindle()
+    env.fake.crash_on[("PATCH", "/metadata-and-locks")] = RuntimeError(
+        "PATCH /books/7001/metadata-and-locks -> HTTP 502: bad gateway")
+    env.snapshot_tree()
+
+    r = env.executor().execute(intent_attach(arr, 7001), arr, {})
+
+    assert r.state == "retryable" and "nothing moved" in r.detail, r.detail
+    assert os.path.isfile(arr["primary"])                          # back in the intake
+    folder = env.books_root / "Library" / "Martha Wells" / "Artificial Condition"
+    assert sorted(os.listdir(folder)) == ["Artificial Condition.m4b"]
+    assert env.fake.scans() == []

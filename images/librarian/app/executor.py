@@ -176,6 +176,10 @@ HASH_BEAT_BYTES = 64 << 20       # beat() at least every 64 MiB while hashing
 _PERMANENT_ERRNOS = frozenset({errno.ENAMETOOLONG, errno.EACCES, errno.EPERM, errno.EROFS})
 
 
+_AUDIO_EXTS = frozenset({".m4b", ".m4a", ".mp3", ".aac", ".ogg", ".opus", ".flac", ".wav"})
+_AUDIO_FORMATS = frozenset(e.lstrip(".") for e in _AUDIO_EXTS)
+
+
 def _is_regular(path) -> bool:
     """A regular file itself -- never through a symlink (lstat)."""
     try:
@@ -604,6 +608,16 @@ class Executor:
                 if not stat.S_ISDIR(st.st_mode):
                     raise _Fail(f"book folder {folder} is not a directory")
                 ctx["dst_dir"] = folder
+                # BookOrbit re-extracts a new PRIMARY file's embedded metadata over every
+                # unlocked field and nulls what the file lacks (app.bookorbit.LOCK_FIELDS):
+                # lock the book before the file enters its folder (a scan may run at any
+                # time). The audio fields stay unlocked while the book has no audio, and
+                # for an audio file itself -- BookOrbit fills them from it. A failure here
+                # moves nothing (retryable).
+                has_audio = any((f.get("format") or "").lower() in _AUDIO_FORMATS for f in d.get("files") or [])
+                attaching_audio = os.path.splitext(ctx["filename"])[1].lower() in _AUDIO_EXTS
+                if self.writer.lock_all(ctx["book_id"], audio=has_audio and not attaching_audio):
+                    ctx["locked_all"] = True
             ctx["dst"] = os.path.join(ctx["dst_dir"], ctx["filename"])
             if os.path.lexists(ctx["dst"]):
                 raise _Fail(f"destination {ctx['dst']} already exists; never overwriting")

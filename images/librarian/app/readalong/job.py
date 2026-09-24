@@ -184,6 +184,9 @@ class Bookorbit:
     def set_flag(self, book_id, fid, value):
         self.writer.patch_metadata(book_id, {"customMetadata": [{"fieldId": fid, "value": value}]}, [])
 
+    def lock_all(self, book_id):
+        return self.writer.lock_all(book_id)          # a read-along book has its audio: lock it all
+
 
 def m4b_seconds(path, run=subprocess.run):
     out = run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
@@ -581,6 +584,13 @@ class Job:
                 self._close(fl, "abandoned", {"uuid": fl["uuid"], "why": "staged read-along lost"},
                             f"↩️ {self._title(fl, d)} — its staged read-along is gone; it will be aligned again")
                 return
+            # Before the FIRST file operation in the book's folder (BookOrbit's watcher may scan at
+            # once): the read-along becomes the primary, and BookOrbit would re-extract its embedded
+            # metadata over every unlocked field -- provider ids, page count, genres, tags, the
+            # description, the cover (app/bookorbit.py LOCK_FIELDS). Every time: a resumed publish
+            # re-checks. A failure is this book's failure: never publish unlocked.
+            if self.bo.lock_all(fl["book"]):
+                logger.info("locked every metadata field of book %s before publishing", fl["book"])
             done, pair = publish(self.bo, fl["book"], staged, fl["pair"], media_books=self.s.media_books,
                                  books_prefix=self.s.books_prefix, staging_dir=self.s.staging_dir,
                                  sleep=self.sleep, clock=self.monotonic)

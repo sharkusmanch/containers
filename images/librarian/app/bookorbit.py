@@ -265,6 +265,29 @@ _WRITER_LIBRARY_IDS = frozenset({7, 8})
 SCAN_HISTORY_PAGE = 20
 
 
+# BookOrbit 3.0.0 `BOOK_METADATA_LOCK_FIELDS` (@bookorbit/types src/metadata-lock.ts),
+# verbatim, minus `rating`. When a NEW file becomes a book's primary (a
+# read-along, or an EPUB attached to an audio-only book), BookOrbit's scan
+# re-extracts that file's embedded metadata into EVERY unlocked field and nulls
+# what the file lacks: provider ids, page count, genres, tags, description, the
+# cover... (scanner.service.ts processCandidate -> metadata.service.ts
+# persistBookMetadata). Locked fields are skipped; nothing else prevents it.
+# `rating` stays unlocked: the web UI's star widget PATCHes /metadata {rating}
+# and gets 409 on a locked rating (the extraction's rating is not the one shown).
+LOCK_FIELDS = (
+    "title", "subtitle", "authors", "description", "publisher", "publishedYear", "language", "pageCount",
+    "seriesName", "seriesIndex", "isbn13", "isbn10", "genres", "tags", "communityRating",
+    "narrators", "durationSeconds", "abridged", "googleBooksId", "goodreadsId", "amazonId", "hardcoverId",
+    "hardcoverEditionId", "openLibraryId", "itunesId", "audibleId", "librofmId", "koboId", "comicvineId",
+    "ranobedbId", "lubimyczytacId", "aladinId", "comicIssueNumber", "comicVolumeName", "comicStoryArcs",
+    "comicPencillers", "comicInkers", "comicColorists", "comicLetterers", "comicCoverArtists",
+    "comicCharacters", "comicTeams", "comicLocations", "cover",
+)
+# What an audio file itself fills in: left unlocked while a book has no audio
+# yet, so a later m4b attach can still set them.
+AUDIO_FIELDS = ("narrators", "durationSeconds", "abridged", "audibleId", "librofmId")
+
+
 class BookorbitWriter:
     """Tightly allowlisted write path for the executor (Task 2). Wraps an
     authenticated BookorbitClient instance that is separate from the P1
@@ -425,6 +448,34 @@ class BookorbitWriter:
         return self._client._write(
             "PATCH", f"/books/{book_id}/metadata-and-locks",
             {"metadata": metadata, "lockedFields": merged})
+
+    def lock_all(self, book_id, *, audio=True):
+        """Lock every metadata field of `book_id` (keeping its current locks)
+        BEFORE an import touches the book's folder -- see LOCK_FIELDS for why.
+        `audio=False` leaves AUDIO_FIELDS alone (a book with no audio yet, or an
+        m4b about to be attached: BookOrbit fills them from it). The locks
+        stay: a curated book keeps its metadata through any later file change
+        (editing a field in BookOrbit then means unlocking it first). Sends no
+        metadata (the PATCH is strictly partial) and verifies with a fresh GET.
+        True when it locked something, False when all were locked. Refuses,
+        like patch_metadata, when the GET has no lock list."""
+        if type(book_id) is not int:
+            raise TypeError(f"book_id must be an int, got {book_id!r}")
+        want = set(LOCK_FIELDS) if audio else set(LOCK_FIELDS) - set(AUDIO_FIELDS)
+        current = self._client.get(f"/books/{book_id}").get("lockedFields")
+        if not isinstance(current, list):
+            raise RuntimeError(
+                f"refusing to lock book {book_id}: GET /books/{book_id} returned "
+                f"lockedFields={current!r} (not a list) -- the PATCH replaces the whole lock set")
+        if want <= set(current):
+            return False
+        self._client._write("PATCH", f"/books/{book_id}/metadata-and-locks",
+                            {"lockedFields": sorted(set(current) | want)})
+        after = self._client.get(f"/books/{book_id}").get("lockedFields")
+        missing = sorted(want - set(after if isinstance(after, list) else ()))
+        if missing:
+            raise RuntimeError(f"book {book_id}: metadata locks did not take (missing {', '.join(missing[:6])})")
+        return True
 
 
 # --- LibraryIndex ------------------------------------------------------------
