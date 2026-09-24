@@ -41,6 +41,8 @@ class FakeStoryteller:
         self.clock = clock
         self.library_root = library_root          # this test's view of Storyteller's /library
         self.drop_ebook = 0                        # imports that lose beta.38's EPUB/audio race
+        self.drop_audio = 0                        # ... either half can lose
+        self.epub_rewritten = True                 # EPUB 2: stored as a rewritten EPUB 3 (another size)
         self.books_ = {}
         self.polls_until_done, self.grade = polls_until_done, grade
         self.calls = []
@@ -67,14 +69,18 @@ class FakeStoryteller:
         def size(path):
             return os.path.getsize(os.path.join(self.library_root, path[len("/library/"):])) if self.library_root else 1
         stem = os.path.splitext(os.path.basename(epub))[0]
-        ebook = {"filepath": f"/data/assets/{stem}/text/{stem}.epub", "fileSize": size(epub) + 1000}  # upgraded copy
+        ebook = {"filepath": f"/data/assets/{stem}/text/{stem}.epub",
+                 "fileSize": size(epub) + (1000 if self.epub_rewritten else 0)}
+        audiobook = {"filepath": f"/data/assets/{stem}/audio", "fileSize": size(audio)}
         if self.drop_ebook > 0:                    # the audio candidate won: the EPUB was dropped
             self.drop_ebook -= 1
             ebook = {"filepath": None, "fileSize": None}
+        elif self.drop_audio > 0:                  # the EPUB won: the audio was dropped
+            self.drop_audio -= 1
+            audiobook = None
         self.books_[uuid] = {"uuid": uuid, "title": stem.split(". ", 1)[-1],       # the EPUB's own title
                              "createdAt": made, "readaloud": None, "processingJob": None, "ebook": ebook,
-                             "audiobook": {"filepath": f"/data/assets/{stem}/audio", "fileSize": size(audio)},
-                             "left": None}
+                             "audiobook": audiobook, "left": None}
         self.calls.append(("create", epub, audio))
         return uuid
 
@@ -1154,9 +1160,11 @@ def test_three_bad_books_in_a_row_are_charged_and_then_the_queue_moves_on(env):
         clock.t += DAY
         job = make()
         job.duration = duration
-        job.run()
+        code = job.run()
         if night < 4:
-            assert creates(st) == 0                  # three in a row: no more starts tonight
+            assert creates(st) == 0 and code == 1    # three in a row: no more starts tonight, and it alerts
+        else:
+            assert code == 0
     s = state_of(tmp)
     assert {k: v["count"] for k, v in s["errors"].items()} == {"111": 3, "222": 3, "333": 3}
     assert has_readalong(lib, 444)                   # the others given up: the queue went on
@@ -1332,3 +1340,73 @@ def test_a_long_outage_keeps_the_newest_lines(env):
     assert job.report() == 0
     body = pushes[-1][1].splitlines()
     assert body[0].startswith("… 21 older lines dropped") and body[-1] == "newest" and "old 59" in body
+
+
+
+# --- fourth review round ------------------------------------------------------------------------
+
+def test_an_import_that_lost_its_audio_is_deleted_and_retried(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.drop_audio = 1
+    assert make().run() == 0
+    assert creates(st) == 2 and ("delete", "u1") in st.calls and has_readalong(lib, 111)
+
+
+def test_a_saved_broken_import_is_never_processed(env):
+    """The uuid was saved, then the completeness check itself failed: the next run drops it."""
+    lib, st, clock, pushes, make, tmp = env
+    st.drop_ebook = 1
+    real_book, n = st.book, {"calls": 0}
+
+    def book(uuid):
+        n["calls"] += 1
+        if n["calls"] == 1:                          # the check right after the import
+            raise StorytellerHTTPError(f"GET /api/v2/books/{uuid} -> 502: b'bad gateway'", 502)
+        return real_book(uuid)
+    st.book = book
+    make().run()
+    assert state_of(tmp)["in_flight"]["uuid"] == "u1"
+    for _ in range(2):
+        clock.t += DAY
+        make().run()
+    assert ("process", "u1") not in st.calls and ("delete", "u1") in st.calls
+    assert has_readalong(lib, 111) and creates(st) == 2
+
+
+def test_an_epub_only_leftover_is_adopted_and_dropped(env):
+    """The audio lost the race, then the pod died before the uuid was saved: ours, found by the EPUB 3 size."""
+    lib, st, clock, pushes, make, tmp = env
+    st.epub_rewritten, st.drop_audio = False, 1
+    real_create = st.create_book
+
+    def killed_after_the_import(epub, audio):
+        real_create(epub, audio)
+        raise KeyboardInterrupt
+    st.create_book = killed_after_the_import
+    with pytest.raises(KeyboardInterrupt):
+        make().run()
+    st.create_book = real_create
+    clock.t += 60
+    make().run()
+    assert ("delete", "u1") in st.calls and ("process", "u1") not in st.calls     # never orphaned
+    clock.t += DAY
+    make().run()
+    assert has_readalong(lib, 111) and st.books_ == {}
+
+
+def test_a_stopped_alignment_is_told_as_stopped(env):
+    lib, st, clock, pushes, make, tmp = env
+    real_process = st.process
+    once = {"n": 1}
+
+    def process(uuid):
+        real_process(uuid)
+        if once["n"]:
+            once["n"] = 0
+            st.fail(uuid, "STOPPED")                 # cancelled in Storyteller, or it restarted
+    st.process = process
+    make().run()
+    assert "stopped in Storyteller" in pushes[-1][1] and "no-readalong" in pushes[-1][1]
+    clock.t += DAY
+    make().run()
+    assert has_readalong(lib, 111)                   # re-processed and published

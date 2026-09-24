@@ -212,6 +212,7 @@ class Job:
         self.clock, self.sleep, self.monotonic, self.duration = clock, sleep, monotonic, duration
         self.tools = tools
         self.stopping = False
+        self.starts_stalled = False
         self.handled = set()
         self.state = State.load(os.path.join(settings.state_dir, "readalong.json"))
         self.t0 = clock()
@@ -462,7 +463,9 @@ class Job:
             if p == DONE:
                 return self.finish(fl)
             if p == FAILED:
-                self._fail(fl, "Storyteller could not align it", d)
+                stopped = str((b.get("readaloud") or {}).get("status") or "").upper() == "STOPPED"
+                self._fail(fl, "stopped in Storyteller (cancelled or restarted); tag the book no-readalong "
+                               "to keep it out" if stopped else "Storyteller could not align it", d)
                 if self.state.in_flight is fl:  # not given up: Storyteller tries again, polled next run
                     try:
                         self._st(self.st.process, fl["uuid"])
@@ -477,6 +480,10 @@ class Job:
                 return
             if fl.pop("paused_told", None):
                 self._save()
+            if p == NOT_STARTED and not import_complete(b):
+                # the import race dropped a half (and a kill kept us from retrying): ours, drop it
+                self._close(fl, "abandoned", {"uuid": fl["uuid"], "why": "import incomplete"})
+                return
             if p == NOT_STARTED and not resumed:
                 self._st(self.st.process, fl["uuid"])
                 resumed = True
@@ -504,25 +511,26 @@ class Job:
         for b in new:
             full = self._st_book(b["uuid"]) or {}
             audio = full.get("audiobook") if isinstance(full.get("audiobook"), dict) else {}
-            if phase(full) == NOT_STARTED and audio.get("fileSize") == fl["pair"][3]:
+            ebook = full.get("ebook") if isinstance(full.get("ebook"), dict) else {}
+            ours = (audio.get("fileSize") == fl["pair"][3]
+                    or (not audio.get("filepath") and ebook.get("fileSize") == fl["pair"][1]))
+            if phase(full) == NOT_STARTED and ours:
                 mine.append(full)
         if len(mine) == 1:
             fl["uuid"] = mine[0]["uuid"]
             fl["staged"] = os.path.join(self.s.staging_dir, f"{fl['book']}-{fl['uuid']}.epub")
             self._save()
             logger.info("adopted Storyteller book %s for book %s", fl["uuid"], fl["book"])
-            if not import_complete(mine[0]):    # ours, but the import race dropped a half: start afresh
-                self._close(fl, "abandoned", {"uuid": fl["uuid"], "why": "adopted import incomplete"})
-                return
-            return self.advance(fl)
+            return self.advance(fl)             # an incomplete one is dropped there
         if not mine and self.clock() < hi:
             logger.info("book %s: its import may still be landing; looking again next run", fl["book"])
             return
         self.state.in_flight = None
         if new:
             self._tell(f"⚠️ {self._title(fl)} — none of the Storyteller books made around its import "
-                       f"({', '.join(str(b.get('title')) for b in new)[:120]}) is certainly its own; all are "
-                       f"left alone and the book will be started again", save=False)
+                       f"({', '.join(str(b.get('title')) for b in new)[:120]}) is certainly its own, so all are "
+                       f"left alone (delete any leftover in Storyteller); the book will be started again",
+                       save=False)
         self._save()
 
     def finish(self, fl):
@@ -811,6 +819,7 @@ class Job:
                     in_a_row += 1
                     if in_a_row >= START_ERRORS_MAX:
                         logger.error("%d books in a row could not start; no more starts tonight", in_a_row)
+                        self.starts_stalled = True
                         break
                     continue
                 in_a_row = 0
@@ -825,7 +834,8 @@ class Job:
                 self._tell(f"⚠️ run failed: {type(e).__name__}: {str(e)[:150]}")
             self.report()
             return 1
-        return self.report()
+        rc = self.report()
+        return 1 if self.starts_stalled else rc  # three books in a row: fail the Job so it alerts
 
     def report(self):
         p = self.state.pending_push
