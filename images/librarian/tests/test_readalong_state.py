@@ -94,7 +94,7 @@ def test_a_second_run_exits_while_the_first_holds_the_lock(tmp_path):
     state.mkdir()
     held = open(state / "readalong.lock", "w")
     fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    assert main({**ENV, "STATE_DIR": str(state)}) == 1       # never reaches the network
+    assert main({**ENV, "STATE_DIR": str(state)}) == 0       # another run's window: not an error; no network
 
 
 
@@ -131,5 +131,5 @@ def test_settings_refuse_a_window_with_no_room_to_publish():
     with pytest.raises(ValueError, match="FINISH_HOURS"):
         Settings.from_env({**base, "RUN_HOURS": "1", "START_HOURS": "1"})       # the default finish is 1 h
     s = Settings.from_env({**base, "RUN_HOURS": "1", "START_HOURS": "1", "FINISH_HOURS": "0.5",
-                           "JOB_NAME": "librarian-readalong-1"})
-    assert s.finish_hours == 0.5 and s.job_name == "librarian-readalong-1"
+                           "JOB_ID": "5f0c6f8e-0000-4000-8000-000000000001"})
+    assert s.finish_hours == 0.5 and s.job_id == "5f0c6f8e-0000-4000-8000-000000000001"

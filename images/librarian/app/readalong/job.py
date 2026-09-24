@@ -55,7 +55,7 @@ ERROR_INTERVAL = 6 * 3600         # count at most one failure per book per night
 ADOPT_SLACK = 120                 # seconds of clock skew allowed when adopting an import
 ADOPT_WINDOW = 3600               # an import lands within this of its request (the POST copies the m4b first)
 CANCEL_WAIT = 120                 # a cancel only signals the alignment to stop: wait before deleting
-START_ERRORS_MAX = 3              # books in a row that cannot start: the job is broken, not the books
+START_ERRORS_MAX = 3              # books in a row that cannot start: no more starts tonight
 BLOCKED_TELL_AFTER = 20 * 3600    # a blocker often clears by itself (a scan, BookOrbit's own rename)
 RETELL_BLOCKED = 7 * 86400
 RELEASE_TELL_AFTER = 3 * 86400    # a Storyteller book we cannot delete, told once after this
@@ -71,7 +71,11 @@ class BookGone(Exception):
 
 
 class StartFailed(Exception):
-    """Storyteller certainly did not import the book (nothing to adopt)."""
+    """Storyteller certainly holds no import of the book (nothing to adopt)."""
+
+
+class NotStopped(Exception):
+    """A cancelled alignment is still running: deleting under it races its worker."""
 
 
 # --- Storyteller status -----------------------------------------------------------
@@ -113,6 +117,19 @@ def st_created(book):
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.timestamp()
+
+
+def import_complete(book):
+    """beta.38 imports the EPUB and the audio as two racing candidates of one
+    book; the loser is dropped ("UNIQUE constraint failed: book.uuid"). An
+    import without both cannot be aligned."""
+    ebook = book.get("ebook") if isinstance(book.get("ebook"), dict) else {}
+    audio = book.get("audiobook") if isinstance(book.get("audiobook"), dict) else {}
+    return bool(ebook.get("filepath")) and bool(audio.get("filepath"))
+
+
+def check_tools(run=subprocess.run):
+    run(["ffprobe", "-version"], capture_output=True, timeout=60, check=True)
 
 
 def import_never_happened(e):
@@ -190,20 +207,24 @@ def send_push(url, title, body, *, post=requests.post, sleep=time.sleep):
 
 class Job:
     def __init__(self, settings, *, bo, st, push=send_push, clock=time.time, sleep=time.sleep,
-                 monotonic=time.monotonic, duration=m4b_seconds):
+                 monotonic=time.monotonic, duration=m4b_seconds, tools=check_tools):
         self.s, self.bo, self.st, self._push = settings, bo, st, push
         self.clock, self.sleep, self.monotonic, self.duration = clock, sleep, monotonic, duration
+        self.tools = tools
         self.stopping = False
         self.handled = set()
         self.state = State.load(os.path.join(settings.state_dir, "readalong.json"))
         self.t0 = clock()
         run = self.state.run or {}
-        # a retry pod of the same Job continues its window; any other run opens its own
-        self.resumed_window = (bool(settings.job_name) and not settings.dry_run
-                               and run.get("job") == settings.job_name
+        # a retry pod of the same Job (same uid) continues its window; any other run opens its own
+        self.resumed_window = (bool(settings.job_id) and not settings.dry_run
+                               and run.get("job") == settings.job_id
                                and isinstance(run.get("started"), (int, float)))
         if self.resumed_window:
             self.t0 = run["started"]
+            logger.info("continuing the window of Job %s, %.1f h in", settings.job_id, (clock() - self.t0) / 3600)
+        elif not settings.job_id and not settings.dry_run:
+            logger.warning("JOB_ID is not set: a retry pod would open a fresh window")
 
     def on_sigterm(self, *_):
         logger.warning("SIGTERM: stopping at the next safe point")
@@ -259,8 +280,10 @@ class Job:
             b = self._st_book(uuid)
             if b is None:
                 return
-            if phase(b) not in (RUNNING, PAUSED) or self.monotonic() >= deadline:
+            if phase(b) not in (RUNNING, PAUSED):
                 break
+            if self.monotonic() >= deadline:
+                raise NotStopped(f"Storyteller book {uuid} still running {CANCEL_WAIT} s after its cancel")
             self.sleep(5)
         self._st(self.st.delete_book, uuid)
 
@@ -300,17 +323,21 @@ class Job:
             except OSError as e:
                 logger.warning("could not remove %s: %s", p, e)
 
-    def _release(self, fl):
-        """Free our Storyteller book. Best effort: publishing never waits on it;
-        a failure parks the uuid in state.to_release, retried every run."""
-        uuid = fl.get("uuid")
-        if not uuid or fl.get("st_released"):
-            return
+    def _release_uuid(self, uuid, book):
+        """Free one of OUR Storyteller books, best effort: a failure (or an
+        alignment that has not stopped yet) parks it in state.to_release."""
         try:
             self._free(uuid)
         except Exception as e:
             logger.warning("could not free Storyteller book %s: %s; retried next run", uuid, e)
-            self.state.to_release.setdefault(uuid, {"book": fl["book"], "since": self.clock()})
+            self.state.to_release.setdefault(uuid, {"book": book, "since": self.clock()})
+
+    def _release(self, fl):
+        """Free our Storyteller book. Best effort: publishing never waits on it."""
+        uuid = fl.get("uuid")
+        if not uuid or fl.get("st_released"):
+            return
+        self._release_uuid(uuid, fl["book"])
         fl["st_released"] = True
         self._save()
 
@@ -350,12 +377,15 @@ class Job:
     def _fail(self, fl, why, d=None):
         """One counted failure per book per night; given up at ERROR_LIMIT."""
         self.handled.add(fl["book"])
+        before = self.state.error_count(fl["book"], fl["pair"])
         n = self.state.add_error(fl["book"], fl["pair"], why, now=self.clock(), min_interval=ERROR_INTERVAL)
         if n >= ERROR_LIMIT:
             self._close(fl, "gave-up", {"uuid": fl.get("uuid"), "why": why},
                         f"⚠️ {self._title(fl, d)} — gave up after {n} tries: {why[:120]}")
-        else:
+        elif n > before:
             self._tell(f"⚠️ {self._title(fl, d)} — failed ({why[:120]}); retrying next run")
+        else:                                   # already counted and told tonight (the Job's retry pod)
+            self._save()
 
     def _guard(self, fl, step):
         """One book's step. A deleted book is closed; any other unexpected
@@ -439,7 +469,15 @@ class Job:
                     except Exception as e:      # already told; the next run finds it failed again
                         logger.warning("re-processing %s: %s", fl["uuid"], e)
                 return
-            if p in (PAUSED, NOT_STARTED) and not resumed:
+            if p == PAUSED:                     # the owner paused it in Storyteller: theirs to resume
+                if not fl.get("paused_told"):
+                    fl["paused_told"] = True
+                    self._tell(f"⏸️ {self._title(fl, d)} — paused in Storyteller; resume (or delete) it "
+                               f"there, the queue waits for it")
+                return
+            if fl.pop("paused_told", None):
+                self._save()
+            if p == NOT_STARTED and not resumed:
                 self._st(self.st.process, fl["uuid"])
                 resumed = True
             if self.must_stop():
@@ -465,14 +503,17 @@ class Job:
         mine = []
         for b in new:
             full = self._st_book(b["uuid"]) or {}
-            ebook = full.get("ebook") if isinstance(full.get("ebook"), dict) else {}
-            if phase(full) == NOT_STARTED and ebook.get("fileSize") == fl["pair"][1]:
+            audio = full.get("audiobook") if isinstance(full.get("audiobook"), dict) else {}
+            if phase(full) == NOT_STARTED and audio.get("fileSize") == fl["pair"][3]:
                 mine.append(full)
         if len(mine) == 1:
             fl["uuid"] = mine[0]["uuid"]
             fl["staged"] = os.path.join(self.s.staging_dir, f"{fl['book']}-{fl['uuid']}.epub")
             self._save()
             logger.info("adopted Storyteller book %s for book %s", fl["uuid"], fl["book"])
+            if not import_complete(mine[0]):    # ours, but the import race dropped a half: start afresh
+                self._close(fl, "abandoned", {"uuid": fl["uuid"], "why": "adopted import incomplete"})
+                return
             return self.advance(fl)
         if not mine and self.clock() < hi:
             logger.info("book %s: its import may still be landing; looking again next run", fl["book"])
@@ -625,20 +666,33 @@ class Job:
         def st_path(f):
             return self.s.storyteller_library + folder[len(self.s.books_prefix):] + "/" + f["filename"]
         known = sorted(b["uuid"] for b in self._st(self.st.books) or [] if b.get("uuid"))
-        # recorded BEFORE the import: a run killed right after it can find its book again
-        self.state.in_flight = {"book": d["id"], "title": d.get("title"), "uuid": None, "pair": list(pair),
-                                "started": self.clock(), "m4b_seconds": seconds, "known_uuids": known}
-        self._save()
-        try:
-            uuid = self._st(self.st.create_book, st_path(plain), st_path(m4b))
-        except Exception as e:
-            if import_never_happened(e):
-                self.state.in_flight = None
-                self._save()
-                raise StartFailed(f"Storyteller did not import it: {e}") from e
-            raise
-        self.state.in_flight.update(uuid=uuid, staged=os.path.join(self.s.staging_dir, f"{d['id']}-{uuid}.epub"))
-        self._save()
+        for attempt in (1, 2):
+            # recorded BEFORE the import: a run killed right after it can find its book again
+            self.state.in_flight = {"book": d["id"], "title": d.get("title"), "uuid": None, "pair": list(pair),
+                                    "started": self.clock(), "m4b_seconds": seconds, "known_uuids": known}
+            self._save()
+            try:
+                uuid = self._st(self.st.create_book, st_path(plain), st_path(m4b))
+            except Exception as e:
+                if import_never_happened(e):
+                    self.state.in_flight = None
+                    self._save()
+                    raise StartFailed(f"Storyteller did not import it: {e}") from e
+                raise
+            self.state.in_flight.update(uuid=uuid,
+                                        staged=os.path.join(self.s.staging_dir, f"{d['id']}-{uuid}.epub"))
+            self._save()
+            if import_complete(self._st_book(uuid) or {}):
+                break
+            # beta.38 raced the EPUB and the audio of this import and dropped one: ours, so delete it
+            logger.warning("Storyteller import %s of book %s lacks its EPUB or audio (attempt %d)",
+                           uuid, d["id"], attempt)
+            self._release_uuid(uuid, d["id"])
+            known.append(uuid)
+            self.state.in_flight = None
+            self._save()
+        else:
+            raise StartFailed("Storyteller dropped the EPUB or the audio of the import twice")
         self._st(self.st.process, uuid)
         logger.info("started book %s (%s) as Storyteller %s", d["id"], d.get("title"), uuid)
         return True
@@ -648,20 +702,35 @@ class Job:
         self.handled.add(rec["id"])
         pair = pair_key(rec.get("files") or [])
         why = f"start: {type(e).__name__}: {e}"
-        n = 0
+        before = n = 0
         if pair is not None:
+            before = self.state.error_count(rec["id"], pair)
             n = self.state.add_error(rec["id"], pair, why, now=self.clock(), min_interval=ERROR_INTERVAL)
-        if n >= ERROR_LIMIT:
+        if pair is not None and n == before:
+            self._save()                        # already counted and told tonight (the Job's retry pod)
+        elif n >= ERROR_LIMIT:
             self.state.record("gave-up", rec["id"], {"why": why}, now=self.clock())
             self._tell(f"⚠️ {rec.get('title')} — gave up after {n} tries to start it: {str(e)[:120]}")
         else:
             self._tell(f"⚠️ {rec.get('title')} — could not start ({str(e)[:120]}); retrying next run")
 
+    def preflight(self):
+        """What every start needs. A failure here is the job's, never a book's:
+        nothing is charged, the run fails (exit 1, told once) and alerts."""
+        self.tools()
+        if not os.path.isdir(self.s.media_books) or not os.listdir(self.s.media_books):
+            raise JobError(f"{self.s.media_books} is missing or empty: check the library mount")
+        os.makedirs(self.s.staging_dir, exist_ok=True)
+        probe = os.path.join(self.s.staging_dir, ".preflight")
+        with open(probe, "w") as fh:
+            fh.write("ok")
+        os.unlink(probe)
+
     def storyteller_busy(self):
         """Another client's book in flight. Told once after STUCK_HOURS."""
-        ours = (self.state.in_flight or {}).get("uuid")
+        ours = {(self.state.in_flight or {}).get("uuid"), *self.state.to_release}
         busy = [b for b in self._st(self.st.books) or []
-                if b.get("uuid") != ours and phase(b) in (RUNNING, PAUSED)]
+                if b.get("uuid") not in ours and phase(b) in (RUNNING, PAUSED)]
         if not busy:
             if self.state.foreign_busy_since is not None:
                 self.state.foreign_busy_since, self.state.foreign_told = None, False
@@ -704,7 +773,7 @@ class Job:
                 logger.info("in flight: %s", self.state.in_flight)
             return 0
         if not self.resumed_window:
-            self.state.run = {"job": self.s.job_name, "started": self.t0}
+            self.state.run = {"job": self.s.job_id, "started": self.t0}
         self._save()
         try:
             self._free_parked()
@@ -716,9 +785,10 @@ class Job:
                 self._guard(self.state.in_flight, self.advance)
                 if self.state.in_flight:         # still aligning, failed and kept, too late, or landing
                     return self.report()
-            started = 0
-            fails = []                           # tonight's start errors, charged once another book starts
+            started = in_a_row = 0
             queue = [b for b in chosen if b["id"] != (self.state.in_flight or {}).get("book")]
+            if queue and not self.stopping and self.elapsed_hours() < self.s.start_hours:
+                self.preflight()
             while queue and started < self.s.max_books and not self.stopping \
                     and self.elapsed_hours() < self.s.start_hours:
                 busy = self.storyteller_busy()
@@ -737,24 +807,17 @@ class Job:
                         self._fail(fl, f"start: {type(e).__name__}: {e}")
                         break
                     logger.exception("start of book %s failed", rec["id"])
-                    self.handled.add(rec["id"])
-                    fails.append((rec, e))
-                    if len(fails) >= START_ERRORS_MAX:
-                        self._tell(f"⚠️ {len(fails)} books in a row could not start ({type(e).__name__}: "
-                                   f"{str(e)[:100]}) -- the job's problem, not the books': nothing counted, "
-                                   f"no more starts tonight")
-                        fails = []
+                    self._start_failed(rec, e)
+                    in_a_row += 1
+                    if in_a_row >= START_ERRORS_MAX:
+                        logger.error("%d books in a row could not start; no more starts tonight", in_a_row)
                         break
                     continue
-                for f in fails:                  # another book started: those errors were the books' own
-                    self._start_failed(*f)
-                fails = []
+                in_a_row = 0
                 started += 1
                 self._guard(self.state.in_flight, self.advance)
                 if self.state.in_flight:         # one book at a time: never orphan the kept one
                     break
-            for f in fails:                      # nothing to compare with: charged to the book
-                self._start_failed(*f)
         except Exception as e:                   # not one book's failure (Storyteller or BookOrbit down)
             logger.exception("read-along run failed")
             if not self.state.run.get("failure_told"):
@@ -771,8 +834,8 @@ class Job:
             logger.info("nothing to report")
             return 0
         title = f"Read-along: {p.get('published', 0)} published · {p.get('refused', 0)} refused"
-        if len(lines) > PUSH_LINES_MAX:
-            lines = lines[:PUSH_LINES_MAX] + [f"… and {len(lines) - PUSH_LINES_MAX} more (see the job's log)"]
+        if len(lines) > PUSH_LINES_MAX:          # after an outage: tonight's news matters most
+            lines = [f"… {len(lines) - PUSH_LINES_MAX} older lines dropped"] + lines[-PUSH_LINES_MAX:]
         body = "\n".join(lines)
         logger.info("%s\n%s", title, body)
         if self._push(self.s.apprise_url, title, body):

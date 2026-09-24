@@ -40,6 +40,7 @@ class FakeStoryteller:
     def __init__(self, clock, polls_until_done=2, grade="S", library_root=None):
         self.clock = clock
         self.library_root = library_root          # this test's view of Storyteller's /library
+        self.drop_ebook = 0                        # imports that lose beta.38's EPUB/audio race
         self.books_ = {}
         self.polls_until_done, self.grade = polls_until_done, grade
         self.calls = []
@@ -63,19 +64,27 @@ class FakeStoryteller:
         self.imports += 1
         uuid = f"u{self.imports}"
         made = datetime.fromtimestamp(self.clock(), timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        size = os.path.getsize(os.path.join(self.library_root, epub[len("/library/"):])) if self.library_root else None
+        def size(path):
+            return os.path.getsize(os.path.join(self.library_root, path[len("/library/"):])) if self.library_root else 1
         stem = os.path.splitext(os.path.basename(epub))[0]
+        ebook = {"filepath": f"/data/assets/{stem}/text/{stem}.epub", "fileSize": size(epub) + 1000}  # upgraded copy
+        if self.drop_ebook > 0:                    # the audio candidate won: the EPUB was dropped
+            self.drop_ebook -= 1
+            ebook = {"filepath": None, "fileSize": None}
         self.books_[uuid] = {"uuid": uuid, "title": stem.split(". ", 1)[-1],       # the EPUB's own title
-                             "createdAt": made, "readaloud": None, "processingJob": None,
-                             "ebook": {"fileSize": size}, "left": None}
+                             "createdAt": made, "readaloud": None, "processingJob": None, "ebook": ebook,
+                             "audiobook": {"filepath": f"/data/assets/{stem}/audio", "fileSize": size(audio)},
+                             "left": None}
         self.calls.append(("create", epub, audio))
         return uuid
 
     def process(self, uuid):
-        self._get(uuid)
+        """beta.38: an active job (queued, running or PAUSED) is returned unchanged -- process never resumes."""
+        b = self._get(uuid)
         self.calls.append(("process", uuid))
-        self.books_[uuid].update(readaloud={"status": "PROCESSING"}, processingJob={"status": "RUNNING"},
-                                 left=self.polls_until_done)
+        if (b["processingJob"] or {}).get("status") in ("QUEUED", "RUNNING", "PAUSED"):
+            return
+        b.update(readaloud={"status": "PROCESSING"}, processingJob={"status": "RUNNING"}, left=self.polls_until_done)
 
     def fail(self, uuid, status="ERROR"):
         self.books_[uuid].update(readaloud={"status": status}, processingJob=None)
@@ -151,7 +160,8 @@ def env(tmp_path):
                                "STAGING_DIR": str(tmp_path / "staging"), **extra})
         os.makedirs(s.state_dir, exist_ok=True)
         return Job(s, bo=lib, st=st, push=lambda url, t, b: pushes.append((t, b)) or True,
-                   clock=clock, sleep=clock.sleep, monotonic=clock, duration=lambda path: 40.0)
+                   clock=clock, sleep=clock.sleep, monotonic=clock, duration=lambda path: 40.0,
+                   tools=lambda: None)
     return lib, st, clock, pushes, make, tmp_path
 
 
@@ -311,22 +321,22 @@ def test_a_book_too_long_for_the_rest_of_the_run_waits(env):
 
 def test_a_retry_pod_continues_its_jobs_window(env):
     lib, st, clock, pushes, make, tmp = env
-    first = make(JOB_NAME="readalong-1")
+    first = make(JOB_ID="readalong-1")
     first._push = lambda url, t, b: False            # exit 1: the Job starts a retry pod
     assert first.run() == 1
     clock.t += 2 * 3600
-    assert make(JOB_NAME="readalong-1").t0 == first.t0          # not a fresh 3.5 h to start books in
-    assert make(JOB_NAME="readalong-2").t0 == clock.t           # another Job is another window
+    assert make(JOB_ID="readalong-1").t0 == first.t0          # not a fresh 3.5 h to start books in
+    assert make(JOB_ID="readalong-2").t0 == clock.t           # another Job is another window
     assert make().t0 == clock.t
 
 
 def test_an_evening_manual_run_does_not_eat_the_nightly_window(env):
     lib, st, clock, pushes, make, tmp = env
-    manual = make(JOB_NAME="readalong-manual-1")     # the owner runs it by hand at ~20:00
+    manual = make(JOB_ID="readalong-manual-1")     # the owner runs it by hand at ~20:00
     assert manual.run() == 0 and has_readalong(lib, 111)
     add_other(lib)
     clock.t = manual.t0 + 4.5 * 3600                 # the CronJob's own Job at 00:30
-    assert make(JOB_NAME="librarian-readalong-29801234").run() == 0
+    assert make(JOB_ID="librarian-readalong-29801234").run() == 0
     assert has_readalong(lib, 222)
 
 
@@ -342,12 +352,12 @@ def test_a_retry_pod_after_a_full_run_only_finishes_up(env):
         if uuid == "u2":
             st.books_[uuid]["left"] = 10 ** 6
     st.process = process
-    first = make(JOB_NAME="j")
+    first = make(JOB_ID="j")
     first._push = lambda url, t, b: False            # the end-of-run push fails -> exit 1 -> a retry pod
     assert first.run() == 1
     clock.t += 10
     st.books_["u2"]["left"] = 1                      # 222 finishes just as the retry pod starts
-    retry = make(JOB_NAME="j")
+    retry = make(JOB_ID="j")
     assert retry.run() == 0
     assert retry.t0 == first.t0 and not has_readalong(lib, 222)  # past the window: no publish begins
     assert "1 refused" in pushes[-1][0] and "grade D" in pushes[-1][1]        # but the news goes out
@@ -419,8 +429,10 @@ def test_a_missing_report_is_an_error_not_a_refusal(env):
     assert "no alignment report" in pushes[-1][1] and "u1" in st.books_     # kept for the retry
 
 
-def test_a_paused_job_is_resumed_and_waited_for(env):
+def test_an_owners_pause_is_left_alone_and_told_once(env):
+    """beta.38's process never resumes a paused job; the pause is the owner's to lift."""
     lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
     real_process = st.process
     once = {"n": 1}
 
@@ -428,11 +440,18 @@ def test_a_paused_job_is_resumed_and_waited_for(env):
         real_process(uuid)
         if once["n"]:
             once["n"] = 0
-            st.pause(uuid)
+            st.pause(uuid)                           # the owner pauses it in Storyteller's UI
     st.process = process
-    assert make().run() == 0
-    assert sum(1 for c in st.calls if c[0] == "process") == 2          # resumed once
-    assert has_readalong(lib, 111)
+    for _ in range(3):
+        clock.t += DAY
+        assert make().run() == 0
+    assert st.books_["u1"]["processingJob"] == {"status": "PAUSED"} and creates(st) == 1   # the queue waits
+    assert len([b for _t, b in pushes if "paused in Storyteller" in b]) == 1
+    assert not any("still aligning" in b for _t, b in pushes)
+    st.books_["u1"].update(readaloud={"status": "PROCESSING"}, processingJob={"status": "RUNNING"}, left=1)
+    clock.t += DAY
+    assert make().run() == 0                         # resumed by the owner: published, then the queue moves
+    assert has_readalong(lib, 111) and has_readalong(lib, 222)
 
 
 def test_a_401_is_retried_once_after_relogin(env):
@@ -583,8 +602,8 @@ def test_a_new_book_with_another_title_is_left_alone_and_told(env):
     def someone_elses_import_then_killed(epub, audio):
         st.books_["other"] = {"uuid": "other", "title": "Another Book", "createdAt":
                               datetime.fromtimestamp(clock.t, timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
-                              "readaloud": None, "processingJob": None, "ebook": {"fileSize": 999},
-                              "left": None}
+                              "readaloud": None, "processingJob": None, "ebook": {"filepath": "/x", "fileSize": 999},
+                              "audiobook": {"filepath": "/y", "fileSize": 999}, "left": None}
         raise KeyboardInterrupt
     real_create = st.create_book
     st.create_book = someone_elses_import_then_killed
@@ -844,9 +863,9 @@ def test_a_run_failure_is_told_once_per_window(env):
     def down():
         raise ConnectionError("storyteller is down")
     st.books = down
-    assert make(JOB_NAME="j").run() == 1
+    assert make(JOB_ID="j").run() == 1
     clock.t += 600
-    assert make(JOB_NAME="j").run() == 1             # the retry pod: same failure, not told again
+    assert make(JOB_ID="j").run() == 1             # the retry pod: same failure, not told again
     assert len([b for _t, b in pushes if "run failed" in b]) == 1
     st.books = real_books
 
@@ -1100,20 +1119,47 @@ def test_one_failure_one_line(env):
     assert state_of(tmp)["errors"]["111"]["count"] == 1
 
 
-def test_a_systemic_start_error_charges_no_book(env):
+def test_a_broken_job_charges_no_book(env):
+    """ffprobe missing (an image regression): the preflight fails the run before any book is charged."""
     lib, st, clock, pushes, make, tmp = env
     add_other(lib)
     add_dune(lib)
+
+    def no_ffprobe():
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'ffprobe'")
+    codes = []
     for _ in range(3):
         clock.t += DAY
         job = make()
+        job.tools = no_ffprobe
+        codes.append(job.run())
+    assert codes == [1, 1, 1] and state_of(tmp)["errors"] == {} and creates(st) == 0
+    assert all("run failed" in b and "ffprobe" in b for _t, b in pushes)
 
-        def no_ffprobe(path):
-            raise FileNotFoundError("[Errno 2] No such file or directory: 'ffprobe'")
-        job.duration = no_ffprobe
+
+def test_three_bad_books_in_a_row_are_charged_and_then_the_queue_moves_on(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    add_dune(lib)
+    lib.add_book(444, "Older/01. Older", [(41, "01. Older.epub", b"P4"), (42, "01. Older.m4b", b"A4" * 9)],
+                 title="Older", updatedAt="2026-09-01T10:00:00.000Z", customMetadata=[{"fieldId": 2, "value": False}])
+    bad = {"Hatred": "corrupt m4b", "Other": "no such file", "Dune": "moov atom not found"}
+
+    def duration(path):
+        for key, why in bad.items():
+            if key in path:
+                raise RuntimeError(why)
+        return 40.0
+    for night in range(1, 5):
+        clock.t += DAY
+        job = make()
+        job.duration = duration
         job.run()
-    assert state_of(tmp)["errors"] == {}
-    assert len([b for _t, b in pushes if "nothing counted" in b]) == 3
+        if night < 4:
+            assert creates(st) == 0                  # three in a row: no more starts tonight
+    s = state_of(tmp)
+    assert {k: v["count"] for k, v in s["errors"].items()} == {"111": 3, "222": 3, "333": 3}
+    assert has_readalong(lib, 444)                   # the others given up: the queue went on
 
 
 def test_a_book_specific_start_error_is_charged_and_the_queue_moves_on(env):
@@ -1180,8 +1226,10 @@ def test_an_import_landing_after_the_retry_pod_is_adopted_not_duplicated(env):
     clock.t += 30                                    # the Job's retry pod, before the import has landed
     assert make().run() == 0 and creates(st) == 0
     st.books_["u-late"] = {"uuid": "u-late", "title": "A Little Hatred", "createdAt": utc(t_request[0] + 45),
-                           "readaloud": None, "processingJob": None, "ebook": {"fileSize": len(b"PLAIN")},
-                           "left": None}
+                           "readaloud": None, "processingJob": None,
+                           "ebook": {"filepath": "/data/assets/A Little Hatred/text/x.epub", "fileSize": 1005},
+                           "audiobook": {"filepath": "/data/assets/A Little Hatred/audio",
+                                         "fileSize": len(b"AUDIO" * 20)}, "left": None}
     clock.t += DAY
     assert make().run() == 0
     assert creates(st) == 0 and has_readalong(lib, 111) and st.books_ == {}   # the late import, adopted
@@ -1204,3 +1252,83 @@ def test_the_books_own_file_in_the_way_is_never_reported(env, monkeypatch):
         clock.t += DAY
         make().run()
     assert not any("in the way" in b for _t, b in pushes) and has_readalong(lib, 111)
+
+
+
+# --- third review round ------------------------------------------------------------------------
+
+def test_an_import_that_lost_the_race_is_deleted_and_retried(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.drop_ebook = 1                                # beta.38 dropped the EPUB of the first import
+    assert make().run() == 0
+    assert creates(st) == 2 and ("delete", "u1") in st.calls and has_readalong(lib, 111)
+    assert state_of(tmp)["errors"] == {}
+
+
+def test_an_import_that_loses_the_race_twice_is_charged(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    st.drop_ebook = 2
+    assert make().run() == 0
+    assert ("delete", "u1") in st.calls and ("delete", "u2") in st.calls
+    assert state_of(tmp)["errors"]["111"]["count"] == 1 and "dropped the EPUB" in pushes[-1][1]
+    assert has_readalong(lib, 222)                   # the queue moved on
+
+
+def test_an_epub2_import_is_adopted_by_its_audio(env):
+    """Storyteller rewrites an EPUB 2 into an EPUB 3: only the audio keeps its size."""
+    lib, st, clock, pushes, make, tmp = env
+    real_create = st.create_book
+
+    def killed_after_the_import(epub, audio):
+        real_create(epub, audio)
+        raise KeyboardInterrupt
+    st.create_book = killed_after_the_import
+    with pytest.raises(KeyboardInterrupt):
+        make().run()
+    assert st.books_["u1"]["ebook"]["fileSize"] != len(b"PLAIN")    # the fake's upgraded copy
+    st.create_book = real_create
+    clock.t += 60
+    assert make().run() == 0
+    assert creates(st) == 1 and has_readalong(lib, 111)
+
+
+def test_a_cancel_that_does_not_stop_is_parked_not_deleted(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.polls_until_done = 10 ** 6
+    make(**SHORT).run()
+
+    def cancel(uuid):                                # the worker ignores the signal for now
+        st.calls.append(("cancel", uuid))
+    real_cancel, st.cancel_processing = st.cancel_processing, cancel
+    lib._books[111]["tags"] = ["no-readalong"]
+    clock.t += DAY
+    make().run()
+    assert ("delete", "u1") not in st.calls and list(state_of(tmp)["to_release"]) == ["u1"]
+    assert not any("not mine" in b for _t, b in pushes)          # our own parked book is not someone else's
+    st.cancel_processing = real_cancel
+    clock.t += DAY
+    make().run()
+    assert ("delete", "u1") in st.calls and state_of(tmp)["to_release"] == {}
+
+
+def test_a_retry_pod_does_not_retell_a_counted_failure(env):
+    lib, st, clock, pushes, make, tmp = env
+    lib.scan_fails = True
+    first = make(JOB_ID="j")
+    first._push = lambda url, t, b: False            # exit 1 -> the retry pod
+    assert first.run() == 1
+    clock.t += 60
+    make(JOB_ID="j").run()
+    lines = [ln for _t, b in pushes for ln in b.splitlines() if "A Little Hatred" in ln]
+    assert len(lines) == 1 and state_of(tmp)["errors"]["111"]["count"] == 1
+
+
+def test_a_long_outage_keeps_the_newest_lines(env):
+    lib, st, clock, pushes, make, tmp = env
+    job = make()
+    job.state.pending_push = {"lines": [f"old {i}" for i in range(60)], "published": 0, "refused": 0}
+    job._tell("newest")
+    assert job.report() == 0
+    body = pushes[-1][1].splitlines()
+    assert body[0].startswith("… 21 older lines dropped") and body[-1] == "newest" and "old 59" in body

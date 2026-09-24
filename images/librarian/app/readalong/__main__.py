@@ -1,7 +1,8 @@
 """`python -m app.readalong`: one nightly run (the librarian release's
 `readalong` CronJob). Exit 0 = the run did its job (books may still have been
-refused or failed: those are in the push); 1 = it could not (listing, login,
-push delivery, anything unexpected) -- the Job fails and alerts."""
+refused or failed: those are in the push), or another run holds the lock;
+1 = it could not (listing, login, push delivery, anything unexpected) -- the
+Job fails and alerts."""
 import fcntl
 import logging
 import os
@@ -21,9 +22,9 @@ def main(env=os.environ) -> int:
     lock = open(os.path.join(s.state_dir, "readalong.lock"), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        log.error("another read-along run holds the lock; exiting")
-        return 1
+    except BlockingIOError:              # e.g. a manual run still going at 00:30: its window, not an error
+        log.warning("another read-along run holds the lock; nothing to do")
+        return 0
     try:
         client = BookorbitClient(s.bookorbit_url, s.bookorbit_user, s.bookorbit_pass,
                                  cookie_path=os.path.join(s.state_dir, "bookorbit-cookies.txt"),

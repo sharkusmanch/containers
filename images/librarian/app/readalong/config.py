@@ -44,7 +44,7 @@ class Settings:
     poll_seconds: int = 60
     dry_run: bool = False
     only: frozenset = field(default_factory=frozenset)
-    job_name: str = ""                         # the Kubernetes Job (downward API): its retry pods share a window
+    job_id: str = ""                           # the Kubernetes Job's uid (downward API): its retry pods share a window
 
     @staticmethod
     def from_env(env: Mapping[str, str]) -> "Settings":
@@ -61,8 +61,8 @@ class Settings:
         for k in ("START_HOURS", "RUN_HOURS", "FINISH_HOURS"):
             if env.get(k):
                 kw[k.lower()] = float(env[k])
-        if env.get("JOB_NAME"):
-            kw["job_name"] = env["JOB_NAME"]
+        if env.get("JOB_ID"):
+            kw["job_id"] = env["JOB_ID"]
         if env.get("LIBRARIES"):
             kw["libraries"] = _ints(env["LIBRARIES"])
         if env.get("QUIET_HOURS"):
