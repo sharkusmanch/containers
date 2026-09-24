@@ -218,8 +218,11 @@ def test_a_nightly_stopped_mid_poll_keeps_the_asks_it_did_not_start(env):
         j.on_sigterm()
         real(s)
     j.sleep = sleep
+    lib.add_book(333, "Solo/01. Solo", [(31, "01. Solo.epub", b"E")], title="Solo",
+                 updatedAt="2026-09-19T10:00:00.000Z", customMetadata=[{"fieldId": 2, "value": False}])
+    ask(tmp, 333, clock.t - 400)                       # no candidate: a finished run would drop it
     j.run()
-    assert asked(tmp) == [222] and not j.completed      # 111's went at its start; 222 was never reached
+    assert asked(tmp) == [222, 333] and not j.completed   # 111's went at its start; the rest stay
 
 
 def test_a_nightly_that_ends_with_a_book_aligning_leaves_the_rest_to_the_ticks(env):
@@ -306,3 +309,143 @@ def test_a_424_is_not_delivered(env):
     j.report()
     p = state_of(tmp)["pending_push"]
     assert p["lines"] == ["⚠️ Sharp Ends — gave up after 3 tries: x"] and p["tries"] == 1   # kept, backed off
+
+
+# --- rv10 (review of 26a84df): failures finish() handles itself, unstartable asks, closes, 424 ----
+
+def test_a_failing_publish_scan_backs_off_like_any_failed_look(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.polls_until_done = 1
+    ask(tmp, 111, clock.t - 400)
+    make().tick()                                      # started
+    attempts = []
+
+    def scan(library_id):                              # BookOrbit's scan times out / 500s
+        attempts.append(clock.t)
+        raise RuntimeError("scan did not finish within 900 s")
+    lib.scan = scan
+    t0 = clock.t
+    while clock.t < t0 + 95 * 60:
+        clock.t += 60
+        make().tick()
+    assert [a - t0 for a in attempts] == [60, 60 + 1800, 60 + 1800 + 3600]   # not every minute
+    s = state_of(tmp)
+    assert s["errors"]["111"]["count"] == 1 and s["in_flight"]["look_fails"] == 3
+    assert len([b for _t, b in pushes if "failed" in b]) == 1
+
+
+def test_a_missing_report_is_not_refetched_every_minute(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.polls_until_done = 1
+    st.report_missing = True                           # finish(): _fail("gave no alignment report")
+    ask(tmp, 111, clock.t - 400)
+    make().tick()
+    calls = []
+    real = st.alignment_report
+    st.alignment_report = lambda uuid: calls.append(clock.t) or real(uuid)
+    for _ in range(10):
+        clock.t += 60
+        make().tick()
+    assert len(calls) == 1
+
+
+def test_a_charged_failure_after_a_blip_keeps_backing_off(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.polls_until_done = 1
+    ask(tmp, 111, clock.t - 400)
+    make().tick()
+    real_detail = lib.detail
+    n = {"i": 0}
+
+    def detail(bid):                                   # the first look: a BookOrbit 502
+        n["i"] += 1
+        if n["i"] == 1:
+            raise RuntimeError("GET /books/111 -> HTTP 502: bad gateway")
+        return real_detail(bid)
+    lib.detail = detail
+    lib.scan_fails = True                              # and then the publish fails (PublishError)
+    clock.t += 60
+    make().tick()
+    assert state_of(tmp)["in_flight"]["look_fails"] == 1
+    clock.t += 1800
+    make().tick()                                      # the second failure in a row: charged ...
+    s = state_of(tmp)
+    assert s["errors"]["111"]["count"] == 1 and s["in_flight"]["look_fails"] == 2   # ... and backing off
+    attempts = lib.scan_attempts
+    for _ in range(30):
+        clock.t += 60
+        make().tick()
+    assert lib.scan_attempts == attempts               # 1 h now
+
+
+def test_an_ask_the_nightly_could_not_start_is_dropped_by_it(env):
+    lib, st, clock, pushes, make, tmp = env
+    add_other(lib)
+    real = lib.detail
+    gets = []
+
+    def detail(bid):
+        if bid == 222:                                 # BookOrbit 500s on this one book's detail
+            gets.append(clock.t)
+            raise RuntimeError("GET /books/222 -> HTTP 500: internal")
+        return real(bid)
+    lib.detail = detail
+    real_books = lib.books                             # the fake's listing goes through detail(): keep it whole
+
+    def books():
+        lib.detail = real
+        try:
+            return real_books()
+        finally:
+            lib.detail = detail
+    lib.books = books
+    ask(tmp, 222, clock.t - 400)
+    for _ in range(10):                                # ticks cannot evaluate it: it stays, blocks nothing
+        clock.t += 60
+        make().tick()
+    assert asked(tmp) == [222]
+    make().run()                                       # the nightly tries to start it: charged, ask dropped
+    assert asked(tmp) == [] and state_of(tmp)["errors"]["222"]["count"] == 1
+    n = len(gets)
+    for _ in range(60):
+        clock.t += 60
+        make().tick()
+    assert len(gets) == n                              # no more GETs every minute
+
+
+def test_a_resumed_close_is_not_held_back_by_the_look_backoff(env):
+    lib, st, clock, pushes, make, tmp = env
+    st.polls_until_done = 10 ** 6
+    ask(tmp, 111, clock.t - 400)
+    make().tick()
+    j = make()                                         # the state a kill leaves mid-_close() after a
+    fl = j.state.in_flight                             # tick's give-up (look_fails 8 = the 20 h cap)
+    fl.update(closing="gave-up", closing_line="⚠️ A Little Hatred — gave up after 3 tries: x",
+              look_fails=8, look_failed_at=clock.t)
+    j.state.save()
+    clock.t += 60
+    make().tick()
+    assert state_of(tmp)["in_flight"] is None
+    assert [b for _t, b in pushes if "gave up after 3 tries" in b]
+
+
+def test_a_424_is_one_post_per_backed_off_attempt(env):
+    lib, st, clock, pushes, make, tmp = env
+    posts = []
+
+    class R:
+        status_code = 424                              # Apprise: its target failed (maybe some parts arrived)
+
+    def push(url, title, body):
+        return jobmod.send_push(url, title, body, post=lambda url, json, timeout: posts.append(clock.t) or R(),
+                                sleep=lambda s: None)
+    j = make()
+    j._tell("📖🎧 Sharp Ends — read-along published (grade S)")
+    t0 = clock.t
+    for _ in range(120):                               # two idle hours
+        clock.t += 60
+        j = make()
+        j._push = push
+        j.tick()
+    assert [p - t0 for p in posts] == [60, 60 + 1800, 60 + 1800 + 3600]   # never re-sent seconds later
+    assert state_of(tmp)["pending_push"]["lines"]      # kept until delivered

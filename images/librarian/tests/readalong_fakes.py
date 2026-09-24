@@ -117,6 +117,7 @@ class FakeLibrary:
         if self.hook_before_scan:
             hook, self.hook_before_scan = self.hook_before_scan, None
             hook(self)
+        self.scan_attempts = getattr(self, "scan_attempts", 0) + 1
         if self.scan_fails:
             raise RuntimeError("scan failed")
         self.scans += 1

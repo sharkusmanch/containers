@@ -193,15 +193,20 @@ def m4b_seconds(path, run=subprocess.run):
 
 def send_push(url, title, body, *, post=requests.post, sleep=time.sleep):
     """Only 200 counts as delivered: Apprise answers 204 for an unknown key and
-    424 when its one target (Bark) failed. A re-send after a 424 may repeat the
-    parts of a long, split push that did arrive -- better than a lost "gave up"
-    or "blocked" line; the caller's backoff keeps repeats rare."""
+    424 when its one target (Bark) failed. A 424 is not re-sent here: a long
+    push is split into parts, and the parts that did arrive would arrive again
+    seconds later. The caller keeps it and backs off (30 min, doubling, at most
+    6 h) with no give-up: a repeated part now and then beats a lost "gave up"
+    or "blocked" line after a Bark outage."""
     last = None
     for attempt in range(3):
         try:
             r = post(url, json={"title": title, "body": body, "type": "info"}, timeout=30)
             if r.status_code == 200:
                 return True
+            if r.status_code == 424:
+                logger.error("push not delivered: Apprise's target failed (HTTP 424)")
+                return False
             last = f"HTTP {r.status_code}"
         except requests.RequestException as e:
             last = str(e)
@@ -448,8 +453,8 @@ class Job:
             self._close(fl, fl["closing"], {"uuid": fl.get("uuid"), "resumed": True}, fl.get("closing_line"))
             return
         if poll:                                 # the nightly run has had its go: ticks may look again
-            fl.pop("look_failed_at", None)
-            fl.pop("look_fails", None)
+            if [fl.pop(k, None) for k in ("look_fails", "look_failed_at")] != [None, None]:
+                self._save()                     # persisted now: the run may end without another save
         if not fl.get("uuid"):
             return self._adopt(fl, poll)
         d = self.bo.detail(fl["book"])
@@ -828,6 +833,8 @@ class Job:
                         continue
                 except Exception as e:
                     fl = self.state.in_flight
+                    if rec["id"] in asked:      # charged: the nightly retries it, not the ticks
+                        self._drop_ask(rec["id"], asked[rec["id"]], "its start failed (nightly run)")
                     if fl and fl["book"] == rec["id"]:
                         # the import may exist: kept (uuid or None) so the next run resumes or adopts it
                         logger.exception("start of book %s failed after its import was requested", rec["id"])
@@ -848,11 +855,11 @@ class Job:
                 self._guard(self.state.in_flight, self.advance)
                 if self.state.in_flight:         # one book at a time: never orphan the kept one
                     break
-            # A started book's ask went at its start. A book that is no candidate by
-            # tonight's listing loses its ask (one that kept failing to evaluate blocks
-            # nothing any more). Every other ask -- a book not reached, one that did not
-            # fit, one whose start failed -- stays for the ticks, which judge it afresh.
-            # A stopped run keeps them all for the run that resumes it.
+            # A started book's ask went at its start, a charged start's at its failure. A
+            # book that is no candidate by tonight's listing loses its ask. Every other
+            # ask -- a book not reached, one that did not fit -- stays for the ticks,
+            # which judge it afresh. A stopped run keeps them all for the run that
+            # resumes it.
             if not self.stopping:
                 candidates = {b["id"] for b in chosen}
                 for bid, at in asked.items():
@@ -904,16 +911,18 @@ class Job:
 
     def _may_look(self, fl):
         n = fl.get("look_fails", 0)
-        return not n or self.clock() - fl.get("look_failed_at", 0) >= \
-            min(LOOK_RETRY_FIRST * 2 ** (n - 1), ERROR_INTERVAL)
+        return not n or bool(fl.get("closing")) or self.clock() - fl.get("look_failed_at", 0) >= \
+            min(LOOK_RETRY_FIRST * 2 ** (n - 1), ERROR_INTERVAL)   # a close to finish: at once
 
     def _look(self, fl):
         """One look at the in-flight book. A failed look backs off -- 30 min,
         doubling up to ERROR_INTERVAL -- so a failing download or publish never
-        repeats every minute. One failure (a BookOrbit or Storyteller restart)
-        is only logged; the second in a row is charged like the nightly run's
-        (once per ERROR_INTERVAL, told). A clean look resets it, and so does
-        the nightly run, which owns the retries."""
+        repeats every minute. A look that raised once (a BookOrbit or
+        Storyteller restart) is only logged; the second in a row is charged
+        like the nightly run's (once per ERROR_INTERVAL, told). A failure
+        finish() charges itself (a scan that failed, a missing report) backs
+        off the same way. A clean look resets it, and so does the nightly
+        run, which owns the retries."""
         try:
             self.advance(fl, poll=False)
         except BookGone:
@@ -921,17 +930,23 @@ class Job:
                         f"🗑️ {self._title(fl)} — deleted from BookOrbit; its alignment is dropped")
         except Exception as e:
             logger.exception("book %s", fl["book"])
-            fl["look_fails"] = fl.get("look_fails", 0) + 1
-            fl["look_failed_at"] = self.clock()
-            if fl["look_fails"] >= 2:
+            if self._look_failed(fl) >= 2:
                 self._fail(fl, f"{type(e).__name__}: {e}")
             else:
                 self._save()
         else:
-            if fl.pop("look_fails", None) is not None:
+            if self.state.in_flight is fl and fl["book"] in self.handled:
+                self._look_failed(fl)            # still in flight, yet handled: only _fail() does that
+                self._save()
+            elif fl.pop("look_fails", None) is not None:
                 fl.pop("look_failed_at", None)
                 if self.state.in_flight is fl:
                     self._save()
+
+    def _look_failed(self, fl):
+        fl["look_fails"] = fl.get("look_fails", 0) + 1
+        fl["look_failed_at"] = self.clock()
+        return fl["look_fails"]
 
     def _not_candidate(self, d):
         """Why an asked-for book is not (yet) to be aligned; None when it is."""
@@ -961,7 +976,8 @@ class Job:
         is dropped when its book is not one, or once it is started or its
         start failed; it stays while Storyteller is busy, ONLY excludes it,
         start() declines for now, or it cannot be evaluated (then it blocks
-        nothing: the next ask is tried, and the nightly run clears it)."""
+        nothing: the next ask is tried; the nightly run drops it once it has
+        tried to start the book and failed, or finds it no candidate)."""
         busy = self.storyteller_busy()
         if busy:
             logger.info("asks for %s wait: Storyteller is busy with %s", sorted(asks), busy)
@@ -1003,10 +1019,14 @@ class Job:
             return                              # declined for now (e.g. closed this tick): the next tick
 
     def _drop_ask(self, bid, at, why):
-        """Done with an ask -- unless the librarian asked again meanwhile."""
-        if wanted.asked_at(self.s.wanted_dir, bid) == at:
-            wanted.drop(self.s.wanted_dir, bid)
-            logger.info("ask for book %s done: %s", bid, why)
+        """Done with an ask -- unless the librarian asked again meanwhile. Never
+        raises: an ask that cannot be removed (NFS) is judged again later."""
+        try:
+            if wanted.asked_at(self.s.wanted_dir, bid) == at:
+                wanted.drop(self.s.wanted_dir, bid)
+                logger.info("ask for book %s done: %s", bid, why)
+        except OSError as e:
+            logger.warning("ask for book %s done (%s), but it cannot be removed: %s", bid, why, e)
 
     def _tick_failed(self, e):
         today = time.strftime("%Y-%m-%d", time.localtime(self.clock()))

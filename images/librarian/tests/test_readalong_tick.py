@@ -88,11 +88,12 @@ def test_a_book_with_a_recent_error_is_left_alone(env):
     clock.t += 60
     make().tick()                                      # the publish fails: counted once
     assert state_of(tmp)["errors"]["111"]["count"] == 1
-    scans = lib.scans
+    attempts = lib.scan_attempts
+    assert attempts >= 1
     for _ in range(3):
         clock.t += 60
         make().tick()
-    assert lib.scans == scans and state_of(tmp)["errors"]["111"]["count"] == 1   # no rescan every minute
+    assert lib.scan_attempts == attempts and state_of(tmp)["errors"]["111"]["count"] == 1   # no rescan every minute
 
 
 def test_an_ask_for_a_book_that_is_no_candidate_is_dropped(env):
@@ -280,7 +281,7 @@ def test_a_clean_look_resets_the_backoff(env):
 
 def test_the_nightly_clears_a_look_backoff(env):
     lib, st, clock, pushes, make, tmp = env
-    st.polls_until_done = 2
+    st.polls_until_done = 10 ** 6                      # still aligning when the nightly run ends
     ask(tmp, 111, clock.t - 400)
     make().tick()
     real = st.book
@@ -289,8 +290,9 @@ def test_the_nightly_clears_a_look_backoff(env):
     make().tick()
     st.book = real
     assert state_of(tmp)["in_flight"]["look_fails"] == 1
-    assert make().run() == 0                            # the nightly polls it to the end
-    assert has_readalong(lib, 111) and state_of(tmp)["in_flight"] is None
+    assert make(RUN_HOURS="1", START_HOURS="1", FINISH_HOURS="0.5").run() == 0
+    fl = state_of(tmp)["in_flight"]
+    assert fl["book"] == 111 and "look_fails" not in fl and "look_failed_at" not in fl
 
 
 def test_a_nightly_stopped_before_its_starts_keeps_the_asks(env):
@@ -298,8 +300,11 @@ def test_a_nightly_stopped_before_its_starts_keeps_the_asks(env):
     the asks it did not serve stay for the resumed run and the ticks."""
     lib, st, clock, pushes, make, tmp = env
     lib._books[111]["updatedAt"] = FRESH               # just filed: only the ask gets it aligned tonight
+    lib.add_book(333, "Solo/01. Solo", [(31, "01. Solo.epub", b"E")], title="Solo",
+                 updatedAt="2026-09-19T10:00:00.000Z", customMetadata=[{"fieldId": 2, "value": False}])
     ask(tmp, 111, clock.t - 400)
+    ask(tmp, 333, clock.t - 400)                       # no candidate: a finished run would drop it
     job = make()
     job.on_sigterm()                                   # before the first start
     assert job.run() == 0
-    assert creates(st) == 0 and asked(tmp) == [111] and not job.completed
+    assert creates(st) == 0 and asked(tmp) == [111, 333] and not job.completed
