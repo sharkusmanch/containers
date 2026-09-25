@@ -715,12 +715,21 @@ def human_answer_matches(intent: dict, human_answer) -> bool:
 # --- check_intent --------------------------------------------------------
 
 
+def _same_index(a, b) -> bool:
+    try:
+        return (a is None and b is None) or (a is not None and b is not None and float(a) == float(b))
+    except (TypeError, ValueError):
+        return False
+
+
 def _human_chose_series(intent: dict, human_answer, series) -> bool:
-    """The human selected exactly this create_book, with this very series (guard 12's override)."""
+    """The human selected exactly this create_book, with this very series AND position (guard 12's
+    override; the position names the folder too)."""
     if not human_answer_matches(intent, human_answer):
         return False
-    chosen = ((human_answer.get("option_intent") or {}).get("metadata") or {}).get("series")
-    return bool(chosen) and umbrella.key(chosen) == umbrella.key(series)
+    chosen = (human_answer.get("option_intent") or {}).get("metadata") or {}
+    return (bool(chosen.get("series")) and umbrella.key(chosen["series"]) == umbrella.key(series)
+            and _same_index(chosen.get("seriesIndex"), (intent.get("metadata") or {}).get("seriesIndex")))
 
 
 def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:

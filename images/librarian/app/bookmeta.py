@@ -161,6 +161,9 @@ def create_metadata(md, arrival, epub=None) -> dict:
     # store (Task 9c fix round 1): send them normalised so what we render,
     # send and read back are the same strings.
     series = normalize_metadata_text(md.get("series"))
+    # a human-approved umbrella series (guard 12) is filed under the umbrella's own name, never a
+    # variant spelling ("Cosmere Universe") that would make a stray series row
+    series = umbrella.as_umbrella(series) or series
     meta = {
         "title": md["title"], "authors": normalize_authors(md["authors"]),
         "subtitle": md.get("subtitle") or None,

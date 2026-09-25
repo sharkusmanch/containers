@@ -101,3 +101,12 @@ def test_summarize_shows_every_membership_primary_first():
     assert s["series_memberships"] == [{"series": "Hoid's Travails", "index": "2"},
                                        {"series": "The Cosmere", "index": "18"}]
     assert idx.summarize(dict(_book(8), title="Solo", files=[]))["series_memberships"] == []
+
+
+def test_create_metadata_files_an_umbrella_under_its_own_name():
+    fields = bookmeta.create_metadata({"title": "T", "authors": ["A"], "series": "Cosmere Universe", "seriesIndex": 3},
+                                      {"source": "manual"})["fields"]
+    assert fields["seriesName"] == "The Cosmere"
+    fields = bookmeta.create_metadata({"title": "T", "authors": ["A"], "series": "The Tawny Man", "seriesIndex": 1},
+                                      {"source": "manual"})["fields"]
+    assert fields["seriesName"] == "The Tawny Man"

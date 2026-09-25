@@ -1654,3 +1654,6 @@ def test_create_book_under_an_umbrella_passes_only_on_the_humans_exact_choice():
     assert ok, msg
     ok, msg = check_intent(intent, ctx(make_dossier(), FakeIndex({}), human_answer=other))
     assert not ok and "umbrella" in msg
+    moved = {"option": 1, "option_intent": dict(create_book_intent(series="First Law World", series_index=3))}
+    ok, msg = check_intent(intent, ctx(make_dossier(), FakeIndex({}), human_answer=moved))
+    assert not ok and "umbrella" in msg            # the chosen position names the folder too
