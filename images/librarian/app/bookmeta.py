@@ -208,17 +208,18 @@ def create_memberships(fields) -> list:
     - no series -> []: clears every membership. A scalar seriesName null would
       instead PROMOTE a second membership (from the file or a provider fetch) to
       primary, mirror it into seriesName and move the folder;
-    - else the series, plus its umbrella (app.umbrella) with no position -- the
-      position is looked up by hand, never invented.
+    - else the series, plus every umbrella it lies in (app.umbrella: Wax & Wayne ->
+      The Cosmere and The Mistborn Saga) with no position -- the positions are
+      looked up by hand, never invented.
     Only seriesName/seriesIndex per entry: an `expectedBookCount` -- even null --
     rewrites that count for the whole series."""
     series = fields.get("seriesName")
     if not series:
         return []
     out = [{"seriesName": series, "seriesIndex": fields.get("seriesIndex")}]
-    u = umbrella.umbrella_for(series)
-    if u and umbrella.key(u) != umbrella.key(series):
-        out.append({"seriesName": u, "seriesIndex": None})
+    for u in umbrella.umbrellas_for(series):
+        if umbrella.key(u) != umbrella.key(series):
+            out.append({"seriesName": u, "seriesIndex": None})
     return out
 
 

@@ -15,13 +15,21 @@ def test_key_is_bookorbits_series_identity():
 
 
 def test_member_series_and_aliases():
-    assert umbrella.umbrella_for("The Stormlight Archive") == "The Cosmere"
-    assert umbrella.umbrella_for("the farseer  trilogy") == "The Realm of the Elderlings"
-    assert umbrella.umbrella_for("Secret Projects") is None          # mixed: not every one is Cosmere
-    assert umbrella.umbrella_for("The Cosmere") is None               # an umbrella is no member of itself
-    assert umbrella.as_umbrella("Cosmere") == "The Cosmere"
-    assert umbrella.as_umbrella("realm of the elderlings") == "The Realm of the Elderlings"
-    assert umbrella.as_umbrella("The Stormlight Archive") is None
+    assert umbrella.umbrellas_for("The Stormlight Archive") == ["The Cosmere"]
+    assert umbrella.umbrellas_for("the farseer  trilogy") == ["The Realm of the Elderlings"]
+    assert umbrella.umbrellas_for("Farseer Trilogy") == ["The Realm of the Elderlings"]   # provider spelling
+    assert umbrella.umbrellas_for("Mistborn: Wax & Wayne") == ["The Cosmere", "The Mistborn Saga"]
+    assert umbrella.umbrellas_for("The Age of Madness") == ["First Law World"]
+    assert umbrella.umbrellas_for("Secret Projects") == []          # mixed: not every one is Cosmere
+    assert umbrella.umbrellas_for("The Cosmere") == []              # an umbrella is no member of itself
+    for name, u in (("Cosmere", "The Cosmere"), ("Cosmere Universe", "The Cosmere"),
+                    ("The Cosmere Collection", "The Cosmere"), ("The Elderlings", "The Realm of the Elderlings"),
+                    ("realm of the elderlings", "The Realm of the Elderlings"), ("Mistborn", "The Mistborn Saga"),
+                    ("The Mistborn Saga", "The Mistborn Saga"), ("First Law World", "First Law World")):
+        assert umbrella.as_umbrella(name) == u, name
+    for name in ("The Stormlight Archive", "Elantris", "The First Law", "The Mistborn Saga: The Original Trilogy",
+                 "The Collection", "Series", None, ""):
+        assert umbrella.as_umbrella(name) is None, name
 
 
 def test_memberships_are_ordered_by_display_order():
@@ -34,13 +42,17 @@ def test_memberships_are_ordered_by_display_order():
 def test_series_change_problem():
     plain = _book(series="Murderbot Diaries", index="2")
     cosmere = _book(series="The Stormlight Archive", index="1", extras=[("The Cosmere", "6")])
+    elantris = _book(258, series="The Cosmere", index="1")                  # the umbrella IS its series
     assert "umbrella" in umbrella.series_change_problem({}, "The Cosmere")
     assert "umbrella" in umbrella.series_change_problem(plain, "Cosmere")           # an alias
     assert umbrella.series_change_problem(plain, "The Murderbot Diaries") is None    # no extras: free
     assert umbrella.series_change_problem({}, "The Stormlight Archive") is None      # a new book
     assert umbrella.series_change_problem(cosmere, "the stormlight  archive") is None  # same series
-    why = umbrella.series_change_problem(cosmere, "Mistborn")
+    why = umbrella.series_change_problem(cosmere, "Mistborn: Wax & Wayne")
     assert why and "'The Cosmere'" in why
+    why = umbrella.series_change_problem(elantris, "Elantris")
+    assert why and "umbrella 'The Cosmere'" in why
+    assert umbrella.series_change_problem(elantris, "the cosmere") is None          # same series
 
 
 def test_create_memberships():
@@ -51,6 +63,18 @@ def test_create_memberships():
     assert bookmeta.create_memberships({"seriesName": "The Stormlight Archive", "seriesIndex": "6"}) == [
         {"seriesName": "The Stormlight Archive", "seriesIndex": "6"},
         {"seriesName": "The Cosmere", "seriesIndex": None}]
+    assert bookmeta.create_memberships({"seriesName": "Mistborn: Ghostbloods", "seriesIndex": "1"}) == [
+        {"seriesName": "Mistborn: Ghostbloods", "seriesIndex": "1"},
+        {"seriesName": "The Cosmere", "seriesIndex": None},
+        {"seriesName": "The Mistborn Saga", "seriesIndex": None}]
+    # a standalone a human filed under the umbrella itself: just that
+    assert bookmeta.create_memberships({"seriesName": "First Law World", "seriesIndex": "12"}) == [
+        {"seriesName": "First Law World", "seriesIndex": "12"}]
+    # the index travels as BookOrbit's string (a number would be a 400)
+    fields = bookmeta.create_metadata({"title": "T", "authors": ["A"], "series": "The Tawny Man", "seriesIndex": 2},
+                                      {"source": "manual"})["fields"]
+    for m in bookmeta.create_memberships(fields):
+        assert m["seriesIndex"] is None or isinstance(m["seriesIndex"], str)
     # never an expectedBookCount: even null rewrites the count of the whole series
     for m in bookmeta.create_memberships({"seriesName": "Fitz and the Fool", "seriesIndex": "1"}):
         assert set(m) == {"seriesName", "seriesIndex"}

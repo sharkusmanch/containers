@@ -90,6 +90,9 @@ def normalize_book(b: dict, local_root: str) -> dict:
     d.setdefault("libraryName", "Library")
     d.setdefault("seriesName", None)
     d.setdefault("seriesIndex", None)
+    # BookOrbit always holds the primary as a membership too (never a series without one)
+    d.setdefault("seriesMemberships", [{"seriesId": 0, "seriesName": d["seriesName"], "seriesIndex": d["seriesIndex"],
+                                        "displayOrder": 0}] if d["seriesName"] else [])
     d.setdefault("publishedYear", None)
     d.setdefault("readAloudSync", {"state": "unavailable"})
     d.setdefault("updatedAt", f"u{d['id']}")

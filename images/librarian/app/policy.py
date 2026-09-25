@@ -715,6 +715,14 @@ def human_answer_matches(intent: dict, human_answer) -> bool:
 # --- check_intent --------------------------------------------------------
 
 
+def _human_chose_series(intent: dict, human_answer, series) -> bool:
+    """The human selected exactly this create_book, with this very series (guard 12's override)."""
+    if not human_answer_matches(intent, human_answer):
+        return False
+    chosen = ((human_answer.get("option_intent") or {}).get("metadata") or {}).get("series")
+    return bool(chosen) and umbrella.key(chosen) == umbrella.key(series)
+
+
 def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
     shape_ok, shape_msg = validate_shape(intent)
     if not shape_ok:
@@ -756,17 +764,20 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
             return False, f"book_id {book_id} not found in the library index"
 
     # Guard 12 (2026-09-24): a book's own series is never an umbrella series
-    # (The Cosmere, The Realm of the Elderlings -- they name the folder and
-    # collapse with the umbrella membership), and a book that is in other
-    # series too keeps its series here: a change would leave the umbrella on
-    # an unrelated book. Both are a human's call (escalate). The executor
-    # repeats it on a fresh read (this index can be minutes old).
+    # (The Cosmere, First Law World, ... -- they name the folder and collapse
+    # with the umbrella membership); a book whose own series IS an umbrella,
+    # or that is in other series too, keeps its series here: a change would
+    # drop the umbrella or leave it on an unrelated book. All are a human's
+    # call (escalate). A NEW book filed under an umbrella (a standalone, like
+    # First Law World #4) passes only when the human selected exactly that
+    # option, series included. The executor repeats the update_metadata rules
+    # on a fresh read (this index can be minutes old).
     if kind in (CREATE_BOOK, UPDATE_METADATA):
         series = (intent.get("metadata") or {}).get("series")
         if series:
             book = ctx.index.book(intent["book_id"]) if kind == UPDATE_METADATA else None
             why = umbrella.series_change_problem(book or {}, series)
-            if why:
+            if why and not (kind == CREATE_BOOK and _human_chose_series(intent, ctx.human_answer, series)):
                 return False, why
 
     # Guard 4: library must be adult|kids; CBZ arrivals may only escalate or

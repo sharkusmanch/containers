@@ -211,11 +211,13 @@ class FakeBookorbit:
                 for k, v in self.fetch.items():
                     if k == "seriesMemberships":
                         continue
+                    if k in ("seriesName", "seriesIndex") and not series_open:
+                        continue                         # either lock set: BookOrbit skips both
                     if k not in b["lockedFields"]:
                         b[k] = v
                 if "seriesMemberships" in self.fetch and series_open:      # Audible: every series
                     self._set_memberships(b, self.fetch["seriesMemberships"])
-                elif any(k in self.fetch and k not in b["lockedFields"] for k in ("seriesName", "seriesIndex")):
+                elif series_open and any(k in self.fetch for k in ("seriesName", "seriesIndex")):
                     self._sync_primary(b)
                 self._touch(b)
                 self.fetch_log.append((now, bid))
@@ -3247,3 +3249,15 @@ def test_execute_update_index_fix_keeps_the_umbrella(env):
 
     assert r.ok and r.state == "updated", r.detail
     assert _ms(env.fake.books[7001]) == [("The Stormlight Archive", "2"), ("The Cosmere", "6")]
+
+
+def test_create_book_in_a_series_inside_two_umbrellas(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, series="Mistborn: Ghostbloods", seriesIndex=1), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    assert _ms(env.fake.books[r.book_id]) == [("Mistborn: Ghostbloods", "1"), ("The Cosmere", None),
+                                              ("The Mistborn Saga", None)]

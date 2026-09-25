@@ -1619,8 +1619,10 @@ def test_create_book_with_an_umbrella_or_alias_as_its_series_is_refused():
 
 def test_update_metadata_series_rules_on_a_book_with_an_umbrella():
     index = FakeIndex({2: _member_book(2, "The Stormlight Archive", "1", [("The Cosmere", "6")])})
-    ok, msg = check_intent(update_metadata_intent(2, metadata={"series": "Mistborn"}), ctx(make_dossier(), index))
+    ok, msg = check_intent(update_metadata_intent(2, metadata={"series": "Warbreaker"}), ctx(make_dossier(), index))
     assert not ok and "'The Cosmere'" in msg
+    ok, msg = check_intent(update_metadata_intent(2, metadata={"series": "Mistborn"}), ctx(make_dossier(), index))
+    assert not ok and "umbrella series 'The Mistborn Saga'" in msg
     ok, msg = check_intent(update_metadata_intent(2, metadata={"series": "The Cosmere"}), ctx(make_dossier(), index))
     assert not ok and "umbrella" in msg
     ok, msg = check_intent(update_metadata_intent(2, metadata={"series": "the stormlight archive", "seriesIndex": 2}),
@@ -1634,3 +1636,21 @@ def test_update_metadata_series_change_on_a_plain_book_is_unaffected():
     index = FakeIndex({2: _member_book(2, "Murderbot", "2")})
     ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
     assert ok, msg
+
+
+def test_update_metadata_refuses_to_move_a_book_off_its_umbrella_series():
+    index = FakeIndex({258: _member_book(258, "The Cosmere", "1")})
+    ok, msg = check_intent(update_metadata_intent(258, metadata={"series": "Elantris"}), ctx(make_dossier(), index))
+    assert not ok and "umbrella 'The Cosmere'" in msg
+
+
+def test_create_book_under_an_umbrella_passes_only_on_the_humans_exact_choice():
+    intent = create_book_intent(series="First Law World", series_index=12)
+    chosen = {"option": 1, "option_intent": dict(create_book_intent(series="First Law World", series_index=12))}
+    other = {"option": 1, "option_intent": dict(create_book_intent(series="The Age of Madness", series_index=4))}
+    ok, msg = check_intent(intent, ctx(make_dossier(), FakeIndex({})))
+    assert not ok and "umbrella" in msg
+    ok, msg = check_intent(intent, ctx(make_dossier(), FakeIndex({}), human_answer=chosen))
+    assert ok, msg
+    ok, msg = check_intent(intent, ctx(make_dossier(), FakeIndex({}), human_answer=other))
+    assert not ok and "umbrella" in msg
