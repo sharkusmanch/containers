@@ -10,7 +10,7 @@ ARG KUBECTL_VERSION=v1.37.0
 ARG HELM_VERSION=v4.3.0
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_VERSION=2.1.280
+ARG CLAUDE_VERSION=2.1.282
 
 # renovate: datasource=npm depName=@openai/codex
 ARG CODEX_VERSION=0.156.1
