@@ -25,6 +25,7 @@ import time
 import urllib.error
 import urllib.request
 
+from app import umbrella
 from app.titles import surnames, title_keys
 
 RELOGIN_AFTER_SECONDS = 600  # access token lives 900s
@@ -731,6 +732,9 @@ class LibraryIndex:
             "authors": _names(detail.get("authors")),
             "series": detail.get("seriesName"),
             "series_index": detail.get("seriesIndex"),
+            # every series the book is in, primary first (= series/series_index);
+            # the others are extras such as an umbrella (The Cosmere #6)
+            "series_memberships": [{"series": n, "index": i} for n, i in umbrella.memberships(detail)],
             "year": detail.get("publishedYear"),
             # GET /books/{id} carries no top-level "narrators" -- verified
             # live 2026-09-22: it's nested under audioMetadata.narrators (as

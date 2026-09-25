@@ -44,7 +44,7 @@ import json
 import unicodedata
 from dataclasses import dataclass, field
 
-from app import bo_render
+from app import bo_render, umbrella
 from app.dossier import agreement
 from app.states import ATTACH, CREATE_BOOK, DEFER, ESCALATE, INTENT_KINDS, UPDATE_METADATA
 from app.titles import normalize
@@ -754,6 +754,20 @@ def check_intent(intent: dict, ctx: GuardContext) -> GuardResult:
         book = ctx.index.book(book_id)
         if book is None:
             return False, f"book_id {book_id} not found in the library index"
+
+    # Guard 12 (2026-09-24): a book's own series is never an umbrella series
+    # (The Cosmere, The Realm of the Elderlings -- they name the folder and
+    # collapse with the umbrella membership), and a book that is in other
+    # series too keeps its series here: a change would leave the umbrella on
+    # an unrelated book. Both are a human's call (escalate). The executor
+    # repeats it on a fresh read (this index can be minutes old).
+    if kind in (CREATE_BOOK, UPDATE_METADATA):
+        series = (intent.get("metadata") or {}).get("series")
+        if series:
+            book = ctx.index.book(intent["book_id"]) if kind == UPDATE_METADATA else None
+            why = umbrella.series_change_problem(book or {}, series)
+            if why:
+                return False, why
 
     # Guard 4: library must be adult|kids; CBZ arrivals may only escalate or
     # defer (no auto-filing for comics in this plan); an attach target must

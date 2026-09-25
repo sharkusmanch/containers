@@ -230,7 +230,11 @@ def build_server(mode: str, api: str, token: str) -> FastMCP:
             Comics. `metadata` carries the new book's fields (title,
             subtitle, authors, series, seriesIndex, publishedYear,
             language, audibleId, asinTag, narrators); only `title` and
-            `authors` are required. This does not file anything
+            `authors` are required. `series` is the book's own, most
+            specific series (The Stormlight Archive, never The Cosmere):
+            an umbrella series (The Cosmere, The Realm of the Elderlings)
+            is refused there and is added as a second membership by the
+            service itself. This does not file anything
             immediately: it queues a proposed intent for a separate
             reviewer run to approve or reject.
             """
@@ -264,6 +268,11 @@ def build_server(mode: str, api: str, token: str) -> FastMCP:
             follow). `lock` may contain `title`, `subtitle`, `description`,
             `authors`, `seriesName`, `seriesIndex`, `publishedYear`,
             `language`; every identity field you set is locked anyway.
+            `series` sets the book's own (primary) series: never an
+            umbrella series, and never on a book whose
+            `series_memberships` list other series too (a candidate's
+            dossier entry shows them) unless it stays the same series --
+            escalate instead; both are refused.
             This does not patch anything immediately: it queues a
             proposed intent, reviewed alongside the attach it corrects,
             for a separate reviewer run to approve or reject.

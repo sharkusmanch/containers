@@ -1,6 +1,6 @@
 {
   "name": "catching-fire-missing-series-index",
-  "note": "Audio Book 2 arrives; the library's Catching Fire ebook (#602) sits in 'The Hunger Games' with NO series index while #601/#603 carry 1 and 3. Attach and fix the missing index (seriesIndex 2) — no title change, no locks.",
+  "note": "Audio Book 2 arrives; the library's Catching Fire ebook (#602) sits in 'The Hunger Games' with NO series index while #601/#603 carry 1 and 3. Attach and fix the missing index (seriesIndex 2) — no title change; the only lock allowed is the corrected seriesIndex (the core locks every identity field it writes, and librarian.md's own example locks it -- lock_max [] predated that and failed with the unchanged prompts on 2026-09-24).",
   "arrival": {
     "source": "libation",
     "source_id": "B0CATCHF02",
@@ -106,7 +106,9 @@
         "subtitle",
         "authors"
       ],
-      "lock_max": []
+      "lock_max": [
+        "seriesIndex"
+      ]
     }
   }
 }

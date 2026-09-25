@@ -1596,3 +1596,41 @@ def test_guard7_update_metadata_needs_an_attach_answer_not_a_create(tmp_path):
                          ctx(dossier, index, lists=lists,
                              human_answer=answer(create_book_intent(library="kids"))))
     assert not ok
+
+
+# --- guard 12: umbrella series (2026-09-24) -------------------------------------------------
+
+
+def _member_book(bid, series, index, extras=()):
+    ms = [{"seriesName": series, "seriesIndex": index, "displayOrder": 0}] + \
+         [{"seriesName": n, "seriesIndex": i, "displayOrder": k + 1} for k, (n, i) in enumerate(extras)]
+    return dict(make_book(bid), seriesName=series, seriesIndex=index, seriesMemberships=ms)
+
+
+def test_create_book_with_an_umbrella_or_alias_as_its_series_is_refused():
+    for series in ("The Cosmere", "cosmere", "The Realm of the Elderlings"):
+        ok, msg = check_intent(create_book_intent(series=series, series_index=6),
+                               ctx(make_dossier(), FakeIndex({})))
+        assert not ok and "umbrella" in msg, (series, msg)
+    ok, msg = check_intent(create_book_intent(series="The Stormlight Archive", series_index=6),
+                           ctx(make_dossier(), FakeIndex({})))
+    assert ok, msg
+
+
+def test_update_metadata_series_rules_on_a_book_with_an_umbrella():
+    index = FakeIndex({2: _member_book(2, "The Stormlight Archive", "1", [("The Cosmere", "6")])})
+    ok, msg = check_intent(update_metadata_intent(2, metadata={"series": "Mistborn"}), ctx(make_dossier(), index))
+    assert not ok and "'The Cosmere'" in msg
+    ok, msg = check_intent(update_metadata_intent(2, metadata={"series": "The Cosmere"}), ctx(make_dossier(), index))
+    assert not ok and "umbrella" in msg
+    ok, msg = check_intent(update_metadata_intent(2, metadata={"series": "the stormlight archive", "seriesIndex": 2}),
+                           ctx(make_dossier(), index))
+    assert ok, msg                                    # the same series: extras stay right
+    ok, msg = check_intent(update_metadata_intent(2, metadata={"seriesIndex": 2}), ctx(make_dossier(), index))
+    assert ok, msg
+
+
+def test_update_metadata_series_change_on_a_plain_book_is_unaffected():
+    index = FakeIndex({2: _member_book(2, "Murderbot", "2")})
+    ok, msg = check_intent(update_metadata_intent(2), ctx(make_dossier(), index))
+    assert ok, msg

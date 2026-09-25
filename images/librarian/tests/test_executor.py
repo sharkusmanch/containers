@@ -62,6 +62,10 @@ class FakeBookorbit:
         self.rename_delay = 3.0
         self.rename_noop = False             # every rename silently does nothing (204)
         self.fetch = {"seriesName": "The Arcanaeum", "seriesIndex": "3", "publishedYear": 1999}
+        # BookOrbit's series rows: key -> stored name (the first-created casing wins); a GET's
+        # memberships show that name, its top-level seriesName the primary's name AS SENT
+        self.series_rows = {}
+        self.expected_count_sent = False     # a seriesMemberships entry carried expectedBookCount
         self.fetch_delay = 7.0
         self._due = []                       # [(due, kind, book_id)]
         self.rename_log = []                 # (book_id, "moved"|"skipped"|"unchanged", why)
@@ -100,9 +104,43 @@ class FakeBookorbit:
             "providerIds": {"audible": None}, "tags": [], "lockedFields": [],
             "folderPath": f"/books/{lib}/{rel_folder}", "files": entries, "updatedAt": "u0",
         }
+        memberships = extra.pop("memberships", None)
         b.update(extra)
+        self._set_memberships(b, memberships if memberships is not None else
+                              ([(b["seriesName"], b["seriesIndex"])] if b["seriesName"] else []))
         self.books[bid] = b
         return b
+
+    # series memberships, as BookOrbit 3.0.0 keeps them (series-membership.service.ts)
+    @staticmethod
+    def _display(name):
+        n = " ".join(name.split()) if isinstance(name, str) else ""
+        return n or None
+
+    def _set_memberships(self, b, entries):
+        """replaceForBook + syncPrimaryMetadata: the list replaces the book's (a repeated
+        name, lower-cased, dropped -- first wins); entry 0 is mirrored AS SENT."""
+        out, seen = [], set()
+        for name, index in entries:
+            disp = self._display(name)
+            if not disp or disp.lower() in seen:
+                continue
+            seen.add(disp.lower())
+            stored = self.series_rows.setdefault(disp.lower(), disp)
+            out.append({"seriesId": list(self.series_rows).index(disp.lower()) + 1, "seriesName": stored,
+                        "seriesIndex": index, "displayOrder": len(out), "expectedBookCount": None,
+                        "_sent": disp})
+        b["seriesMemberships"] = [{k: v for k, v in m.items() if k != "_sent"} for m in out]
+        b["seriesName"] = out[0]["_sent"] if out else None
+        b["seriesIndex"] = out[0]["seriesIndex"] if out else None
+
+    def _sync_primary(self, b):
+        """syncPrimaryFromMetadata after a scalar series write: the primary is replaced,
+        the extras kept -- and a cleared series promotes the first extra."""
+        rest = [(m["seriesName"], m["seriesIndex"]) for m in b.get("seriesMemberships") or []
+                if m["displayOrder"] != 0]
+        disp = self._display(b.get("seriesName"))
+        self._set_memberships(b, ([(disp, b.get("seriesIndex"))] if disp else []) + rest)
 
     @staticmethod
     def _file_entry(path):
@@ -169,9 +207,16 @@ class FakeBookorbit:
                 self._rename_files(bid)
             elif kind == "fetch":
                 b = self.books[bid]
+                series_open = not {"seriesName", "seriesIndex"} & set(b["lockedFields"])
                 for k, v in self.fetch.items():
+                    if k == "seriesMemberships":
+                        continue
                     if k not in b["lockedFields"]:
                         b[k] = v
+                if "seriesMemberships" in self.fetch and series_open:      # Audible: every series
+                    self._set_memberships(b, self.fetch["seriesMemberships"])
+                elif any(k in self.fetch and k not in b["lockedFields"] for k in ("seriesName", "seriesIndex")):
+                    self._sync_primary(b)
                 self._touch(b)
                 self.fetch_log.append((now, bid))
 
@@ -284,19 +329,29 @@ class FakeBookorbit:
             if parts[3] == "metadata-and-locks" and method == "PATCH":
                 b = self.books[bid]
                 self.patch_bodies.append((self._now(), bid, payload))
-                for k, v in (payload.get("metadata") or {}).items():     # optional in the real DTO
+                md = payload.get("metadata") or {}                          # optional in the real DTO
+                listed = md.get("seriesMemberships")
+                for k, v in md.items():
+                    if k == "seriesMemberships" or (listed is not None and k in ("seriesName", "seriesIndex")):
+                        continue                          # a list wins: BookOrbit ignores the scalars
                     if k == "authors":
                         b["authors"] = [{"id": i, "name": n, "sortName": n} for i, n in enumerate(v)]
                     elif k == "audibleId":
                         b["providerIds"] = {"audible": v}
+                    elif k == "seriesName":
+                        b[k] = self._display(v)            # normalizeMetadataText
                     else:
                         b[k] = v
+                if listed is not None:
+                    self.expected_count_sent |= any("expectedBookCount" in m for m in listed)
+                    self._set_memberships(b, [(m.get("seriesName"), m.get("seriesIndex")) for m in listed])
+                elif "seriesName" in md or "seriesIndex" in md:
+                    self._sync_primary(b)
                 b["lockedFields"] = list(payload["lockedFields"])
                 if self.on_patch:
                     self.on_patch(self, b)
                 self._touch(b)
-                if self.auto_rename and any(k in (payload.get("metadata") or {})
-                                            for k in bo_render.RENAME_RELEVANT_FIELDS):
+                if self.auto_rename and (listed is not None or any(k in md for k in bo_render.RENAME_RELEVANT_FIELDS)):
                     self._schedule("rename", bid, self.rename_delay)
                 return 200, json.dumps(b)
         return 500, f"unhandled {method} {path}"
@@ -3058,3 +3113,137 @@ def test_a_lock_failure_moves_nothing_and_is_retryable(env):
     folder = env.books_root / "Library" / "Martha Wells" / "Artificial Condition"
     assert sorted(os.listdir(folder)) == ["Artificial Condition.m4b"]
     assert env.fake.scans() == []
+
+
+# --- series memberships and umbrella series (2026-09-24) -------------------------------------
+
+
+def _ms(b):
+    return [(m["seriesName"], m["seriesIndex"]) for m in b["seriesMemberships"]]
+
+
+def test_fake_models_bookorbits_membership_traps(env):
+    """The fake itself: a scalar write keeps extras, a CLEARED series promotes the first extra
+    (the trap create_book's explicit list avoids), a list replaces everything."""
+    fake = env.fake
+    b = fake.add_book(90, 7, "A/B", "B", ["A"], seriesName="Saga", seriesIndex="1",
+                      memberships=[("Saga", "1"), ("Umbrella", "5")])
+    env.snapshot_tree()
+    b["seriesIndex"] = "2"
+    fake._sync_primary(b)
+    assert _ms(b) == [("Saga", "2"), ("Umbrella", "5")]
+    b["seriesName"] = None
+    fake._sync_primary(b)
+    assert b["seriesName"] == "Umbrella" and _ms(b) == [("Umbrella", "5")]
+    fake._set_memberships(b, [("saga", "1"), ("SAGA", "9")])      # first-created casing, dedup
+    assert _ms(b) == [("Saga", "1")] and b["seriesName"] == "saga"
+
+
+def test_create_book_files_the_series_and_its_umbrella_as_memberships(env):
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, series="The Stormlight Archive", seriesIndex=6), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    body = env.fake.patch_bodies[0][2]["metadata"]
+    assert body["seriesMemberships"] == [{"seriesName": "The Stormlight Archive", "seriesIndex": "6"},
+                                         {"seriesName": "The Cosmere", "seriesIndex": None}]
+    assert body["seriesName"] == "The Stormlight Archive"          # scalars kept: locks, guard 8, read-back
+    assert not env.fake.expected_count_sent
+    b = env.fake.books[r.book_id]
+    assert _ms(b) == [("The Stormlight Archive", "6"), ("The Cosmere", None)]
+    assert {"seriesName", "seriesIndex"} <= set(b["lockedFields"])
+    # the folder follows the primary only
+    assert b["folderPath"] == "/books/Library/Jane Author/The Stormlight Archive/06. New Book"
+
+
+def test_create_book_without_a_series_clears_a_multi_series_fetch(env):
+    """Audible-style fetch writes two series before the PATCH. A scalar null would promote
+    the second to primary (a folder named after it); the empty list clears both."""
+    env.fake.fetch = {"seriesName": "Bogus", "seriesIndex": "1", "publishedYear": 1999,
+                      "seriesMemberships": [("Bogus", "1"), ("Other Bogus", "4")]}
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, series=None, seriesIndex=None), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    assert env.fake.fetch_log[0][0] < env.fake.patch_bodies[0][0]
+    assert env.fake.patch_bodies[0][2]["metadata"]["seriesMemberships"] == []
+    b = env.fake.books[r.book_id]
+    assert b["seriesName"] is None and b["seriesMemberships"] == []
+    assert b["folderPath"] == "/books/Library/Jane Author/New Book"
+
+
+def test_create_book_with_a_series_replaces_provider_extras(env):
+    env.fake.fetch = {"seriesName": "Bogus", "seriesIndex": "1",
+                      "seriesMemberships": [("Bogus", "1"), ("The Cosmere", "31")]}
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, series="Hoid's Travails", seriesIndex=3), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    assert _ms(env.fake.books[r.book_id]) == [("Hoid's Travails", "3"), ("The Cosmere", None)]
+
+
+def test_create_book_read_back_accepts_the_stored_series_casing(env):
+    env.fake.add_book(91, 7, "Brandon Sanderson/the stormlight archive/01. X", "X", ["Brandon Sanderson"],
+                      seriesName="the stormlight archive", seriesIndex="1")      # the row's casing
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, series="The Stormlight Archive", seriesIndex=6), arr, {})
+
+    assert r.ok and r.state == "filed", r.detail
+    b = env.fake.books[r.book_id]
+    assert b["seriesName"] == "The Stormlight Archive"                 # top level: as sent
+    assert _ms(b)[0] == ("the stormlight archive", "6")                # membership: the stored row
+
+
+def test_create_book_membership_read_back_mismatch_is_not_filed_silently(env):
+    def drop_extras(fake, b):
+        fake._set_memberships(b, [(n, i) for n, i in _ms(b)[:1]])
+    env.fake.on_patch = drop_extras
+    arr = env.libation(asin="B0NEWBOOK1", title="New Book")
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute(intent_create(arr, series="The Stormlight Archive", seriesIndex=6), arr, {})
+
+    assert not r.ok and "seriesMemberships" in r.detail, r.detail
+
+
+def _umbrella_target(env):
+    return attach_target(env, seriesName="The Stormlight Archive", seriesIndex="1",
+                         memberships=[("The Stormlight Archive", "1"), ("The Cosmere", "6")])
+
+
+def test_execute_update_refuses_a_series_change_on_a_book_with_an_umbrella(env):
+    _umbrella_target(env)
+    arr = mark_filed(env, env.libation(title="Artificial Condition"), 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+    for series in ("Mistborn", "The Cosmere"):
+        r = ex.execute_update(intent_update_metadata(arr, 7001, metadata={"series": series, "seriesIndex": 1},
+                                                     lock=[]), arr, 7001)
+        assert not r.ok and "update_metadata not written" in r.detail, (series, r.detail)
+    assert env.fake.patches() == []
+    assert _ms(env.fake.books[7001]) == [("The Stormlight Archive", "1"), ("The Cosmere", "6")]
+
+
+def test_execute_update_index_fix_keeps_the_umbrella(env):
+    _umbrella_target(env)
+    arr = mark_filed(env, env.libation(title="Artificial Condition"), 7001)
+    ex = env.executor()
+    env.snapshot_tree()
+
+    r = ex.execute_update(intent_update_metadata(arr, 7001, metadata={"seriesIndex": 2}, lock=[]), arr, 7001)
+
+    assert r.ok and r.state == "updated", r.detail
+    assert _ms(env.fake.books[7001]) == [("The Stormlight Archive", "2"), ("The Cosmere", "6")]

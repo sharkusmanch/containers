@@ -1,0 +1,64 @@
+{
+ "name": "cosmere-umbrella-tag-new-book",
+ "note": "A new Sanderson audiobook tagged only with the UMBRELLA series (The Cosmere #22). Its siblings show the pattern (own series first, The Cosmere as a second membership), but nothing in the arrival names its own series. It must never be filed with series 'The Cosmere' (the guard refuses it): escalate to ask for the book's own series, or file it without one -- never onto a sibling.",
+ "arrival": {
+  "source": "libation",
+  "source_id": "B0FIRESDEC",
+  "folder": "The Fires of December [B0FIRESDEC]",
+  "files": [
+   {
+    "name": "The Fires of December.m4b",
+    "kind": "m4b",
+    "size": 9000,
+    "probe": {
+     "duration": 41000,
+     "tags": {
+      "title": "The Fires of December",
+      "album": "The Fires of December",
+      "artist": "Brandon Sanderson",
+      "album_artist": "Michael Kramer",
+      "series": "The Cosmere",
+      "series-part": "22",
+      "genre": "Fantasy",
+      "date": "2026",
+      "audible_asin": "B0FIRESDEC"
+     },
+     "chapters": ["Opening Credits", "Prologue", "Chapter 1"],
+     "chapter_count": 42
+    }
+   }
+  ]
+ },
+ "library": [
+  {
+   "id": 265, "title": "Tress of the Emerald Sea", "authors": ["Brandon Sanderson"],
+   "files": [{"format": "epub", "filename": "01. Tress of the Emerald Sea.epub", "sizeBytes": 900000}],
+   "seriesName": "Hoid's Travails", "seriesIndex": "1", "publishedYear": 2023,
+   "seriesMemberships": [
+    {"seriesId": 30, "seriesName": "Hoid's Travails", "seriesIndex": "1", "displayOrder": 0},
+    {"seriesId": 516, "seriesName": "The Cosmere", "seriesIndex": "17", "displayOrder": 1}]
+  },
+  {
+   "id": 243, "title": "Yumi and the Nightmare Painter", "authors": ["Brandon Sanderson"],
+   "files": [{"format": "epub", "filename": "02. Yumi and the Nightmare Painter.epub", "sizeBytes": 900000}],
+   "seriesName": "Hoid's Travails", "seriesIndex": "2", "publishedYear": 2023,
+   "seriesMemberships": [
+    {"seriesId": 30, "seriesName": "Hoid's Travails", "seriesIndex": "2", "displayOrder": 0},
+    {"seriesId": 516, "seriesName": "The Cosmere", "seriesIndex": "18", "displayOrder": 1}]
+  },
+  {
+   "id": 251, "title": "Wind and Truth", "authors": ["Brandon Sanderson"],
+   "files": [{"format": "epub", "filename": "05. Wind and Truth.epub", "sizeBytes": 900000}],
+   "seriesName": "The Stormlight Archive", "seriesIndex": "5", "publishedYear": 2024,
+   "seriesMemberships": [
+    {"seriesId": 97, "seriesName": "The Stormlight Archive", "seriesIndex": "5", "displayOrder": 0},
+    {"seriesId": 516, "seriesName": "The Cosmere", "seriesIndex": "20", "displayOrder": 1}]
+  }
+ ],
+ "expect": {
+  "kind_in": ["escalate", "create_book"],
+  "library": "adult",
+  "title_contains": "Fires of December",
+  "forbid": {"book_id": [265, 243, 251], "series": ["The Cosmere", "Cosmere"]}
+ }
+}

@@ -71,7 +71,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from app import bo_render, bookmeta, fsops, metrics, states
+from app import bo_render, bookmeta, fsops, metrics, states, umbrella
 from app.bookorbit import ScanError
 from app.fsops import sha12
 from app.logutil import log_safe
@@ -335,6 +335,10 @@ class Executor:
                 if library not in LIBRARY_IDS:
                     return ExecResult(False, "failed", book_id,
                                       f"book {book_id} is in library {library!r}, not a filing target")
+                if "seriesName" in mapped:           # the policy's umbrella guard, on fresh data
+                    why = umbrella.series_change_problem(d, mapped["seriesName"])
+                    if why:
+                        return ExecResult(False, "failed", book_id, f"update_metadata not written: {why}")
                 self._guard2(LIBRARY_IDS[library])
                 try:
                     plan = self._plan_patch(book_id, library, mapped)
@@ -1071,11 +1075,16 @@ class Executor:
         except _Attention as e:
             ctx["no_rename"] = True
             return str(e)
-        self.writer.patch_metadata(ctx["book_id"], meta, sorted(locks))
+        # The explicit membership list (2026-09-24): exactly the intent's series (+ its umbrella),
+        # whatever the file or the provider fetch put there -- see bookmeta.create_memberships.
+        members = bookmeta.create_memberships(meta)
+        self.writer.patch_metadata(ctx["book_id"], dict(meta, seriesMemberships=members), sorted(locks))
         after = self._settle(plan, self._want(ctx))
         got = bookmeta.norm_for_compare(bookmeta.identity(after))
         want = bookmeta.norm_for_compare(meta)
         bad = [k for k in want if got[k] != want[k]]
+        if not bookmeta.memberships_match(after, members):
+            bad.append("seriesMemberships")
         if "audibleId" in meta and bookmeta.audible_of(after) != meta["audibleId"]:
             bad.append("audibleId")
         if tag and f"asin:{tag}" not in bookmeta.tag_names(after):

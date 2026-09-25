@@ -36,8 +36,9 @@ shows the escalation origin (`escalate[librarian]`, `escalate[reviewer]`) and th
 reviewer's verdicts; the `guard-rejects` column lists intents the guards refused.
 
 `expect.kind_in` must contain the graded kind. `book_id` is checked for `attach`;
-`library`, `title_contains` (case/punctuation-insensitive) and `readalong` for
-`create_book`; `forbid.book_id` (an id or a list) / `forbid.library` apply to the outcome AND to every
+`library`, `title_contains` (case/punctuation-insensitive), `readalong`, `series`
+(case/punctuation-insensitive) and `series_index` for `create_book`; `forbid.book_id` (an
+id or a list) / `forbid.library` / `forbid.series` (a list) apply to the outcome AND to every
 intent the model submitted, including guard-rejected ones — trying a forbidden target is a
 FAIL even if a guard stopped it (an attach's library is the target book's).
 `expect.escalate_origin: "reviewer"` (or `"librarian"`) requires the escalation to come

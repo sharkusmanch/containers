@@ -24,7 +24,8 @@ Case file schema (see evals/README.md):
   {"name", "arrival": {source, source_id, folder?, files: [{name, kind, size,
    probe|epub}], sidecar?}, "library": [BookOrbit detail dicts], "kids_lists"?:
    {"allow": {...}, "deny": {...}}, "expect": {"kind_in": [...], "book_id"?,
-   "library"?, "title_contains"?, "readalong"?, "forbid"?: {"book_id"?, "library"?},
+   "library"?, "title_contains"?, "readalong"?, "series"?, "series_index"?,
+   "forbid"?: {"book_id"?, "library"?, "series"?},
    "update_metadata"?: {"state", "fields"?, "forbid_keys"?, "lock_max"?}},
    "answered"?: {"escalation": {question, options, recommendation}, "reply": "..."},
    "scripted_intent"? | "scripted_intents"?: [...]}
@@ -345,6 +346,7 @@ def outcome(svc, key: str, scripted_ids=()) -> dict:
             "auto": p.get("origin") == "reviewer",
             "book_id": p.get("book_id"), "library": _lib_of(svc, r.get("kind"), p),
             "title": (p.get("metadata") or {}).get("title"),
+            "series": (p.get("metadata") or {}).get("series"),
             "reason": r.get("reason"), "guard": r.get("guard"), "review": r.get("review"),
             "question": p.get("question")})
     metas = [r for r in intents if r.get("kind") == states.UPDATE_METADATA
@@ -379,6 +381,8 @@ def grade(expect: dict, got: dict, record: dict) -> tuple[bool, str]:
             return False, f"{t['kind']} ({t['state']}) targeted forbidden book {t['book_id']}"
         if "library" in forbid and t.get("library") == forbid["library"]:
             return False, f"{t['kind']} ({t['state']}) targeted forbidden library {forbid['library']}"
+        if t.get("series") and _fold(t["series"]) in {_fold(x) for x in forbid.get("series") or []}:
+            return False, f"{t['kind']} ({t['state']}) used forbidden series {t['series']!r}"
     if kind not in expect["kind_in"]:
         return False, f"kind {kind} not in {expect['kind_in']}"
     if got.get("book_id") is not None and got.get("book_id") in bad_ids:
@@ -416,6 +420,11 @@ def grade(expect: dict, got: dict, record: dict) -> tuple[bool, str]:
             return False, f"title {got.get('title')!r} lacks {expect['title_contains']!r}"
         if "readalong" in expect and got.get("readalong") != expect["readalong"]:
             return False, f"readalong {got.get('readalong')}, expected {expect['readalong']}"
+        md = got.get("metadata") or {}
+        if "series" in expect and _fold(md.get("series")) != _fold(expect["series"]):
+            return False, f"series {md.get('series')!r}, expected {expect['series']!r}"
+        if "series_index" in expect and md.get("seriesIndex") != expect["series_index"]:
+            return False, f"seriesIndex {md.get('seriesIndex')!r}, expected {expect['series_index']!r}"
     return True, "ok"
 
 
@@ -429,6 +438,8 @@ def expected_str(expect: dict) -> str:
         s += f" ~{expect['title_contains']!r}"
     if "readalong" in expect:
         s += f" ra={expect['readalong']}"
+    if "series" in expect:
+        s += f" series={expect['series']!r}#{expect.get('series_index')}"
     if expect.get("escalate_origin"):
         s += f" by {expect['escalate_origin']}"
     if expect.get("update_metadata"):

@@ -9,6 +9,7 @@ names). `narrators` is deliberately NOT written -- no confirmed PATCH key.
 import math
 import re
 
+from app import umbrella
 from app.bo_render import normalize_authors, normalize_metadata_text
 from app.policy import _format_index
 
@@ -196,6 +197,48 @@ def create_metadata(md, arrival, epub=None) -> dict:
     if arrival.get("source") == "kindle" and isinstance(sid, str) and ASIN_RE.match(sid):
         asin_tag = sid
     return {"fields": meta, "asin_tag": asin_tag, "dropped": dropped}
+
+
+def create_memberships(fields) -> list:
+    """The `seriesMemberships` list a create_book PATCH carries alongside the
+    scalar seriesName/seriesIndex (which BookOrbit then ignores, but which the
+    locks, guard 8 and the read-back still key on). Built at PATCH time from
+    the journaled `fields`, so a filing resumed across an upgrade gets it too.
+
+    - no series -> []: clears every membership. A scalar seriesName null would
+      instead PROMOTE a second membership (from the file or a provider fetch) to
+      primary, mirror it into seriesName and move the folder;
+    - else the series, plus its umbrella (app.umbrella) with no position -- the
+      position is looked up by hand, never invented.
+    Only seriesName/seriesIndex per entry: an `expectedBookCount` -- even null --
+    rewrites that count for the whole series."""
+    series = fields.get("seriesName")
+    if not series:
+        return []
+    out = [{"seriesName": series, "seriesIndex": fields.get("seriesIndex")}]
+    u = umbrella.umbrella_for(series)
+    if u and umbrella.key(u) != umbrella.key(series):
+        out.append({"seriesName": u, "seriesIndex": None})
+    return out
+
+
+def _index_value(v):
+    s = _norm_str(v)
+    try:
+        return float(s) if s is not None else None
+    except ValueError:
+        return s
+
+
+def memberships_match(d: dict, want: list) -> bool:
+    """A GET detail holds exactly the memberships `want`, in order. Names by
+    BookOrbit's series key: a membership shows its series row's name, whose
+    first-created casing wins over what was sent. Indexes as numbers."""
+    got = umbrella.memberships(d)
+    return len(got) == len(want) and all(
+        umbrella.key(n) == umbrella.key(w.get("seriesName"))
+        and _index_value(i) == _index_value(w.get("seriesIndex"))
+        for (n, i), w in zip(got, want))
 
 
 def create_locks(fields) -> set:
