@@ -13,7 +13,7 @@ ARG CLAUDE_VERSION=2.1.283
 ARG CODEX_VERSION=0.156.1
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-ARG KUBECTL_VERSION=v1.37.0
+ARG KUBECTL_VERSION=v1.37.1
 
 # renovate: datasource=github-releases depName=helm/helm
 ARG HELM_VERSION=v4.3.0
