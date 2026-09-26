@@ -50,7 +50,7 @@ ARG REQUESTS_VERSION=2.34.2
 ARG PROMETHEUS_CLIENT_VERSION=0.26.0
 # mcp 1.x only: 2.x is a breaking major the shim is not written for.
 # renovate: datasource=pypi depName=mcp
-ARG MCP_VERSION=1.30.0
+ARG MCP_VERSION=2.2.0
 
 LABEL org.opencontainers.image.title="librarian" \
       org.opencontainers.image.description="BookOrbit intake librarian: staging core + sandboxed claude -p (dry-run)" \
