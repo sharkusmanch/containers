@@ -12,6 +12,7 @@ import zipfile
 from app.readalong.job import BookGone
 
 OVERLAY = b"OVERLAY"
+AUDIO = ("m4b", "mp3", "m4a", "opus", "ogg", "flac")
 
 
 class FakeLibrary:
@@ -27,6 +28,10 @@ class FakeLibrary:
         self.sync_pending = 0                  # detail() reports read-along sync "pending" this many times
         self.lock_fails = False                # lock_all() raises (BookOrbit down)
         self.lock_calls = []                   # (book id, the folder's file names at that moment)
+        self.durations = {}                    # file name -> seconds BookOrbit measured (its audio files)
+        self.created = {}                      # file name -> createdAt (ISO); absent = long ago
+        self.length_fails = False              # set_length() raises (BookOrbit down)
+        self.length_calls = []                 # (book id, seconds)
 
     # setup -------------------------------------------------------------------
     def add_book(self, bid, rel_folder, files, library_id=7, **extra):
@@ -90,6 +95,16 @@ class FakeLibrary:
         b["lockedFields"] = sorted(set(b["lockedFields"]) | set(LOCK_ALL))
         return True
 
+    def set_length(self, book_id, seconds):
+        """The adapter's set_length: the stored audiobook length, locks untouched."""
+        if book_id not in self._books:
+            raise BookGone(book_id)
+        self.length_calls.append((book_id, seconds))
+        if self.length_fails:
+            raise RuntimeError("PATCH /books/%d/metadata-and-locks -> HTTP 502: bad gateway" % book_id)
+        b = self._books[book_id]
+        b["audioMetadata"] = {**(b.get("audioMetadata") or {}), "durationSeconds": seconds}
+
     def _derive(self, b):
         ra = [f for f in b["files"] if f["mediaOverlay"]["available"]]
         epubs = [f for f in b["files"] if f["format"] == "epub"]
@@ -139,6 +154,9 @@ class FakeLibrary:
         b.pop("_primary", None)
         for f in b["files"]:
             f.pop("_ino", None)
+            f["durationSeconds"] = self.durations.get(f["filename"]) if f["format"] in AUDIO else None
+            f["createdAt"] = self.created.get(f["filename"], "2026-01-01T00:00:00.000Z")
+        b.setdefault("audioMetadata", None)
         if self.sync_pending > 0 and b["readAloudSync"]["state"] == "enabled":
             self.sync_pending -= 1
             b["readAloudSync"]["state"] = "pending"

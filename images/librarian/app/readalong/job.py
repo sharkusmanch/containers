@@ -38,6 +38,7 @@ import requests
 from app.readalong import gate, patch, smil, wanted
 from app.readalong.candidates import OPT_OUT_TAG, is_readalong_file, opted_out, pair_key, select
 from app.readalong.flag import field_id, sync_flags
+from app.readalong.length import fill_lengths
 from app.readalong.publish import (FilesChanged, PublishConflict, PublishError, local_path, publish, rekey,
                                    targets)
 from app.readalong.state import ERROR_LIMIT, State
@@ -191,6 +192,29 @@ class Bookorbit:
             if _DETAIL_404.match(str(e)):
                 raise BookGone(book_id) from None
             raise
+
+    def set_length(self, book_id, seconds):
+        """The stored audiobook length (app/readalong/length.py). patch_metadata sends the
+        book's own lock list back unchanged ([] adds none): a locked length is overwritten
+        -- the endpoint has no lock guard -- and stays locked. The read-back checks the
+        value, and that no lock the book had before was lost (the set BookOrbit keeps is
+        the one sent). It cannot close the window in which another writer's lock lands
+        between patch_metadata's GET and its PATCH (lockedFields is required and replaces
+        the set): the sweep's RECENT_S skip is what keeps it away from a book being filed."""
+        try:
+            before = self.client.get(f"/books/{book_id}").get("lockedFields")
+            self.writer.patch_metadata(book_id, {"audioMetadata": {"durationSeconds": seconds}}, [])
+            after = self.client.get(f"/books/{book_id}")
+        except RuntimeError as e:
+            if _DETAIL_404.match(str(e)):
+                raise BookGone(book_id) from None
+            raise
+        got = (after.get("audioMetadata") or {}).get("durationSeconds")
+        if got != seconds:
+            raise RuntimeError(f"book {book_id}: the length reads back {got!r}, not {seconds}")
+        lost = set(before or []) - set(after.get("lockedFields") or [])
+        if lost:
+            raise RuntimeError(f"book {book_id}: lost locks while the length was set: {sorted(lost)}")
 
 
 def m4b_seconds(path, run=subprocess.run):
@@ -808,6 +832,10 @@ class Job:
         changed, failed = sync_flags(self.bo, books, self._fid, libraries=self.s.libraries,
                                      dry_run=self.s.dry_run)
         logger.info("Read-Along flags: %d set, %d failed", changed, failed)
+        filled, fill_failed = fill_lengths(self.bo, books, libraries=self.s.libraries, dry_run=self.s.dry_run,
+                                           now=self.clock(), monotonic=self.monotonic,
+                                           stopping=lambda: self.stopping)
+        logger.info("audiobook lengths: %d set, %d failed", filled, fill_failed)
         logger.info("candidates: %s; blocked: %s", json.dumps(funnel, sort_keys=True), sorted(self.state.blocked))
         self.st.login(self.s.storyteller_user, self.s.storyteller_pass)
         if self.s.dry_run:
