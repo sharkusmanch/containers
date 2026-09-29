@@ -1,0 +1,50 @@
+#!/bin/sh
+# Prepares the data volume, then execs the given command (php-fpm).
+#
+# Optional inputs, both read-only mounts:
+#   /etc/tachyon/overrides.ini   Settings overlay. Linked into the data dir as
+#                                configs/overrides.ini (see /tachyon/include.php).
+#                                Tachyon reads it on every request and never
+#                                writes it, so it can be managed from outside.
+#   /etc/tachyon/domains/*.json  The complete set of permitted mail domains.
+#                                When present, every other domain file is
+#                                removed, including upstream's wildcard
+#                                default.json, so logins to any other server
+#                                are refused.
+set -eu
+
+DATA=/var/lib/tachyon
+PRIV="$DATA/_data_/_default_"
+
+mkdir -p "$PRIV/configs" "$PRIV/domains" "$PRIV/plugins" "$PRIV/storage"
+chmod 0700 "$DATA/_data_" "$PRIV" "$PRIV/configs" "$PRIV/domains" "$PRIV/plugins" "$PRIV/storage"
+
+ln -sfn /etc/tachyon/overrides.ini "$PRIV/configs/overrides.ini"
+
+# gpg leaves lock files and agent sockets in each keyring. Tachyon kills the
+# agent after every request, so anything left here is from a container that
+# died mid-operation. gpg will not break a lock it believes another host
+# holds, and a pod's hostname can change, so clear them. Safe: one replica,
+# and php-fpm is not running yet.
+find "$PRIV/storage" -path '*/.gnupg/*' \( -name '.#lk*' -o -name '*.lock' -o -name 'S.gpg-agent*' -o -name 'S.keyboxd' -o -name 'S.scdaemon' -o -name 'S.dirmngr' \) \
+  -exec rm -f {} + 2>/dev/null || true
+
+if [ -d /etc/tachyon/domains ] && ls /etc/tachyon/domains/*.json >/dev/null 2>&1; then
+  # A "disabled" file stops Tachyon's first-run setup from copying its bundled
+  # domain files (incl. the wildcard default.json) into the data dir.
+  [ -f "$PRIV/domains/disabled" ] || : > "$PRIV/domains/disabled"
+  for f in "$PRIV/domains/"*.json "$PRIV/domains/"*.ini "$PRIV/domains/"*.alias; do
+    [ -e "$f" ] || continue
+    name=$(basename "$f")
+    case "$name" in
+      *.json) [ -f "/etc/tachyon/domains/$name" ] && continue ;;
+    esac
+    echo "tachyon-init: removing unmanaged domain file $name" >&2
+    rm -f "$f"
+  done
+  for f in /etc/tachyon/domains/*.json; do
+    install -m 0600 "$f" "$PRIV/domains/$(basename "$f")"
+  done
+fi
+
+exec "$@"
