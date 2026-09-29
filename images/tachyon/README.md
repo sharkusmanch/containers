@@ -52,7 +52,7 @@ Both inputs are optional, read-only mounts in the php container:
 
 | Path | Effect |
 |------|--------|
-| `/etc/tachyon/overrides.ini` | Linked to `configs/overrides.ini` in the data dir. Tachyon applies it on top of its own `application.ini` on every request and never writes it, so settings stay under your control. Same format as `application.ini`, only the keys you set. |
+| `/etc/tachyon/overrides.ini` | Linked to `configs/overrides.ini` in the data dir. Tachyon applies it on top of its own `application.ini` on every request and never writes it, so the keys it sets always win. On an empty volume it also seeds `application.ini`, because Tachyon ignores the overlay until that file exists. Same format as `application.ini`, only the keys you set. Removing a key does **not** revert it: Tachyon may already have saved the merged value into `application.ini`, so set it to the default explicitly instead. |
 | `/etc/tachyon/domains/*.json` | The complete list of mail domains users may log in to. Every other domain file is removed at startup, including upstream's wildcard `default.json`, so the app cannot be pointed at arbitrary servers. |
 
 Settings worth putting in `overrides.ini` for this layout:
@@ -91,11 +91,14 @@ The application code is unmodified; only the packaging differs.
   `tachyon/v/<version>/{static,themes}/` is served as files, only `index.php` runs, and
   every other path is routed to it (Tachyon routes on the query string).
 - **Two unauthenticated actions are refused** at nginx: `?/Test` (makes the server send
-  requests to its own Host header) and `?/AdminAppData` (can write an admin password file).
+  requests to its own Host header) and `?/AdminAppData` (can write an admin password file),
+  including the `?/Test@x` and `?admin/Test` spellings Tachyon's router also accepts.
 - **`HTTPS=on` is passed to PHP**, as TLS terminates in front of it, so session cookies
   are marked Secure.
 - **A stable `/favicon.ico`**, so an authenticating proxy can exempt one fixed path.
-- **`tachyon-init`** prepares the data dir, links the overrides file, enforces the domain
-  list, removes stale gpg lock files and agent sockets, and writes a `gpg-agent.conf`
-  with passphrase caching disabled into every keyring. Tachyon kills the agent after
-  each request, but not if the PHP worker itself is killed mid-request.
+- **gpg-agent never caches a passphrase.** A global `/etc/gnupg/gpg-agent.conf`
+  (`[force]`, TTL 0) covers every keyring. Tachyon kills the agent after each request,
+  but not if the PHP worker itself is killed mid-request. The build fails if the setting
+  does not take effect.
+- **`tachyon-init`** prepares the data dir, links (and on first run seeds) the overrides
+  file, enforces the domain list, and removes stale gpg lock files and agent sockets.

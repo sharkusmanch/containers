@@ -21,6 +21,13 @@ chmod 0700 "$DATA/_data_" "$PRIV" "$PRIV/configs" "$PRIV/domains" "$PRIV/plugins
 
 ln -sfn /etc/tachyon/overrides.ini "$PRIV/configs/overrides.ini"
 
+# Tachyon applies the overlay only once application.ini exists; on the very
+# first request it would run on built-in defaults (and pick a random cipher).
+# Seed application.ini from the overrides so the first request honours them.
+if [ -f /etc/tachyon/overrides.ini ] && [ ! -e "$PRIV/configs/application.ini" ]; then
+  install -m 0600 /etc/tachyon/overrides.ini "$PRIV/configs/application.ini"
+fi
+
 # gpg leaves lock files and agent sockets in each keyring. Tachyon kills the
 # agent after every request, so anything left here is from a container that
 # died mid-operation. gpg will not break a lock it believes another host
@@ -29,15 +36,8 @@ ln -sfn /etc/tachyon/overrides.ini "$PRIV/configs/overrides.ini"
 find "$PRIV/storage" -path '*/.gnupg/*' \( -name '.#lk*' -o -name '*.lock' -o -name 'S.gpg-agent*' -o -name 'S.keyboxd' -o -name 'S.scdaemon' -o -name 'S.dirmngr' \) \
   -exec rm -f {} + 2>/dev/null || true
 
-# Tachyon kills gpg-agent after every request, but a php worker killed
-# mid-request (timeout, OOM) skips that, and the agent would then keep the
-# passphrase cached for its default 10 minutes. Forbid caching in every
-# keyring. A keyring created after startup is covered from the next restart.
-for d in "$PRIV"/storage/*/*/.gnupg; do
-  [ -d "$d" ] || continue
-  printf 'default-cache-ttl 0\nmax-cache-ttl 0\ndisable-scdaemon\n' > "$d/gpg-agent.conf"
-  chmod 0600 "$d/gpg-agent.conf"
-done
+# Passphrase caching is disabled globally (/etc/gnupg/gpg-agent.conf, with
+# [force]), which also covers keyrings created after startup.
 
 if [ -d /etc/tachyon/domains ] && ls /etc/tachyon/domains/*.json >/dev/null 2>&1; then
   # A "disabled" file stops Tachyon's first-run setup from copying its bundled

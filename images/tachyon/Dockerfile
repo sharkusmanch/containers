@@ -26,7 +26,7 @@ ARG TACHYON_SIGNING_KEY
 RUN --mount=type=cache,target=/var/cache/apk \
     apk add --no-cache curl gpg gpg-agent
 WORKDIR /build
-RUN set -eux; \
+RUN set -eux -o pipefail; \
     v="${TACHYON_VERSION#v}"; \
     base="https://github.com/kimusan/Tachyon/releases/download/${TACHYON_VERSION}"; \
     curl -fsSL -o tachyon.tar.gz "${base}/tachyon-${v}.tar.gz"; \
@@ -35,12 +35,15 @@ RUN set -eux; \
     echo "${TACHYON_SHA256}  tachyon.tar.gz" | sha256sum -c -; \
     export GNUPGHOME="$(mktemp -d)"; \
     gpg --batch --quiet --import keyring.asc; \
-    # VALIDSIG's last field is the PRIMARY key fingerprint.
-    gpg --batch --status-fd 1 --verify tachyon.tar.gz.asc tachyon.tar.gz \
-      | grep -E "^\[GNUPG:\] VALIDSIG .* ${TACHYON_SIGNING_KEY}\$"; \
+    gpg --batch --status-fd 1 --verify tachyon.tar.gz.asc tachyon.tar.gz > verify.status; \
+    # GOODSIG: good and not expired/revoked. VALIDSIG's last field is the
+    # PRIMARY key fingerprint, which must be the pinned one.
+    grep -q '^\[GNUPG:\] GOODSIG ' verify.status; \
+    grep -Eq "^\[GNUPG:\] VALIDSIG .* ${TACHYON_SIGNING_KEY}\$" verify.status; \
+    gpgconf --kill gpg-agent; \
     rm -rf "${GNUPGHOME}"; \
     mkdir /tachyon; \
-    tar -xzf tachyon.tar.gz -C /tachyon; \
+    tar -xzf tachyon.tar.gz --no-same-owner -C /tachyon; \
     # data/ moves to the mounted volume; the rest is Apache-only or docs.
     rm -rf /tachyon/data /tachyon/_include.php /tachyon/README.md /tachyon/.htaccess; \
     test -f "/tachyon/tachyon/v/${v}/static/favicon.ico"; \
@@ -64,14 +67,17 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 # fcgi: cgi-fcgi, for the php container's probe against php-fpm's ping.path.
 # gpg, gpg-agent, gnupg-gpgconf: what Tachyon drives through proc_open for
 # server-side PGP (gpgconf kills the agent after every request). Not the gnupg
-# metapackage: no gpgsm, scdaemon or pinentry. dirmngr, gpg's network helper for
-# keyservers, is a hard package dependency, so its binary is deleted instead.
+# metapackage, so no gpgsm or scdaemon; pinentry and keyboxd still arrive as
+# package dependencies but are never used (loopback pinentry, pubring.kbx).
+# dirmngr, gpg's network helper for keyservers, is also a hard dependency, so
+# its binary is deleted.
 # tini is PID 1 so signals are forwarded and any orphaned gpg-agent is reaped
 # whatever the entrypoint runs.
 # PHP: only what Tachyon uses. No gd (thumbnails are off), tidy (its only use is
 # commented out upstream), pdo_sqlite (contacts/calendar are off), LDAP, MySQL,
 # PostgreSQL, Redis or ImageMagick.
 RUN --mount=type=cache,target=/var/cache/apk \
+    set -eux; \
     apk add --no-cache \
       ca-certificates \
       gpg \
@@ -115,8 +121,23 @@ RUN set -eux; \
     php-fpm84 -t -y /etc/php84/php-fpm.conf; \
     # Fail the build if Tachyon's own requirement check fails.
     php84 -r 'define("APP_VERSION", "check"); require "/tachyon/tachyon/v/'"${TACHYON_VERSION#v}"'/app/libraries/tachyon_util/integrity.php"; $r = \Tachyon\Util\Integrity::phpExtensions(); if ($r) { fwrite(STDERR, "missing: ".implode(", ", $r)."\n"); exit(1); }'; \
-    command -v gpg gpgconf gpg-agent; \
-    ! command -v dirmngr
+    php84 -m | grep -qx sodium; \
+    for b in gpg gpgconf gpg-agent nginx tini cgi-fcgi php-fpm84; do command -v "$b"; done; \
+    test ! -e /usr/bin/dirmngr; \
+    nginx -t -e stderr; \
+    # The global gpg-agent.conf must actually stop passphrase caching: a
+    # decrypt with the right passphrase followed by one with a wrong
+    # passphrase has to FAIL. (With caching the second one succeeds.)
+    export GNUPGHOME="$(mktemp -d)"; \
+    gpg --batch --pinentry-mode loopback --passphrase ok --quick-gen-key 'ci <ci@example.invalid>' default default never; \
+    echo probe | gpg --batch --trust-model always -e -r ci@example.invalid > "$GNUPGHOME/m.gpg"; \
+    gpg --batch --pinentry-mode loopback --passphrase ok -d "$GNUPGHOME/m.gpg" | grep -qx probe; \
+    if gpg --batch --pinentry-mode loopback --passphrase wrong -d "$GNUPGHOME/m.gpg" >/dev/null 2>&1; then \
+      echo "gpg-agent cached the passphrase" >&2; exit 1; \
+    fi; \
+    gpgconf --kill gpg-agent; \
+    rm -rf "$GNUPGHOME"; \
+    unset GNUPGHOME
 
 USER 10000:10000
 WORKDIR /tachyon
