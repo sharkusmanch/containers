@@ -34,8 +34,13 @@ WORKDIR /src
 RUN make -j"$(nproc)" TOOLS=1 EMULATOR=0 NOWERROR=1 PYTHON_EXECUTABLE=python3 \
         NO_X11=1 NO_USE_XINPUT=1 NO_OPENGL=1 USE_QTDEBUG=0 NO_USE_PORTAUDIO=1 NO_USE_PULSEAUDIO=1 \
     && strip chdman \
-    && ldd chdman \
-    && { ./chdman 2>&1 || true; } | grep -q "MAME Compressed Hunks of Data"
+    && { ./chdman 2>&1 || true; } | grep -q "MAME Compressed Hunks of Data" \
+    # MAME links its tools against the SDL OSD layer, so chdman needs SDL2 (and its
+    # X11/audio deps) at runtime. Record the Debian packages owning every shared
+    # library so the runtime stage installs exactly those.
+    && ldd chdman | awk '/=> \//{print $3}' | xargs -r readlink -f \
+       | xargs -r dpkg -S | cut -d: -f1 | sort -u > /runtime-packages \
+    && cat /runtime-packages
 
 # ============================================================================
 # Runtime stage
@@ -55,9 +60,12 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="chdman" \
       org.opencontainers.image.description="MAME chdman (${MAME_VERSION}) + unzip for converting disc images (cue/bin, gdi, iso) to CHD"
 
-# unzip: Redump/Minerva ship each disc as a zip.
+COPY --from=builder /runtime-packages /tmp/runtime-packages
+
+# unzip: Redump/Minerva ship each disc as a zip. The rest: chdman's shared libraries.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends unzip \
+    && xargs -a /tmp/runtime-packages apt-get install -y --no-install-recommends unzip \
+    && rm /tmp/runtime-packages \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 10000 appgroup \
     && useradd -u 10000 -g appgroup -s /usr/sbin/nologin -M appuser
