@@ -29,6 +29,16 @@ ln -sfn /etc/tachyon/overrides.ini "$PRIV/configs/overrides.ini"
 find "$PRIV/storage" -path '*/.gnupg/*' \( -name '.#lk*' -o -name '*.lock' -o -name 'S.gpg-agent*' -o -name 'S.keyboxd' -o -name 'S.scdaemon' -o -name 'S.dirmngr' \) \
   -exec rm -f {} + 2>/dev/null || true
 
+# Tachyon kills gpg-agent after every request, but a php worker killed
+# mid-request (timeout, OOM) skips that, and the agent would then keep the
+# passphrase cached for its default 10 minutes. Forbid caching in every
+# keyring. A keyring created after startup is covered from the next restart.
+for d in "$PRIV"/storage/*/*/.gnupg; do
+  [ -d "$d" ] || continue
+  printf 'default-cache-ttl 0\nmax-cache-ttl 0\ndisable-scdaemon\n' > "$d/gpg-agent.conf"
+  chmod 0600 "$d/gpg-agent.conf"
+done
+
 if [ -d /etc/tachyon/domains ] && ls /etc/tachyon/domains/*.json >/dev/null 2>&1; then
   # A "disabled" file stops Tachyon's first-run setup from copying its bundled
   # domain files (incl. the wildcard default.json) into the data dir.

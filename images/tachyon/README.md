@@ -71,9 +71,18 @@ use_local_proxy_for_external_images = Off  ; else the SERVER fetches remote imag
 
 The application code is unmodified; only the packaging differs.
 
-- **Built from the signed release tarball** on Alpine's PHP 8.4 packages instead of
-  compiling extensions into `php:8.2-fpm-alpine`. Only the extensions Tachyon uses are
-  installed (no LDAP, MySQL, PostgreSQL, Redis, ImageMagick).
+- **Built from the release tarball, checksum- and signature-verified** against the
+  release signing key pinned by fingerprint (`2AF665D5…9866`, expires 2028-09-04: a new
+  key means updating `TACHYON_SIGNING_KEY`). A git checkout is never used, since
+  version `0.0.0` puts Tachyon in development mode.
+- **Alpine's PHP 8.4 packages** instead of compiling extensions into
+  `php:8.2-fpm-alpine` (PHP 8.2 leaves security support at the end of 2026). Only the
+  extensions Tachyon uses: no gd (so attachment thumbnails must be off), tidy, SQLite,
+  LDAP, MySQL, PostgreSQL, Redis or ImageMagick. `allow_url_fopen` is off and unused
+  shell functions are disabled; `proc_open`/`shell_exec` stay for gpg.
+- **gpg without its network helper.** Only `gpg`, `gpg-agent` and `gpgconf` are
+  installed; the `dirmngr` binary (keyserver access), a hard package dependency, is
+  deleted.
 - **No root, no supervisord.** Upstream's entrypoint chowns the data dir and rewrites
   nginx and PHP config at startup, which requires root. Here config is baked at build
   time and nginx and php-fpm run as separate containers.
@@ -81,6 +90,12 @@ The application code is unmodified; only the packaging differs.
   existing `.php` file to PHP and serves the whole tree. Here only
   `tachyon/v/<version>/{static,themes}/` is served as files, only `index.php` runs, and
   every other path is routed to it (Tachyon routes on the query string).
+- **Two unauthenticated actions are refused** at nginx: `?/Test` (makes the server send
+  requests to its own Host header) and `?/AdminAppData` (can write an admin password file).
+- **`HTTPS=on` is passed to PHP**, as TLS terminates in front of it, so session cookies
+  are marked Secure.
 - **A stable `/favicon.ico`**, so an authenticating proxy can exempt one fixed path.
 - **`tachyon-init`** prepares the data dir, links the overrides file, enforces the domain
-  list and removes stale gpg lock files and agent sockets before php-fpm starts.
+  list, removes stale gpg lock files and agent sockets, and writes a `gpg-agent.conf`
+  with passphrase caching disabled into every keyring. Tachyon kills the agent after
+  each request, but not if the PHP worker itself is killed mid-request.
