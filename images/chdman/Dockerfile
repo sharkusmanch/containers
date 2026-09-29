@@ -24,7 +24,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update \
     && apt-get install -y --no-install-recommends \
-        build-essential ca-certificates git python3 libsdl2-dev libfontconfig-dev
+        build-essential ca-certificates git python3 libsdl2-dev libsdl2-ttf-dev libfontconfig-dev
 
 # git verifies the fetched tree against the tag's commit.
 RUN git clone --depth 1 --branch "${MAME_VERSION}" https://github.com/mamedev/mame.git /src
