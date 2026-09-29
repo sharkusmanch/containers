@@ -24,7 +24,7 @@ ARG TACHYON_VERSION
 ARG TACHYON_SHA256
 ARG TACHYON_SIGNING_KEY
 RUN --mount=type=cache,target=/var/cache/apk \
-    apk add --no-cache curl gpg
+    apk add --no-cache curl gpg gpg-agent
 WORKDIR /build
 RUN set -eux; \
     v="${TACHYON_VERSION#v}"; \
