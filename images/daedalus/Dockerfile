@@ -107,12 +107,14 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 # GitOps/secrets/image CLIs for the /new-app deploy flow (Alpine community, real PATH):
 #   openbao(->`bao`)/sops/age read+seed OpenBao KV & SOPS secrets; crane/skopeo inspect
 #   candidate image manifests+config; kustomize renders overlays; grype/syft CVE scan + SBOM.
+# android-tools (adb/fastboot): phone debugging over adb wireless debugging on the LAN.
 RUN apk add --no-cache \
       openssh openssh-server openssh-sftp-server openssh-keygen \
       bash curl ca-certificates su-exec tzdata \
       git nodejs npm go make python3 py3-pip py3-virtualenv uv tmux \
       jq yq-go \
       openbao crane skopeo kustomize sops age grype syft \
+      android-tools \
       libstdc++ libgcc \
     # Interactive dev user; HOME is the persistent /config PVC (mounted at runtime).
     && adduser -D -u 1000 -s /bin/bash -h /config abc \

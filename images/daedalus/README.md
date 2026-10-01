@@ -2,7 +2,7 @@
 
 Minimal self-owned SSH dev box: a single-process `sshd` on Alpine with a baked
 development toolchain (kubectl, helm, flux, kustomize, kubeconform, cosign, skopeo, crane,
-openbao `bao`, sops, age, grype, syft, Claude Code, Codex CLI, Go, Node, Python, git, tmux, uv, jq, yq).
+openbao `bao`, sops, age, grype, syft, Claude Code, Codex CLI, Go, Node, Python, git, tmux, uv, jq, yq, adb).
 Used as a remote/mobile admin entry point into a Kubernetes cluster, exposed
 over Tailscale. Replaces a previous LinuxServer.io `openssh-server`-based image
 whose runtime package install (before sshd started) caused startup crashloops.

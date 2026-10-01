@@ -131,11 +131,13 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 #   PATH): openbao(->`bao`)/sops/age read+seed OpenBao KV & SOPS secrets; crane/skopeo
 #   inspect candidate image manifests (amd64) + config (user/ports); kustomize renders
 #   overlays for kubeconform; grype/syft do image CVE scan + SBOM.
+# android-tools (adb/fastboot): phone debugging over adb wireless debugging on the LAN.
 RUN apk add --no-cache \
       nodejs npm coreutils libuv libstdc++ libgcc tini \
       git openssh-client github-cli ca-certificates bash curl tzdata \
       python3 py3-pip py3-virtualenv uv jq yq-go \
       openbao crane skopeo kustomize sops age grype syft \
+      android-tools \
     # Non-root dev user; HOME is the persistent /config PVC (mounted at runtime).
     && adduser -D -u 1000 -h /config paseo
 

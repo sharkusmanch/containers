@@ -4,7 +4,7 @@ Headless [Paseo](https://github.com/getpaseo/paseo) daemon — orchestrates codi
 agents (Claude Code et al.) on cluster hardware, reachable from a phone/laptop/CLI.
 Minimal Alpine image with the paseo daemon (node-pty compiled from source for musl),
 Claude Code, the Codex CLI, a Kubernetes/GitOps toolchain (kubectl, helm, flux, kustomize, kubeconform),
-image/secrets CLIs (cosign, skopeo, crane, openbao `bao`, sops, age, grype, syft), git, and a
+image/secrets CLIs (cosign, skopeo, crane, openbao `bao`, sops, age, grype, syft), adb, git, and a
 Python/jq/yq toolchain baked in. Single
 foreground process (`paseo daemon start --foreground`) under `tini`.
 
