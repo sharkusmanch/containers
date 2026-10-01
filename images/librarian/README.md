@@ -64,10 +64,28 @@ that acts on arrivals already in the state store:
 - the execution queue (`run_due`): queued and retrying filings, pending
   `update_metadata` corrections, duplicate removal;
 - the startup resume of arrivals left `executing`;
+- the retirement of open arrivals whose intake copy was removed by hand;
 - escalation sync (Vikunja tasks, replies, closes, pushes).
 
 It does not imply `DRY_RUN` either: with `DRY_RUN=false`, those keep running
 for every arrival.
+
+## Removing something from the intake by hand
+
+Deleting an arrival's file (or folder) from `libation/`, `kindle/` or `manual/` is how
+a human says "do not file this". An arrival that is still open (`ready`,
+`needs-decision`, `answered`, `deferred`) and whose intake copy has been gone for ten
+minutes is retired as `removed`: its Vikunja task is closed with "Removed from
+intake", one summary line reports it, and nothing is filed. While it waits, the
+arrival is not offered to a run (it could only fail on the missing file). The wait
+covers a re-upload that replaces the file. Two things never count as a removal: a
+folder that cannot be listed (`/media` not mounted), and an intake root without the
+librarian's own `.executing` folder (a fresh or wrong export; the executor creates
+that folder at its first filing). Dropping the same file back in later is taken in as
+a fresh arrival, at most twice; after that the copy is left in the intake untouched
+and a warning is logged. Arrivals that are queued, being filed, filed or failed are
+not touched. An older image can load a store that holds `removed` arrivals (they are
+inert there), so a rollback needs no store edit.
 
 ## Ports
 

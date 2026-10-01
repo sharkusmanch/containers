@@ -358,7 +358,7 @@ def flush_summaries(svc) -> None:
 
 
 def late_summary(svc, keys: list[str]) -> tuple[str, str]:
-    n_filed = n_failed = n_dup = 0
+    n_filed = n_failed = n_dup = n_removed = 0
     lines = []
     for key in keys:
         rec = svc.arrivals.get(key) or {}
@@ -369,11 +369,15 @@ def late_summary(svc, keys: list[str]) -> tuple[str, str]:
             n_failed += 1
         elif st == states.DUPLICATE:
             n_dup += 1
+        elif st == states.REMOVED:
+            n_removed += 1
         intent = svc.intents.store.get(rec.get("exec_intent") or "") or {}
         lines.append(_line(svc, rec, key, intent))
     title = f"Librarian (later): {n_filed} filed · {n_failed} failed"
     if n_dup:
         title += f" · {n_dup} duplicate(s) removed"
+    if n_removed:
+        title += f" · {n_removed} removed from intake"
     return "\n".join([title, *lines]), title
 
 
@@ -431,6 +435,8 @@ def _line(svc, rec, key, intent) -> str:
     elif st == states.DUPLICATE:
         icon = "♻️"
         what = "duplicate removed" if rec.get("dup_removed") is True else "duplicate"
+    elif st == states.REMOVED:
+        icon, what = "🗑️", "removed from intake, nothing filed"
     else:
         what = "no decision"
     return f"{icon} {hint} — {what}"

@@ -283,11 +283,14 @@ def verify_sidecar(c: Candidate, sha: str) -> str | None:
     return None
 
 
-def classify(key: str, c, sha: str, arrivals: Store, filed_hashes: dict) -> tuple[str, dict]:
+def classify(key: str, c, sha: str, arrivals: Store, filed_hashes: dict, *,
+             returning: bool = False) -> tuple[str, dict]:
     """Decide what to do with a freshly-hashed candidate.
 
     - "skip": an arrival already exists for this exact key (any state) --
-      nothing new to do, re-scanning the same stable file is a no-op.
+      nothing new to do, re-scanning the same stable file is a no-op. Not for a
+      `returning` candidate: its arrival was retired as removed and the same
+      file is back in the intake, so it is judged like a new one.
     - "duplicate": this exact content (by sha256) has already been filed
       under some other arrival -- `filed_hashes` maps sha256 -> book_id.
     - "new": genuinely new content. `previously_filed` is set to the book_id
@@ -295,7 +298,7 @@ def classify(key: str, c, sha: str, arrivals: Store, filed_hashes: dict) -> tupl
       prefix (a re-arrival: same book, different bytes/sha -- e.g. a
       re-download), else None.
     """
-    if arrivals.get(key) is not None:
+    if arrivals.get(key) is not None and not returning:
         return ("skip", {})
 
     if sha in filed_hashes:

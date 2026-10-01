@@ -20,10 +20,15 @@ RETRYABLE = "retryable"
 # Plan 2: the executor is mid-filing. The arrival's `exec` journal says which
 # step; app/executor.py's Executor.resume() owns every arrival in this state.
 EXECUTING = "executing"
+# A human removed the intake copy of an arrival that was still open (ready,
+# needs-decision, answered, deferred): nothing was filed and nothing is left to
+# decide (app/service.py `_retire_removed`). The same file dropped again is taken
+# in afresh.
+REMOVED = "removed"
 
 ARRIVAL_STATES = frozenset({
     READY, PROPOSED, NEEDS_DECISION, ANSWERED, DEFERRED, SIMULATED,
-    FILED, DUPLICATE, FAILED, RETRYABLE, EXECUTING,
+    FILED, DUPLICATE, FAILED, RETRYABLE, EXECUTING, REMOVED,
 })
 
 # An arrival is offerable to the librarian run when it's freshly ready or has

@@ -25,8 +25,8 @@ the task is closed with the outcome once the arrival is terminal.
      change nothing; the LLM run sees `human_answer` (untrusted) through
      `GET /arrivals/{key}`, and guards 7/10 honour it only for the exact
      option intent selected (app/policy.py `human_answer_matches`).
-  4. filed / failed / duplicate / simulated with an open task -> comment
-     the outcome and mark the task done, once (`vikunja_closed=True`).
+  4. filed / failed / duplicate / simulated / removed with an open task ->
+     comment the outcome and mark the task done, once (`vikunja_closed=True`).
      A dry-run answer never carries into live: go_live clears
      `human_answer` when it re-offers a simulated arrival.
 
@@ -92,7 +92,7 @@ logger = logging.getLogger(__name__)
 MAX_WRITES_PER_TICK = 10
 TITLE_MAX = 80
 MAX_LINKS = 10
-TERMINAL = frozenset({states.FILED, states.FAILED, states.DUPLICATE, states.SIMULATED})
+TERMINAL = frozenset({states.FILED, states.FAILED, states.DUPLICATE, states.SIMULATED, states.REMOVED})
 
 # ASCII digits only ([0-9], never \d: Unicode digits must not parse), an
 # optional "option"/"#" lead-in, and a number that is not the start of a
@@ -288,6 +288,8 @@ def outcome_text(rec: dict, bookorbit_url: str = "") -> str:
         wd = "; ".join(_clean(x, 200) for x in (rec.get("would_do") or []))
         return (f"Dry run -- nothing was changed. Would do: {wd or 'nothing'}. Answers given "
                 f"during the dry run are not carried over to live filing. Closing.")
+    if st == states.REMOVED:
+        return "Removed from intake: the file is no longer there. Nothing was filed. Closing."
     return f"Finished ({_clean(st, 40)}). Closing."
 
 

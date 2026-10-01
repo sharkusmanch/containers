@@ -40,7 +40,7 @@ import os
 import threading
 import time
 
-from app import escalations, execution, intake, metrics, notify, states
+from app import escalations, execution, fsops, intake, metrics, notify, states
 from app.api import ApiServer
 from app.dossier import build_dossier, title_from_folder
 from app.intents import IntentBook
@@ -55,6 +55,15 @@ logger = logging.getLogger(__name__)
 
 TRANSCRIPT_MAX_AGE = 30 * 86400
 SIDECAR_GRACE = 3600          # s a kindle sidecar may disagree before the arrival fails
+# An open arrival whose intake copy has been gone this long was removed by hand
+# (`_retire_removed`): long enough for a re-upload that replaces the file.
+REMOVED_CONFIRM = 600
+_OPEN = frozenset({states.READY, states.NEEDS_DECISION, states.ANSWERED, states.DEFERRED})
+# A removed arrival whose file is dropped back is taken in afresh this many times;
+# after that the same bytes coming back again are ignored (each return costs a
+# paid run and a task: a tool re-delivering in a loop must not get them for ever).
+RETURN_LIMIT = 2
+_BACK_NOTE = "back in intake (was removed)"
 # arrival states whose APPROVED intents the executor owns (never "recovered")
 _EXEC_OWNED = frozenset({states.RETRYABLE, states.EXECUTING, states.FILED})
 
@@ -104,6 +113,9 @@ class Service:
         self._changed: dict[str, float] = {}      # key -> when it last changed (unoffered)
         self._retry_at: dict[str, float] = {}     # key -> re-offer time after a failed run
         self._sidecar_bad: dict[str, float] = {}  # key -> first tick its sidecar disagreed
+        self._gone_since: dict[str, float] = {}   # key -> first tick its intake copy was gone
+        self._return_refused: set = set()         # removed keys back once too often (logged once)
+        self._foreign_intake_logged = False       # "copy gone, but not our intake" (logged once)
         self.last_run_started: float | None = None
         self._stop = threading.Event()
         self._in_runner = False
@@ -374,6 +386,10 @@ class Service:
         self._intake(now)
         if self._stop.is_set():
             return
+        try:
+            self._retire_removed(now)
+        except Exception:
+            logger.exception("checking for removed intake copies failed")
         self._observe_changes(now)
         keys = self._due(now)
         if keys:
@@ -476,7 +492,18 @@ class Service:
         key = intake.arrival_key(c, sha)
         if not self._only_match(c.source, c.source_id, key):
             return
-        if self.arrivals.get(key) is not None:
+        known = self.arrivals.get(key)
+        # an arrival retired as removed whose file is in the intake again: the
+        # owner dropped it back (or the removal was a mount glitch) -- taken in afresh
+        returning = known is not None and known.get("state") == states.REMOVED
+        if known is not None and not returning:
+            return
+        if returning and sum(1 for h in known.get("history") or []
+                             if isinstance(h, dict) and h.get("note") == _BACK_NOTE) >= RETURN_LIMIT:
+            if key not in self._return_refused:
+                self._return_refused.add(key)
+                logger.warning("arrival %s was removed and came back %d times; this copy is left in "
+                               "the intake untouched", log_safe(key), RETURN_LIMIT)
             return
 
         primary = intake.primary_file(c)
@@ -502,7 +529,7 @@ class Service:
 
         filed = {r["sha256"]: r.get("book_id") for r in self.arrivals.by_state(states.FILED)
                  if r.get("sha256")}
-        verdict, info = intake.classify(key, c, sha, self.arrivals, filed)
+        verdict, info = intake.classify(key, c, sha, self.arrivals, filed, returning=returning)
         if verdict == "skip":
             return
         if verdict == "duplicate":
@@ -513,8 +540,99 @@ class Service:
             return
 
         self.make_dossier(key, c, sha, info.get("previously_filed"))
+        if returning:
+            history = list(known.get("history") or [])
+            history.append({"ts": time.time(), "note": _BACK_NOTE})
+            # Like go_live's re-offer: an answer given before the removal never carries
+            # over, nor does a Vikunja create-failure streak. A task whose close was
+            # still pending stays the arrival's task (it is open: the next question
+            # goes onto it); a closed one is never reused (escalations._open).
+            self.arrivals.record(key, states.READY, detail="back in intake", history=history,
+                                 human_answer=None, not_before=None, would_do=None,
+                                 vikunja_create_failed_since=None, vikunja_create_failures=0, **base)
+            logger.info("arrival %s is back in the intake; ready again", log_safe(key))
+            return
         self.arrivals.record(key, states.READY, **base)
         logger.info("arrival %s ready", log_safe(key))
+
+    # --- removed by hand -----------------------------------------------------------
+
+    def _copy_gone(self, rec: dict, listings: dict):
+        """True when `rec`'s intake copy is gone, False when it is there (or
+        staged for filing), None when that cannot be told: a record with no
+        path, a path that is not an entry of its source's intake folder, a
+        folder that cannot be listed (intake.scan treats a missing folder as
+        "no candidates" -- /media not mounted must never read as "removed"),
+        or an intake root without the librarian's own `.executing` folder (the
+        executor makes it at its first filing and never removes it: a fresh or
+        wrong export with empty source folders is not this intake)."""
+        path, source = rec.get("path"), rec.get("source")
+        if not isinstance(path, str) or not path or not isinstance(source, str) or not source:
+            return None
+        root = os.path.abspath(self.settings.intake_root)
+        source_dir = os.path.join(root, source)
+        if os.path.dirname(os.path.abspath(path)) != source_dir:
+            return None
+        if source_dir not in listings:
+            try:
+                listings[source_dir] = set(os.listdir(source_dir))   # a READDIR: no stale lookup cache
+            except OSError:
+                listings[source_dir] = None
+        names = listings[source_dir]
+        if names is None:
+            return None
+        if os.path.basename(path) in names:
+            return False
+        # nothing is ever staged for an open arrival (the executor records
+        # `executing` first); checked all the same -- a staged copy is not "gone"
+        if os.path.lexists(fsops.staging_dir(self.settings.intake_root, rec["key"])):
+            return False
+        if root not in listings:
+            listings[root] = os.path.isdir(os.path.join(root, fsops.EXECUTING_DIR))
+        if not listings[root]:
+            if not self._foreign_intake_logged:
+                self._foreign_intake_logged = True
+                logger.warning("an open arrival's intake copy is gone, but %s has no %s folder (a fresh or "
+                               "wrong mount, or nothing filed from it yet): nothing is retired as removed",
+                               log_safe(root), fsops.EXECUTING_DIR)
+            return None
+        return True
+
+    def _retire_removed(self, now: float) -> list[str]:
+        """An OPEN arrival (ready, needs-decision, answered, deferred) whose
+        intake copy a human removed is retired as `removed`: nothing was filed
+        and nothing is left to decide, so its Vikunja task is closed
+        (escalations.TERMINAL) and the tick's late summary says so. Before
+        this, such an arrival asked again for ever (out of deferrals it can only
+        escalate; a task closed by hand is re-created hourly). The copy must be
+        gone on every tick for REMOVED_CONFIRM seconds (kept in memory: a
+        restart starts the wait again), which covers a re-upload replacing the
+        file and a listing glitch; while it waits the arrival is not offered to
+        a run (`_due`), which would only fail on the missing file. Arrivals the
+        executor owns (retryable, executing) and finished ones are never
+        touched. Returns the keys."""
+        listings: dict = {}
+        retired = []
+        for rec in self.arrivals.all():
+            key = rec["key"]
+            if rec.get("state") not in _OPEN or self._copy_gone(rec, listings) is not True:
+                self._gone_since.pop(key, None)
+                continue
+            if now - self._gone_since.setdefault(key, now) < REMOVED_CONFIRM:
+                continue
+            with self.lock:
+                cur = self.arrivals.get(key)
+                if cur is None or cur.get("state") not in _OPEN:
+                    continue
+                self.arrivals.record(key, states.REMOVED, detail="removed from intake",
+                                     human_answer=None, not_before=None, would_do=None)
+                if not self.settings.dry_run:       # a dry run only logs it (no "(later)" push)
+                    execution.note_outcome(self, key)
+            self._gone_since.pop(key, None)
+            retired.append(key)
+            logger.info("arrival %s: its intake copy has been gone for %ds; retired as removed",
+                        log_safe(key), REMOVED_CONFIRM)
+        return retired
 
     def make_dossier(self, key: str, c, sha: str, previously_filed) -> None:
         """Build and persist the arrival's dossier (intake, and the
@@ -577,6 +695,10 @@ class Service:
                 stale.append(key)   # a later flip to offerable re-marks it
                 continue
             if not self._only_match(rec.get("source", ""), rec.get("source_id", ""), key):
+                continue
+            if key in self._gone_since:
+                # its intake copy is missing: a run could only fail on it. The mark
+                # stays -- offered if the copy comes back, dropped once retired.
                 continue
             pending.append((rec.get("first_seen", 0), key, at))
         for key in stale:
