@@ -27,6 +27,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [hass-mcp-sse](./images/hass-mcp-sse/) | Home Assistant MCP server with SSE transport (k8s) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
 | [kindle-ingest](./images/kindle-ingest/) | Kindle -> BookOrbit ingest: decrypt, convert, upload | [Satsuoni/DeDRM_tools](https://github.com/Satsuoni/DeDRM_tools) |
 | [loseit-mcp-sse](./images/loseit-mcp-sse/) | Lose It calorie-tracking MCP server with SSE transport (k8s) | [atfinke/loseit-mcp](https://github.com/atfinke/loseit-mcp) |
+| [ludusavi](./images/ludusavi/) | Ludusavi game-save backup tool for headless CLI use | [mtkennerly/ludusavi](https://github.com/mtkennerly/ludusavi) |
 | [mcp-proxy](./images/mcp-proxy/) | Bridge stdio MCP servers to SSE/HTTP transport | [sparfenyuk/mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) |
 | [miniflux-mcp-sse](./images/miniflux-mcp-sse/) | Miniflux MCP server with SSE transport (k8s) | [tssujt/miniflux-mcp](https://github.com/tssujt/miniflux-mcp) |
 | [nextdns-rewrites-sync](./images/nextdns-rewrites-sync/) | Sync Tailscale devices + static entries to NextDNS rewrites API | Original |
