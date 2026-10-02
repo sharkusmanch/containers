@@ -13,7 +13,7 @@ headless CLI use such as a scheduled `ludusavi backup` in a Kubernetes CronJob.
 ```bash
 docker run --rm \
   -v ./config:/config -v ./saves:/saves -v ./backup:/backup \
-  ghcr.io/sharkusmanch/ludusavi:v0.31.0 \
+  ghcr.io/sharkusmanch/containers/ludusavi:v0.31.0 \
   --config /config backup --force < /dev/null
 ```
 
