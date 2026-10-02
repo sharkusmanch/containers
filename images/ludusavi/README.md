@@ -36,4 +36,5 @@ Save and backup locations are whatever `config.yaml` points at.
 - Upstream publishes no container image. This wraps the official Linux release binary
   (checksum-pinned) in Debian slim with GTK 3, which the binary links even in CLI mode.
 - Adds `python3` for post-processing the CLI's `--api` JSON output.
+- amd64 only: upstream ships no arm64 Linux binary.
 - Runs as UID 10000; no GUI or display server is included.
