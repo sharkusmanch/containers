@@ -836,3 +836,390 @@ describe("filter box", () => {
     expect(view.element.querySelector(".ach-row.expanded")).toBeNull();
   });
 });
+
+describe("missable toggle", () => {
+  const toggle = (el: HTMLElement): HTMLButtonElement =>
+    el.querySelector(".ach-filter .ach-missable-only") as HTMLButtonElement;
+  const input = (el: HTMLElement): HTMLInputElement =>
+    el.querySelector(".ach-filter-input") as HTMLInputElement;
+  const type = (el: HTMLElement, text: string): void => {
+    input(el).value = text;
+    input(el).dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const lockedIds = (el: HTMLElement): (string | undefined)[] =>
+    [...el.querySelectorAll(".ach-locked .ach-row")].map((e) => (e as HTMLElement).dataset.id);
+
+  const withExtras: AchievementsResponse = {
+    ...data,
+    total: 9,
+    achievements: [
+      ...list,
+      a({ id: "m-late", unlockPercent: 70, missable: true, description: "desc shared" }),
+      a({ id: "m-other", unlockPercent: null, missable: true, description: "other" }),
+    ],
+  };
+  const noMissables: AchievementsResponse = {
+    ...data,
+    achievements: list.map((x) => ({ ...x, missable: false })),
+  };
+
+  it("sits after the clear button, reads Missable and starts off", () => {
+    const view = createAchievementsView(document);
+    view.update(data);
+    expect(
+      [...(view.element.querySelector(".ach-filter") as HTMLElement).children].map(
+        (c) => c.className,
+      ),
+    ).toEqual(["ach-filter-input", "ach-filter-clear", "ach-missable-only"]);
+    expect(toggle(view.element).textContent).toBe("Missable");
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("false");
+    expect(toggle(view.element).getAttribute("type")).toBe("button");
+  });
+
+  it("is hidden when nothing is missable and shown when something is", () => {
+    const view = createAchievementsView(document);
+    view.update(noMissables);
+    expect(toggle(view.element).hidden).toBe(true);
+    view.update({ ...data });
+    expect(toggle(view.element).hidden).toBe(false);
+  });
+
+  it("lists only missable locked achievements when on, without the recent strip or unlocked section", () => {
+    const view = createAchievementsView(document);
+    view.update(data);
+    toggle(view.element).click();
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("true");
+    expect(lockedIds(view.element)).toEqual(["rare"]);
+    expect(view.element.querySelector(".ach-recent")).toBeNull();
+    expect(view.element.querySelector("details.ach-unlocked")).toBeNull();
+    expect(view.element.querySelectorAll(".ach-row")).toHaveLength(1);
+    expect(view.element.querySelector(".ach-summary")?.textContent).toBe("2 / 7 · 29%");
+    expect(view.element.querySelector(".ach-empty")).toBeNull();
+    toggle(view.element).click();
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("false");
+    expect(lockedIds(view.element)).toEqual(["common", "secret", "tie", "rare", "unknown"]);
+    expect(view.element.querySelector(".ach-recent")).not.toBeNull();
+    expect(view.element.querySelector("details.ach-unlocked")).not.toBeNull();
+  });
+
+  it("does not list a missable achievement that is already unlocked", () => {
+    const view = createAchievementsView(document);
+    view.update({
+      ...data,
+      achievements: [
+        ...list,
+        a({
+          id: "done-missable",
+          unlocked: true,
+          unlockedAt: "2026-10-02T10:00:00.000Z",
+          missable: true,
+        }),
+      ],
+    });
+    toggle(view.element).click();
+    expect(lockedIds(view.element)).toEqual(["rare"]);
+    expect(view.element.querySelector('.ach-row[data-id="done-missable"]')).toBeNull();
+  });
+
+  it("follows the sort order", () => {
+    const view = createAchievementsView(document);
+    view.update(withExtras);
+    toggle(view.element).click();
+    expect(lockedIds(view.element)).toEqual(["m-late", "rare", "m-other"]);
+    (view.element.querySelector(".ach-sort-dir") as HTMLElement).click();
+    expect(lockedIds(view.element)).toEqual(["rare", "m-late", "m-other"]);
+    (view.element.querySelector(".ach-sort-key") as HTMLElement).click();
+    expect(lockedIds(view.element)).toEqual(["m-late", "m-other", "rare"]);
+  });
+
+  it("combines with the text filter", () => {
+    const view = createAchievementsView(document);
+    view.update(withExtras);
+    toggle(view.element).click();
+    type(view.element, "desc");
+    expect(lockedIds(view.element)).toEqual(["m-late", "rare"]);
+    type(view.element, "shared");
+    expect(lockedIds(view.element)).toEqual(["m-late"]);
+    expect(view.element.querySelector(".ach-empty")).toBeNull();
+  });
+
+  it("says no missable achievements are left, or that none match when filtering", () => {
+    const view = createAchievementsView(document);
+    view.update(data);
+    toggle(view.element).click();
+    view.update({
+      ...data,
+      achievements: list.map((x) =>
+        x.id === "rare" ? { ...x, unlocked: true, unlockedAt: "2026-10-03T10:00:00.000Z" } : x,
+      ),
+    });
+    expect(toggle(view.element).hidden).toBe(false);
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe(
+      "No missable achievements left",
+    );
+    expect(view.element.querySelectorAll(".ach-row")).toHaveLength(0);
+    expect(view.element.querySelector(".ach-recent")).toBeNull();
+    expect(view.element.querySelector("details.ach-unlocked")).toBeNull();
+    type(view.element, "zzz");
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe("No matching achievements");
+    type(view.element, "");
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe(
+      "No missable achievements left",
+    );
+  });
+
+  it("says no matching achievements when a filter excludes the only missable one", () => {
+    const view = createAchievementsView(document);
+    view.update(data);
+    toggle(view.element).click();
+    type(view.element, "common");
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe("No matching achievements");
+  });
+
+  it("lists a hidden missable achievement masked and never leaks its name", () => {
+    const view = createAchievementsView(document);
+    view.update({
+      ...data,
+      achievements: [
+        ...list,
+        a({
+          id: "hm",
+          name: "Hidden Missable Name",
+          description: "Hidden missable text",
+          hidden: true,
+          missable: true,
+          unlockPercent: 3,
+          icon: "https://media.example.org/Badge/7.png",
+        }),
+      ],
+    });
+    toggle(view.element).click();
+    expect(lockedIds(view.element)).toEqual(["rare", "hm"]);
+    const row = view.element.querySelector('.ach-row[data-id="hm"]') as HTMLElement;
+    expect(row.querySelector(".ach-name")?.textContent).toBe("Hidden achievement");
+    expect(row.querySelector(".ach-desc")?.textContent).toBe("Tap to reveal");
+    expect(row.querySelector("img")).toBeNull();
+    expect(view.element.textContent).not.toContain("Hidden Missable");
+    expect(view.element.textContent).not.toContain("Hidden missable text");
+    type(view.element, "hidden missable");
+    expect(lockedIds(view.element)).toEqual([]);
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe("No matching achievements");
+  });
+
+  it("resets on a change of game and survives same-game updates", () => {
+    const view = createAchievementsView(document);
+    view.update(data);
+    toggle(view.element).click();
+    view.update({ ...data });
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("true");
+    expect(lockedIds(view.element)).toEqual(["rare"]);
+    view.update(null, "Loading…");
+    view.update({ ...data });
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("true");
+    expect(lockedIds(view.element)).toEqual(["rare"]);
+    view.update({ ...data, id: "2" });
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("false");
+    expect(lockedIds(view.element)).toEqual(["common", "secret", "tie", "rare", "unknown"]);
+    view.update({ ...data, id: "2" });
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("is treated as off while hidden, and the choice returns with the next missable", () => {
+    const view = createAchievementsView(document);
+    view.update(data);
+    toggle(view.element).click();
+    view.update(noMissables);
+    expect(toggle(view.element).hidden).toBe(true);
+    expect(lockedIds(view.element)).toEqual(["common", "secret", "tie", "rare", "unknown"]);
+    expect(view.element.querySelector(".ach-recent")).not.toBeNull();
+    view.update({ ...data });
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("true");
+    expect(lockedIds(view.element)).toEqual(["rare"]);
+  });
+
+  it("is not stored", () => {
+    const s = memory();
+    const view = createAchievementsView(document, { storage: s });
+    view.update(data);
+    toggle(view.element).click();
+    expect([...s.store.keys()]).toEqual([]);
+    const second = createAchievementsView(document, { storage: s });
+    second.update(data);
+    expect(toggle(second.element).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("is the same element after typing, clicks and updates, and is not a row", () => {
+    const view = createAchievementsView(document);
+    document.body.append(view.element);
+    view.update(data);
+    const button = toggle(view.element);
+    type(view.element, "co");
+    expect(toggle(view.element)).toBe(button);
+    button.click();
+    expect(toggle(view.element)).toBe(button);
+    view.update({ ...data });
+    (view.element.querySelector(".ach-sort-dir") as HTMLElement).click();
+    (view.element.querySelector(".ach-hide-unlocked") as HTMLElement).click();
+    (view.element.querySelector(".ach-hide-unlocked") as HTMLElement).click();
+    expect(toggle(view.element)).toBe(button);
+    view.update(null, "Loading…");
+    view.update({ ...data, id: "2" });
+    view.update(noMissables);
+    view.update({ ...data });
+    expect(toggle(view.element)).toBe(button);
+    expect(view.element.querySelector(".ach-row.expanded")).toBeNull();
+    view.element.remove();
+  });
+});
+
+describe("find in guide", () => {
+  const rowSel = (id: string): string => `.ach-row[data-id="${id}"]`;
+  const click = (el: HTMLElement, id: string): void =>
+    (el.querySelector(rowSel(id)) as HTMLElement).click();
+  const bars = (el: HTMLElement): HTMLElement[] => [
+    ...el.querySelectorAll<HTMLElement>(".ach-actions"),
+  ];
+
+  it("adds an action bar after an expanded row in the locked list when enabled", () => {
+    const view = createAchievementsView(document, { onFind: () => {} });
+    view.setFindEnabled(true);
+    view.update(data);
+    expect(bars(view.element)).toHaveLength(0);
+    click(view.element, "common");
+    expect(bars(view.element)).toHaveLength(1);
+    const row = view.element.querySelector(rowSel("common")) as HTMLElement;
+    const bar = row.nextElementSibling as HTMLElement;
+    expect(bar.classList.contains("ach-actions")).toBe(true);
+    expect(bar.parentElement).toBe(row.parentElement);
+    expect(row.contains(bar)).toBe(false);
+    expect([...bar.children].map((c) => c.tagName)).toEqual(["BUTTON"]);
+    const find = bar.firstElementChild as HTMLElement;
+    expect(find.className).toBe("ach-find");
+    expect(find.textContent).toBe("Find in guide");
+    expect(find.getAttribute("type")).toBe("button");
+    expect(row.querySelector("button")).toBeNull();
+  });
+
+  it("adds it after an expanded row in the unlocked list too", () => {
+    const view = createAchievementsView(document, { onFind: () => {} });
+    view.setFindEnabled(true);
+    view.update(data);
+    (view.element.querySelector("details.ach-unlocked") as HTMLDetailsElement).open = true;
+    click(view.element, "done-old");
+    const bar = view.element.querySelector(
+      `details.ach-unlocked ${rowSel("done-old")}`,
+    )?.nextElementSibling;
+    expect(bar?.classList.contains("ach-actions")).toBe(true);
+    expect(view.element.querySelectorAll("details.ach-unlocked .ach-actions")).toHaveLength(1);
+    // The recent strip shows the same achievement, so it is expanded there too and gets its own bar.
+    expect(view.element.querySelectorAll(".ach-recent .ach-actions")).toHaveLength(1);
+  });
+
+  it("gives collapsed and masked rows no action bar", () => {
+    const view = createAchievementsView(document, { onFind: () => {} });
+    view.setFindEnabled(true);
+    view.update(data);
+    click(view.element, "secret");
+    expect(view.element.querySelector(rowSel("secret"))?.textContent).toContain("Secret Name");
+    expect(bars(view.element)).toHaveLength(0);
+    click(view.element, "secret");
+    expect(bars(view.element)).toHaveLength(1);
+    click(view.element, "secret");
+    expect(bars(view.element)).toHaveLength(0);
+  });
+
+  it("is off until enabled, and not rendered without a callback", () => {
+    const withCallback = createAchievementsView(document, { onFind: () => {} });
+    withCallback.update(data);
+    click(withCallback.element, "common");
+    expect(bars(withCallback.element)).toHaveLength(0);
+
+    const withoutCallback = createAchievementsView(document);
+    withoutCallback.setFindEnabled(true);
+    withoutCallback.update(data);
+    click(withoutCallback.element, "common");
+    expect(bars(withoutCallback.element)).toHaveLength(0);
+  });
+
+  it("renders and removes the bars when find is enabled and disabled", () => {
+    const view = createAchievementsView(document, { onFind: () => {} });
+    view.update(data);
+    click(view.element, "common");
+    click(view.element, "rare");
+    view.setFindEnabled(true);
+    expect(bars(view.element)).toHaveLength(2);
+    view.setFindEnabled(false);
+    expect(bars(view.element)).toHaveLength(0);
+    expect(view.element.querySelector(rowSel("common"))?.classList.contains("expanded")).toBe(true);
+  });
+
+  it("can be enabled before any data arrives without adding anything", () => {
+    const view = createAchievementsView(document, { onFind: () => {} });
+    view.setFindEnabled(true);
+    expect(view.element.children).toHaveLength(0);
+    view.update(data);
+    click(view.element, "common");
+    expect(bars(view.element)).toHaveLength(1);
+  });
+
+  it("calls back with the achievement and leaves the row expanded", () => {
+    const calls: Achievement[] = [];
+    const view = createAchievementsView(document, { onFind: (x) => calls.push(x) });
+    view.setFindEnabled(true);
+    view.update(data);
+    click(view.element, "common");
+    click(view.element, "rare");
+    const find = view.element.querySelector(
+      `${rowSel("rare")} + .ach-actions .ach-find`,
+    ) as HTMLElement;
+    find.click();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe(list[0]);
+    expect(view.element.querySelector(rowSel("rare"))?.classList.contains("expanded")).toBe(true);
+    expect(view.element.querySelector(rowSel("common"))?.classList.contains("expanded")).toBe(true);
+    expect(bars(view.element)).toHaveLength(2);
+    (
+      view.element.querySelector(`${rowSel("common")} + .ach-actions .ach-find`) as HTMLElement
+    ).click();
+    expect(calls.map((x) => x.id)).toEqual(["rare", "common"]);
+  });
+
+  it("calls back from an unlocked row without closing the unlocked section", () => {
+    const calls: Achievement[] = [];
+    const view = createAchievementsView(document, { onFind: (x) => calls.push(x) });
+    view.setFindEnabled(true);
+    view.update(data);
+    (view.element.querySelector("details.ach-unlocked") as HTMLDetailsElement).open = true;
+    click(view.element, "done-old");
+    (view.element.querySelector(".ach-unlocked .ach-find") as HTMLElement).click();
+    expect(calls.map((x) => x.id)).toEqual(["done-old"]);
+    expect((view.element.querySelector("details.ach-unlocked") as HTMLDetailsElement).open).toBe(
+      true,
+    );
+  });
+
+  it("works under the missable filter", () => {
+    const calls: Achievement[] = [];
+    const view = createAchievementsView(document, { onFind: (x) => calls.push(x) });
+    view.setFindEnabled(true);
+    view.update(data);
+    (view.element.querySelector(".ach-missable-only") as HTMLElement).click();
+    click(view.element, "rare");
+    (view.element.querySelector(".ach-find") as HTMLElement).click();
+    expect(calls).toEqual([list[0]]);
+  });
+
+  it("never nests a button in a button anywhere in the panel", () => {
+    const view = createAchievementsView(document, { onFind: () => {} });
+    view.setFindEnabled(true);
+    view.update(data);
+    (view.element.querySelector("details.ach-unlocked") as HTMLDetailsElement).open = true;
+    for (const x of list) {
+      const row = view.element.querySelector(rowSel(x.id)) as HTMLElement;
+      row.click();
+      if (isMasked(x, new Set())) click(view.element, x.id);
+    }
+    expect(view.element.querySelectorAll(".ach-find").length).toBeGreaterThan(3);
+    expect(view.element.querySelectorAll("button button")).toHaveLength(0);
+  });
+});

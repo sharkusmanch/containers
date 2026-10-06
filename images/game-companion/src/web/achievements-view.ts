@@ -126,13 +126,20 @@ export function matchesFilter(a: Achievement, filter: string, masked: boolean): 
 export interface AchievementsView {
   element: HTMLElement;
   update(data: AchievementsResponse | null, message?: string): void;
+  /** Enables or disables the "Find in guide" action (it needs a loaded guide). Default: disabled. */
+  setFindEnabled(enabled: boolean): void;
 }
 
 export function createAchievementsView(
   doc: Document,
-  options: { storage?: StorageLike } = {},
+  options: {
+    storage?: StorageLike;
+    /** Called when the user asks to find an achievement in the guide. */
+    onFind?: (achievement: Achievement) => void;
+  } = {},
 ): AchievementsView {
   const storage = options.storage;
+  const onFind = options.onFind;
   const element = doc.createElement("section");
   element.classList.add("ach");
 
@@ -148,6 +155,9 @@ export function createAchievementsView(
   let hideUnlocked = loadHideUnlocked(storage);
   // Per-game, like revealed and expanded; never stored.
   let filter = "";
+  let missableOnly = false;
+  // Set by the page once a guide is loaded; the action needs one.
+  let findEnabled = false;
 
   const textEl = (tag: string, className: string, text: string): HTMLElement => {
     const el = doc.createElement(tag);
@@ -178,10 +188,31 @@ export function createAchievementsView(
     return row;
   };
 
+  const renderFindBar = (a: Achievement): HTMLElement => {
+    const bar = doc.createElement("div");
+    bar.classList.add("ach-actions");
+    const find = doc.createElement("button");
+    find.setAttribute("type", "button");
+    find.classList.add("ach-find");
+    find.textContent = "Find in guide";
+    find.addEventListener("click", () => onFind?.(a));
+    bar.append(find);
+    return bar;
+  };
+
+  /** A row, followed by its action bar (a sibling: a button cannot contain a button) when expanded. */
+  const renderRows = (list: Achievement[]): HTMLElement[] =>
+    list.flatMap((a) => {
+      const row = renderRow(a);
+      const showBar =
+        findEnabled && onFind !== undefined && expanded.has(a.id) && !isMasked(a, revealed);
+      return showBar ? [row, renderFindBar(a)] : [row];
+    });
+
   const renderList = (className: string, list: Achievement[]): HTMLElement => {
     const container = doc.createElement("div");
     container.classList.add(className);
-    container.append(...list.map(renderRow));
+    container.append(...renderRows(list));
     return container;
   };
 
@@ -212,6 +243,11 @@ export function createAchievementsView(
     saveHideUnlocked(storage, hideUnlocked);
     render();
   });
+  const missableButton = control("ach-missable-only", () => {
+    missableOnly = !missableOnly;
+    render();
+  });
+  missableButton.textContent = "Missable";
   const sortRow = doc.createElement("div");
   sortRow.classList.add("ach-sort");
   sortRow.append(keyButton, dirButton, hideButton);
@@ -240,13 +276,13 @@ export function createAchievementsView(
   clearButton.hidden = true;
   const filterRow = doc.createElement("div");
   filterRow.classList.add("ach-filter");
-  filterRow.append(filterInput, clearButton);
+  filterRow.append(filterInput, clearButton, missableButton);
 
   const summaryEl = textEl("div", "ach-summary", "");
   const staleEl = textEl("div", "ach-stale", "Showing older data");
   let listNodes: HTMLElement[] = [];
 
-  const syncControls = (): void => {
+  const syncControls = (hasMissable: boolean, missableActive: boolean): void => {
     const keyLabel = KEY_LABEL[sortPref.key];
     keyButton.textContent = keyLabel;
     keyButton.setAttribute("aria-label", `Sort by: ${keyLabel}`);
@@ -257,6 +293,8 @@ export function createAchievementsView(
     hideButton.setAttribute("aria-pressed", hideUnlocked ? "true" : "false");
     if (filterInput.value !== filter) filterInput.value = filter;
     clearButton.hidden = filter === "";
+    missableButton.hidden = !hasMissable;
+    missableButton.setAttribute("aria-pressed", missableActive ? "true" : "false");
   };
 
   const render = (): void => {
@@ -275,36 +313,49 @@ export function createAchievementsView(
     summaryEl.textContent = summaryLine(data);
     if (!data.stale) staleEl.remove();
     else if (staleEl.parentNode !== element) element.insertBefore(staleEl, sortRow);
-    syncControls();
+    // The option applies only while the data has a missable achievement; the choice itself is kept.
+    const hasMissable = data.achievements.some((a) => a.missable);
+    const missableActive = missableOnly && hasMissable;
+    syncControls(hasMissable, missableActive);
 
     const masked = (a: Achievement): boolean => isMasked(a, revealed);
     const listed = (unlocked: boolean): Achievement[] =>
       sortAchievements(
         data.achievements.filter(
-          (a) => a.unlocked === unlocked && matchesFilter(a, filter, masked(a)),
+          (a) =>
+            a.unlocked === unlocked &&
+            (!missableActive || a.missable) &&
+            matchesFilter(a, filter, masked(a)),
         ),
         sortPref,
         masked,
       );
     const filtering = filter.trim() !== "";
     const locked = listed(false);
-    const unlocked = hideUnlocked ? [] : listed(true);
+    const showUnlocked = !hideUnlocked && !missableActive;
+    const unlocked = showUnlocked ? listed(true) : [];
 
-    if (filtering && locked.length === 0 && unlocked.length === 0) {
-      listNodes.push(textEl("p", "ach-empty", "No matching achievements"));
+    if ((filtering || missableActive) && locked.length === 0 && unlocked.length === 0) {
+      listNodes.push(
+        textEl(
+          "p",
+          "ach-empty",
+          filtering ? "No matching achievements" : "No missable achievements left",
+        ),
+      );
     } else {
-      if (!hideUnlocked && !filtering) {
+      if (showUnlocked && !filtering) {
         listNodes.push(renderList("ach-recent", recentUnlocks(data.achievements)));
       }
       listNodes.push(renderList("ach-locked", locked));
-      if (!hideUnlocked) {
+      if (showUnlocked) {
         const details = doc.createElement("details");
         details.classList.add("ach-unlocked");
         details.open = unlockedOpen;
         unlockedSection = details;
         const summary = doc.createElement("summary");
         summary.textContent = `Unlocked (${unlocked.length})`;
-        details.append(summary, ...unlocked.map(renderRow));
+        details.append(summary, ...renderRows(unlocked));
         listNodes.push(details);
       }
     }
@@ -312,7 +363,9 @@ export function createAchievementsView(
   };
 
   element.addEventListener("click", (event) => {
-    const row = (event.target as Element).closest<HTMLElement>(".ach-row");
+    const target = event.target as Element;
+    if (target.closest(".ach-actions") !== null) return;
+    const row = target.closest<HTMLElement>(".ach-row");
     const id = row?.dataset["id"];
     if (row === null || id === undefined || lastData === null) return;
     const achievement = lastData.achievements.find((a) => a.id === id);
@@ -335,12 +388,17 @@ export function createAchievementsView(
           unlockedOpen = false;
           unlockedSection = null;
           filter = "";
+          missableOnly = false;
           lastGame = game;
         }
       }
       lastData = data;
       lastMessage = message;
       render();
+    },
+    setFindEnabled(enabled) {
+      findEnabled = enabled;
+      if (lastData !== null) render();
     },
   };
 }

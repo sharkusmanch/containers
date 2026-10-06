@@ -318,6 +318,22 @@ button {
   border-radius: 6px;
 }
 
+.ach-filter .ach-missable-only {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 8px;
+  white-space: nowrap;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ach-filter .ach-missable-only[aria-pressed="true"] {
+  background: var(--bg-active);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 .ach-empty {
   margin: 0;
   padding: 16px 12px;
@@ -396,6 +412,20 @@ button {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
+}
+
+.ach-actions {
+  display: flex;
+  padding: 0 12px 8px;
+}
+
+.ach-find {
+  flex: 1 1 auto;
+  min-height: 44px;
+  padding: 0 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
 /* ---- Picker: full-screen list of pages and games ---- */
