@@ -68,6 +68,16 @@
       "allowedVersions": "<2"
     },
     {
+      "description": "game-companion: hold typescript below 6.1 until typescript-eslint supports a newer compiler. typescript-eslint 8.x declares typescript >=4.8.4 <6.1.0, so a newer typescript fails the image's lint gate, and typescript is what compiles the shipped code. Raise or remove this when typescript-eslint's supported range moves.",
+      "matchFileNames": [
+        "images/game-companion/**"
+      ],
+      "matchDepNames": [
+        "typescript"
+      ],
+      "allowedVersions": "<6.1.0"
+    },
+    {
       "description": "Group Dockerfile updates by image",
       "matchFileNames": [
         "images/redlib/**"
