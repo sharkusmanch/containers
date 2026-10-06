@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# Self-maintained TwitchDropsMiner image (we build our own permanently — attested,
-# digest-pinned, independent of the under-maintained upstream that repeatedly breaks against
-# Twitch API changes). Built from the upstream RELEASE tarball (Renovate tracks
+# Self-maintained TwitchDropsMiner image — attested, digest-pinned, non-root and without
+# upstream's browser stack. Kept for as long as it earns its keep, not permanently: see
+# OWN IMAGE vs UPSTREAM'S below. Built from the upstream RELEASE tarball (Renovate tracks
 # github-releases and opens a bump PR on each new rangermix release) with local backport
 # patches applied on top:
 #   patches/pr62-... — PR #62: per-game GQL crash-resilience (intermittent
@@ -14,16 +14,24 @@
 #                      5-retry budget in the GQL client, covering every call site at once.
 # Maintenance model: on a Renovate bump PR, CI rebuilds from the new release + patches. When
 # upstream ships one of these fixes IN A RELEASE, its patch stops applying → the build fails
-# loudly → drop that patch. We keep building our own image throughout.
+# loudly → drop that patch.
 #   PR #70 (Spade-POST drop-progress fix, upstream issue #69) shipped upstream in v1.2.5 —
 #   its patch stopped applying on the v1.2.5 bump and was removed 2026-07-29, exactly as the
 #   maintenance model predicts.
 #   Refs: https://github.com/rangermix/TwitchDropsMiner (issue #69, PRs #70/#62)
-# RUNTIME NOTE: v1.3.1 switched the OAuth device client from ANDROID_APP to SMARTBOX
-# (Twitch now rejects the Android client ID with "invalid client"). A saved session issued
-# by the old client fails the client-ID check in auth_state.validate(), which clears the jar
-# and deletes cookies.jar -> ONE forced device-code re-login per instance at twitch.tv/activate.
-# Expect that once on the 1.3.0 -> 1.3.1 rollout; later restarts reuse the new session.
+# OWN IMAGE vs UPSTREAM'S — re-evaluated at v2.2.0 (2026-10-06), kept. Both patches are
+# still needed: GQLClient.request() still raises on a second consecutive
+# PersistedQueryNotFound, fetch_inventory() and the per-game directory call are still
+# unguarded, and PR #62 was closed unmerged. What upstream's image adds since v2.1.0 is a
+# Twitch sign-in desktop (chromium + Xvfb + openbox + x11vnc + xdotool + noVNC; ~354 MiB
+# against our ~37 MiB) that the miner starts as a second user, and therefore only when it
+# runs as ROOT (BrowserIsolation requires geteuid() == 0). Our consumers run non-root with
+# every capability dropped, so that stack would be dead weight: this image DELIBERATELY
+# ships no browser. Revisit when upstream makes the transient retries count-based, or if
+# Twitch revokes the Android tokens (a browser is then needed whichever image is used).
+# RUNTIME NOTE: there is no sign-in path in this image. Device-code login was retired
+# upstream in v2.0; the miner restores the ANDROID_APP auth-token already in cookies.jar
+# (still honoured at v2.2.0) over plain HTTP. Never delete cookies.jar.
 # RUNTIME NOTE: drop crediting needs beacon.twitch.tv to resolve — blocked by default on
 # tracker-blocking DNS (NextDNS); must be allowlisted or the watch-event POST hits 0.0.0.0.
 

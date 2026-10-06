@@ -2,9 +2,10 @@
 
 Automated Twitch drops mining application with a web-based interface.
 
-**Self-maintained image.** We build our own TwitchDropsMiner image permanently — attested,
-digest-pinned, and independent of the under-maintained upstream (which repeatedly breaks
-against Twitch API changes). It builds from the upstream `rangermix/TwitchDropsMiner`
+**Self-maintained image.** We build our own TwitchDropsMiner image — attested,
+digest-pinned, non-root and without upstream's browser stack — for as long as it earns its
+keep (see [Why not upstream's image](#why-not-upstreams-image)). It builds from the
+upstream `rangermix/TwitchDropsMiner`
 **release tarball** (Renovate tracks `github-releases` and opens a bump PR on each new
 release) with two local patches applied: **PR #62** (per-game GQL crash-resilience) and
 **gql-transient-retry-budget** (a local fix, no upstream PR — see below). The **PR #70**
@@ -15,9 +16,9 @@ Summer Drops event, freezing all drop progress, upstream
 
 > **Maintenance model:** a Renovate bump PR rebuilds from the new upstream release + the
 > patches. When upstream ships one of these fixes *in a release*, its patch stops applying
-> and the build fails loudly — the signal to delete that patch. We keep building our own
-> image throughout. (Python is Renovate-pinned — see the Dockerfile's `partitioned`-cookie
-> note; bumping it below 3.14 breaks the saved Twitch session.)
+> and the build fails loudly — the signal to delete that patch. (Python is Renovate-pinned —
+> see the Dockerfile's `partitioned`-cookie note; bumping it below 3.14 breaks the saved
+> Twitch session.)
 
 > **Runtime note:** drop crediting requires `beacon.twitch.tv` (Twitch's watch-event
 > endpoint) to resolve — it is blocked by default on tracker-blocking DNS (e.g. NextDNS)
@@ -36,7 +37,9 @@ docker run -p 8080:8080 -v tdm-data:/app/data ghcr.io/sharkusmanch/containers/tw
 
 (The image tag is the upstream release version; the local patches are applied on top.)
 
-The web UI is served on port 8080; complete the Twitch device-code login once via the UI.
+The web UI is served on port 8080. This image has no Twitch sign-in of its own: it restores
+the session already saved in `/app/data/cookies.jar` (see
+[Why not upstream's image](#why-not-upstreams-image)).
 
 ## Volumes
 
@@ -60,5 +63,25 @@ The web UI is served on port 8080; complete the Twitch device-code login once vi
   `pr70-...` was removed on the v1.2.5 bump for exactly that reason.
 - Multi-stage build (deps installed into an isolated prefix; build toolchain kept out of
   the runtime image) and a non-root `appuser` (UID/GID 10000), per this repo's standards.
-  Otherwise functionally identical to the upstream Dockerfile (same `python main.py`
-  entrypoint, port 8080, `/app/data` + `/app/logs` layout).
+  Same `python main.py` entrypoint, port 8080 and `/app/data` + `/app/logs` layout as
+  upstream.
+- No browser stack. Upstream's image has shipped Chromium, Xvfb, openbox, x11vnc, xdotool
+  and noVNC since v2.1.0 for its in-dashboard Twitch sign-in; this one ships none of it.
+
+## Why not upstream's image
+
+Re-evaluated at v2.2.0 (2026-10-06); the answer was still "keep ours".
+
+- **Both patches are still needed.** At v2.2.0 `GQLClient.request()` still raises on a
+  second consecutive `PersistedQueryNotFound`, and `fetch_inventory()` and the per-game
+  directory call still let that exception end the process. PR #62 was closed unmerged.
+- **Upstream's sign-in cannot run where we deploy.** Since v2.1.0 the miner signs in
+  through a Chromium desktop inside the container, started as a second `tdm-browser`
+  user — so it refuses unless the miner itself runs as root (`BrowserIsolation` requires
+  `geteuid() == 0`). The v2.1.1 desktop helper moves the sign-in to a PC but still needs
+  headless Chromium on the miner to verify and renew. Our consumers run non-root with
+  every capability dropped, so the stack would be about 320 MiB of dead weight (upstream
+  is ~354 MiB compressed, this image ~37 MiB).
+- **What we rely on instead.** The miner restores the legacy `ANDROID_APP` auth-token from
+  `cookies.jar`, which upstream still honours. If Twitch ever revokes those tokens, a
+  browser is needed whichever image is used — that is the point to revisit this.

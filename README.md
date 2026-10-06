@@ -40,7 +40,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [steam-wishlist-calendar](./images/steam-wishlist-calendar/) | ICS calendar from Steam wishlist release dates | [icue/SteamWishlistCalendar](https://github.com/icue/SteamWishlistCalendar) |
 | [tachyon](./images/tachyon/) | Tachyon webmail (SnappyMail fork), unprivileged, with gpg for server-side PGP | [kimusan/Tachyon](https://github.com/kimusan/Tachyon) |
 | [tailscale-hosts-sync](./images/tailscale-hosts-sync/) | Sync Tailscale devices to hosts file for DNS | Original |
-| [twitch-drops-miner](./images/twitch-drops-miner/) | Twitch drops miner web UI (self-maintained: upstream release + PR#70/#62 patches) | [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) |
+| [twitch-drops-miner](./images/twitch-drops-miner/) | Twitch drops miner web UI (self-maintained: upstream release + PR #62 and a local GQL retry-budget patch; no browser stack) | [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) |
 | [vikunja-mcp-sse](./images/vikunja-mcp-sse/) | Vikunja task-manager MCP server with SSE transport (k8s) | [democratize-technology/vikunja-mcp](https://github.com/democratize-technology/vikunja-mcp) |
 | [yamtrack](./images/yamtrack/) | Media tracker, rootless overlay (drops the PUID/PGID remap that forces root) | [FuzzyGrim/Yamtrack](https://github.com/FuzzyGrim/Yamtrack) |
 
