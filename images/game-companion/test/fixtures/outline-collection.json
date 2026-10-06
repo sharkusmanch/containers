@@ -1,0 +1,25 @@
+{
+  "data": [
+    { "id": "x", "title": "Other", "url": "/doc/other-zzz", "children": [] },
+    {
+      "id": "p1",
+      "title": "Achievement Guides",
+      "url": "/doc/achievement-guides-ppp",
+      "children": [
+        {
+          "id": "h1",
+          "title": "Test Game",
+          "url": "/doc/test-game-aaa",
+          "children": [
+            {
+              "id": "c1",
+              "title": "Achievement Checklist",
+              "url": "/doc/achievement-checklist-bbb",
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "achievementpercentages": {
+    "achievements": [
+      { "name": "ACH_01", "percent": "92.7" },
+      { "name": "ACH_02", "percent": "12.25" }
+    ]
+  }
+}

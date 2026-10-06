@@ -1,0 +1,12 @@
+{
+  "playerstats": {
+    "steamID": "76561190000000000",
+    "gameName": "Test Game",
+    "success": true,
+    "achievements": [
+      { "apiname": "ACH_01", "achieved": 1, "unlocktime": 1700000000 },
+      { "apiname": "ACH_02", "achieved": 0, "unlocktime": 0 },
+      { "apiname": "ACH_03", "achieved": 0, "unlocktime": 0 }
+    ]
+  }
+}

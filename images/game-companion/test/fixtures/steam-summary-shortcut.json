@@ -1,0 +1,12 @@
+{
+  "response": {
+    "players": [
+      {
+        "steamid": "76561190000000000",
+        "personastate": 1,
+        "gameid": "15564589419463376896",
+        "gameextrainfo": "Emulator"
+      }
+    ]
+  }
+}

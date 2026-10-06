@@ -1,0 +1,502 @@
+import type {
+  AchievementsResponse,
+  GameRef,
+  GuideHub,
+  GuidePage,
+  NowResponse,
+  Source,
+} from "../shared/types.js";
+import type { Api } from "./api.js";
+import { createAchievementsView } from "./achievements-view.js";
+import { createFrames } from "./frames.js";
+import { createPicker } from "./picker.js";
+import { createRail } from "./rail.js";
+import {
+  ACHIEVEMENTS,
+  SLOT_COUNT,
+  activate,
+  assignSlot,
+  defaultLayout,
+  gameKey,
+  loadLayout,
+  reconcileLayout,
+  removeSlot,
+  saveLayout,
+  type Layout,
+  type StorageLike,
+} from "./state.js";
+
+export interface AppOptions {
+  doc: Document;
+  api: Api;
+  storage: StorageLike;
+  setInterval?: typeof setInterval;
+  nowPollMs?: number;
+  achievementsPollMs?: number;
+}
+
+export interface App {
+  ready: Promise<void>;
+  tick(): Promise<void>;
+}
+
+interface Current {
+  game: GameRef | null;
+  hub: GuideHub | null;
+  pages: GuidePage[];
+  layout: Layout;
+  key: string;
+  persist: boolean;
+}
+
+type Pending =
+  { kind: "hub"; game: GameRef | null; hub: GuideHub | null } | { kind: "adopt"; now: NowResponse };
+
+function keyFor(game: GameRef | null, hub: GuideHub | null): string {
+  if (game !== null) return gameKey(game);
+  if (hub === null) return "";
+  return hub.source !== null && hub.gameId !== null
+    ? `${hub.source}:${hub.gameId}`
+    : `hub:${hub.hubId}`;
+}
+
+function achievementsSource(c: Current): { source: Source; id: string } | null {
+  const { hub, game } = c;
+  if (hub !== null && hub.source !== null && hub.gameId !== null) {
+    return { source: hub.source, id: hub.gameId };
+  }
+  if (game !== null && game.id !== null) return { source: game.source, id: game.id };
+  return null;
+}
+
+export function startApp(opts: AppOptions): App {
+  const { doc, api, storage } = opts;
+  const nowPollMs = opts.nowPollMs ?? 30_000;
+  const achievementsPollMs = opts.achievementsPollMs ?? 60_000;
+
+  const root = doc.getElementById("app");
+  if (root === null) throw new Error("#app is missing");
+
+  const el = (tag: string, className: string, text = ""): HTMLElement => {
+    const e = doc.createElement(tag);
+    e.classList.add(className);
+    e.textContent = text;
+    return e;
+  };
+  const buttonEl = (className: string, text: string): HTMLButtonElement => {
+    const b = doc.createElement("button");
+    b.setAttribute("type", "button");
+    b.classList.add(className);
+    b.textContent = text;
+    return b;
+  };
+
+  // ---- DOM, built once ----
+  const title = el("span", "game-title", "Game Companion");
+  const note = el("span", "game-note");
+  const topbar = doc.createElement("header");
+  topbar.classList.add("topbar");
+  topbar.append(title, note);
+
+  const bannerLabel = el("span", "switch-label");
+  const accept = buttonEl("switch-accept", "Switch");
+  const dismiss = buttonEl("switch-dismiss", "Dismiss");
+  const banner = doc.createElement("div");
+  banner.classList.add("switch-banner");
+  banner.hidden = true;
+  banner.append(bannerLabel, accept, dismiss);
+
+  const view = createAchievementsView(doc, { storage });
+  const frames = createFrames(doc, SLOT_COUNT);
+  const stage = doc.createElement("div");
+  stage.classList.add("stage");
+  stage.append(view.element, frames.element);
+
+  const rail = createRail(doc, {
+    onSelect(index) {
+      if (current === null) return;
+      current.layout = activate(current.layout, index);
+      save();
+      render();
+    },
+    onMore() {
+      picker.setPages(current?.pages ?? [], current?.layout ?? emptyLayout());
+      picker.open(current?.hub ? "pages" : "games");
+      // Pick up guides that appeared since the page started; a pending chooser keeps its list.
+      if (choosingFor === null) void refreshGuides();
+    },
+  });
+
+  const picker = createPicker(doc, {
+    onPage(page) {
+      if (current === null) return;
+      current.layout = assignSlot(current.layout, page);
+      save();
+      render();
+    },
+    onHub(hub) {
+      pending = { kind: "hub", game: choosingFor, hub };
+      setChoosingFor(null);
+      picker.setHubs(allHubs, available);
+      loadingLabel = hub.title;
+      renderHeader();
+      void tick();
+    },
+    onUnpin(page) {
+      if (current === null) return;
+      current.layout = removeSlot(current.layout, page.url);
+      frames.sync(current.layout.slots.map((s) => s?.url ?? null));
+      save();
+      render();
+      picker.setPages(current.pages, current.layout);
+    },
+    onClose() {
+      if (choosingFor === null) return;
+      // No guide chosen: show the detected game's achievements without one.
+      declinedKey = gameKey(choosingFor);
+      pending = { kind: "hub", game: choosingFor, hub: null };
+      setChoosingFor(null);
+      picker.setHubs(allHubs, available);
+      void tick();
+    },
+  });
+
+  root.replaceChildren(rail.element, topbar, banner, stage, picker.element);
+
+  // ---- state ----
+  let current: Current | null = null;
+  let allHubs: GuideHub[] = [];
+  let available = false;
+  let pending: Pending | null = null;
+  let choosingFor: GameRef | null = null;
+  let declinedKey = "";
+  let dismissedKey = "";
+  let offered: NowResponse | null = null;
+  let liveNow: NowResponse | null = null;
+  let unlockedCount: number | null = null;
+  let lastAchievementsAt = 0;
+  let lastAchievements: AchievementsResponse | null = null;
+  let savedScroll = 0;
+  let loadingLabel: string | null = null;
+  let adoptedFirst = false;
+  let everReached = false;
+  let nowFailed = false;
+
+  function setChoosingFor(game: GameRef | null): void {
+    choosingFor = game;
+    picker.setChoosing(game !== null);
+  }
+
+  async function refreshGuides(): Promise<void> {
+    try {
+      const guides = await api.guides();
+      allHubs = guides.hubs;
+      available = guides.available;
+      if (choosingFor === null) picker.setHubs(allHubs, available);
+    } catch {
+      // A failed re-fetch changes nothing.
+    }
+  }
+
+  function emptyLayout(): Layout {
+    return defaultLayout([], []);
+  }
+
+  function save(): void {
+    if (current !== null && current.persist && current.hub !== null) {
+      saveLayout(storage, current.hub.hubId, current.layout);
+    }
+  }
+
+  function noteText(): string {
+    if (nowFailed) {
+      return everReached
+        ? "Connection lost · showing older data"
+        : "Cannot reach the companion service";
+    }
+    if (current !== null && current.hub === null && current.game !== null) {
+      return declinedKey === current.key ? "No guide selected" : "No guide found";
+    }
+    if (current !== null && liveNow !== null && gameKey(liveNow.game) === current.key) {
+      const parts: string[] = [];
+      if (liveNow.state === "last-played") parts.push("Last played");
+      if (liveNow.stale) parts.push("showing older data");
+      return parts.join(" · ");
+    }
+    return "";
+  }
+
+  function renderHeader(): void {
+    if (loadingLabel !== null) {
+      title.textContent = loadingLabel;
+      note.textContent = "Loading…";
+      return;
+    }
+    title.textContent = current?.hub?.title ?? current?.game?.title ?? "Game Companion";
+    note.textContent = noteText();
+  }
+
+  function render(): void {
+    const layout = current?.layout ?? emptyLayout();
+    rail.render(layout, unlockedCount);
+    renderHeader();
+    const slot = layout.active === ACHIEVEMENTS ? null : (layout.slots[layout.active] ?? null);
+    if (slot === null) {
+      if (view.element.hidden) {
+        view.element.hidden = false;
+        view.element.scrollTop = savedScroll;
+      }
+      frames.hideAll();
+    } else {
+      // A browser may reset the scroll position of an element that is not rendered.
+      if (!view.element.hidden) savedScroll = view.element.scrollTop;
+      view.element.hidden = true;
+      frames.show(layout.active, slot.url);
+    }
+  }
+
+  async function refreshAchievements(first: boolean): Promise<void> {
+    if (current === null) return;
+    lastAchievementsAt = Date.now();
+    const src = achievementsSource(current);
+    if (src === null) {
+      view.update(null, "No achievement data for this game");
+      unlockedCount = null;
+    } else {
+      try {
+        const data = await api.achievements(src.source, src.id);
+        lastAchievements = data;
+        if (data === null) {
+          view.update(null, "No achievements for this game");
+          unlockedCount = null;
+        } else {
+          view.update(data);
+          unlockedCount = data.unlocked;
+        }
+      } catch {
+        if (first) {
+          view.update(null, "Achievements unavailable");
+          unlockedCount = null;
+        } else if (lastAchievements !== null) {
+          view.update({ ...lastAchievements, stale: true });
+        }
+      }
+    }
+    rail.render(current.layout, unlockedCount);
+  }
+
+  async function load(game: GameRef | null, hub: GuideHub | null): Promise<void> {
+    frames.reset();
+    hideBanner();
+    picker.close();
+    view.update(null, "Loading…");
+    unlockedCount = null;
+    lastAchievements = null;
+    savedScroll = 0;
+    const key = keyFor(game, hub);
+    // A load ends any pending choice, even one a poll in flight has just reopened.
+    if (choosingFor !== null) {
+      setChoosingFor(null);
+      picker.setHubs(allHubs, available);
+    }
+    if (key !== declinedKey) declinedKey = "";
+    current = { game, hub, pages: [], layout: emptyLayout(), key, persist: false };
+    picker.setPages(current.pages, current.layout);
+    render();
+
+    if (hub !== null) {
+      const stored = loadLayout(storage, hub.hubId);
+      try {
+        const { pages, defaultPins } = await api.hubTree(hub.hubId);
+        const layout = reconcileLayout(stored ?? defaultLayout(pages, defaultPins), pages);
+        current = { game, hub, pages, layout, key, persist: true };
+      } catch {
+        // A transient error must never overwrite stored pins, so nothing is persisted.
+        current = { game, hub, pages: [], layout: stored ?? emptyLayout(), key, persist: false };
+      }
+      picker.setPages(current.pages, current.layout);
+      render();
+    }
+    await refreshAchievements(true);
+  }
+
+  function showBanner(now: NowResponse): void {
+    offered = now;
+    bannerLabel.textContent = `Switch to ${now.game?.title ?? ""}`;
+    banner.hidden = false;
+  }
+
+  function hideBanner(): void {
+    offered = null;
+    banner.hidden = true;
+  }
+
+  async function adopt(now: NowResponse): Promise<void> {
+    liveNow = now;
+    hideBanner();
+    if (now.game === null) {
+      setChoosingFor(null);
+      picker.setHubs(allHubs, available);
+      picker.open("games");
+      renderHeader();
+      return;
+    }
+    const [only, ...rest] = now.hubs;
+    if (only === undefined) {
+      await load(now.game, null);
+    } else if (rest.length === 0) {
+      await load(now.game, only);
+    } else {
+      setChoosingFor(now.game);
+      picker.setHubs(now.hubs, true);
+      picker.open("games");
+      renderHeader();
+    }
+  }
+
+  async function runTick(): Promise<void> {
+    if (pending !== null) {
+      const p = pending;
+      pending = null;
+      loadingLabel = null;
+      if (p.kind === "hub") await load(p.game, p.hub);
+      else await adopt(p.now);
+      return;
+    }
+
+    if (!available) await refreshGuides();
+    await retryPageTree();
+
+    let now: NowResponse;
+    try {
+      now = await api.now();
+    } catch {
+      nowFailed = true;
+      renderHeader();
+      return;
+    }
+    nowFailed = false;
+    everReached = true;
+    if (!adoptedFirst) {
+      adoptedFirst = true;
+      // Only when nothing is on screen: a game the user picked by hand during an outage stays.
+      if (current === null && choosingFor === null) {
+        await adopt(now);
+        return;
+      }
+    }
+
+    const k = gameKey(now.game);
+    const currentKey = current?.key ?? "";
+    if (k === "") dismissedKey = "";
+    if (k !== "" && current === null && choosingFor === null) {
+      // Nothing is on screen (the picker is open), so a banner would be hidden behind it.
+      await adopt(now);
+      return;
+    }
+    if (k !== "" && k === currentKey) {
+      liveNow = now;
+      dismissedKey = "";
+      hideBanner();
+      renderHeader();
+      if (
+        current !== null &&
+        current.hub === null &&
+        now.hubs.length > 0 &&
+        choosingFor === null &&
+        declinedKey !== k
+      ) {
+        // The guide index became available after the page loaded.
+        await adopt(now);
+        return;
+      }
+    } else {
+      renderHeader();
+      // The banner always describes the game detected now, or is hidden.
+      if (k !== "" && k !== currentKey && k !== dismissedKey && choosingFor === null) {
+        showBanner(now);
+      } else {
+        hideBanner();
+      }
+    }
+
+    if (
+      current !== null &&
+      doc.visibilityState === "visible" &&
+      Date.now() - lastAchievementsAt >= achievementsPollMs
+    ) {
+      await refreshAchievements(false);
+    }
+  }
+
+  // A page tree that failed to load is retried on every tick until it succeeds.
+  async function retryPageTree(): Promise<void> {
+    const c = current;
+    if (c === null || c.hub === null || c.persist) return;
+    let pages: GuidePage[];
+    let defaultPins: string[];
+    try {
+      ({ pages, defaultPins } = await api.hubTree(c.hub.hubId));
+    } catch {
+      return;
+    }
+    const untouched = c.layout.active === ACHIEVEMENTS && c.layout.slots.every((s) => s === null);
+    const base =
+      untouched && loadLayout(storage, c.hub.hubId) === null
+        ? defaultLayout(pages, defaultPins)
+        : c.layout;
+    c.pages = pages;
+    c.layout = reconcileLayout(base, pages);
+    c.persist = true;
+    frames.sync(c.layout.slots.map((s) => s?.url ?? null));
+    picker.setPages(c.pages, c.layout);
+    render();
+  }
+
+  // Ticks run one after another. `inflight` counts running plus queued calls.
+  let chain: Promise<void> = Promise.resolve();
+  let inflight = 0;
+  function tick(): Promise<void> {
+    inflight += 1;
+    const run = chain.then(runTick).finally(() => {
+      inflight -= 1;
+    });
+    chain = run.catch(() => undefined);
+    return run;
+  }
+
+  accept.addEventListener("click", () => {
+    if (offered === null) return;
+    declinedKey = "";
+    pending = { kind: "adopt", now: offered };
+    loadingLabel = offered.game?.title ?? "";
+    hideBanner();
+    renderHeader();
+    void tick();
+  });
+  dismiss.addEventListener("click", () => {
+    if (offered !== null) dismissedKey = gameKey(offered.game);
+    hideBanner();
+  });
+
+  render();
+
+  const ready = (async () => {
+    try {
+      const guides = await api.guides(true);
+      allHubs = guides.hubs;
+      available = guides.available;
+    } catch {
+      allHubs = [];
+      available = false;
+    }
+    picker.setHubs(allHubs, available);
+    await tick();
+    const schedule = opts.setInterval ?? setInterval;
+    schedule(() => {
+      if (inflight === 0) void tick();
+    }, nowPollMs);
+  })();
+
+  return { ready, tick };
+}

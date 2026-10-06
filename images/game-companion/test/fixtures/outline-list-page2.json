@@ -1,0 +1,11 @@
+{
+  "pagination": { "limit": 100, "offset": 100, "total": 3 },
+  "data": [
+    {
+      "id": "h3",
+      "title": "Third Game",
+      "url": "/doc/third-game-ccc",
+      "text": "Sample guide text three."
+    }
+  ]
+}

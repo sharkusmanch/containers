@@ -23,6 +23,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [db-backup](./images/db-backup/) | Database dump toolbox (PostgreSQL/MariaDB/MongoDB clients + curl/jq) for backup CronJobs | Original |
 | [envsubst](./images/envsubst/) | Environment variable substitution with defaults | [a8m/envsubst](https://github.com/a8m/envsubst) |
 | [flareproxy](./images/flareproxy/) | HTTP proxy adapter for FlareSolverr | [mimnix/FlareProxy](https://github.com/mimnix/FlareProxy) |
+| [game-companion](./images/game-companion/) | Second-screen page showing the current game's guide pages and achievement progress | Original |
 | [hass-mcp](./images/hass-mcp/) | Home Assistant MCP server for Claude/LLMs (stdio) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
 | [hass-mcp-sse](./images/hass-mcp-sse/) | Home Assistant MCP server with SSE transport (k8s) | [voska/hass-mcp](https://github.com/voska/hass-mcp) |
 | [kindle-ingest](./images/kindle-ingest/) | Kindle -> BookOrbit ingest: decrypt, convert, upload | [Satsuoni/DeDRM_tools](https://github.com/Satsuoni/DeDRM_tools) |

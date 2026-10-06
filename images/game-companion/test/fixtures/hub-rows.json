@@ -1,0 +1,190 @@
+[
+  {
+    "text": "## At a Glance\n\n| Metric | Details |\n|--------|---------|\n| **Steam App ID** | 1000004 |\n| **Guide Version** | v1.0 |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000004"
+    }
+  },
+  {
+    "text": "| Metric | Details |\n|---|---|\n| **Steam App ID** | 1000007 (base game; see the notes below) |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000007"
+    }
+  },
+  {
+    "text": "| **Steam App ID** | [1000001](https://store.steampowered.com/app/1000001) |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000001"
+    }
+  },
+  {
+    "text": "| **App ID** | 1000002 |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000002"
+    }
+  },
+  {
+    "text": "| **DLC App ID** | 999 |\n| **Guide Version** | v1 |\n",
+    "expect": null
+  },
+  {
+    "text": "| **DLC App ID** | 999 |\n| **Steam App ID** | 1234 |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1234"
+    }
+  },
+  {
+    "text": "| **Platform** | Nintendo 64 (USA) |\n| **RA Game ID** | [30001](https://retroachievements.org/game/30001). 12 achievements / 100 pts |\n",
+    "expect": {
+      "source": "ra",
+      "gameId": "30001"
+    }
+  },
+  {
+    "text": "| **RA Game ID** | 30002 |\n",
+    "expect": {
+      "source": "ra",
+      "gameId": "30002"
+    }
+  },
+  {
+    "text": "| **RA Game ID** | [30001](https://retroachievements.org/game/30001) |\n| **Steam App ID** | 5 |\n",
+    "expect": {
+      "source": "ra",
+      "gameId": "30001"
+    }
+  },
+  {
+    "text": "| **Steam App ID** | TBD |\n",
+    "expect": null
+  },
+  {
+    "text": "| **Steam App ID** | 123456789012 |\n",
+    "expect": null
+  },
+  {
+    "text": "See https://store.steampowered.com/app/1000009 for the store page.\n",
+    "expect": null
+  },
+  {
+    "text": "No table here at all.",
+    "expect": null
+  },
+  {
+    "text": "",
+    "expect": null
+  },
+  {
+    "text": "|**Steam App ID**|77|\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "77"
+    }
+  },
+  {
+    "text": "| **Steam App ID** | 42 |\r\n| **Guide Version** | v1 |\r\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "42"
+    }
+  },
+  {
+    "text": "| Metric | Details |\n|---|---|\n| Steam App ID | 1000006 |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000006"
+    }
+  },
+  {
+    "text": "| Steam App ID | 1000003  |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000003"
+    }
+  },
+  {
+    "text": "| Metric | Value |\n|--------|-------|\n| Steam App ID | **1000005** (see the notes below) |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000005"
+    }
+  },
+  {
+    "text": "| Steam App ID | 1000008 |\n|--------------|---------|\n| Platform     | PC |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000008"
+    }
+  },
+  {
+    "text": "| App ID | 1000002 |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000002"
+    }
+  },
+  {
+    "text": "| RA Game ID | 30002 |\n",
+    "expect": {
+      "source": "ra",
+      "gameId": "30002"
+    }
+  },
+  {
+    "text": "| DLC App ID | 999 |\n| Guide Version | v1 |\n",
+    "expect": null
+  },
+  {
+    "text": "| DLC App ID | 999 |\n| Steam App ID | 1234 |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1234"
+    }
+  },
+  {
+    "text": "| **Steam App ID | 55 |\n",
+    "expect": null
+  },
+  {
+    "text": "| Steam App ID** | 55 |\n",
+    "expect": null
+  },
+  {
+    "text": "| steam app id | 55 |\n",
+    "expect": null
+  },
+  {
+    "text": "Some prose mentioning Steam App ID | 55 | in a sentence.\n",
+    "expect": null
+  },
+  {
+    "text": "| **RA Game ID** | [Sample Quest 7](https://retroachievements.org/game/30003) |\n",
+    "expect": {
+      "source": "ra",
+      "gameId": "30003"
+    }
+  },
+  {
+    "text": "| **Steam App ID** | [Sample Game 2](https://store.steampowered.com/app/1000010) |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "1000010"
+    }
+  },
+  {
+    "text": "| App ID | Name |\n|---|---|\n| Steam App ID | 7 |\n",
+    "expect": {
+      "source": "steam",
+      "gameId": "7"
+    }
+  },
+  {
+    "text": "| Steam App ID\n| 5 |\n",
+    "expect": null
+  }
+]

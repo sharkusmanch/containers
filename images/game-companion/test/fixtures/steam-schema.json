@@ -1,0 +1,35 @@
+{
+  "game": {
+    "gameName": "Test Game",
+    "availableGameStats": {
+      "achievements": [
+        {
+          "name": "ACH_01",
+          "defaultvalue": 0,
+          "displayName": "First",
+          "hidden": 0,
+          "description": "Do the first thing",
+          "icon": "https://steamcdn-a.akamaihd.net/a.jpg",
+          "icongray": "https://steamcdn-a.akamaihd.net/a_g.jpg"
+        },
+        {
+          "name": "ACH_02",
+          "defaultvalue": 0,
+          "displayName": "Secret",
+          "hidden": 1,
+          "icon": "https://steamcdn-a.akamaihd.net/b.jpg",
+          "icongray": "https://steamcdn-a.akamaihd.net/b_g.jpg"
+        },
+        {
+          "name": "ACH_03",
+          "defaultvalue": 0,
+          "displayName": "Third",
+          "hidden": 0,
+          "description": "Do the third thing",
+          "icon": "https://evil.example/c.jpg",
+          "icongray": "https://evil.example/c_g.jpg"
+        }
+      ]
+    }
+  }
+}

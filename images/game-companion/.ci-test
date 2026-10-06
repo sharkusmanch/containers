@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Pre-build test gate (invoked by .github/workflows/build.yml from this directory).
+# Runs the type check, lint, format check and the test suite in the same Node image the
+# Dockerfile builds with, then builds and starts the compiled service once, so a broken
+# change (including an auto-merged dependency bump) never produces a signed image.
+set -euo pipefail
+
+NODE_VERSION=$(grep -E '^ARG NODE_VERSION=' Dockerfile | cut -d= -f2)
+
+# Work on a copy inside the container: node_modules and dist must not land in the
+# checkout, which is also the Docker build context.
+docker run --rm -v "$PWD":/src:ro -w /work "node:${NODE_VERSION}-alpine" sh -ec '
+  cp -r /src/. /work
+  npm ci --no-audit --no-fund
+  npm run typecheck
+  npm run lint
+  npm run format:check
+  npm test
+  npm run build
+
+  # Smoke test of the compiled output, started the way the image starts it. The dummy
+  # values point nowhere, so the upstream polls fail harmlessly; only the server matters.
+  STEAM_API_KEY=x STEAM_ID=1 RA_API_KEY=x RA_USERNAME=x \
+  OUTLINE_BASE_URL=http://127.0.0.1:1 OUTLINE_COLLECTION_ID=c OUTLINE_GUIDES_PARENT_ID=p \
+  PORT=8080 STATIC_DIR=/work/dist/web node dist/server/index.js >/tmp/smoke.log 2>&1 &
+  pid=$!
+  ok=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if wget -qO- http://127.0.0.1:8080/companion/healthz 2>/dev/null | grep -q "\"ok\":true"; then ok=1; break; fi
+    sleep 1
+  done
+  [ -n "$ok" ] || { echo "smoke test: service did not answer /companion/healthz"; cat /tmp/smoke.log; kill "$pid" 2>/dev/null; exit 1; }
+  wget -qO- http://127.0.0.1:8080/companion/ | grep -q "boot.js" || { echo "smoke test: page not served"; kill "$pid"; exit 1; }
+  kill "$pid"
+  echo "smoke test passed"
+'

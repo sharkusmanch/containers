@@ -1,0 +1,12 @@
+{
+  "response": {
+    "players": [
+      {
+        "steamid": "76561190000000000",
+        "personastate": 1,
+        "gameid": "1000001",
+        "gameextrainfo": "Test Game"
+      }
+    ]
+  }
+}

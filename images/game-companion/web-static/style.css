@@ -1,0 +1,524 @@
+:root {
+  --rail-width: 44px;
+  --bg: #111418;
+  --bg-raised: #1b2027;
+  --bg-active: #2d4a73;
+  --border: #2b323c;
+  --text: #e6e9ee;
+  --text-dim: #9aa4b2;
+  --accent: #6aa6ff;
+  --warn: #e0b04a;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+html,
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font:
+    15px/1.35 system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---- Page grid: rail on the left, topbar / banner / stage stacked on the right ---- */
+
+#app {
+  display: grid;
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
+  min-width: 0;
+  min-height: 0;
+}
+
+.rail {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised);
+  border-right: 1px solid var(--border);
+}
+
+/* Every visible button takes an equal share of the rail's height; hidden slot buttons take no
+   room (see the [hidden] rule). */
+.rail button {
+  flex: 1 1 0;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The last button is always visible; no line under it. Hidden buttons are display: none, so
+   their lines vanish with them and a line never doubles up. */
+.rail button:last-child {
+  border-bottom: 0;
+}
+
+.rail button.active {
+  color: var(--text);
+  background: var(--bg-active);
+  border-left-color: var(--accent);
+}
+
+.rail button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.rail-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.rail-count {
+  font-size: 11px;
+  line-height: 1.2;
+  min-height: 1.2em;
+}
+
+.topbar {
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  height: 28px;
+  max-height: 28px;
+  padding: 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.game-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.game-note {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.switch-banner {
+  min-width: 0;
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px;
+  background: #2a2412;
+  border-bottom: 1px solid var(--warn);
+}
+
+.switch-label {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.switch-accept,
+.switch-dismiss {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.switch-accept {
+  background: var(--bg-active);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ---- Stage: the achievements panel and the stacked guide frames ---- */
+
+.stage {
+  grid-column: 2;
+  grid-row: 3;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * Stacking: .frames is appended after .ach and covers the whole stage, so as a plain box it
+ * would sit on top of the achievements panel and swallow every wheel, touch and click, even
+ * when it holds no frame or only inactive ones. Keep these three rules together: the
+ * container ignores pointer events, only a frame takes them, and .ach is raised above it.
+ */
+.frames {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+  pointer-events: auto;
+}
+
+/* visibility, never display: none, so a frame keeps its scroll position while hidden */
+.frame.inactive {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.ach {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg);
+}
+
+.ach-message {
+  margin: 0;
+  padding: 16px 12px;
+  color: var(--text-dim);
+}
+
+.ach-summary {
+  padding: 8px 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.ach-stale {
+  padding: 0 12px 6px;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+.ach-sort {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+
+.ach-sort button {
+  min-height: 44px;
+  padding: 0 12px;
+  white-space: nowrap;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ach-sort-key {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.ach-sort .ach-sort-dir {
+  flex: 0 0 44px;
+  width: 44px;
+  padding: 0;
+}
+
+.ach-sort .ach-hide-unlocked {
+  flex: 0 0 auto;
+  padding: 0 8px;
+}
+
+.ach-sort .ach-hide-unlocked[aria-pressed="true"] {
+  background: var(--bg-active);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.ach-filter {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+
+.ach-filter-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  /* 16px or larger keeps mobile browsers from zooming the page on focus */
+  font-size: 16px;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ach-filter-clear {
+  flex: 0 0 44px;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ach-empty {
+  margin: 0;
+  padding: 16px 12px;
+  color: var(--text-dim);
+}
+
+.ach-unlocked > summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.ach-row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  grid-template-areas:
+    "icon name pct"
+    "icon desc pct"
+    "icon missable pct";
+  column-gap: 8px;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 12px;
+  text-align: left;
+  border-top: 1px solid var(--border);
+}
+
+.ach-row img {
+  grid-area: icon;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+}
+
+.ach-name {
+  grid-area: name;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.ach-desc {
+  grid-area: desc;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.ach-row.expanded .ach-desc {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.ach-missable {
+  grid-area: missable;
+  justify-self: start;
+  font-size: 11px;
+  color: var(--warn);
+}
+
+.ach-pct {
+  grid-area: pct;
+  justify-self: end;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+/* ---- Picker: full-screen list of pages and games ---- */
+
+.picker {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.picker-header {
+  position: sticky;
+  top: 0;
+  display: flex;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-tab,
+.picker-close {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 16px;
+  color: var(--text-dim);
+  border-bottom: 3px solid transparent;
+}
+
+.picker-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.picker-close {
+  margin-left: auto;
+  font-size: 18px;
+}
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-item[data-depth="1"] {
+  padding-left: 1.5rem;
+}
+
+.picker-item[data-depth="2"] {
+  padding-left: 3rem;
+}
+
+.picker-item[data-depth="3"] {
+  padding-left: 4.5rem;
+}
+
+.picker-item.pinned {
+  background: var(--bg-active);
+}
+
+.picker-item.now-playing .picker-title {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.picker-platform {
+  flex: none;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.picker-empty {
+  margin: 0;
+  padding: 16px 12px;
+  color: var(--text-dim);
+}
+
+/* ---- Picker: game groups and removable pins ---- */
+
+.picker-group-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-group-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.picker-row {
+  display: flex;
+  align-items: stretch;
+}
+
+.picker-row .picker-item {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+}
+
+.picker-unpin {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 16px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}

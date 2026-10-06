@@ -1,0 +1,17 @@
+{
+  "pagination": { "limit": 100, "offset": 0, "total": 3 },
+  "data": [
+    {
+      "id": "h1",
+      "title": "Test Game",
+      "url": "/doc/test-game-aaa",
+      "text": "Sample guide text one."
+    },
+    {
+      "id": "h2",
+      "title": "Another Game",
+      "url": "/doc/another-game-bbb",
+      "text": "Sample guide text two."
+    }
+  ]
+}
