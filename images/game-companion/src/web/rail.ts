@@ -8,6 +8,8 @@ export interface RailHandlers {
 export interface Rail {
   element: HTMLElement;
   render(layout: Layout, unlockedCount: number | null): void;
+  /** Marks the achievements button for a while, to draw the eye to it. */
+  pulse(ms?: number): void;
 }
 
 export function createRail(doc: Document, handlers: RailHandlers): Rail {
@@ -43,8 +45,15 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
 
   element.append(achievements, ...slotButtons, more);
 
+  let pulseTimer: ReturnType<typeof setTimeout> | undefined;
+
   return {
     element,
+    pulse(ms = 10_000) {
+      clearTimeout(pulseTimer);
+      achievements.classList.add("pulse");
+      pulseTimer = setTimeout(() => achievements.classList.remove("pulse"), ms);
+    },
     render(layout, unlockedCount) {
       count.textContent = unlockedCount === null ? "" : String(unlockedCount);
       achievements.classList.toggle("active", layout.active === ACHIEVEMENTS);

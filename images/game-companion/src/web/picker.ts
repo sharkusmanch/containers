@@ -1,4 +1,4 @@
-import type { GuideHub, GuidePage } from "../shared/types.js";
+import type { FindMatch, GuideHub, GuidePage } from "../shared/types.js";
 import type { Layout, Slot } from "./state.js";
 
 export interface PickerHandlers {
@@ -6,6 +6,7 @@ export interface PickerHandlers {
   onHub(hub: GuideHub): void;
   onClose(): void;
   onUnpin(page: Slot): void;
+  onMatch(match: FindMatch): void;
 }
 
 export interface Picker {
@@ -16,6 +17,8 @@ export interface Picker {
   setHubs(hubs: GuideHub[], available: boolean): void;
   /** While a guide choice is pending only the Games tab is offered. */
   setChoosing(choosing: boolean): void;
+  /** Opens the picker showing only the places a guide mentions `query`. */
+  showMatches(query: string, matches: FindMatch[], truncated: boolean): void;
 }
 
 type Tab = "pages" | "games";
@@ -52,21 +55,31 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   pagesList.classList.add("picker-pages");
   const gamesList = doc.createElement("div");
   gamesList.classList.add("picker-games");
-  element.append(header, pagesList, gamesList);
+  const matchesList = doc.createElement("div");
+  matchesList.classList.add("picker-matches");
+  matchesList.hidden = true;
+  element.append(header, pagesList, gamesList, matchesList);
 
   let choosing = false;
+  let matchesShowing = false;
 
   function showTab(wanted: Tab): void {
     const next: Tab = choosing ? "games" : wanted;
+    matchesShowing = false;
+    matchesList.hidden = true;
     pagesList.hidden = next !== "pages";
     gamesList.hidden = next !== "games";
-    for (const [name, b] of tabButtons) b.classList.toggle("active", name === next);
+    for (const [name, b] of tabButtons) {
+      b.hidden = name === "pages" && choosing;
+      b.classList.toggle("active", name === next);
+    }
   }
 
   showTab("pages");
 
   const close = (): void => {
     element.hidden = true;
+    if (matchesShowing) showTab("pages");
   };
 
   closeButton.addEventListener("click", () => {
@@ -179,9 +192,41 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     close,
     setChoosing(value) {
       choosing = value;
+      if (matchesShowing) return;
       const pagesTab = tabButtons.get("pages");
       if (pagesTab !== undefined) pagesTab.hidden = value;
       if (value) showTab("games");
+    },
+    showMatches(query, matches, truncated) {
+      const title = doc.createElement("h3");
+      title.classList.add("picker-matches-title");
+      title.textContent = `In the guide: ${query}`;
+      const rows = matches.map((match) => {
+        const { button } = item(match.pageTitle);
+        const heading = doc.createElement("span");
+        heading.classList.add("picker-heading");
+        heading.textContent = match.heading ?? "";
+        const snippet = doc.createElement("span");
+        snippet.classList.add("picker-snippet");
+        snippet.textContent = match.snippet;
+        button.append(heading, snippet);
+        button.addEventListener("click", () => {
+          close();
+          handlers.onMatch(match);
+        });
+        return button;
+      });
+      matchesList.replaceChildren(
+        title,
+        ...rows,
+        ...(truncated ? [empty("More matches not shown")] : []),
+      );
+      matchesShowing = true;
+      matchesList.hidden = false;
+      pagesList.hidden = true;
+      gamesList.hidden = true;
+      for (const b of tabButtons.values()) b.hidden = true;
+      element.hidden = false;
     },
     setPages(pages, layout) {
       const pinned = new Set<string>();

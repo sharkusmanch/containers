@@ -65,8 +65,21 @@ beforeAll(async () => {
       if (id === "13") throw new Error("upstream down");
       return null;
     },
-    find: async () => null,
-    marks: async () => null,
+    find: async (id, q) =>
+      id === "h1"
+        ? {
+            matches: [
+              {
+                pageTitle: "Sample Guide",
+                pageUrl: "/doc/sample-guide",
+                heading: "Chapter One",
+                snippet: `Find ${q} here`,
+              },
+            ],
+            truncated: false,
+          }
+        : null,
+    marks: async (id) => (id === "h1" ? { missable: ["first"] } : null),
   };
   server = createServer((req, res) => void createHandler(deps)(req, res));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -103,6 +116,37 @@ describe("browser client against the real request handler", () => {
     const err = await api.achievements("steam", "13").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(500);
+  });
+});
+
+describe("find and marks against the real request handler", () => {
+  it("finds text in a known guide, with the query encoded on the wire", async () => {
+    expect(await api.find("h1", "Fish & Chips")).toEqual({
+      matches: [
+        {
+          pageTitle: "Sample Guide",
+          pageUrl: "/doc/sample-guide",
+          heading: "Chapter One",
+          snippet: "Find Fish & Chips here",
+        },
+      ],
+      truncated: false,
+    });
+  });
+
+  it("maps an unknown hub to null for find and for marks", async () => {
+    expect(await api.find("nope", "ab")).toBeNull();
+    expect(await api.marks("nope")).toBeNull();
+  });
+
+  it("surfaces a too-short query as an ApiError 400", async () => {
+    const err = await api.find("h1", "a").catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(400);
+  });
+
+  it("reads the missable marks of a known guide", async () => {
+    expect(await api.marks("h1")).toEqual({ missable: ["first"] });
   });
 });
 

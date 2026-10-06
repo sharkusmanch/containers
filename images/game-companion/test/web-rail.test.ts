@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRail } from "../src/web/rail.js";
 import { ACHIEVEMENTS, type Layout } from "../src/web/state.js";
 
@@ -80,5 +80,55 @@ describe("createRail", () => {
       true,
       false,
     ]);
+  });
+});
+
+describe("rail pulse", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("marks only the achievements button, then clears it after the given time", () => {
+    vi.useFakeTimers();
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    rail.render(layout, 3);
+    const buttons = [...rail.element.querySelectorAll("button")];
+    rail.pulse(500);
+    expect(buttons.map((b) => b.classList.contains("pulse"))).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    vi.advanceTimersByTime(499);
+    expect(buttons[0]?.classList.contains("pulse")).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(buttons[0]?.classList.contains("pulse")).toBe(false);
+  });
+
+  it("lasts ten seconds by default", () => {
+    vi.useFakeTimers();
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    rail.pulse();
+    const first = rail.element.querySelector("button") as HTMLElement;
+    vi.advanceTimersByTime(9_999);
+    expect(first.classList.contains("pulse")).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(first.classList.contains("pulse")).toBe(false);
+  });
+
+  it("restarts the time when pulsed again, and survives a re-render", () => {
+    vi.useFakeTimers();
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    const first = rail.element.querySelector("button") as HTMLElement;
+    rail.pulse(1000);
+    vi.advanceTimersByTime(600);
+    rail.render(layout, 4);
+    expect(first.classList.contains("pulse")).toBe(true);
+    rail.pulse(1000);
+    vi.advanceTimersByTime(600);
+    expect(first.classList.contains("pulse")).toBe(true);
+    vi.advanceTimersByTime(400);
+    expect(first.classList.contains("pulse")).toBe(false);
   });
 });

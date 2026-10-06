@@ -1,5 +1,7 @@
 import type {
   AchievementsResponse,
+  FindResponse,
+  GuideMarksResponse,
   GuidesResponse,
   HubTreeResponse,
   NowResponse,
@@ -21,6 +23,10 @@ export interface Api {
   hubTree(hubId: string): Promise<HubTreeResponse>;
   /** Null when the server has no achievements for the game (404). */
   achievements(source: Source, id: string): Promise<AchievementsResponse | null>;
+  /** Null when the guide is unknown (404). */
+  find(hubId: string, query: string): Promise<FindResponse | null>;
+  /** Null when the guide is unknown (404). */
+  marks(hubId: string): Promise<GuideMarksResponse | null>;
 }
 
 export function createApi(
@@ -41,15 +47,26 @@ export function createApi(
     return (await res.json()) as T;
   }
 
+  async function getJsonOrNull<T>(path: string): Promise<T | null> {
+    const res = await get(path);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(res.status);
+    return (await res.json()) as T;
+  }
+
   return {
     now: () => getJson<NowResponse>("now"),
     guides: (refresh = false) => getJson<GuidesResponse>(refresh ? "guides?refresh=1" : "guides"),
     hubTree: (hubId) => getJson<HubTreeResponse>(`guides/${encodeURIComponent(hubId)}`),
-    async achievements(source, id) {
-      const res = await get(`achievements/${encodeURIComponent(source)}/${encodeURIComponent(id)}`);
-      if (res.status === 404) return null;
-      if (!res.ok) throw new ApiError(res.status);
-      return (await res.json()) as AchievementsResponse;
-    },
+    achievements: (source, id) =>
+      getJsonOrNull<AchievementsResponse>(
+        `achievements/${encodeURIComponent(source)}/${encodeURIComponent(id)}`,
+      ),
+    find: (hubId, query) =>
+      getJsonOrNull<FindResponse>(
+        `guides/${encodeURIComponent(hubId)}/find?q=${encodeURIComponent(query)}`,
+      ),
+    marks: (hubId) =>
+      getJsonOrNull<GuideMarksResponse>(`guides/${encodeURIComponent(hubId)}/marks`),
   };
 }

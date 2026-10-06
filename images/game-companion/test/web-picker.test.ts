@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPicker } from "../src/web/picker.js";
 import { defaultLayout } from "../src/web/state.js";
-import type { GuideHub, GuidePage } from "../src/shared/types.js";
+import type { FindMatch, GuideHub, GuidePage } from "../src/shared/types.js";
 
 const pages: GuidePage[] = [
   { title: "Achievement Checklist", url: "/doc/checklist", children: [] },
@@ -34,7 +34,13 @@ const hubs: GuideHub[] = [
 ];
 
 function make() {
-  const handlers = { onPage: vi.fn(), onHub: vi.fn(), onClose: vi.fn(), onUnpin: vi.fn() };
+  const handlers = {
+    onPage: vi.fn(),
+    onHub: vi.fn(),
+    onClose: vi.fn(),
+    onUnpin: vi.fn(),
+    onMatch: vi.fn(),
+  };
   const picker = createPicker(document, handlers);
   picker.setPages(pages, defaultLayout(pages, ["Achievement Checklist"]));
   picker.setHubs(hubs, true);
@@ -149,7 +155,13 @@ describe("game groups", () => {
   ];
 
   function build(hubs: GuideHub[], available = true) {
-    const handlers = { onPage: vi.fn(), onHub: vi.fn(), onClose: vi.fn(), onUnpin: vi.fn() };
+    const handlers = {
+      onPage: vi.fn(),
+      onHub: vi.fn(),
+      onClose: vi.fn(),
+      onUnpin: vi.fn(),
+      onMatch: vi.fn(),
+    };
     const picker = createPicker(document, handlers);
     picker.setHubs(hubs, available);
     picker.open("games");
@@ -309,5 +321,139 @@ describe("choosing a guide", () => {
     expect(pagesTab.hidden).toBe(false);
     pagesTab.click();
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
+  });
+});
+
+describe("matches view", () => {
+  const matches: FindMatch[] = [
+    {
+      pageTitle: "Collectibles",
+      pageUrl: "/doc/coll",
+      heading: "Chapter One",
+      snippet: "Sample Boss drops the gem",
+    },
+    {
+      pageTitle: "Walkthrough",
+      pageUrl: "/doc/walk",
+      heading: null,
+      snippet: "Defeat the <b>Sample Boss</b> <img src=x onerror=alert(1)>",
+    },
+  ];
+  const tabs = (picker: { element: HTMLElement }): HTMLElement[] => [
+    ...picker.element.querySelectorAll<HTMLElement>(".picker-tab"),
+  ];
+
+  it("opens showing only the matches, with the query in a heading and the tabs hidden", () => {
+    const { picker } = make();
+    picker.showMatches("Sample Boss", matches, false);
+    expect(picker.element.hidden).toBe(false);
+    const list = picker.element.querySelector(".picker-matches") as HTMLElement;
+    expect(list.hidden).toBe(false);
+    expect(list.querySelector(".picker-matches-title")?.textContent).toBe(
+      "In the guide: Sample Boss",
+    );
+    expect(tabs(picker)).toHaveLength(2);
+    expect(tabs(picker).every((t) => t.hidden)).toBe(true);
+    expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(true);
+    expect((picker.element.querySelector(".picker-games") as HTMLElement).hidden).toBe(true);
+    expect((picker.element.querySelector(".picker-close") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("lists title, heading and snippet of each match in order, empty heading for null", () => {
+    const { picker } = make();
+    picker.showMatches("Sample Boss", matches, false);
+    const items = [...picker.element.querySelectorAll(".picker-matches button.picker-item")];
+    expect(items).toHaveLength(2);
+    expect(
+      items.map((i) => [
+        i.querySelector(".picker-title")?.textContent,
+        i.querySelector(".picker-heading")?.textContent,
+        i.querySelector(".picker-snippet")?.textContent,
+      ]),
+    ).toEqual([
+      ["Collectibles", "Chapter One", "Sample Boss drops the gem"],
+      ["Walkthrough", "", "Defeat the <b>Sample Boss</b> <img src=x onerror=alert(1)>"],
+    ]);
+    expect(picker.element.querySelector(".picker-matches .picker-empty")).toBeNull();
+  });
+
+  it("renders every field as text: markup creates no elements", () => {
+    const { picker } = make();
+    picker.showMatches(
+      "<i>q</i>",
+      [{ pageTitle: "<u>T</u>", pageUrl: "/doc/t", heading: "<s>H</s>", snippet: "<b>S</b><img>" }],
+      false,
+    );
+    expect(
+      picker.element.querySelector(".picker-matches")?.querySelector("i, u, s, b, img"),
+    ).toBeNull();
+    expect(picker.element.querySelector(".picker-matches-title")?.textContent).toBe(
+      "In the guide: <i>q</i>",
+    );
+  });
+
+  it("adds a final note when the list was truncated, and not otherwise", () => {
+    const { picker } = make();
+    picker.showMatches("x", matches, true);
+    const list = picker.element.querySelector(".picker-matches") as HTMLElement;
+    const last = list.lastElementChild as HTMLElement;
+    expect(last.classList.contains("picker-empty")).toBe(true);
+    expect(last.textContent).toBe("More matches not shown");
+    expect(list.querySelectorAll(".picker-empty")).toHaveLength(1);
+    picker.showMatches("x", matches, false);
+    expect(picker.element.querySelector(".picker-matches .picker-empty")).toBeNull();
+  });
+
+  it("reports the chosen match and closes", () => {
+    const { picker, handlers } = make();
+    picker.showMatches("Sample Boss", matches, false);
+    (picker.element.querySelectorAll(".picker-matches .picker-item")[1] as HTMLElement).click();
+    expect(handlers.onMatch).toHaveBeenCalledTimes(1);
+    expect(handlers.onMatch).toHaveBeenCalledWith(matches[1]);
+    expect(picker.element.hidden).toBe(true);
+    expect(handlers.onPage).not.toHaveBeenCalled();
+  });
+
+  it("restores the tabs on the next open", () => {
+    const { picker } = make();
+    picker.showMatches("x", matches, false);
+    picker.open("pages");
+    expect(tabs(picker).every((t) => !t.hidden)).toBe(true);
+    expect((picker.element.querySelector(".picker-matches") as HTMLElement).hidden).toBe(true);
+    expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
+    expect((picker.element.querySelector(".picker-games") as HTMLElement).hidden).toBe(true);
+    picker.showMatches("x", matches, false);
+    picker.open("games");
+    expect((picker.element.querySelector(".picker-games") as HTMLElement).hidden).toBe(false);
+    expect(tabs(picker).every((t) => !t.hidden)).toBe(true);
+  });
+
+  it("restores the tabs when closed from the close button or by choosing", () => {
+    const { picker, handlers } = make();
+    picker.showMatches("x", matches, false);
+    (picker.element.querySelector(".picker-close") as HTMLElement).click();
+    expect(picker.element.hidden).toBe(true);
+    expect(handlers.onClose).toHaveBeenCalled();
+    expect(tabs(picker).every((t) => !t.hidden)).toBe(true);
+    picker.showMatches("x", matches, false);
+    (picker.element.querySelector(".picker-matches .picker-item") as HTMLElement).click();
+    expect(tabs(picker).every((t) => !t.hidden)).toBe(true);
+  });
+
+  it("keeps the Pages tab hidden while a guide choice is pending, after the matches view", () => {
+    const { picker } = make();
+    picker.setChoosing(true);
+    picker.showMatches("x", matches, false);
+    picker.open("games");
+    expect(tabs(picker).map((t) => t.hidden)).toEqual([true, false]);
+  });
+
+  it("is not affected by page or game refreshes while showing", () => {
+    const { picker } = make();
+    picker.showMatches("x", matches, false);
+    picker.setPages(pages, defaultLayout(pages, []));
+    picker.setHubs(hubs, true);
+    expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(true);
+    expect((picker.element.querySelector(".picker-matches") as HTMLElement).hidden).toBe(false);
   });
 });

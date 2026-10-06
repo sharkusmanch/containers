@@ -49,4 +49,52 @@ describe("createApi", () => {
   it("throws ApiError for a failed now request", async () => {
     await expect(createApi(fake(502, {}).fn).now()).rejects.toBeInstanceOf(ApiError);
   });
+
+  it("builds the find URL with the query encoded", async () => {
+    const f = fake(200, { matches: [], truncated: false });
+    const api = createApi(f.fn);
+    await api.find("h1", "Sample Quest");
+    await api.find("h1", "Fish & Chips");
+    await api.find("h1", "Café ünï");
+    await api.find("a/b", "x");
+    expect(f.urls).toEqual([
+      "api/guides/h1/find?q=Sample%20Quest",
+      "api/guides/h1/find?q=Fish%20%26%20Chips",
+      "api/guides/h1/find?q=Caf%C3%A9%20%C3%BCn%C3%AF",
+      "api/guides/a%2Fb/find?q=x",
+    ]);
+  });
+
+  it("returns the find response body", async () => {
+    const body = {
+      matches: [{ pageTitle: "P", pageUrl: "/doc/p", heading: null, snippet: "s" }],
+      truncated: true,
+    };
+    expect(await createApi(fake(200, body).fn).find("h1", "ab")).toEqual(body);
+  });
+
+  it("returns null for find on 404 and throws ApiError otherwise", async () => {
+    expect(await createApi(fake(404, {}).fn).find("h1", "ab")).toBeNull();
+    for (const status of [400, 500]) {
+      const err = await createApi(fake(status, {}).fn)
+        .find("h1", "ab")
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).status).toBe(status);
+    }
+  });
+
+  it("builds the marks URL, returns the body, maps 404 to null and throws ApiError otherwise", async () => {
+    const f = fake(200, { missable: ["sample quest"] });
+    const api = createApi(f.fn);
+    expect(await api.marks("h1")).toEqual({ missable: ["sample quest"] });
+    await api.marks("a/b");
+    expect(f.urls).toEqual(["api/guides/h1/marks", "api/guides/a%2Fb/marks"]);
+    expect(await createApi(fake(404, {}).fn).marks("h1")).toBeNull();
+    const err = await createApi(fake(503, {}).fn)
+      .marks("h1")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(503);
+  });
 });

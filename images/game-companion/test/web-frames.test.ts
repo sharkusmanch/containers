@@ -2,6 +2,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createFrames } from "../src/web/frames.js";
 
+/** jsdom does not load a framed page, so give the frame a document of known content. */
+function showing(frame: HTMLIFrameElement | undefined, text: string): void {
+  const doc = new DOMParser().parseFromString(`<!doctype html><body>${text}</body>`, "text/html");
+  Object.defineProperty(frame, "contentDocument", { value: doc, configurable: true });
+}
+
 describe("createFrames", () => {
   it("creates a frame lazily and shows only the requested one", () => {
     const f = createFrames(document, 4);
@@ -106,5 +112,46 @@ describe("createFrames", () => {
     expect(f.element.querySelectorAll("iframe")).toHaveLength(1);
     f.sync([]);
     expect(f.element.querySelectorAll("iframe")).toHaveLength(0);
+  });
+
+  it("locate reports false for a slot with no frame, and for a slot out of range", async () => {
+    const f = createFrames(document, 4);
+    expect(await f.locate(0, "Sample Boss")).toBe(false);
+    f.show(1, "/doc/b");
+    expect(await f.locate(0, "Sample Boss")).toBe(false);
+    expect(await f.locate(9, "Sample Boss")).toBe(false);
+    expect(await f.locate(-1, "Sample Boss")).toBe(false);
+  });
+
+  it("locate delegates to the frame of that slot, not to another one", async () => {
+    document.body.innerHTML = "";
+    const f = createFrames(document, 4);
+    document.body.append(f.element);
+    f.show(0, "/doc/a");
+    f.show(1, "/doc/b");
+    const [a, b] = [...f.element.querySelectorAll("iframe")] as HTMLIFrameElement[];
+    showing(a, "Nothing relevant");
+    showing(b, "Here is the Sample Boss");
+    expect(await f.locate(1, "sample boss")).toBe(true);
+    vi.useFakeTimers();
+    try {
+      const other = f.locate(0, "sample boss");
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(await other).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("locate follows the frame when slots are re-keyed", async () => {
+    document.body.innerHTML = "";
+    const f = createFrames(document, 4);
+    document.body.append(f.element);
+    f.show(0, "/doc/a");
+    f.show(1, "/doc/b");
+    showing(f.element.querySelectorAll("iframe")[1], "Here is the Sample Boss");
+    f.sync([null, "/doc/b", null, null]);
+    expect(await f.locate(0, "sample boss")).toBe(false);
+    expect(await f.locate(1, "sample boss")).toBe(true);
   });
 });

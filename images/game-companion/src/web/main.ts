@@ -1,5 +1,7 @@
 import type {
+  Achievement,
   AchievementsResponse,
+  FindMatch,
   GameRef,
   GuideHub,
   GuidePage,
@@ -18,6 +20,7 @@ import {
   assignSlot,
   defaultLayout,
   gameKey,
+  isSafeDocUrl,
   loadLayout,
   reconcileLayout,
   removeSlot,
@@ -31,6 +34,7 @@ export interface AppOptions {
   api: Api;
   storage: StorageLike;
   setInterval?: typeof setInterval;
+  setTimeout?: typeof setTimeout;
   nowPollMs?: number;
   achievementsPollMs?: number;
 }
@@ -60,6 +64,17 @@ function keyFor(game: GameRef | null, hub: GuideHub | null): string {
     : `hub:${hub.hubId}`;
 }
 
+function pageUrls(pages: GuidePage[]): string[] {
+  return pages.flatMap((p) => [p.url, ...pageUrls(p.children)]);
+}
+
+/** The text of the notice for achievements that just unlocked. */
+function unlockText(names: string[]): string {
+  const [first, second] = names;
+  if (names.length <= 3) return `Unlocked: ${names.join(", ")}`;
+  return `Unlocked: ${first}, ${second} and ${names.length - 2} more`;
+}
+
 function achievementsSource(c: Current): { source: Source; id: string } | null {
   const { hub, game } = c;
   if (hub !== null && hub.source !== null && hub.gameId !== null) {
@@ -71,6 +86,7 @@ function achievementsSource(c: Current): { source: Source; id: string } | null {
 
 export function startApp(opts: AppOptions): App {
   const { doc, api, storage } = opts;
+  const schedule = opts.setTimeout ?? setTimeout;
   const nowPollMs = opts.nowPollMs ?? 30_000;
   const achievementsPollMs = opts.achievementsPollMs ?? 60_000;
 
@@ -106,11 +122,20 @@ export function startApp(opts: AppOptions): App {
   banner.hidden = true;
   banner.append(bannerLabel, accept, dismiss);
 
-  const view = createAchievementsView(doc, { storage });
+  const view = createAchievementsView(doc, { storage, onFind: (a) => void findInGuide(a) });
   const frames = createFrames(doc, SLOT_COUNT);
+  const toastText = el("span", "toast-text");
+  const toast = doc.createElement("div");
+  toast.classList.add("toast");
+  toast.hidden = true;
+  toast.append(toastText);
+  toast.addEventListener("click", () => {
+    toastSeq += 1;
+    toast.hidden = true;
+  });
   const stage = doc.createElement("div");
   stage.classList.add("stage");
-  stage.append(view.element, frames.element);
+  stage.append(view.element, frames.element, toast);
 
   const rail = createRail(doc, {
     onSelect(index) {
@@ -141,6 +166,10 @@ export function startApp(opts: AppOptions): App {
       loadingLabel = hub.title;
       renderHeader();
       void tick();
+    },
+    onMatch(match) {
+      if (findFor === null) return;
+      openMatch(findFor.current, findFor.name, match);
     },
     onUnpin(page) {
       if (current === null) return;
@@ -181,6 +210,106 @@ export function startApp(opts: AppOptions): App {
   let adoptedFirst = false;
   let everReached = false;
   let nowFailed = false;
+  let achievementsStale = false;
+  // Lower-cased names the open guide marks as missable; empty until its marks arrive.
+  let marks: ReadonlySet<string> = new Set();
+  let marksEpoch = 0;
+  // Ids unlocked as of the first fetch for this game, plus those announced since.
+  let seenUnlocked: Set<string> | null = null;
+  let findEnabled = false;
+  // The search a list of matches in the picker belongs to.
+  let findFor: { current: Current; name: string } | null = null;
+  let toastSeq = 0;
+
+  function showToast(text: string, ms = 6000): void {
+    toastSeq += 1;
+    const mine = toastSeq;
+    toastText.textContent = text;
+    toast.hidden = false;
+    schedule(() => {
+      if (toastSeq === mine) toast.hidden = true;
+    }, ms);
+  }
+
+  function withMarks(data: AchievementsResponse): AchievementsResponse {
+    if (marks.size === 0) return data;
+    return {
+      ...data,
+      achievements: data.achievements.map((a) =>
+        marks.has(a.name.toLowerCase()) ? { ...a, missable: true } : a,
+      ),
+    };
+  }
+
+  /** Hands the last good achievements, with the guide's marks, to the panel. */
+  function showAchievements(): void {
+    if (lastAchievements === null) return;
+    view.update(
+      withMarks(achievementsStale ? { ...lastAchievements, stale: true } : lastAchievements),
+    );
+  }
+
+  async function loadMarks(c: Current): Promise<void> {
+    if (c.hub === null) return;
+    const epoch = marksEpoch;
+    let missable: unknown;
+    try {
+      missable = (await api.marks(c.hub.hubId))?.missable;
+    } catch {
+      return;
+    }
+    if (!Array.isArray(missable) || epoch !== marksEpoch) return;
+    marks = new Set(missable.map((name: string) => name.toLowerCase()));
+    showAchievements();
+  }
+
+  async function findInGuide(a: Achievement): Promise<void> {
+    const c = current;
+    if (c === null || c.hub === null) return;
+    let found;
+    try {
+      found = await api.find(c.hub.hubId, a.name);
+    } catch {
+      if (current === c) showToast("Could not search the guide");
+      return;
+    }
+    if (current !== c) return;
+    const matches = found?.matches ?? [];
+    const [only] = matches;
+    if (only === undefined || found === null) {
+      showToast("Not found in this guide");
+    } else if (matches.length === 1) {
+      openMatch(c, a.name, only);
+    } else {
+      findFor = { current: c, name: a.name };
+      picker.showMatches(a.name, matches, found.truncated);
+    }
+  }
+
+  function openMatch(c: Current, name: string, match: FindMatch): void {
+    if (current !== c) return;
+    if (!isSafeDocUrl(match.pageUrl) || !pageUrls(c.pages).includes(match.pageUrl)) return;
+    c.layout = assignSlot(c.layout, { title: match.pageTitle, url: match.pageUrl });
+    save();
+    render();
+    picker.setPages(c.pages, c.layout);
+    void frames.locate(c.layout.active, name).then((located) => {
+      if (!located && current === c) showToast("Opened the page, but could not find the text");
+    });
+  }
+
+  function announceUnlocks(data: AchievementsResponse): void {
+    const unlockedNow = data.achievements.filter((a) => a.unlocked);
+    if (seenUnlocked === null) {
+      seenUnlocked = new Set(unlockedNow.map((a) => a.id));
+      return;
+    }
+    const fresh = unlockedNow.filter((a) => !(seenUnlocked as Set<string>).has(a.id));
+    if (fresh.length === 0) return;
+    for (const a of fresh) seenUnlocked.add(a.id);
+    rail.pulse();
+    showToast(unlockText(fresh.map((a) => a.name)), 10_000);
+  }
 
   function setChoosingFor(game: GameRef | null): void {
     choosingFor = game;
@@ -240,6 +369,11 @@ export function startApp(opts: AppOptions): App {
     const layout = current?.layout ?? emptyLayout();
     rail.render(layout, unlockedCount);
     renderHeader();
+    const canFind = current !== null && current.hub !== null && current.pages.length > 0;
+    if (canFind !== findEnabled) {
+      findEnabled = canFind;
+      view.setFindEnabled(canFind);
+    }
     const slot = layout.active === ACHIEVEMENTS ? null : (layout.slots[layout.active] ?? null);
     if (slot === null) {
       if (view.element.hidden) {
@@ -266,19 +400,22 @@ export function startApp(opts: AppOptions): App {
       try {
         const data = await api.achievements(src.source, src.id);
         lastAchievements = data;
+        achievementsStale = false;
         if (data === null) {
           view.update(null, "No achievements for this game");
           unlockedCount = null;
         } else {
-          view.update(data);
+          showAchievements();
           unlockedCount = data.unlocked;
+          announceUnlocks(data);
         }
       } catch {
         if (first) {
           view.update(null, "Achievements unavailable");
           unlockedCount = null;
         } else if (lastAchievements !== null) {
-          view.update({ ...lastAchievements, stale: true });
+          achievementsStale = true;
+          showAchievements();
         }
       }
     }
@@ -292,8 +429,14 @@ export function startApp(opts: AppOptions): App {
     view.update(null, "Loading…");
     unlockedCount = null;
     lastAchievements = null;
+    achievementsStale = false;
     savedScroll = 0;
     const key = keyFor(game, hub);
+    // A change of game drops the guide's marks and the record of what was unlocked.
+    marks = new Set();
+    marksEpoch += 1;
+    if (key !== current?.key) seenUnlocked = null;
+    findFor = null;
     // A load ends any pending choice, even one a poll in flight has just reopened.
     if (choosingFor !== null) {
       setChoosingFor(null);
@@ -310,6 +453,7 @@ export function startApp(opts: AppOptions): App {
         const { pages, defaultPins } = await api.hubTree(hub.hubId);
         const layout = reconcileLayout(stored ?? defaultLayout(pages, defaultPins), pages);
         current = { game, hub, pages, layout, key, persist: true };
+        void loadMarks(current);
       } catch {
         // A transient error must never overwrite stored pins, so nothing is persisted.
         current = { game, hub, pages: [], layout: stored ?? emptyLayout(), key, persist: false };
@@ -448,6 +592,7 @@ export function startApp(opts: AppOptions): App {
     c.pages = pages;
     c.layout = reconcileLayout(base, pages);
     c.persist = true;
+    void loadMarks(c);
     frames.sync(c.layout.slots.map((s) => s?.url ?? null));
     picker.setPages(c.pages, c.layout);
     render();

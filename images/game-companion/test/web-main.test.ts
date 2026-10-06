@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startApp } from "../src/web/main.js";
 import type { Api } from "../src/web/api.js";
 import type {
+  Achievement,
   AchievementsResponse,
+  FindMatch,
+  FindResponse,
   GuideHub,
+  GuideMarksResponse,
   HubTreeResponse,
   NowResponse,
 } from "../src/shared/types.js";
@@ -56,6 +60,8 @@ function memory() {
 interface Fake extends Api {
   nowValue: NowResponse;
   achCalls: string[];
+  markCalls: string[];
+  findCalls: [string, string][];
   failNow: boolean;
 }
 
@@ -63,6 +69,8 @@ function fakeApi(nowValue: NowResponse): Fake {
   const f: Fake = {
     nowValue,
     achCalls: [],
+    markCalls: [],
+    findCalls: [],
     failNow: false,
     now: async () => {
       if (f.failNow) throw new Error("down");
@@ -73,6 +81,14 @@ function fakeApi(nowValue: NowResponse): Fake {
     achievements: async (source, id) => {
       f.achCalls.push(`${source}:${id}`);
       return ach(id, 2);
+    },
+    find: async (hubId, query) => {
+      f.findCalls.push([hubId, query]);
+      return null;
+    },
+    marks: async (hubId) => {
+      f.markCalls.push(hubId);
+      return null;
     },
   };
   return f;
@@ -902,5 +918,829 @@ describe("startApp", () => {
     ach.scrollTop = 0;
     (document.querySelectorAll(".rail button")[0] as HTMLElement).click();
     expect(ach.scrollTop).toBe(0);
+  });
+});
+
+// ---- find in guide, guide-marked missables, unlock notice ----
+
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+const mk = (id: string, name: string, unlocked = false): Achievement => ({
+  id,
+  name,
+  description: null,
+  icon: null,
+  unlocked,
+  unlockedAt: null,
+  unlockPercent: 10,
+  hidden: false,
+  missable: false,
+});
+const board = (list: Achievement[]): AchievementsResponse => ({
+  source: "ra",
+  id: "20",
+  title: "t",
+  total: list.length,
+  unlocked: list.filter((a) => a.unlocked).length,
+  stale: false,
+  achievements: list,
+});
+const boardZ = (list: Achievement[]): AchievementsResponse => ({
+  ...board(list),
+  source: "steam",
+  id: "10",
+});
+
+interface Timers {
+  set: typeof setTimeout;
+  calls: { fn: () => void; ms: number }[];
+}
+function timers(): Timers {
+  const calls: Timers["calls"] = [];
+  const set = ((fn: () => void, ms: number) => {
+    calls.push({ fn, ms });
+    return calls.length;
+  }) as unknown as typeof setTimeout;
+  return { set, calls };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: unknown) => void;
+} {
+  let resolve: (value: T) => void = () => undefined;
+  let reject: (reason: unknown) => void = () => undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+const missableToggle = (): HTMLElement => $(".ach-missable-only") as HTMLElement;
+const toast = (): HTMLElement => $(".toast") as HTMLElement;
+const railButtons = (): HTMLButtonElement[] => [
+  ...document.querySelectorAll<HTMLButtonElement>(".rail button"),
+];
+
+describe("guide marks", () => {
+  const start = async (
+    api: Fake,
+    resp: AchievementsResponse,
+    extra: Partial<Parameters<typeof startApp>[0]> = {},
+  ) => {
+    api.achievements = async () => resp;
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      ...extra,
+    });
+    await app.ready;
+    await flush();
+    return app;
+  };
+
+  it("makes a named achievement missable, ignoring case, without changing the response", async () => {
+    const api = fakeApi(playing(hubA));
+    api.marks = async (hubId) => {
+      api.markCalls.push(hubId);
+      return { missable: ["first steps", "no such name"] };
+    };
+    const resp = board([mk("a1", "First Steps"), mk("a2", "Other")]);
+    const snapshot = JSON.stringify(resp);
+    await start(api, resp);
+    expect(api.markCalls).toEqual(["hA"]);
+    expect(missableToggle().hidden).toBe(false);
+    const missable = [...document.querySelectorAll(".ach-locked .ach-row")].filter(
+      (r) => r.querySelector(".ach-missable") !== null,
+    );
+    expect(missable.map((r) => r.querySelector(".ach-name")?.textContent)).toEqual(["First Steps"]);
+    expect(JSON.stringify(resp)).toBe(snapshot);
+    expect(resp.achievements[0]?.missable).toBe(false);
+  });
+
+  it("leaves the response alone even when it is frozen", async () => {
+    const api = fakeApi(playing(hubA));
+    api.marks = async () => ({ missable: ["first steps"] });
+    const resp = board([mk("a1", "First Steps")]);
+    resp.achievements.forEach((a) => Object.freeze(a));
+    Object.freeze(resp.achievements);
+    Object.freeze(resp);
+    await start(api, resp);
+    expect(missableToggle().hidden).toBe(false);
+  });
+
+  it("applies marks that arrive after the achievements are already shown", async () => {
+    const api = fakeApi(playing(hubA));
+    const late = deferred<GuideMarksResponse | null>();
+    api.marks = () => late.promise;
+    const resp = board([mk("a1", "First Steps")]);
+    await start(api, resp);
+    expect(missableToggle().hidden).toBe(true);
+    expect(document.querySelectorAll(".ach-row")).toHaveLength(1);
+    late.resolve({ missable: ["first steps"] });
+    await flush();
+    expect(missableToggle().hidden).toBe(false);
+    expect(document.querySelector(".ach-row .ach-missable")).not.toBeNull();
+    expect(resp.achievements[0]?.missable).toBe(false);
+  });
+
+  it("keeps the older-data marker when marks arrive after a failed refresh", async () => {
+    const api = fakeApi(playing(hubA));
+    const late = deferred<GuideMarksResponse | null>();
+    api.marks = () => late.promise;
+    const app = await start(api, board([mk("a1", "First Steps")]), { achievementsPollMs: 0 });
+    api.achievements = async () => {
+      throw new Error("down");
+    };
+    await app.tick();
+    expect($(".ach-stale")).not.toBeNull();
+    late.resolve({ missable: ["first steps"] });
+    await flush();
+    expect($(".ach-stale")).not.toBeNull();
+    expect(missableToggle().hidden).toBe(false);
+  });
+
+  it("keeps the marks across later refreshes of the same game", async () => {
+    const api = fakeApi(playing(hubA));
+    api.marks = async () => ({ missable: ["first steps"] });
+    const resp = board([mk("a1", "First Steps")]);
+    let fetched = 0;
+    const app = await start(api, resp, { achievementsPollMs: 0 });
+    api.achievements = async () => {
+      fetched += 1;
+      return resp;
+    };
+    await app.tick();
+    expect(fetched).toBe(1);
+    expect(missableToggle().hidden).toBe(false);
+  });
+
+  it.each([
+    ["is null", async () => null],
+    [
+      "fails",
+      async (): Promise<GuideMarksResponse | null> => {
+        throw new Error("down");
+      },
+    ],
+  ])("shows no marks when the marks request %s", async (_name, marks) => {
+    const api = fakeApi(playing(hubA));
+    api.marks = marks;
+    await start(api, board([mk("a1", "First Steps")]));
+    expect(missableToggle().hidden).toBe(true);
+    expect(document.querySelector(".ach-missable")).toBeNull();
+    expect(document.querySelectorAll(".ach-row")).toHaveLength(1);
+  });
+
+  it("asks only after the page tree has loaded, and again once a failed tree is retried", async () => {
+    const api = fakeApi(playing(hubA));
+    let fail = true;
+    api.hubTree = async () => {
+      if (fail) throw new Error("down");
+      return tree(hubA);
+    };
+    api.marks = async (hubId) => {
+      api.markCalls.push(hubId);
+      return { missable: ["first steps"] };
+    };
+    const app = await start(api, board([mk("a1", "First Steps")]));
+    expect(api.markCalls).toEqual([]);
+    expect(missableToggle().hidden).toBe(true);
+    fail = false;
+    await app.tick();
+    await flush();
+    expect(api.markCalls).toEqual(["hA"]);
+    expect(missableToggle().hidden).toBe(false);
+  });
+
+  it("does not ask for a game without a guide", async () => {
+    const api = fakeApi({ ...playing(hubA), hubs: [] });
+    await start(api, board([mk("a1", "First Steps")]));
+    expect(api.markCalls).toEqual([]);
+  });
+
+  it("discards the marks when the game changes, and ignores a late answer for the old game", async () => {
+    const api = fakeApi(playing(hubA));
+    const lateForZ = deferred<GuideMarksResponse | null>();
+    api.marks = async (hubId) => {
+      api.markCalls.push(hubId);
+      return hubId === "hA" ? { missable: ["shared name"] } : lateForZ.promise;
+    };
+    const app = await start(api, board([mk("a1", "Shared Name")]));
+    expect(missableToggle().hidden).toBe(false);
+    api.achievements = async () => boardZ([mk("z1", "Shared Name")]);
+    api.nowValue = playing(hubZ);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    await flush();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    expect(api.markCalls).toEqual(["hA", "hZ"]);
+    expect(missableToggle().hidden).toBe(true);
+    expect(document.querySelector(".ach-missable")).toBeNull();
+    lateForZ.resolve({ missable: ["shared name"] });
+    await flush();
+    expect(missableToggle().hidden).toBe(false);
+  });
+
+  it("ignores marks of the previous game that arrive after the next game has loaded", async () => {
+    const api = fakeApi(playing(hubA));
+    const lateForA = deferred<GuideMarksResponse | null>();
+    api.marks = async (hubId) => (hubId === "hA" ? lateForA.promise : null);
+    const app = await start(api, board([mk("a1", "Shared Name")]));
+    api.achievements = async () => boardZ([mk("z1", "Shared Name")]);
+    api.nowValue = playing(hubZ);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    await flush();
+    lateForA.resolve({ missable: ["shared name"] });
+    await flush();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    expect(missableToggle().hidden).toBe(true);
+  });
+});
+
+describe("find in guide: enabling", () => {
+  const expandFirst = (): void => {
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+  };
+  const start = async (api: Fake) => {
+    api.achievements = async () => board([mk("a1", "First Steps")]);
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    return app;
+  };
+
+  it("offers the action while a guide with pages is loaded", async () => {
+    await start(fakeApi(playing(hubA)));
+    expandFirst();
+    expect(document.querySelectorAll(".ach-find")).toHaveLength(1);
+  });
+
+  it("does not offer it for a game without a guide", async () => {
+    await start(fakeApi({ ...playing(hubA), hubs: [] }));
+    expandFirst();
+    expect(document.querySelectorAll(".ach-row.expanded")).toHaveLength(1);
+    expect(document.querySelector(".ach-find")).toBeNull();
+  });
+
+  it("does not offer it when the guide has no pages", async () => {
+    const api = fakeApi(playing(hubA));
+    api.hubTree = async () => ({ hub: hubA, pages: [], defaultPins: [] });
+    await start(api);
+    expandFirst();
+    expect(document.querySelector(".ach-find")).toBeNull();
+  });
+
+  it("offers it only once a page tree that failed has loaded", async () => {
+    const api = fakeApi(playing(hubA));
+    let fail = true;
+    api.hubTree = async () => {
+      if (fail) throw new Error("down");
+      return tree(hubA);
+    };
+    const app = await start(api);
+    expandFirst();
+    expect(document.querySelector(".ach-find")).toBeNull();
+    fail = false;
+    await app.tick();
+    expect(document.querySelectorAll(".ach-find")).toHaveLength(1);
+  });
+
+  it("withdraws it when the game changes to one without a guide", async () => {
+    const api = fakeApi(playing(hubA));
+    const app = await start(api);
+    api.nowValue = { ...playing(hubZ), hubs: [] };
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    expandFirst();
+    expect(document.querySelector(".ach-find")).toBeNull();
+  });
+});
+
+describe("find in guide", () => {
+  const page = (hub: GuideHub, suffix: string): string => `/doc/${hub.hubId}-${suffix}`;
+  const match = (url: string, over: Partial<FindMatch> = {}): FindMatch => ({
+    pageTitle: "Collectibles",
+    pageUrl: url,
+    heading: "Chapter One",
+    snippet: "the First Steps are here",
+    ...over,
+  });
+  const frameDocs = new Map<string, Document>();
+  const docWith = (text: string): Document =>
+    new DOMParser().parseFromString(`<!doctype html><body><p>${text}</p></body>`, "text/html");
+
+  beforeEach(() => {
+    frameDocs.clear();
+    vi.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockImplementation(function (
+      this: HTMLIFrameElement,
+    ) {
+      return frameDocs.get(this.getAttribute("src") ?? "") ?? null;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const start = async (answer: FindResponse | null | Error, tm = timers()) => {
+    const api = fakeApi(playing(hubA));
+    api.achievements = async () => board([mk("a1", "First Steps")]);
+    api.find = async (hubId, query) => {
+      api.findCalls.push([hubId, query]);
+      if (answer instanceof Error) throw answer;
+      return answer;
+    };
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: tm.set,
+    });
+    await app.ready;
+    return { api, app, tm };
+  };
+  const find = async (): Promise<void> => {
+    if (document.querySelector(".ach-find") === null) {
+      (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    }
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    await flush();
+  };
+  const shown = (): string[] =>
+    [...document.querySelectorAll("iframe:not(.inactive)")].map((f) => f.getAttribute("src") ?? "");
+
+  it("asks the server for the achievement's name in the loaded guide", async () => {
+    const { api } = await start({ matches: [], truncated: false });
+    await find();
+    expect(api.findCalls).toEqual([["hA", "First Steps"]]);
+  });
+
+  it("tells the user when the search fails", async () => {
+    await start(new Error("down"));
+    await find();
+    expect(toast().hidden).toBe(false);
+    expect(toast().querySelector(".toast-text")?.textContent).toBe("Could not search the guide");
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  it.each([
+    ["the guide is unknown", null],
+    ["there are no matches", { matches: [], truncated: false }],
+  ])("says so when %s", async (_name, answer) => {
+    await start(answer);
+    await find();
+    expect(toast().hidden).toBe(false);
+    expect(toast().querySelector(".toast-text")?.textContent).toBe("Not found in this guide");
+    expect(document.querySelector("iframe")).toBeNull();
+    expect($(".picker")?.hidden).toBe(true);
+  });
+
+  it("opens a single match in a slot and finds the text in it", async () => {
+    const url = page(hubA, "coll");
+    frameDocs.set(url, docWith("Get the first steps trophy"));
+    await start({ matches: [match(url)], truncated: false });
+    await find();
+    await flush();
+    expect(shown()).toEqual([url]);
+    expect($(".ach")?.hidden).toBe(true);
+    expect($(".picker")?.hidden).toBe(true);
+    expect(toast().hidden).toBe(true);
+    // The page is pinned under the title the match gave it.
+    expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Collectibles");
+  });
+
+  it("switches to the slot of a page that is already pinned instead of pinning it twice", async () => {
+    const url = page(hubA, "checklist");
+    frameDocs.set(url, docWith("first steps"));
+    await start({
+      matches: [match(url, { pageTitle: "Achievement Checklist" })],
+      truncated: false,
+    });
+    await find();
+    await flush();
+    expect(shown()).toEqual([url]);
+    expect(railButtons()[1]?.classList.contains("active")).toBe(true);
+    expect(
+      railButtons()
+        .slice(1, 5)
+        .filter((b) => !b.hidden),
+    ).toHaveLength(1);
+  });
+
+  it("saves the pinned page", async () => {
+    const storage = memory();
+    const api = fakeApi(playing(hubA));
+    api.achievements = async () => board([mk("a1", "First Steps")]);
+    const url = page(hubA, "coll");
+    frameDocs.set(url, docWith("first steps"));
+    api.find = async () => ({ matches: [match(url)], truncated: false });
+    const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+    await app.ready;
+    await find();
+    const saved = JSON.parse(storage.getItem("game-companion:v1:layout:hA") as string) as {
+      slots: ({ url: string } | null)[];
+    };
+    expect(saved.slots.map((s) => s?.url ?? null)).toContain(url);
+  });
+
+  it("tells the user when the page opened but the text is not in it", async () => {
+    vi.useFakeTimers();
+    const url = page(hubA, "coll");
+    frameDocs.set(url, docWith("nothing relevant"));
+    const { tm } = await start({ matches: [match(url)], truncated: false });
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown()).toEqual([url]);
+    expect(toast().hidden).toBe(true);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(toast().hidden).toBe(false);
+    expect(toast().querySelector(".toast-text")?.textContent).toBe(
+      "Opened the page, but could not find the text",
+    );
+    expect(tm.calls.at(-1)?.ms).toBe(6000);
+  });
+
+  it("offers several matches in the picker, and opens the one chosen", async () => {
+    const one = page(hubA, "coll");
+    const two = page(hubA, "checklist");
+    frameDocs.set(two, docWith("first steps"));
+    await start({
+      matches: [
+        match(one, { pageTitle: "Collectibles", snippet: "first" }),
+        match(two, { pageTitle: "Achievement Checklist", heading: null, snippet: "second" }),
+      ],
+      truncated: true,
+    });
+    await find();
+    expect($(".picker")?.hidden).toBe(false);
+    expect($(".picker-matches-title")?.textContent).toBe("In the guide: First Steps");
+    const items = [...document.querySelectorAll(".picker-matches .picker-item")];
+    expect(items).toHaveLength(2);
+    expect($(".picker-matches .picker-empty")?.textContent).toBe("More matches not shown");
+    expect(document.querySelector("iframe")).toBeNull();
+    (items[1] as HTMLElement).click();
+    await flush();
+    expect($(".picker")?.hidden).toBe(true);
+    expect(shown()).toEqual([two]);
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("restores the picker's tabs afterwards", async () => {
+    const one = page(hubA, "coll");
+    await start({ matches: [match(one), match(page(hubA, "checklist"))], truncated: false });
+    await find();
+    (document.querySelector(".picker-close") as HTMLElement).click();
+    railButtons().at(-1)?.click();
+    expect([...document.querySelectorAll<HTMLElement>(".picker-tab")].every((t) => !t.hidden)).toBe(
+      true,
+    );
+    expect(($(".picker-pages") as HTMLElement).hidden).toBe(false);
+  });
+
+  it.each([
+    ["an unsafe address", "https://evil.example/doc/hA-coll"],
+    ["a protocol-relative address", "//evil.example/doc/hA-coll"],
+    ["an address outside /doc/", "/collection/hA-coll"],
+    ["a safe address that is not a page of this guide", "/doc/other-guide-page"],
+  ])("ignores a match with %s", async (_name, url) => {
+    await start({ matches: [match(url)], truncated: false });
+    await find();
+    await flush();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect($(".ach")?.hidden).toBe(false);
+    expect(toast().hidden).toBe(true);
+    expect(
+      railButtons()
+        .slice(1, 5)
+        .filter((b) => !b.hidden)
+        .map((b) => b.textContent),
+    ).toEqual(["AC"]);
+  });
+
+  it("ignores a match for a page whose own address is unsafe, even though the guide lists it", async () => {
+    const api = fakeApi(playing(hubA));
+    api.achievements = async () => board([mk("a1", "First Steps")]);
+    api.hubTree = async () => ({
+      hub: hubA,
+      pages: [{ title: "Odd", url: "https://evil.example/doc/odd", children: [] }],
+      defaultPins: [],
+    });
+    api.find = async () => ({
+      matches: [match("https://evil.example/doc/odd")],
+      truncated: false,
+    });
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    await find();
+    await flush();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("ignores an unsafe match chosen from several, and still opens a valid one", async () => {
+    const good = page(hubA, "coll");
+    frameDocs.set(good, docWith("first steps"));
+    await start({
+      matches: [match("javascript:alert(1)"), match(good)],
+      truncated: false,
+    });
+    await find();
+    const items = [...document.querySelectorAll(".picker-matches .picker-item")] as HTMLElement[];
+    items[0]?.click();
+    await flush();
+    expect(document.querySelector("iframe")).toBeNull();
+    await find();
+    (document.querySelectorAll(".picker-matches .picker-item")[1] as HTMLElement).click();
+    await flush();
+    expect(shown()).toEqual([good]);
+  });
+
+  it.each([
+    ["a missing guide", null],
+    ["a match", { matches: [match("/doc/hA-coll")], truncated: false }],
+    ["an error", new Error("down")],
+  ])("drops %s when the game changed while the search was running", async (_name, answer) => {
+    const late = deferred<FindResponse | null>();
+    const { api, app } = await start(null);
+    api.find = () => late.promise;
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    api.nowValue = playing(hubZ);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    if (answer instanceof Error) late.reject(answer);
+    else late.resolve(answer);
+    await flush();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(toast().hidden).toBe(true);
+  });
+});
+
+describe("toast", () => {
+  const start = async (tm = timers()) => {
+    const api = fakeApi(playing(hubA));
+    api.achievements = async () => board([mk("a1", "First Steps")]);
+    api.find = async () => null;
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: tm.set,
+    });
+    await app.ready;
+    return { tm, api, app };
+  };
+  const notFound = async (): Promise<void> => {
+    if (document.querySelector(".ach-find") === null) {
+      (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    }
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    await flush();
+  };
+
+  it("is one hidden element with a text child, inside the shell and not on the rail", async () => {
+    await start();
+    expect(document.querySelectorAll(".toast")).toHaveLength(1);
+    expect(toast().tagName).toBe("DIV");
+    expect(toast().hidden).toBe(true);
+    expect(toast().querySelector(".toast-text")).not.toBeNull();
+    expect($("#app")?.contains(toast())).toBe(true);
+    expect($(".rail")?.contains(toast())).toBe(false);
+  });
+
+  it("shows for six seconds by default through the injected timer, then hides", async () => {
+    const { tm } = await start();
+    await notFound();
+    expect(toast().hidden).toBe(false);
+    expect(tm.calls).toHaveLength(1);
+    expect(tm.calls[0]?.ms).toBe(6000);
+    tm.calls[0]?.fn();
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("is replaced by a newer toast, and the older timer then no longer hides it", async () => {
+    const { tm } = await start();
+    await notFound();
+    await notFound();
+    expect(tm.calls).toHaveLength(2);
+    tm.calls[0]?.fn();
+    expect(toast().hidden).toBe(false);
+    tm.calls[1]?.fn();
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("hides when tapped, and a later toast shows again", async () => {
+    const { tm } = await start();
+    await notFound();
+    toast().click();
+    expect(toast().hidden).toBe(true);
+    await notFound();
+    expect(toast().hidden).toBe(false);
+    // the timer of the tapped toast must not hide the new one
+    tm.calls[0]?.fn();
+    expect(toast().hidden).toBe(false);
+  });
+
+  it("renders its text as text", async () => {
+    const api = fakeApi(playing(hubA));
+    api.achievements = async () =>
+      board([mk("a1", "<img src=x onerror=alert(1)>"), mk("a2", "Done", true)]);
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: timers().set,
+      achievementsPollMs: 0,
+    });
+    await app.ready;
+    api.achievements = async () =>
+      board([mk("a1", "<img src=x onerror=alert(1)>", true), mk("a2", "Done", true)]);
+    await app.tick();
+    expect(toast().querySelector(".toast-text")?.textContent).toBe(
+      "Unlocked: <img src=x onerror=alert(1)>",
+    );
+    expect(toast().querySelector("img")).toBeNull();
+  });
+});
+
+describe("unlock notice", () => {
+  const names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"];
+  const list = (unlockedNames: string[]): Achievement[] =>
+    names.map((n, i) => mk(`a${i}`, n, unlockedNames.includes(n)));
+
+  const start = async (initial: string[], extra: { tm?: Timers; failFirst?: boolean } = {}) => {
+    const tm = extra.tm ?? timers();
+    const api = fakeApi(playing(hubA));
+    let current = board(list(initial));
+    api.achievements = async () => current;
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: tm.set,
+      achievementsPollMs: 0,
+    });
+    await app.ready;
+    return {
+      api,
+      app,
+      tm,
+      set(unlockedNames: string[]) {
+        current = board(list(unlockedNames));
+      },
+    };
+  };
+  const text = (): string => toast().querySelector(".toast-text")?.textContent ?? "";
+  const pulsing = (): boolean => railButtons()[0]?.classList.contains("pulse") ?? false;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows nothing for the first fetch, even with achievements already unlocked", async () => {
+    await start(["Alpha", "Bravo"]);
+    expect(toast().hidden).toBe(true);
+    expect(pulsing()).toBe(false);
+  });
+
+  it("names a single new unlock, pulses the rail and shows for ten seconds", async () => {
+    const t = await start(["Alpha"]);
+    t.set(["Alpha", "Bravo"]);
+    await t.app.tick();
+    expect(toast().hidden).toBe(false);
+    expect(text()).toBe("Unlocked: Bravo");
+    expect(pulsing()).toBe(true);
+    expect(t.tm.calls.at(-1)?.ms).toBe(10_000);
+    t.tm.calls.at(-1)?.fn();
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("lists three new unlocks joined by commas, in the order of the list", async () => {
+    const t = await start([]);
+    t.set(["Delta", "Bravo", "Charlie"]);
+    await t.app.tick();
+    expect(text()).toBe("Unlocked: Bravo, Charlie, Delta");
+  });
+
+  it("lists two new unlocks joined by a comma", async () => {
+    const t = await start([]);
+    t.set(["Alpha", "Echo"]);
+    await t.app.tick();
+    expect(text()).toBe("Unlocked: Alpha, Echo");
+  });
+
+  it("names two and counts the rest beyond three", async () => {
+    const t = await start([]);
+    t.set(["Alpha", "Bravo", "Charlie", "Delta", "Echo"]);
+    await t.app.tick();
+    expect(text()).toBe("Unlocked: Alpha, Bravo and 3 more");
+    const four = await (async () => {
+      document.body.innerHTML = '<main id="app"></main>';
+      return start([]);
+    })();
+    four.set(["Alpha", "Bravo", "Charlie", "Delta"]);
+    await four.app.tick();
+    expect(text()).toBe("Unlocked: Alpha, Bravo and 2 more");
+  });
+
+  it("does not announce the same unlock twice", async () => {
+    const t = await start([]);
+    t.set(["Alpha"]);
+    await t.app.tick();
+    expect(text()).toBe("Unlocked: Alpha");
+    t.tm.calls.at(-1)?.fn();
+    await t.app.tick();
+    expect(toast().hidden).toBe(true);
+    t.set(["Alpha", "Bravo"]);
+    await t.app.tick();
+    expect(text()).toBe("Unlocked: Bravo");
+  });
+
+  it("shows nothing when a fetch fails, and compares against the last good one afterwards", async () => {
+    const t = await start(["Alpha"]);
+    t.api.achievements = async () => {
+      throw new Error("down");
+    };
+    await t.app.tick();
+    expect(toast().hidden).toBe(true);
+    expect(pulsing()).toBe(false);
+    t.api.achievements = async () => board(list(["Alpha", "Bravo"]));
+    await t.app.tick();
+    expect(text()).toBe("Unlocked: Bravo");
+  });
+
+  it("shows nothing for the first fetch of a new game, even when it differs from the old one", async () => {
+    const t = await start(["Alpha"]);
+    let zeta = boardZ(list(["Alpha", "Bravo", "Charlie"]));
+    t.api.achievements = async (source) => (source === "steam" ? zeta : board(list(["Alpha"])));
+    t.api.nowValue = playing(hubZ);
+    await t.app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await t.app.tick();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    expect(toast().hidden).toBe(true);
+    expect(pulsing()).toBe(false);
+    zeta = boardZ(list(["Alpha", "Bravo", "Charlie", "Delta"]));
+    await t.app.tick();
+    expect(text()).toBe("Unlocked: Delta");
+  });
+
+  it("starts again from a new baseline when returning to the first game", async () => {
+    const t = await start(["Alpha"]);
+    let alpha = board(list(["Alpha"]));
+    t.api.achievements = async (source) => (source === "steam" ? boardZ(list([])) : alpha);
+    t.api.nowValue = playing(hubZ);
+    await t.app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await t.app.tick();
+    alpha = board(list(["Alpha", "Bravo"]));
+    t.api.nowValue = playing(hubA);
+    await t.app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await t.app.tick();
+    expect($(".game-title")?.textContent).toBe("Alpha");
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("ignores a game that has no achievements", async () => {
+    const api = fakeApi(playing(hubA));
+    api.achievements = async () => null;
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: timers().set,
+      achievementsPollMs: 0,
+    });
+    await app.ready;
+    await app.tick();
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("removes the pulse after ten seconds", async () => {
+    vi.useFakeTimers();
+    const t = await start(["Alpha"]);
+    t.set(["Alpha", "Bravo"]);
+    await t.app.tick();
+    expect(pulsing()).toBe(true);
+    vi.advanceTimersByTime(10_000);
+    expect(pulsing()).toBe(false);
   });
 });

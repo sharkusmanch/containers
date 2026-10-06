@@ -1,3 +1,4 @@
+import { locateInFrame } from "./locate.js";
 import { isSafeDocUrl } from "./state.js";
 
 export interface Frames {
@@ -10,6 +11,8 @@ export interface Frames {
    */
   sync(urls: (string | null)[]): void;
   reset(): void;
+  /** Finds `text` in the page framed in slot `index` and highlights it. False when the slot has no frame. */
+  locate(index: number, text: string): Promise<boolean>;
 }
 
 interface Entry {
@@ -67,6 +70,10 @@ export function createFrames(doc: Document, slotCount: number): Frames {
     reset() {
       element.replaceChildren();
       entries.fill(null);
+    },
+    locate(index, text) {
+      const entry = Number.isInteger(index) ? (entries[index] ?? null) : null;
+      return entry === null ? Promise.resolve(false) : locateInFrame(entry.frame, text);
     },
   };
 }
