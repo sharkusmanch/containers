@@ -1,4 +1,5 @@
 import type { FindMatch, FindResponse, GuideMarksResponse } from "../shared/types.js";
+import type { PageRef } from "./guide-index.js";
 
 export interface PageText {
   id: string;
@@ -23,6 +24,18 @@ const EMPHASIS_AND_CODE = /\*\*|__|`/g;
 const CHECKBOX_LINE = /^[ \t]*[-*][ \t]+\[[ xX]\]/;
 const WARNING_SIGN = "⚠";
 const BOLD_SPAN = /\*\*(.+?)\*\*/;
+const LEADING_SIGNS = /^(?:\s|\u26A0\uFE0F?)+/;
+
+/** A name as the guide shows it: no leading warning sign, link syntax or code marks. */
+function markName(raw: string): string {
+  return raw
+    .replace(LEADING_SIGNS, "")
+    .replace(LINK, "$1")
+    .replace(/`/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
 
 const lines = (text: string): string[] => text.replace(/\r\n/g, "\n").split("\n");
 
@@ -36,22 +49,60 @@ function headingText(line: string): string | null | undefined {
   if (end < text.length && end > 0 && /\s/.test(text[end - 1] as string)) {
     text = text.slice(0, end).trimEnd();
   }
-  return text === "" ? null : text;
+  return text === "" ? null : cutEnd(text);
 }
 
-function snippetOf(line: string): string {
+const isHigh = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;
+const isLow = (code: number): boolean => code >= 0xdc00 && code <= 0xdfff;
+
+/** The first 160 characters, ending in an ellipsis when cut; never ends on half a pair. */
+function cutEnd(text: string): string {
+  if (text.length <= SNIPPET_MAX) return text;
+  let cut = SNIPPET_MAX - 1;
+  if (isHigh(text.charCodeAt(cut - 1))) cut -= 1;
+  return `${text.slice(0, cut)}…`;
+}
+
+/** Where `loweredIndex` in the lower-cased text falls in the original (lower-casing can change lengths). */
+function originalIndex(text: string, loweredIndex: number): number {
+  let lowered = 0;
+  let i = 0;
+  while (i < text.length && lowered < loweredIndex) {
+    const ch = String.fromCodePoint(text.codePointAt(i) as number);
+    lowered += ch.toLocaleLowerCase().length;
+    i += ch.length;
+  }
+  return i;
+}
+
+/** A 160-character window of `clean` showing the first occurrence of `needle` (lower-case). */
+function windowAround(clean: string, needle: string): string {
+  const found = clean.toLocaleLowerCase().indexOf(needle);
+  const at = found === -1 ? 0 : originalIndex(clean, found);
+  const mid = at + Math.floor(needle.length / 2);
+  // A leading ellipsis costs one character, so a window that reaches the end holds 159.
+  let start = Math.max(0, Math.min(mid - SNIPPET_MAX / 2, clean.length - (SNIPPET_MAX - 1)));
+  let end: number;
+  if (start === 0) {
+    end = SNIPPET_MAX - 1;
+  } else if (start === clean.length - (SNIPPET_MAX - 1)) {
+    end = clean.length;
+  } else {
+    end = start + SNIPPET_MAX - 2;
+  }
+  if (start > 0 && isLow(clean.charCodeAt(start))) start += 1;
+  if (end < clean.length && isHigh(clean.charCodeAt(end - 1))) end -= 1;
+  return `${start > 0 ? "…" : ""}${clean.slice(start, end)}${end < clean.length ? "…" : ""}`;
+}
+
+function snippetOf(line: string, needle: string): string {
   const clean = line
     .replace(LEADING_MARKERS, "")
     .replace(LINK, "$1")
     .replace(EMPHASIS_AND_CODE, "")
     .replace(/\s+/g, " ")
     .trim();
-  if (clean.length <= SNIPPET_MAX) return clean;
-  let cut = SNIPPET_MAX - 1;
-  // Never end on half of a surrogate pair.
-  const last = clean.charCodeAt(cut - 1);
-  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
-  return `${clean.slice(0, cut)}…`;
+  return clean.length <= SNIPPET_MAX ? clean : windowAround(clean, needle);
 }
 
 /**
@@ -79,7 +130,7 @@ export function findInPages(
         pageTitle: page.title,
         pageUrl: page.url,
         heading,
-        snippet: snippetOf(line),
+        snippet: snippetOf(line, needle),
       });
       // A heading line is found under the heading above it, and heads what follows.
       if (own !== undefined) heading = own;
@@ -94,17 +145,12 @@ export function missableMarks(pages: PageText[]): string[] {
   for (const page of pages) {
     for (const line of lines(page.text)) {
       if (!CHECKBOX_LINE.test(line) || !line.includes(WARNING_SIGN)) continue;
-      const name = BOLD_SPAN.exec(line)?.[1]?.trim().toLowerCase();
+      const span = BOLD_SPAN.exec(line)?.[1];
+      const name = span === undefined ? "" : markName(span);
       if (name) names.add(name);
     }
   }
   return [...names];
-}
-
-interface PageRef {
-  id: string;
-  title: string;
-  url: string;
 }
 
 export interface GuidePageServiceOptions {
@@ -112,10 +158,18 @@ export interface GuidePageServiceOptions {
   /** The Outline client; null when no key is configured. */
   source: { docText(id: string): Promise<string> } | null;
   now?: () => number;
-  /** How long a hub's loaded pages are served without reloading. Default ten minutes. */
+  /** Starts a timer and returns a function that cancels it. Defaults to `setTimeout`. */
+  setTimer?: (fn: () => void, ms: number) => () => void;
+  /** How long a complete set of a hub's pages is served without reloading. Default ten minutes. */
   ttlMs?: number;
-  /** Hubs held at once, oldest evicted first. Default 8. */
+  /** The same for a set still missing a page, so it is retried soon. Default one minute. */
+  partialTtlMs?: number;
+  /** How long a request with no held copy waits for a load. Default six seconds. */
+  loadDeadlineMs?: number;
+  /** Hubs held at once, oldest evicted first. Default 24. */
   maxHubs?: number;
+  /** Total length of held page text across all hubs, oldest hubs evicted first. Default 30 million. */
+  maxChars?: number;
   /** Process-wide ceiling on hub loads in any rolling minute. Default 6. */
   maxLoadsPerMinute?: number;
   /** Pages fetched at the same time within one load. Default 4. */
@@ -125,7 +179,21 @@ export interface GuidePageServiceOptions {
 interface CacheEntry {
   pages: PageText[];
   at: number;
+  ttlMs: number;
+  chars: number;
 }
+
+interface Loaded {
+  pages: PageText[];
+  /** Every page of the hub has text, fetched now or kept from the held copy. */
+  complete: boolean;
+}
+
+const defaultTimer = (fn: () => void, ms: number): (() => void) => {
+  const handle = setTimeout(fn, ms);
+  handle.unref();
+  return () => clearTimeout(handle);
+};
 
 export class GuidePageService {
   private readonly cache = new Map<string, CacheEntry>();
@@ -133,15 +201,23 @@ export class GuidePageService {
   /** Start times of recent hub loads, oldest first. */
   private readonly loadTimes: number[] = [];
   private readonly now: () => number;
+  private readonly setTimer: (fn: () => void, ms: number) => () => void;
   private readonly ttlMs: number;
+  private readonly partialTtlMs: number;
+  private readonly loadDeadlineMs: number;
   private readonly maxHubs: number;
+  private readonly maxChars: number;
   private readonly maxLoadsPerMinute: number;
   private readonly concurrency: number;
 
   constructor(private readonly opts: GuidePageServiceOptions) {
     this.now = opts.now ?? Date.now;
+    this.setTimer = opts.setTimer ?? defaultTimer;
     this.ttlMs = opts.ttlMs ?? 10 * 60_000;
-    this.maxHubs = opts.maxHubs ?? 8;
+    this.partialTtlMs = opts.partialTtlMs ?? 60_000;
+    this.loadDeadlineMs = opts.loadDeadlineMs ?? 6_000;
+    this.maxHubs = opts.maxHubs ?? 24;
+    this.maxChars = opts.maxChars ?? 30_000_000;
     this.maxLoadsPerMinute = opts.maxLoadsPerMinute ?? 6;
     this.concurrency = opts.concurrency ?? 4;
   }
@@ -167,28 +243,63 @@ export class GuidePageService {
     if (source === null || refs.length === 0) return [];
 
     const cached = this.cache.get(hubId);
-    if (cached && this.now() - cached.at < this.ttlMs) return cached.pages;
+    if (cached && this.now() - cached.at < cached.ttlMs) return cached.pages;
 
-    const pending = this.inFlight.get(hubId);
-    if (pending) return pending;
-
-    if (!this.takeLoadSlot()) {
-      // Over the ceiling: serve what we hold, untouched, so the next call asks again.
-      if (cached) return cached.pages;
-      throw new Error("guide page load limit reached");
+    if (cached) {
+      // Expired but held: answer from it now (the wiki may be slow) and refresh behind it,
+      // if no refresh is running and the limiter allows one.
+      if (!this.inFlight.has(hubId)) void this.startLoad(hubId, source, refs, cached);
+      return cached.pages;
     }
-    const load = this.load(source, refs)
-      .then((pages) => {
-        this.store(hubId, { pages, at: this.now() });
+
+    const load = this.inFlight.get(hubId) ?? this.startLoad(hubId, source, refs, undefined);
+    if (!load) throw new Error("guide page load limit reached");
+    return this.withDeadline(load);
+  }
+
+  /** Starts a load unless the limiter refuses; it fills the cache whenever it finishes. */
+  private startLoad(
+    hubId: string,
+    source: { docText(id: string): Promise<string> },
+    refs: PageRef[],
+    held: CacheEntry | undefined,
+  ): Promise<PageText[]> | null {
+    if (!this.takeLoadSlot()) return null;
+    const load = this.load(source, refs, held?.pages)
+      .then(({ pages, complete }) => {
+        this.store(hubId, {
+          pages,
+          at: this.now(),
+          ttlMs: complete ? this.ttlMs : this.partialTtlMs,
+          chars: pages.reduce((n, p) => n + p.text.length, 0),
+        });
         return pages;
       })
-      .catch((err: unknown) => {
-        if (cached) return cached.pages;
-        throw err;
-      })
       .finally(() => this.inFlight.delete(hubId));
+    // Nobody may be waiting any more (background refresh, or a request past its deadline).
+    load.catch(() => undefined);
     this.inFlight.set(hubId, load);
     return load;
+  }
+
+  /** Rejects, with a fixed message, when the load takes longer than the deadline. */
+  private withDeadline(load: Promise<PageText[]>): Promise<PageText[]> {
+    return new Promise((resolve, reject) => {
+      const cancel = this.setTimer(
+        () => reject(new Error("guide pages still loading")),
+        this.loadDeadlineMs,
+      );
+      load.then(
+        (pages) => {
+          cancel();
+          resolve(pages);
+        },
+        (err: unknown) => {
+          cancel();
+          reject(err instanceof Error ? err : new Error("guide pages unavailable"));
+        },
+      );
+    });
   }
 
   private takeLoadSlot(): boolean {
@@ -201,11 +312,15 @@ export class GuidePageService {
     return true;
   }
 
-  /** Every page that loads, in the refs' order. Rejects, with a fixed message, when none does. */
+  /**
+   * The hub's pages, in the refs' order. A page that fails keeps the text the held copy has
+   * for it. Rejects, with a fixed message, when no page could be fetched at all.
+   */
   private async load(
     source: { docText(id: string): Promise<string> },
     refs: PageRef[],
-  ): Promise<PageText[]> {
+    held: PageText[] | undefined,
+  ): Promise<Loaded> {
     const texts: (string | null)[] = new Array<string | null>(refs.length).fill(null);
     let next = 0;
     const worker = async (): Promise<void> => {
@@ -222,25 +337,28 @@ export class GuidePageService {
     };
     const workers = Math.max(1, Math.min(this.concurrency, refs.length));
     await Promise.all(Array.from({ length: workers }, worker));
+    if (texts.every((t) => t === null)) throw new Error("guide pages unavailable");
 
+    const heldText = new Map((held ?? []).map((p) => [p.id, p.text]));
     const pages: PageText[] = [];
     refs.forEach((ref, i) => {
-      const text = texts[i];
-      if (text !== null && text !== undefined) {
-        pages.push({ id: ref.id, title: ref.title, url: ref.url, text });
-      }
+      const text = texts[i] ?? heldText.get(ref.id);
+      if (text !== undefined) pages.push({ id: ref.id, title: ref.title, url: ref.url, text });
     });
-    if (pages.length === 0) throw new Error("guide pages unavailable");
-    return pages;
+    return { pages, complete: pages.length === refs.length };
   }
 
   private store(hubId: string, entry: CacheEntry): void {
     this.cache.delete(hubId);
     this.cache.set(hubId, entry);
-    while (this.cache.size > this.maxHubs) {
-      const oldest = this.cache.keys().next().value;
-      if (oldest === undefined) break;
-      this.cache.delete(oldest);
+    let chars = 0;
+    for (const e of this.cache.values()) chars += e.chars;
+    for (const key of this.cache.keys()) {
+      if (this.cache.size <= this.maxHubs && chars <= this.maxChars) break;
+      // The hub just stored stays, even when it alone is over the bound.
+      if (key === hubId) continue;
+      chars -= (this.cache.get(key) as CacheEntry).chars;
+      this.cache.delete(key);
     }
   }
 }

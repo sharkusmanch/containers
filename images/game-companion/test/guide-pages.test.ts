@@ -6,6 +6,9 @@ import {
   type PageText,
 } from "../src/server/guide-pages.js";
 
+// Code-unit mode (no `u` flag): matches a half of a surrogate pair standing alone.
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
 const page = (id: string, text: string, title = `Page ${id}`): PageText => ({
   id,
   title,
@@ -127,12 +130,87 @@ describe("findInPages", () => {
       expect(snip(exact)).toBe(exact);
     });
 
+    it("shows a match near the end of a long line, cutting only the start", () => {
+      const line = `${"a".repeat(380)} Needle ${"b".repeat(10)}`;
+      const s = snip(line, "needle") as string;
+      expect(s.length).toBeLessThanOrEqual(160);
+      expect(s).toContain("Needle");
+      expect(s.startsWith("…")).toBe(true);
+      expect(s.endsWith("…")).toBe(false);
+      expect(s.endsWith("b".repeat(10))).toBe(true);
+    });
+
+    it("centres a match in the middle of a long line, cutting both ends", () => {
+      const line = `${"a".repeat(200)}Needle${"b".repeat(200)}`;
+      const s = snip(line, "needle") as string;
+      expect(s).toHaveLength(160);
+      expect(s.startsWith("…a")).toBe(true);
+      expect(s.endsWith("b…")).toBe(true);
+      const at = s.indexOf("Needle");
+      expect(at).toBeGreaterThan(60);
+      expect(at + 6).toBeLessThan(100);
+    });
+
+    it("starts at the line's start when the match is near it", () => {
+      const line = `Needle ${"b".repeat(300)}`;
+      const s = snip(line, "needle") as string;
+      expect(s).toHaveLength(160);
+      expect(s.startsWith("Needle b")).toBe(true);
+      expect(s.endsWith("…")).toBe(true);
+    });
+
+    it("falls back to the start when the cleaned line no longer holds the text", () => {
+      const line = `${"a".repeat(300)} [x](/doc/needle)`;
+      const s = snip(line, "/doc/needle") as string;
+      expect(s).toHaveLength(160);
+      expect(s.startsWith("aaa")).toBe(true);
+    });
+
+    it("never splits a surrogate pair at the end of the cut", () => {
+      const line = `x${"a".repeat(157)}\u{1F600}${"b".repeat(200)}`;
+      const s = snip(line) as string;
+      expect(LONE_SURROGATE.test(s)).toBe(false);
+      expect(s.endsWith("…")).toBe(true);
+      expect(s.length).toBeLessThanOrEqual(160);
+    });
+
+    it("never splits a surrogate pair at the start of the window", () => {
+      // The window start lands between the two halves of the emoji.
+      const line = `${"a".repeat(250)}\u{1F600}${"b".repeat(151)} needle`;
+      const s = snip(line, "needle") as string;
+      expect(LONE_SURROGATE.test(s)).toBe(false);
+      expect(s.startsWith("…")).toBe(true);
+      expect(s).toContain("needle");
+      expect(s.length).toBeLessThanOrEqual(160);
+    });
+
+    it("matches case-insensitively where lower-casing changes the length", () => {
+      expect(snip("\u0130stanbul Target", "target")).toBe("\u0130stanbul Target");
+      expect(snip("Target \u0130\u0130\u0130", "\u0130\u0130")).toBe("Target \u0130\u0130\u0130");
+    });
+
+    it("keeps the match in view when earlier characters change length when lower-cased", () => {
+      const line = `${"\u0130".repeat(150)}${"x".repeat(150)} TARGET ${"y".repeat(200)}`;
+      const s = snip(line, "target") as string;
+      expect(s).toContain("TARGET");
+      expect(s.length).toBeLessThanOrEqual(160);
+    });
+
     it("stays fast on a long run of unclosed brackets", () => {
       const evil = `x${"[a](".repeat(20000)}`;
       const t = Date.now();
       expect(snip(evil)).toHaveLength(160);
       expect(Date.now() - t).toBeLessThan(1000);
     });
+  });
+
+  it("cuts a very long heading to 160 characters", () => {
+    const r = findInPages([page("a", `## ${"h".repeat(300)}\nneedle`)], "needle");
+    const h = r.matches[0]?.heading as string;
+    expect(h).toHaveLength(160);
+    expect(h.endsWith("…")).toBe(true);
+    const short = findInPages([page("a", `## ${"h".repeat(160)}\nneedle`)], "needle");
+    expect(short.matches[0]?.heading).toBe("h".repeat(160));
   });
 
   it("stops at the limit and says there was more", () => {
@@ -209,6 +287,19 @@ describe("missableMarks", () => {
     expect(marks("- [ ] **Sample Trophy** missable")).toEqual([]);
   });
 
+  it("cleans the name before lower-casing it", () => {
+    expect(marks("- [ ] **⚠️ Sample Feat** — text")).toEqual(["sample feat"]);
+    expect(marks("- [ ] **\u26A0 Plain Sign** ⚠")).toEqual(["plain sign"]);
+    expect(marks("- [ ] ** ⚠  ⚠️  Twice ** x")).toEqual(["twice"]);
+    expect(marks("- [ ] **[Linked Name](/doc/abc)** ⚠")).toEqual(["linked name"]);
+    expect(marks("- [ ] **`Code` Name** ⚠")).toEqual(["code name"]);
+    expect(marks("- [ ] **Spaced \t  Out   Name** ⚠")).toEqual(["spaced out name"]);
+  });
+
+  it("ignores a name that is empty after cleaning", () => {
+    expect(marks("- [ ] **⚠️** ⚠", "- [ ] **` `** ⚠", "- [ ] **[](/doc/a)** ⚠")).toEqual([]);
+  });
+
   it("collapses duplicates, keeping first-seen order, across pages", () => {
     const pages = [
       page("a", "- [ ] **Beta** ⚠\n- [ ] **Alpha** ⚠"),
@@ -239,7 +330,15 @@ describe("GuidePageService", () => {
     const hubs = over.hubs ?? { h1: ["a", "b"] };
     const texts = over.texts ?? { a: "# Intro\nalpha needle", b: "- [ ] **Beta** ⚠\nbeta needle" };
     const failing = over.failing ?? new Set<string>();
-    const state = { clock: 1_000_000, loads: [] as string[], active: 0, maxActive: 0 };
+    const state = {
+      clock: 1_000_000,
+      loads: [] as string[],
+      active: 0,
+      maxActive: 0,
+      /** While set, every page fetch waits for it (a hung wiki). */
+      gate: null as Promise<void> | null,
+      timers: [] as { fn: () => void; ms: number; cancelled: boolean }[],
+    };
     const index = {
       pageRefs: (hubId: string): Ref[] | null => (hubs[hubId] ? hubs[hubId].map(ref) : null),
     };
@@ -249,13 +348,26 @@ describe("GuidePageService", () => {
         state.active += 1;
         state.maxActive = Math.max(state.maxActive, state.active);
         await new Promise((r) => setTimeout(r, 1));
+        if (state.gate) await state.gate;
         state.active -= 1;
         if (failing.has(id)) throw new Error("upstream said: secret-token-123");
         return texts[id] ?? "";
       },
     };
     const make = (opts: Partial<ConstructorParameters<typeof GuidePageService>[0]> = {}) =>
-      new GuidePageService({ index, source, now: () => state.clock, ...opts });
+      new GuidePageService({
+        index,
+        source,
+        now: () => state.clock,
+        setTimer: (fn, ms) => {
+          const t = { fn, ms, cancelled: false };
+          state.timers.push(t);
+          return () => {
+            t.cancelled = true;
+          };
+        },
+        ...opts,
+      });
     return { state, make, failing, texts, hubs };
   }
 
@@ -440,5 +552,229 @@ describe("GuidePageService", () => {
     expect(await svc.marks("h1")).toEqual({ missable: [] });
     expect(await svc.find("h1", "needle")).toEqual({ matches: [], truncated: false });
     expect(state.loads).toEqual([]);
+  });
+
+  describe("a slow wiki", () => {
+    const settle = () => new Promise((r) => setTimeout(r, 20));
+    const hang = (state: { gate: Promise<void> | null }): (() => void) => {
+      let release = () => {};
+      state.gate = new Promise<void>((r) => {
+        release = r;
+      });
+      return () => {
+        state.gate = null;
+        release();
+      };
+    };
+
+    it("answers an expired copy at once and refreshes in the background", async () => {
+      const { make, state, texts } = setup();
+      const svc = make({ ttlMs: 1000 });
+      await svc.find("h1", "needle");
+      state.clock += 5000;
+      texts.a = "# Intro\nalpha needle changed";
+      const release = hang(state);
+      const quick = await svc.find("h1", "alpha");
+      expect(quick?.matches[0]?.snippet).toBe("alpha needle");
+      expect(state.loads).toEqual(["a", "b", "a", "b"]);
+      // Still refreshing: more requests share it and are answered from the copy.
+      await svc.marks("h1");
+      expect(state.loads).toHaveLength(4);
+      release();
+      await settle();
+      expect((await svc.find("h1", "alpha"))?.matches[0]?.snippet).toBe("alpha needle changed");
+      expect(state.loads).toHaveLength(4);
+    });
+
+    it("keeps the held copy when the background refresh fails, without an unhandled rejection", async () => {
+      const { make, state, failing } = setup();
+      const svc = make({ ttlMs: 1000 });
+      await svc.find("h1", "needle");
+      failing.add("a").add("b");
+      state.clock += 5000;
+      expect((await svc.find("h1", "needle"))?.matches).toHaveLength(2);
+      await settle();
+      expect((await svc.find("h1", "needle"))?.matches).toHaveLength(2);
+    });
+
+    it("does nothing in the background when the limiter refuses", async () => {
+      const { make, state } = setup();
+      const svc = make({ ttlMs: 1000, maxLoadsPerMinute: 1 });
+      await svc.find("h1", "needle");
+      state.clock += 5000;
+      expect((await svc.find("h1", "needle"))?.matches).toHaveLength(2);
+      await settle();
+      expect(state.loads).toEqual(["a", "b"]);
+    });
+
+    it("makes a request with no copy wait at most the deadline, while the load carries on", async () => {
+      const { make, state } = setup();
+      const svc = make();
+      const release = hang(state);
+      const first = svc.find("h1", "needle");
+      const second = svc.marks("h1");
+      const rejected = Promise.all([
+        first.then(
+          () => "ok",
+          (e: unknown) => (e as Error).message,
+        ),
+        second.then(
+          () => "ok",
+          (e: unknown) => (e as Error).message,
+        ),
+      ]);
+      await settle();
+      const timers = state.timers.filter((t) => !t.cancelled);
+      expect(timers.map((t) => t.ms)).toEqual([6000, 6000]);
+      for (const t of timers) t.fn();
+      const results = await rejected;
+      expect(results[0]).not.toBe("ok");
+      expect(results[1]).not.toBe("ok");
+      expect(results.join(" ")).not.toContain("secret");
+      expect(state.loads).toEqual(["a", "b"]);
+
+      release();
+      await settle();
+      // The load finished in the background and filled the cache.
+      expect((await svc.find("h1", "needle"))?.matches).toHaveLength(2);
+      expect(state.loads).toEqual(["a", "b"]);
+    });
+
+    it("answers a request that beats the deadline and cancels its timer", async () => {
+      const { make, state } = setup();
+      const svc = make({ loadDeadlineMs: 1234 });
+      expect((await svc.find("h1", "needle"))?.matches).toHaveLength(2);
+      expect(state.timers.map((t) => [t.ms, t.cancelled])).toEqual([[1234, true]]);
+    });
+
+    it("does not let a load that fails after the deadline become an unhandled rejection", async () => {
+      const { make, state, failing } = setup({ failing: new Set(["a", "b"]) });
+      const svc = make();
+      const release = hang(state);
+      const pending = svc.find("h1", "needle").catch((e: unknown) => (e as Error).message);
+      await settle();
+      for (const t of state.timers) t.fn();
+      await pending;
+      release();
+      await settle();
+      expect(failing.size).toBe(2);
+    });
+  });
+
+  describe("partial loads", () => {
+    const settle = () => new Promise((r) => setTimeout(r, 20));
+
+    it("keeps the held text of a page the refresh lost, and treats the result as complete", async () => {
+      const { make, state, failing } = setup();
+      const svc = make({ ttlMs: 10_000, partialTtlMs: 100 });
+      await svc.find("h1", "needle");
+      state.clock += 10_000;
+      failing.add("a");
+      await svc.find("h1", "needle");
+      await settle();
+      state.clock += 5000;
+      const found = await svc.find("h1", "needle");
+      expect(found?.matches.map((m) => m.snippet)).toEqual(["alpha needle", "beta needle"]);
+      expect(await svc.marks("h1")).toEqual({ missable: ["beta"] });
+      // Complete, so the full TTL applies: no reload 5 s later.
+      expect(state.loads).toHaveLength(4);
+    });
+
+    it("caches a result still missing a page only for partialTtlMs", async () => {
+      const { make, state, failing } = setup({ failing: new Set(["a"]) });
+      const svc = make({ ttlMs: 600_000, partialTtlMs: 60_000 });
+      expect((await svc.find("h1", "needle"))?.matches.map((m) => m.pageUrl)).toEqual(["/doc/b"]);
+      state.clock += 59_999;
+      await svc.find("h1", "needle");
+      expect(state.loads).toEqual(["a", "b"]);
+      failing.clear();
+      state.clock += 1;
+      // Expired: the partial copy answers at once and the retry runs behind it.
+      await svc.find("h1", "needle");
+      await settle();
+      expect(state.loads).toEqual(["a", "b", "a", "b"]);
+      const full = await svc.find("h1", "needle");
+      expect(full?.matches.map((m) => m.pageUrl)).toEqual(["/doc/a", "/doc/b"]);
+      state.clock += 540_000;
+      await svc.find("h1", "needle");
+      expect(state.loads).toHaveLength(4);
+    });
+
+    it("defaults the partial TTL to a minute", async () => {
+      const { make, state } = setup({ failing: new Set(["a"]) });
+      const svc = make();
+      await svc.find("h1", "needle");
+      state.clock += 59_999;
+      await svc.find("h1", "needle");
+      expect(state.loads).toHaveLength(2);
+      state.clock += 1;
+      await svc.find("h1", "needle");
+      expect(state.loads).toHaveLength(4);
+    });
+
+    it("does not call a load that fetched nothing complete just because a copy fills every page", async () => {
+      const { make, state, failing } = setup();
+      const svc = make({ ttlMs: 1000 });
+      await svc.find("h1", "needle");
+      failing.add("a").add("b");
+      state.clock += 5000;
+      await svc.find("h1", "needle");
+      await settle();
+      // The failed refresh left the old copy (and its age) alone, so the next request retries.
+      await svc.find("h1", "needle");
+      await settle();
+      expect(state.loads).toHaveLength(6);
+    });
+  });
+
+  describe("memory bound", () => {
+    it("evicts the oldest hubs first when held text exceeds maxChars, never the one just stored", async () => {
+      const hubs = Object.fromEntries(Array.from({ length: 4 }, (_, i) => [`h${i}`, [`p${i}`]]));
+      const texts = Object.fromEntries(
+        Array.from({ length: 4 }, (_, i) => [`p${i}`, "x".repeat(10)]),
+      );
+      const { make, state } = setup({ hubs, texts });
+      const svc = make({ maxChars: 25 });
+      for (const h of ["h0", "h1", "h2", "h3"]) await svc.find(h, "x");
+      expect(state.loads).toEqual(["p0", "p1", "p2", "p3"]);
+      await svc.find("h3", "x");
+      await svc.find("h2", "x");
+      expect(state.loads).toHaveLength(4);
+      await svc.find("h0", "x");
+      expect(state.loads).toHaveLength(5);
+    });
+
+    it("keeps a single hub larger than maxChars", async () => {
+      const { make, state } = setup({ texts: { a: "x".repeat(100), b: "y".repeat(100) } });
+      const svc = make({ maxChars: 10 });
+      await svc.find("h1", "x");
+      await svc.find("h1", "x");
+      expect(state.loads).toEqual(["a", "b"]);
+    });
+
+    it("holds 24 hubs by default", async () => {
+      const hubs = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`h${i}`, [`p${i}`]]));
+      const { make, state } = setup({ hubs });
+      const svc = make({ maxLoadsPerMinute: 100 });
+      for (let i = 0; i < 25; i += 1) await svc.find(`h${i}`, "x");
+      expect(state.loads).toHaveLength(25);
+      await svc.find("h1", "x");
+      expect(state.loads).toHaveLength(25);
+      await svc.find("h0", "x");
+      expect(state.loads).toHaveLength(26);
+    });
+  });
+
+  it("frees limiter slots as the window rolls, not all at once", async () => {
+    const hubs = Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`h${i}`, [`p${i}`]]));
+    const { make, state } = setup({ hubs });
+    const svc = make({ maxLoadsPerMinute: 2 });
+    await svc.find("h0", "x"); // t = 0
+    state.clock += 30_000;
+    await svc.find("h1", "x"); // t = 30 s
+    state.clock += 31_000; // t = 61 s: the first load has left the window, the second has not
+    await svc.find("h2", "x");
+    await expect(svc.find("h3", "x")).rejects.toThrow();
+    expect(state.loads).toEqual(["p0", "p1", "p2"]);
   });
 });
