@@ -5,7 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createHandler, IMAGE_HOSTS, type RouteDeps } from "../src/server/routes.js";
-import type { AchievementsResponse, GuideHub, NowResponse } from "../src/shared/types.js";
+import type {
+  AchievementsResponse,
+  FindResponse,
+  GuideHub,
+  GuideMarksResponse,
+  NowResponse,
+} from "../src/shared/types.js";
 
 const hub: GuideHub = {
   hubId: "h1",
@@ -27,9 +33,16 @@ const ach: AchievementsResponse = {
   achievements: [],
 };
 
+const found: FindResponse = {
+  matches: [{ pageTitle: "Checklist", pageUrl: "/doc/c1", heading: null, snippet: "Sample item" }],
+  truncated: false,
+};
+const marked: GuideMarksResponse = { missable: ["sample trophy"] };
+
 let server: Server;
 let base: string;
 let refreshCalls = 0;
+const findCalls: [string, string][] = [];
 
 beforeAll(async () => {
   const dir = await mkdtemp(join(tmpdir(), "gc-routes-"));
@@ -44,6 +57,11 @@ beforeAll(async () => {
       refreshCalls += 1;
     },
     achievements: async (source, id) => (source === "steam" && id === "10" ? ach : null),
+    find: async (hubId, q) => {
+      findCalls.push([hubId, q]);
+      return hubId === "h1" ? found : null;
+    },
+    marks: async (hubId) => (hubId === "h1" ? marked : null),
   };
   server = createServer((req, res) => void createHandler(deps)(req, res));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -101,6 +119,111 @@ describe("routes", () => {
 
   it("404s an unknown hub", async () => {
     expect((await fetch(`${base}/companion/api/guides/nope`)).status).toBe(404);
+  });
+
+  describe("guide find and marks", () => {
+    const find = (hubId: string, qs: string) =>
+      fetch(`${base}/companion/api/guides/${hubId}/find${qs}`);
+
+    it("returns matches for a known hub as uncached JSON", async () => {
+      const r = await find("h1", "?q=sample");
+      expect(r.status).toBe(200);
+      expect(await r.json()).toEqual(found);
+      expect(r.headers.get("cache-control")).toBe("no-store");
+      expect(r.headers.get("content-security-policy")).toContain("default-src 'none'");
+    });
+
+    it("404s an unknown hub", async () => {
+      expect((await find("nope", "?q=sample")).status).toBe(404);
+    });
+
+    it.each([
+      ["missing", ""],
+      ["empty", "?q="],
+      ["other parameter", "?query=sample"],
+      ["one character", "?q=a"],
+      ["one character with padding", "?q=%20%20a%20%20"],
+      ["blank", "?q=%20%20%20"],
+      ["one emoji", `?q=${encodeURIComponent("\u{1F600}")}`],
+      ["101 characters", `?q=${"a".repeat(101)}`],
+    ])("rejects a bad q (%s) with 400", async (_name, qs) => {
+      const before = findCalls.length;
+      expect((await find("h1", qs)).status).toBe(400);
+      expect(findCalls.length).toBe(before);
+    });
+
+    it("accepts two and one hundred characters", async () => {
+      expect((await find("h1", "?q=ab")).status).toBe(200);
+      expect((await find("h1", `?q=${"a".repeat(100)}`)).status).toBe(200);
+      expect((await find("h1", `?q=${"%20".repeat(5)}${"a".repeat(100)}`)).status).toBe(200);
+    });
+
+    it("hands q to the dependency decoded once, spaces and non-ASCII intact", async () => {
+      await find("h1", "?q=caf%C3%A9%20au%20lait%20%E2%9A%A0");
+      await find("h1", "?q=a+b%2520c");
+      expect(findCalls.slice(-2)).toEqual([
+        ["h1", "caf\u00e9 au lait \u26a0"],
+        ["h1", "a b%20c"],
+      ]);
+    });
+
+    it("rejects a hub id outside the pattern", async () => {
+      expect((await find("h1.x", "?q=sample")).status).toBe(404);
+      expect((await find("a".repeat(65), "?q=sample")).status).toBe(404);
+    });
+
+    it("returns the missable marks for a known hub", async () => {
+      const r = await fetch(`${base}/companion/api/guides/h1/marks`);
+      expect(r.status).toBe(200);
+      expect(await r.json()).toEqual(marked);
+      expect(r.headers.get("cache-control")).toBe("no-store");
+    });
+
+    it("404s the marks of an unknown hub", async () => {
+      expect((await fetch(`${base}/companion/api/guides/nope/marks`)).status).toBe(404);
+    });
+
+    it("rejects writes", async () => {
+      for (const p of ["h1/find?q=sample", "h1/marks"]) {
+        const r = await fetch(`${base}/companion/api/guides/${p}`, { method: "POST" });
+        expect(r.status).toBe(405);
+        expect(r.headers.get("allow")).toBe("GET, HEAD");
+      }
+    });
+
+    it("answers HEAD with the headers and no body", async () => {
+      const r = await fetch(`${base}/companion/api/guides/h1/marks`, { method: "HEAD" });
+      expect(r.status).toBe(200);
+      expect(await r.text()).toBe("");
+    });
+
+    it("turns a throwing dependency into a 500 without leaking its message", async () => {
+      const deps: RouteDeps = {
+        staticDir: "/nonexistent",
+        now: () => now,
+        guides: () => ({ available: false, hubs: [] }),
+        hubTree: () => null,
+        refreshGuides: () => {},
+        achievements: async () => null,
+        find: async (_hub, q) => {
+          throw new Error(`secret detail ${q}`);
+        },
+        marks: async () => {
+          throw new Error("secret detail");
+        },
+      };
+      const s = createServer((req, res) => void createHandler(deps)(req, res));
+      await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+      const origin = `http://127.0.0.1:${(s.address() as AddressInfo).port}/companion/api/guides/h1`;
+      for (const path of ["/find?q=needle", "/marks"]) {
+        const r = await fetch(origin + path);
+        expect(r.status).toBe(500);
+        const body = await r.text();
+        expect(body).not.toContain("secret detail");
+        expect(body).not.toContain("needle");
+      }
+      await new Promise<void>((res) => s.close(() => res()));
+    });
   });
 
   it("asks for a guide refresh only when requested", async () => {
@@ -170,6 +293,8 @@ describe("routes", () => {
       hubTree: () => null,
       refreshGuides: () => {},
       achievements: async () => null,
+      find: async () => null,
+      marks: async () => null,
     };
     const s = createServer((req, res) => void createHandler(deps)(req, res));
     await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));

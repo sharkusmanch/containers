@@ -4,6 +4,7 @@ import { buildDeps } from "./app.js";
 import { loadConfig } from "./config.js";
 import { Detector } from "./detector.js";
 import { GuideIndex } from "./guide-index.js";
+import { GuidePageService } from "./guide-pages.js";
 import { OutlineClient } from "./outline.js";
 import { RaClient } from "./ra.js";
 import { createHandler } from "./routes.js";
@@ -33,6 +34,7 @@ const index = new GuideIndex({
   scheduleDocId: config.outlineScheduleDocId,
 });
 const achievements = new AchievementService({ steam, ra });
+const pages = new GuidePageService({ index, source: outline });
 
 detector.start();
 // While Outline stays unreachable the index retries every few seconds; log only the first
@@ -52,6 +54,7 @@ const handler = createHandler(
     detector,
     index,
     achievements,
+    pages,
   }),
 );
 const server = createServer((req, res) => void handler(req, res));

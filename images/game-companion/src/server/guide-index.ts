@@ -80,9 +80,17 @@ export interface GuideSource {
   docText(id: string): Promise<string>;
 }
 
+/** A page of a hub with its Outline document id. */
+export interface PageRef {
+  id: string;
+  title: string;
+  url: string;
+}
+
 interface Entry {
   hub: GuideHub;
   pages: GuidePage[];
+  refs: PageRef[];
 }
 
 const SAFE_URL = /^\/doc\/[A-Za-z0-9_-]+$/;
@@ -96,6 +104,13 @@ function toPages(nodes: OutlineNode[]): GuidePage[] {
   return nodes
     .filter((n) => isSafeGuideUrl(n.url))
     .map((n) => ({ title: n.title, url: n.url, children: toPages(n.children) }));
+}
+
+/** The pages `toPages` keeps, flattened depth-first, each with its document id. */
+function toRefs(nodes: OutlineNode[]): PageRef[] {
+  return nodes
+    .filter((n) => isSafeGuideUrl(n.url))
+    .flatMap((n) => [{ id: n.id, title: n.title, url: n.url }, ...toRefs(n.children)]);
 }
 
 function findNode(nodes: OutlineNode[], id: string): OutlineNode | null {
@@ -213,6 +228,12 @@ export class GuideIndex {
     return entry ? { hub: entry.hub, pages: entry.pages } : null;
   }
 
+  /** The pages `tree(hubId)` returns, flattened depth-first, with their document ids. */
+  pageRefs(hubId: string): PageRef[] | null {
+    const entry = this.entries.find((e) => e.hub.hubId === hubId);
+    return entry ? [...entry.refs] : null;
+  }
+
   private async build(source: GuideSource): Promise<boolean> {
     let docs: OutlineDoc[];
     let tree: OutlineNode[];
@@ -251,7 +272,11 @@ export class GuideIndex {
           nowPlaying: playing.has(normaliseTitle(d.title)),
         };
         const node = children.find((c) => c.id === d.id);
-        return { hub, pages: node ? toPages(node.children) : [] };
+        return {
+          hub,
+          pages: node ? toPages(node.children) : [],
+          refs: node ? toRefs(node.children) : [],
+        };
       });
     this.built = true;
     return true;

@@ -178,6 +178,49 @@ describe("GuideIndex", () => {
     expect(idx.tree("nope")).toBeNull();
   });
 
+  it("lists a hub's pages with their ids in tree order, safe URLs only", async () => {
+    const idx = new GuideIndex({ ...base, source: source() });
+    await idx.refresh();
+    expect(idx.pageRefs("h1")).toEqual([
+      { id: "c1", title: "Achievement Checklist", url: "/doc/checklist-ddd" },
+      { id: "c2", title: "Collectibles", url: "/doc/collectibles-eee" },
+      { id: "c3", title: "Collectibles: Area One", url: "/doc/area-one-fff" },
+    ]);
+    expect(idx.pageRefs("h2")).toEqual([]);
+    expect(idx.pageRefs("nope")).toBeNull();
+    expect(idx.pageRefs("h4")).toBeNull();
+  });
+
+  it("drops the children of an unsafe page from the refs, as tree() does", async () => {
+    const nested: OutlineNode[] = [
+      {
+        id: "p1",
+        title: "Achievement Guides",
+        url: "/doc/guides-ppp",
+        children: [
+          {
+            id: "h1",
+            title: "Zeta Game",
+            url: "/doc/zeta-aaa",
+            children: [
+              {
+                id: "x1",
+                title: "Off-site",
+                url: "https://evil.example/x",
+                children: [{ id: "x2", title: "Hidden", url: "/doc/hidden-ggg", children: [] }],
+              },
+              { id: "x3", title: "Kept", url: "/doc/kept-hhh", children: [] },
+            ],
+          },
+        ],
+      },
+    ];
+    const idx = new GuideIndex({ ...base, source: source({ collectionTree: async () => nested }) });
+    await idx.refresh();
+    expect(idx.pageRefs("h1")?.map((r) => r.id)).toEqual(["x3"]);
+    expect(idx.tree("h1")?.pages.map((p) => p.title)).toEqual(["Kept"]);
+  });
+
   it("gives a hub an empty tree when the collection tree lacks it", async () => {
     const idx = new GuideIndex({ ...base, source: source() });
     await idx.refresh();

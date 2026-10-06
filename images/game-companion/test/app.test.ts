@@ -32,6 +32,7 @@ function parts(over: Record<string, unknown> = {}) {
       requestRefresh: () => {},
     },
     achievements: { get: async () => null },
+    pages: { find: async () => null, marks: async () => null },
     ...over,
   };
 }
@@ -156,6 +157,37 @@ describe("buildDeps", () => {
     d.refreshGuides();
     expect(index.refreshed).toBe(1);
     expect((await d.achievements("steam", "10"))?.title).toBe("Zeta");
+  });
+});
+
+describe("guide pages", () => {
+  it("calls the page service as methods, keeping their `this`", async () => {
+    class Pages {
+      private readonly title = "Sample Quest";
+      asked: string[] = [];
+      async find(hubId: string, query: string) {
+        this.asked.push(`find:${hubId}:${query}`);
+        return {
+          matches: [{ pageTitle: this.title, pageUrl: "/doc/a", heading: null, snippet: query }],
+          truncated: false,
+        };
+      }
+      async marks(hubId: string) {
+        this.asked.push(`marks:${hubId}`);
+        return { missable: [this.title.toLowerCase()] };
+      }
+    }
+    const pages = new Pages();
+    const d = buildDeps(parts({ pages }));
+    expect((await d.find("h1", "needle"))?.matches[0]?.pageTitle).toBe("Sample Quest");
+    expect(await d.marks("h1")).toEqual({ missable: ["sample quest"] });
+    expect(pages.asked).toEqual(["find:h1:needle", "marks:h1"]);
+  });
+
+  it("passes an unknown hub through as null", async () => {
+    const d = buildDeps(parts());
+    expect(await d.find("nope", "needle")).toBeNull();
+    expect(await d.marks("nope")).toBeNull();
   });
 });
 

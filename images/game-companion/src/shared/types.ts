@@ -73,6 +73,28 @@ export interface AchievementsResponse {
   achievements: Achievement[];
 }
 
+/** One place where a guide page mentions the searched text. */
+export interface FindMatch {
+  pageTitle: string;
+  /** Same-origin path of the page, starting with `/doc/`. */
+  pageUrl: string;
+  /** Text of the nearest heading above the match, or null. */
+  heading: string | null;
+  /** The matching line with markdown markers removed, at most 160 characters. */
+  snippet: string;
+}
+
+export interface FindResponse {
+  matches: FindMatch[];
+  /** True when more matches existed than were returned. */
+  truncated: boolean;
+}
+
+export interface GuideMarksResponse {
+  /** Lower-cased achievement names that the guide marks as missable. */
+  missable: string[];
+}
+
 export interface ErrorResponse {
   error: string;
 }

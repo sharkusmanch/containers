@@ -1,6 +1,7 @@
 import type { AchievementService } from "./achievements.js";
 import type { Detector, DetectorSnapshot } from "./detector.js";
 import type { GuideIndex } from "./guide-index.js";
+import type { GuidePageService } from "./guide-pages.js";
 import type { RouteDeps } from "./routes.js";
 
 /** How many games the detector has reported that stay eligible for achievement lookups. */
@@ -13,6 +14,7 @@ export interface AppParts {
   detector: Pick<Detector, "current">;
   index: Pick<GuideIndex, "available" | "hubs" | "lookup" | "tree" | "requestRefresh">;
   achievements: Pick<AchievementService, "get">;
+  pages: Pick<GuidePageService, "find" | "marks">;
 }
 
 /**
@@ -20,7 +22,7 @@ export interface AppParts {
  * Every call goes through the object (never a detached method), so classes keep `this`.
  */
 export function buildDeps(parts: AppParts): RouteDeps {
-  const { detector, index, achievements } = parts;
+  const { detector, index, achievements, pages } = parts;
 
   // Games the detector has reported since start, oldest first. Together with the guide index
   // this is the whole set an anonymous caller may ask the achievement service about.
@@ -69,5 +71,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
       if (!detected.has(key) && index.lookup(source, id).length === 0) return null;
       return achievements.get(source, id, { priority });
     },
+    find: (hubId, query) => pages.find(hubId, query),
+    marks: (hubId) => pages.marks(hubId),
   };
 }

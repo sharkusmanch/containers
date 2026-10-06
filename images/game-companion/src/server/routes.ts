@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   AchievementsResponse,
+  FindResponse,
+  GuideMarksResponse,
   GuidesResponse,
   HubTreeResponse,
   NowResponse,
@@ -17,7 +19,15 @@ export interface RouteDeps {
   refreshGuides(): void;
   /** Null when the game has no achievement data at all. Throws when a first fetch fails. */
   achievements(source: Source, id: string): Promise<AchievementsResponse | null>;
+  /** Null for an unknown hub. `query` is only ever compared with text the server holds. */
+  find(hubId: string, query: string): Promise<FindResponse | null>;
+  /** Null for an unknown hub. */
+  marks(hubId: string): Promise<GuideMarksResponse | null>;
 }
+
+/** Bounds on the trimmed search text, in characters (code points). */
+const FIND_MIN = 2;
+const FIND_MAX = 100;
 
 const BASE = "/companion";
 
@@ -88,6 +98,21 @@ export function createHandler(
       if (rest === "api/guides") {
         if (query.get("refresh") === "1") deps.refreshGuides();
         return json(res, 200, deps.guides());
+      }
+      const subMatch = /^api\/guides\/([A-Za-z0-9-]{1,64})\/(find|marks)$/.exec(rest);
+      if (subMatch) {
+        const hubId = subMatch[1] as string;
+        if (subMatch[2] === "marks") {
+          const marks = await deps.marks(hubId);
+          return marks ? json(res, 200, marks) : json(res, 404, { error: "unknown guide" });
+        }
+        const q = query.get("q");
+        const length = q === null ? 0 : [...q.trim()].length;
+        if (q === null || length < FIND_MIN || length > FIND_MAX) {
+          return json(res, 400, { error: "bad request" });
+        }
+        const found = await deps.find(hubId, q);
+        return found ? json(res, 200, found) : json(res, 404, { error: "unknown guide" });
       }
       const hubMatch = /^api\/guides\/([A-Za-z0-9-]{1,64})$/.exec(rest);
       if (hubMatch) {

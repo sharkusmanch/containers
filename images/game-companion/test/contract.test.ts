@@ -65,6 +65,8 @@ beforeAll(async () => {
       if (id === "13") throw new Error("upstream down");
       return null;
     },
+    find: async () => null,
+    marks: async () => null,
   };
   server = createServer((req, res) => void createHandler(deps)(req, res));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
