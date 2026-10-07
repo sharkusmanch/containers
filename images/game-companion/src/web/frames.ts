@@ -16,7 +16,8 @@ export interface Frames {
   setHideChrome(hide: boolean): void;
   /**
    * Finds `text` (preferably under `heading`) in the page framed in slot `index` and highlights it.
-   * In "heading" mode it looks for the section heading carrying `text` instead (see findTextRange).
+   * In "heading" mode it looks for the section heading carrying `text` instead (see findTextRange);
+   * `fallback` is then tried once, at the deadline, if the heading text has drifted.
    * Waits for a navigation this module started to finish first. "gone" when the slot has no frame or
    * its frame was dropped meanwhile.
    */
@@ -25,6 +26,7 @@ export interface Frames {
     text: string,
     heading?: string | null,
     mode?: LocateMode,
+    fallback?: string,
   ): Promise<LocateResult>;
 }
 
@@ -160,7 +162,7 @@ export function createFrames(
       hideChrome = hide;
       for (const entry of entries) if (entry !== null) applyTo(entry);
     },
-    async locate(index, text, heading, mode = "text") {
+    async locate(index, text, heading, mode = "text", fallback) {
       const entry = Number.isInteger(index) ? (entries[index] ?? null) : null;
       if (entry === null) return "gone";
       entry.live?.abort();
@@ -173,6 +175,7 @@ export function createFrames(
         gone: dropped,
         signal: mine.signal,
         mode,
+        ...(fallback === undefined ? {} : { fallback }),
       });
       if (entry.live === mine) entry.live = null;
       if (found) return "found";

@@ -35,8 +35,73 @@ interface Piece {
   end: number;
 }
 
+const HEADINGS = "h1, h2, h3, h4, h5, h6";
+
+/**
+ * True for text inside a control the wiki puts in a heading (its "#" anchor button): such text
+ * is not part of the heading and is never searched.
+ */
+function inHeadingControl(node: Node): boolean {
+  const control = node.parentElement?.closest("button, .heading-anchor");
+  return control != null && control.closest(HEADINGS) !== null;
+}
+
 /** What a search is for: a piece of text anywhere, or the section heading that carries it. */
 export type LocateMode = "text" | "heading";
+
+interface Scan {
+  root: Element;
+  pieces: Piece[];
+  /** The folded text of every piece, joined. */
+  all: string;
+}
+
+function scan(doc: Document): Scan | null {
+  const root = searchRoot(doc);
+  if (root === null) return null;
+  const pieces: Piece[] = [];
+  let all = "";
+  const walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    if (node.parentElement?.closest(SKIPPED) != null || inHeadingControl(node)) continue;
+    const data = node.nodeValue ?? "";
+    if (data === "") continue;
+    pieces.push({ node: node as Text, start: all.length, end: all.length + data.length });
+    all += fold(data);
+  }
+  return { root, pieces, all };
+}
+
+/** A heading's text: its own text nodes, without the controls inside it. */
+function headingTexts(found: Scan): { heading: Element; text: string; pieces: Piece[] }[] {
+  return [...found.root.querySelectorAll(HEADINGS)].map((heading) => {
+    const pieces = found.pieces.filter((p) => heading.contains(p.node));
+    return { heading, pieces, text: collapse(pieces.map((p) => p.node.nodeValue ?? "").join("")) };
+  });
+}
+
+function headingRange(doc: Document, heading: { pieces: Piece[] } | undefined): Range | null {
+  const first = heading?.pieces[0];
+  const last = heading?.pieces[heading.pieces.length - 1];
+  if (first === undefined || last === undefined) return null;
+  const range = doc.createRange();
+  range.setStart(first.node, 0);
+  range.setEnd(last.node, last.node.length);
+  return range;
+}
+
+function textRange(doc: Document, found: Scan, needle: string, from = 0): Range | null {
+  const at = found.all.indexOf(needle, from);
+  if (at === -1) return null;
+  const last = at + needle.length;
+  const start = found.pieces.find((p) => at < p.end);
+  const end = found.pieces.find((p) => last <= p.end && last > p.start);
+  if (start === undefined || end === undefined) return null;
+  const range = doc.createRange();
+  range.setStart(start.node, at - start.start);
+  range.setEnd(end.node, last - end.start);
+  return range;
+}
 
 /**
  * First place `text` occurs in the page text of `doc`, ignoring case, as a Range. The text may
@@ -46,6 +111,9 @@ export type LocateMode = "text" | "heading";
  * In "heading" mode the target is instead the first h1-h6 whose text equals `text` (folded the
  * same way), else the first one that contains it, and the range covers that heading's text; with
  * no such heading it behaves as "text" mode. The `heading` hint is not used then.
+ *
+ * A heading's text never includes a button (or `.heading-anchor`) inside it, and text in such a
+ * control is never matched.
  */
 export function findTextRange(
   doc: Document,
@@ -54,64 +122,54 @@ export function findTextRange(
   mode: LocateMode = "text",
 ): Range | null {
   const needle = fold(text.trim());
-  const root = searchRoot(doc);
-  if (needle === "" || root === null) return null;
-
-  const pieces: Piece[] = [];
-  let all = "";
-  const walker = doc.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
-  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-    if (node.parentElement?.closest(SKIPPED) != null) continue;
-    const data = node.nodeValue ?? "";
-    if (data === "") continue;
-    pieces.push({ node: node as Text, start: all.length, end: all.length + data.length });
-    all += fold(data);
-  }
+  const found = scan(doc);
+  if (needle === "" || found === null) return null;
 
   if (mode === "heading") {
     const wantedTitle = collapse(text);
-    const titles = [...root.querySelectorAll("h1, h2, h3, h4, h5, h6")];
-    const title =
-      titles.find((h) => collapse(h.textContent ?? "") === wantedTitle) ??
-      titles.find((h) => collapse(h.textContent ?? "").includes(wantedTitle));
-    const inside = title === undefined ? [] : pieces.filter((p) => title.contains(p.node));
-    const first = inside[0];
-    const last = inside[inside.length - 1];
-    if (first !== undefined && last !== undefined) {
-      const range = doc.createRange();
-      range.setStart(first.node, 0);
-      range.setEnd(last.node, last.node.length);
-      return range;
-    }
+    const titles = headingTexts(found);
+    const range = headingRange(
+      doc,
+      titles.find((h) => h.text === wantedTitle) ??
+        titles.find((h) => h.text.includes(wantedTitle)),
+    );
+    if (range !== null) return range;
   }
 
-  let at = -1;
   const wanted = heading == null ? "" : collapse(heading);
   if (wanted !== "") {
-    const title = [...root.querySelectorAll("h1, h2, h3, h4, h5, h6")].find(
-      (h) => collapse(h.textContent ?? "") === wanted,
-    );
+    const title = headingTexts(found).find((h) => h.text === wanted)?.heading;
     const after =
       title === undefined
         ? undefined
-        : pieces.find(
+        : found.pieces.find(
             (p) =>
               !title.contains(p.node) &&
               (title.compareDocumentPosition(p.node) & 4) /* DOCUMENT_POSITION_FOLLOWING */ !== 0,
           );
-    if (after !== undefined) at = all.indexOf(needle, after.start);
+    if (after !== undefined) {
+      const under = textRange(doc, found, needle, after.start);
+      if (under !== null) return under;
+    }
   }
-  if (at === -1) at = all.indexOf(needle);
-  if (at === -1) return null;
+  return textRange(doc, found, needle);
+}
 
-  const last = at + needle.length;
-  const from = pieces.find((p) => at < p.end);
-  const to = pieces.find((p) => last <= p.end && last > p.start);
-  if (from === undefined || to === undefined) return null;
-  const range = doc.createRange();
-  range.setStart(from.node, at - from.start);
-  range.setEnd(to.node, last - to.start);
-  return range;
+/**
+ * The last resort for a heading whose text has drifted from the server's copy: the first heading
+ * containing `text`, else the first place `text` occurs in the page.
+ */
+export function findFallbackRange(doc: Document, text: string): Range | null {
+  const needle = fold(text.trim());
+  const found = scan(doc);
+  if (needle === "" || found === null) return null;
+  const wanted = collapse(text);
+  return (
+    headingRange(
+      doc,
+      headingTexts(found).find((h) => h.text.includes(wanted)),
+    ) ?? textRange(doc, found, needle)
+  );
 }
 
 interface HighlightRegistry {
@@ -208,6 +266,11 @@ export interface LocateOptions {
   gone?: () => boolean;
   /** "heading" looks for the section heading carrying the text; default "text". */
   mode?: LocateMode;
+  /**
+   * Heading mode only: when the deadline passes without a match, one last attempt with this
+   * text (the first heading containing it, else its first occurrence in the page).
+   */
+  fallback?: string;
   /** Aborting stops the search (it resolves false) and takes down any highlight it made. */
   signal?: AbortSignal;
 }
@@ -267,8 +330,10 @@ export function locateInFrame(
         try {
           // The wiki renders after load; a frame on another origin throws. Both mean "not yet".
           const doc = frame.contentDocument;
-          const range =
-            doc === null ? null : findTextRange(doc, text, heading, opts.mode ?? "text");
+          let range = doc === null ? null : findTextRange(doc, text, heading, opts.mode ?? "text");
+          if (doc !== null && range === null && opts.mode === "heading" && Date.now() >= deadline) {
+            range = opts.fallback === undefined ? null : findFallbackRange(doc, opts.fallback);
+          }
           if (doc !== null && range !== null) found = { doc, range };
         } catch {
           found = null;

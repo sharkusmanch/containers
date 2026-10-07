@@ -241,14 +241,97 @@ describe("findTextRange in heading mode", () => {
 
   it("ignores a heading outside the search root", () => {
     const doc = page(
-      "<h1 id='out'>Mock Harbour</h1><div class='ProseMirror'><p id='in'>Mock Harbour</p></div>",
+      "<h1 id='out'>Mock Harbour</h1>" +
+        "<div class='ProseMirror'><p id='say'>Go to Mock Harbour</p><h2 id='in'>Mock Harbour</h2></div>",
     );
+    // The heading outside the root comes first in the document; the one inside must win.
     expect(owner(findTextRange(doc, "mock harbour", null, "heading"))?.id).toBe("in");
+    const plain = page(
+      "<h1 id='out'>Mock Harbour</h1><div class='ProseMirror'><p id='in'>x</p></div>",
+    );
+    expect(findTextRange(plain, "mock harbour", null, "heading")).toBeNull();
   });
 
   it("does not use the heading hint to choose a heading", () => {
     const doc = page("<h2 id='a'>Mock Harbour</h2><h2>Two</h2><h2 id='b'>Mock Harbour</h2>");
     expect(owner(findTextRange(doc, "mock harbour", "Two", "heading"))?.id).toBe("a");
+  });
+});
+
+describe.each(["first", "last"] as const)(
+  "headings that carry the wiki's anchor button (%s in the heading)",
+  (place) => {
+    const anchor = "<button class='heading-anchor'>#</button>";
+    const h = (level: number, id: string, text: string): string =>
+      place === "first"
+        ? `<h${level} id='${id}'>${anchor}${text}</h${level}>`
+        : `<h${level} id='${id}'>${text}${anchor}</h${level}>`;
+    const owner = (r: Range | null): Element | null | undefined => r?.startContainer.parentElement;
+    const inButton = (n: Node | undefined): boolean =>
+      n?.parentElement?.closest("button, .heading-anchor") != null;
+
+    it("matches a heading by equality, so a later exact heading beats an earlier containing one", () => {
+      const doc = page(
+        `<p>intro</p>${h(2, "a", "Around Mock Harbour")}<p>x</p>${h(2, "b", "Mock Harbour")}`,
+      );
+      expect(owner(findTextRange(doc, "mock harbour", null, "heading"))?.id).toBe("b");
+    });
+
+    it("covers the heading text without the button, starting and ending outside it", () => {
+      const doc = page(`<p id='say'>Go to 4. Mock Harbour.</p>${h(3, "h", "4. Mock Harbour")}`);
+      const range = findTextRange(doc, "4. mock harbour", null, "heading");
+      expect(range?.toString()).toBe("4. Mock Harbour");
+      expect(inButton(range?.startContainer)).toBe(false);
+      expect(inButton(range?.endContainer)).toBe(false);
+      expect(owner(range)?.id).toBe("h");
+    });
+
+    it("keeps the heading text across inner markup next to the button", () => {
+      const inner =
+        place === "first"
+          ? "<h3 id='h'><button class='heading-anchor'>#</button>Mock <a href='#x'>Harbour</a></h3>"
+          : "<h3 id='h'>Mock <a href='#x'>Harbour</a><button class='heading-anchor'>#</button></h3>";
+      const range = findTextRange(
+        page(`<p>Mock Harbour</p>${inner}`),
+        "mock harbour",
+        null,
+        "heading",
+      );
+      expect(range?.toString()).toBe("Mock Harbour");
+      expect(range?.startContainer.parentElement?.closest("h3")?.id).toBe("h");
+      expect(inButton(range?.startContainer)).toBe(false);
+      expect(inButton(range?.endContainer)).toBe(false);
+    });
+
+    it("lets the heading hint (Find) select the occurrence under the chosen heading", () => {
+      const doc = page(
+        `<p id='intro'>Sample Boss in the intro</p>${h(2, "one", "Chapter One")}` +
+          `<p id='p1'>Sample Boss one</p>${h(2, "two", "Chapter Two")}<p id='p2'>Sample Boss two</p>`,
+      );
+      expect(owner(findTextRange(doc, "sample boss", "Chapter Two"))?.id).toBe("p2");
+      expect(owner(findTextRange(doc, "sample boss", "chapter one"))?.id).toBe("p1");
+    });
+
+    it("never matches a heading whose only text is the button", () => {
+      const only = page(h(2, "h", ""));
+      expect(findTextRange(only, "#", null, "heading")).toBeNull();
+      expect(findTextRange(only, "#")).toBeNull();
+      const withMention = page(`${h(2, "h", "")}<p id='p'>Issue #4 is open</p>`);
+      expect(owner(findTextRange(withMention, "#", null, "heading"))?.id).toBe("p");
+    });
+
+    it("never selects button text inside a heading in text mode", () => {
+      const doc = page(`${h(2, "h", "Mock Harbour")}<p id='p'>and a # sign</p>`);
+      expect(owner(findTextRange(doc, "#"))?.id).toBe("p");
+      expect(findTextRange(doc, "#mock harbour")).toBeNull();
+    });
+  },
+);
+
+describe("buttons outside headings", () => {
+  it("are still searched as ordinary text", () => {
+    const doc = page("<button id='b'>Open Gate</button>");
+    expect(findTextRange(doc, "open gate")?.startContainer.parentElement?.id).toBe("b");
   });
 });
 
@@ -440,6 +523,88 @@ describe("locateInFrame", () => {
       expect(highlights.get("gc-find")?.ranges[0]?.toString()).toBe("Hidden Key");
       await vi.advanceTimersByTimeAsync(500);
       expect(highlights.has("gc-find")).toBe(false);
+    });
+  });
+
+  describe("the last-resort fallback text", () => {
+    const heading = "4. Mock Harbour (0/12)";
+    const drifted =
+      "<p id='say'>Mock Harbour is nice</p><h2 id='right'>4. Mock Harbour (3/12)</h2>";
+    const opts = { intervalMs: 5, timeoutMs: 100, mode: "heading" as const };
+
+    afterEach(() => vi.useRealTimers());
+
+    it("is tried only at the deadline, then lands on the first heading containing it", async () => {
+      vi.useFakeTimers();
+      const frame = makeFrame(drifted);
+      const scroll = vi.fn();
+      frameWin(frame).Element.prototype.scrollIntoView = scroll;
+      let result: boolean | undefined;
+      void locateInFrame(frame, heading, null, { ...opts, fallback: "Mock Harbour" }).then(
+        (r) => (result = r),
+      );
+      await vi.advanceTimersByTimeAsync(90);
+      expect(result).toBeUndefined();
+      expect(scroll).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(result).toBe(true);
+      expect((scroll.mock.contexts[0] as Element).id).toBe("right");
+    });
+
+    it("falls back to the first occurrence in the page when no heading contains it", async () => {
+      vi.useFakeTimers();
+      const frame = makeFrame("<h2>Other</h2><p id='say'>Visit Mock Harbour</p>");
+      const scroll = vi.fn();
+      frameWin(frame).Element.prototype.scrollIntoView = scroll;
+      let result: boolean | undefined;
+      void locateInFrame(frame, heading, null, { ...opts, fallback: "Mock Harbour" }).then(
+        (r) => (result = r),
+      );
+      await vi.advanceTimersByTimeAsync(90);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(result).toBe(true);
+      expect((scroll.mock.contexts[0] as Element).id).toBe("say");
+    });
+
+    it("changes nothing without a fallback text", async () => {
+      vi.useFakeTimers();
+      const frame = makeFrame(drifted);
+      let result: boolean | undefined;
+      void locateInFrame(frame, heading, null, opts).then((r) => (result = r));
+      await vi.advanceTimersByTimeAsync(200);
+      expect(result).toBe(false);
+    });
+
+    it("is never used while the right heading could still appear", async () => {
+      vi.useFakeTimers();
+      const frame = makeFrame("<h2 id='early'>Around Mock Harbour</h2>");
+      const scroll = vi.fn();
+      frameWin(frame).Element.prototype.scrollIntoView = scroll;
+      setTimeout(() => {
+        frameDoc(frame).body.insertAdjacentHTML("beforeend", `<h2 id='right'>${heading}</h2>`);
+      }, 30);
+      let result: boolean | undefined;
+      void locateInFrame(frame, heading, null, { ...opts, fallback: "Mock Harbour" }).then(
+        (r) => (result = r),
+      );
+      await vi.advanceTimersByTimeAsync(200);
+      expect(result).toBe(true);
+      expect(scroll).toHaveBeenCalledTimes(1);
+      expect((scroll.mock.contexts[0] as Element).id).toBe("right");
+    });
+
+    it("is ignored in text mode", async () => {
+      vi.useFakeTimers();
+      const frame = makeFrame(drifted);
+      let result: boolean | undefined;
+      void locateInFrame(frame, heading, null, {
+        intervalMs: 5,
+        timeoutMs: 100,
+        fallback: "Mock Harbour",
+      }).then((r) => (result = r));
+      await vi.advanceTimersByTimeAsync(200);
+      expect(result).toBe(false);
     });
   });
 

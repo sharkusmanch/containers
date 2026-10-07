@@ -3172,14 +3172,14 @@ describe("guide jump", () => {
       expect(($(".toast") as HTMLElement).hidden).toBe(true);
       // The heading's text, no heading hint, and the heading mode: exactly this.
       expect(locateCalls.map((c) => c.slice(1))).toEqual([
-        ["Chapter Two: Sample Keep", null, "heading"],
+        ["Chapter Two: Sample Keep", null, "heading", "Sample Keep"],
       ]);
     });
 
     it("says so when the page opens but the heading is not in it", async () => {
       vi.useFakeTimers();
       frameDocs.set("/doc/hA-coll", sectioned());
-      await started({ matches: [wm({ heading: "Chapter Nine: Nowhere" })] });
+      await started({ matches: [wm({ heading: "Chapter Nine: Nowhere", phrase: "Nowhere" })] });
       jump().click();
       await vi.advanceTimersByTimeAsync(0);
       loadFrames();
@@ -3229,7 +3229,7 @@ describe("guide jump", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect((scroll.mock.contexts[0] as Element).id).toBe("one");
       expect(locateCalls.map((c) => c.slice(1))).toEqual([
-        ["Chapter One: Sample Caves", null, "heading"],
+        ["Chapter One: Sample Caves", null, "heading", "Sample Caves"],
       ]);
     });
 
@@ -3513,11 +3513,14 @@ describe("checklist progress", () => {
   });
 
   describe("after a click inside a guide page", () => {
-    const startedWithFrame = async (tweak?: (api: Fake) => void) => {
+    const startedWithFrame = async (tweak?: (api: Fake) => void, poll?: number) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
       const url = "/doc/hA-checklist";
       frameDocs.set(url, pageDoc());
-      const run = await started(tweak === undefined ? {} : { tweak });
+      const run = await started({
+        ...(tweak === undefined ? {} : { tweak }),
+        ...(poll === undefined ? {} : { poll }),
+      });
       railButtons()[1]?.click();
       const frame = document.querySelector("iframe") as HTMLIFrameElement;
       frame.dispatchEvent(new Event("load"));
@@ -3565,6 +3568,50 @@ describe("checklist progress", () => {
       held.resolve(progressOf("/doc/hA-checklist", 3, 7));
       await vi.advanceTimersByTimeAsync(0);
       expect(slotCount(1)).toBe("5/7");
+    });
+
+    describe("while a fresh read is in flight", () => {
+      const setup = async () => {
+        const fresh = deferred<GuideProgressResponse | null>();
+        let ordinary = 0;
+        const run = await startedWithFrame((a) => {
+          a.progress = (hubId, refresh) => {
+            a.progressCalls.push([hubId, refresh]);
+            if (refresh === true) return fresh.promise;
+            ordinary += 1;
+            // The load gets the counts as they are; later polls get the server's older held copy.
+            return Promise.resolve(progressOf("/doc/hA-checklist", ordinary === 1 ? 3 : 2, 7));
+          };
+        }, 0);
+        run.clickInFrame();
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(run.fresh()).toBe(1);
+        return { ...run, fresh: fresh };
+      };
+
+      it("does not apply an ordinary answer, and applies the fresh one when it arrives", async () => {
+        const { app, fresh } = await setup();
+        expect(slotCount(1)).toBe("3/7");
+        await app.tick();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(slotCount(1)).toBe("3/7");
+        fresh.resolve(progressOf("/doc/hA-checklist", 6, 7));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(slotCount(1)).toBe("6/7");
+      });
+
+      it("applies the next ordinary answer as usual when the fresh read fails", async () => {
+        const { app, fresh } = await setup();
+        await app.tick();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(slotCount(1)).toBe("3/7");
+        fresh.reject(new Error("down"));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(slotCount(1)).toBe("3/7");
+        await app.tick();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(slotCount(1)).toBe("2/7");
+      });
     });
 
     it("restarts both timers on a second click", async () => {

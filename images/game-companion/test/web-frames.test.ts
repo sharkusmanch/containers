@@ -204,6 +204,37 @@ describe("createFrames", () => {
     }
   });
 
+  it("locate passes the fallback text on, used only once the deadline has passed", async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = "";
+    const f = createFrames(document, 4);
+    document.body.append(f.element);
+    f.show(0, "/doc/a");
+    const frame = f.element.querySelector("iframe") as HTMLIFrameElement;
+    showing(frame, "<h2 id='head'>4. Mock Harbour (3/12)</h2>");
+    loaded(frame);
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      let result: string | undefined;
+      void f
+        .locate(0, "4. Mock Harbour (0/12)", null, "heading", "Mock Harbour")
+        .then((r) => (result = r));
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(result).toBe("found");
+      expect((scroll.mock.contexts[0] as Element).id).toBe("head");
+      let plain: string | undefined;
+      void f.locate(0, "4. Mock Harbour (0/12)", null, "heading").then((r) => (plain = r));
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(plain).toBe("not-found");
+    } finally {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      vi.useRealTimers();
+    }
+  });
+
   describe("locate while a slot is being re-pointed", () => {
     afterEach(() => vi.useRealTimers());
 

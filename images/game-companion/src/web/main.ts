@@ -209,7 +209,13 @@ export function startApp(opts: AppOptions): App {
     },
     onMatch(match) {
       if (findFor === null) return;
-      openMatch(findFor.current, findFor.locate(match), match, findFor.mode);
+      openMatch(
+        findFor.current,
+        findFor.locate(match),
+        match,
+        findFor.mode,
+        findFor.fallback?.(match),
+      );
     },
     onSetting(name) {
       if (name === "fullscreen") {
@@ -265,6 +271,8 @@ export function startApp(opts: AppOptions): App {
   // Numbers the progress requests; an answer older than the last one applied is ignored.
   let progressSeq = 0;
   let progressApplied = 0;
+  // Fresh (refresh) reads in flight for the game on screen; ordinary answers wait them out.
+  let freshPending = 0;
   // Bumped by every tap in a guide page and every load, so older follow-up timers do nothing.
   let interactGen = 0;
   let lastAchievements: AchievementsResponse | null = null;
@@ -288,6 +296,8 @@ export function startApp(opts: AppOptions): App {
     current: Current;
     locate: (match: FindMatch) => string;
     mode: LocateMode;
+    /** The text to settle for if the heading has drifted (guide jump only). */
+    fallback?: (match: FindMatch) => string | undefined;
   } | null = null;
   let findSeq = 0;
   // The guide-jump answer for the status text it was asked about, for the game on screen.
@@ -453,21 +463,39 @@ export function startApp(opts: AppOptions): App {
     // A Find answer still in flight must not replace what the jump shows.
     findSeq += 1;
     // The jump reuses the find flow: a match whose heading is the text to look for.
-    const asFind = (m: WhereMatch): FindMatch => ({
-      pageTitle: m.pageTitle,
-      pageUrl: m.pageUrl,
-      heading: null,
-      snippet: m.heading,
-    });
+    const phrases = new Map<FindMatch, string>();
+    const asFind = (m: WhereMatch): FindMatch => {
+      const match = {
+        pageTitle: m.pageTitle,
+        pageUrl: m.pageUrl,
+        heading: null,
+        snippet: m.heading,
+      };
+      phrases.set(match, m.phrase);
+      return match;
+    };
+    const entries = [best, ...rest].map(asFind);
     if (rest.length === 0) {
-      openMatch(c, best.heading, asFind(best), "heading");
+      const [only] = entries;
+      if (only !== undefined) openMatch(c, best.heading, only, "heading", best.phrase);
     } else {
-      findFor = { current: c, locate: (match) => match.snippet, mode: "heading" };
-      picker.showMatches(best.phrase, [best, ...rest].map(asFind), false);
+      findFor = {
+        current: c,
+        locate: (match) => match.snippet,
+        mode: "heading",
+        fallback: (match) => phrases.get(match),
+      };
+      picker.showMatches(best.phrase, entries, false);
     }
   }
 
-  function openMatch(c: Current, name: string, match: FindMatch, mode: LocateMode = "text"): void {
+  function openMatch(
+    c: Current,
+    name: string,
+    match: FindMatch,
+    mode: LocateMode = "text",
+    fallback?: string,
+  ): void {
     if (current !== c || !isSafeDocUrl(match.pageUrl)) return;
     if (!flattenPages(c.pages).some((p) => p.url === match.pageUrl)) {
       showToast("Could not open that page");
@@ -477,7 +505,11 @@ export function startApp(opts: AppOptions): App {
     save();
     render();
     picker.setPages(c.pages, c.layout);
-    void frames.locate(c.layout.active, name, match.heading, mode).then((result) => {
+    const located =
+      fallback === undefined
+        ? frames.locate(c.layout.active, name, match.heading, mode)
+        : frames.locate(c.layout.active, name, match.heading, mode, fallback);
+    void located.then((result) => {
       if (result === "not-found" && current === c) {
         showToast("Opened the page, but could not find the text");
       }
@@ -634,13 +666,19 @@ export function startApp(opts: AppOptions): App {
     progressSeq += 1;
     const mine = progressSeq;
     let pages: unknown;
+    if (fresh) freshPending += 1;
     try {
       const hubId = c.hub.hubId;
       pages = (await (fresh ? api.progress(hubId, true) : api.progress(hubId)))?.pages;
     } catch {
       return;
+    } finally {
+      if (fresh && epoch === progressEpoch) freshPending -= 1;
     }
     if (!Array.isArray(pages) || epoch !== progressEpoch || current === null) return;
+    // The server answers an ordinary poll from its held copy, which may predate the fresh read
+    // still on its way; that read wins.
+    if (!fresh && freshPending > 0) return;
     if (mine < progressApplied) return;
     progressApplied = mine;
     const byDoc = new Map<string, PageProgressLabel>();
@@ -707,6 +745,7 @@ export function startApp(opts: AppOptions): App {
     loadCount += 1;
     progress = new Map();
     progressEpoch += 1;
+    freshPending = 0;
     interactGen += 1;
     frames.reset();
     hideBanner();
