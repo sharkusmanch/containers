@@ -70,8 +70,105 @@ describe("findTextRange", () => {
     expect(findTextRange(doc, ".*")).toBeNull();
   });
 
-  it("does not match across two text nodes", () => {
-    expect(findTextRange(page("<p>Sample <b>Boss</b></p>"), "Sample Boss")).toBeNull();
+  it("finds a name split over adjacent text nodes, and the range reads as the whole name", () => {
+    const doc = page("<p>Meet Alpha <a href='/x'>One</a> today</p>");
+    const range = findTextRange(doc, "alpha one");
+    expect(range?.toString()).toBe("Alpha One");
+    expect(range?.startContainer.nodeValue).toBe("Meet Alpha ");
+    expect(range?.endContainer.nodeValue).toBe("One");
+    const emphasis = page("<p>The <em>Sample</em> Boss</p>");
+    expect(findTextRange(emphasis, "Sample Boss")?.toString()).toBe("Sample Boss");
+  });
+
+  it("matches the text literally, with no pattern characters taking effect", () => {
+    const doc = page("<p>x (a) [b] 1.5 2*3 c\\d $5 end</p><p>aXb 25 cd</p>");
+    for (const needle of ["(a)", "[b]", "1.5", "2*3", "c\\d", "$5"]) {
+      expect(findTextRange(doc, needle)?.toString()).toBe(needle);
+    }
+    expect(findTextRange(doc, "a.b")).toBeNull();
+    expect(findTextRange(doc, "2*")?.toString()).toBe("2*");
+    expect(findTextRange(doc, "c\\")?.toString()).toBe("c\\");
+    expect(findTextRange(doc, "(")?.toString()).toBe("(");
+    expect(findTextRange(doc, "[")?.toString()).toBe("[");
+  });
+
+  it("keeps the range right when lower-casing changes the length of earlier text", () => {
+    const dotted = "\u0130stanbul \u0130\u0130 ";
+    expect(dotted.toLowerCase().length).not.toBe(dotted.length);
+    const doc = page(`<p>${dotted}</p><p>Then the Sample Boss</p>`);
+    const range = findTextRange(doc, "sample boss");
+    expect(range?.toString()).toBe("Sample Boss");
+    const inside = page(`<p>${dotted}Sample Boss</p>`);
+    expect(findTextRange(inside, "sample boss")?.toString()).toBe("Sample Boss");
+    expect(findTextRange(inside, "sample boss")?.startOffset).toBe(dotted.length);
+  });
+
+  it("searches only the page text: ProseMirror first, then the main role, then the body", () => {
+    const sidebar = "<nav>Sample Boss in the sidebar</nav>";
+    const both = page(`${sidebar}<main role="main"><p>Sample Boss in the page</p></main>`);
+    expect(findTextRange(both, "sample boss")?.startContainer.nodeValue).toBe(
+      "Sample Boss in the page",
+    );
+    const outsideOnly = page(`${sidebar}<main role="main"><p>nothing</p></main>`);
+    expect(findTextRange(outsideOnly, "sample boss")).toBeNull();
+    const prose = page(
+      `${sidebar}<div role="main"><p>Sample Boss around the editor</p>` +
+        `<div class="ProseMirror"><p>Sample Boss in the editor</p></div></div>`,
+    );
+    expect(findTextRange(prose, "sample boss")?.startContainer.nodeValue).toBe(
+      "Sample Boss in the editor",
+    );
+    const proseOutsideOnly = page(
+      `<p>Sample Boss outside</p><div class="ProseMirror"><p>none here</p></div>`,
+    );
+    expect(findTextRange(proseOutsideOnly, "sample boss")).toBeNull();
+    const plain = page("<p>Sample Boss in a plain body</p>");
+    expect(findTextRange(plain, "sample boss")).not.toBeNull();
+  });
+
+  describe("heading hint", () => {
+    const doc = (): Document =>
+      page(
+        "<div class='ProseMirror'><p>Sample Boss in the intro</p>" +
+          "<h2>Chapter One</h2><p>Fight the Sample Boss here</p>" +
+          "<h2>Chapter  Two</h2><p>Sample Boss again, and <b>Sample</b> Boss</p></div>",
+      );
+    const where = (r: Range | null): string | null | undefined =>
+      r?.startContainer.parentElement?.closest("p")?.textContent;
+
+    it("takes the first occurrence after the named heading", () => {
+      expect(where(findTextRange(doc(), "sample boss", "Chapter Two"))).toBe(
+        "Sample Boss again, and Sample Boss",
+      );
+      expect(where(findTextRange(doc(), "sample boss", "Chapter One"))).toBe(
+        "Fight the Sample Boss here",
+      );
+    });
+
+    it("compares the heading ignoring case and runs of whitespace", () => {
+      expect(where(findTextRange(doc(), "sample boss", "  chapter TWO "))).toBe(
+        "Sample Boss again, and Sample Boss",
+      );
+    });
+
+    it("falls back to the first occurrence for an unknown, empty or null heading", () => {
+      for (const heading of ["Chapter Nine", "", null, undefined]) {
+        expect(where(findTextRange(doc(), "sample boss", heading))).toBe(
+          "Sample Boss in the intro",
+        );
+      }
+    });
+
+    it("falls back when nothing follows the heading", () => {
+      expect(where(findTextRange(doc(), "intro", "Chapter Two"))).toBe("Sample Boss in the intro");
+    });
+
+    it("does not count text inside the heading itself", () => {
+      const d = page("<h2>Sample Boss</h2><p>Sample Boss is here</p>");
+      expect(findTextRange(d, "sample boss", "Sample Boss")?.startContainer.nodeValue).toBe(
+        "Sample Boss is here",
+      );
+    });
   });
 });
 
@@ -263,6 +360,74 @@ describe("locateInFrame", () => {
       expect(highlights.get("gc-find")?.ranges[0]?.toString()).toBe("Hidden Key");
       await vi.advanceTimersByTimeAsync(500);
       expect(highlights.has("gc-find")).toBe(false);
+    });
+  });
+
+  it("scrolls to the occurrence under the given heading", async () => {
+    const frame = makeFrame(
+      "<h2>One</h2><p id='first'>Sample Boss</p><h2>Two</h2><p id='second'>Sample Boss</p>",
+    );
+    const scroll = vi.fn();
+    frameWin(frame).Element.prototype.scrollIntoView = scroll;
+    expect(await locateInFrame(frame, "Sample Boss", "Two", { intervalMs: 5 })).toBe(true);
+    expect((scroll.mock.contexts[0] as Element).id).toBe("second");
+    expect(await locateInFrame(frame, "Sample Boss", null, { intervalMs: 5 })).toBe(true);
+    expect((scroll.mock.contexts[1] as Element).id).toBe("first");
+  });
+
+  describe("while the frame is navigating", () => {
+    it("does not read the frame until it is ready, then looks as soon as it loads", async () => {
+      const frame = makeFrame("<p>Sample Boss</p>");
+      const real = frameDoc(frame);
+      let reads = 0;
+      Object.defineProperty(frame, "contentDocument", {
+        get() {
+          reads += 1;
+          return real;
+        },
+      });
+      let ready = false;
+      let settled = false;
+      const result = locateInFrame(frame, "Sample Boss", {
+        intervalMs: 5,
+        timeoutMs: 5000,
+        ready: () => ready,
+      }).then((r) => {
+        settled = true;
+        return r;
+      });
+      await new Promise((r) => setTimeout(r, 40));
+      expect(reads).toBe(0);
+      expect(settled).toBe(false);
+      ready = true;
+      frame.dispatchEvent(new Event("load"));
+      expect(await result).toBe(true);
+      expect(reads).toBeGreaterThan(0);
+    });
+
+    it("resolves false at the deadline when it never becomes ready", async () => {
+      const frame = makeFrame("<p>Sample Boss</p>");
+      expect(
+        await locateInFrame(frame, "Sample Boss", {
+          intervalMs: 5,
+          timeoutMs: 40,
+          ready: () => false,
+        }),
+      ).toBe(false);
+    });
+
+    it("resolves false at once when told the frame is gone", async () => {
+      const frame = makeFrame("<p>Sample Boss</p>");
+      const started = Date.now();
+      expect(
+        await locateInFrame(frame, "Sample Boss", {
+          intervalMs: 5,
+          timeoutMs: 5000,
+          ready: () => false,
+          gone: () => true,
+        }),
+      ).toBe(false);
+      expect(Date.now() - started).toBeLessThan(1000);
     });
   });
 

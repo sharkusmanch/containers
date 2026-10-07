@@ -11,13 +11,21 @@ export interface Frames {
    */
   sync(urls: (string | null)[]): void;
   reset(): void;
-  /** Finds `text` in the page framed in slot `index` and highlights it. False when the slot has no frame. */
-  locate(index: number, text: string): Promise<boolean>;
+  /**
+   * Finds `text` (preferably under `heading`) in the page framed in slot `index` and highlights it.
+   * Waits for a navigation this module started to finish first. "gone" when the slot has no frame or
+   * its frame was dropped meanwhile.
+   */
+  locate(index: number, text: string, heading?: string | null): Promise<LocateResult>;
 }
+
+export type LocateResult = "found" | "not-found" | "gone";
 
 interface Entry {
   frame: HTMLIFrameElement;
   url: string;
+  /** True from the moment this module starts a navigation until that frame's load event. */
+  loading: boolean;
 }
 
 /**
@@ -45,11 +53,16 @@ export function createFrames(doc: Document, slotCount: number): Frames {
         const frame = doc.createElement("iframe");
         frame.classList.add("frame");
         frame.setAttribute("title", "Guide page");
+        const created: Entry = { frame, url, loading: true };
+        frame.addEventListener("load", () => {
+          created.loading = false;
+        });
         frame.setAttribute("src", url);
         element.append(frame);
-        entry = { frame, url };
+        entry = created;
         entries[index] = entry;
       } else if (entry.url !== url) {
+        entry.loading = true;
         entry.frame.setAttribute("src", url);
         entry.url = url;
       }
@@ -71,9 +84,16 @@ export function createFrames(doc: Document, slotCount: number): Frames {
       element.replaceChildren();
       entries.fill(null);
     },
-    locate(index, text) {
+    async locate(index, text, heading) {
       const entry = Number.isInteger(index) ? (entries[index] ?? null) : null;
-      return entry === null ? Promise.resolve(false) : locateInFrame(entry.frame, text);
+      if (entry === null) return "gone";
+      const dropped = (): boolean => !entries.includes(entry);
+      const found = await locateInFrame(entry.frame, text, heading, {
+        ready: () => !entry.loading,
+        gone: dropped,
+      });
+      if (found) return "found";
+      return dropped() ? "gone" : "not-found";
     },
   };
 }

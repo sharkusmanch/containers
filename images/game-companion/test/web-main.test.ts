@@ -1117,6 +1117,17 @@ describe("guide marks", () => {
     expect(missableToggle().hidden).toBe(false);
   });
 
+  it("ignores entries that are not strings", async () => {
+    const api = fakeApi(playing(hubA));
+    api.marks = async () =>
+      ({
+        missable: [5, null, { a: 1 }, ["first steps"], "first steps"],
+      }) as unknown as GuideMarksResponse;
+    await start(api, board([mk("a1", "First Steps"), mk("a2", "Other")]));
+    expect(missableToggle().hidden).toBe(false);
+    expect(document.querySelectorAll(".ach-locked .ach-row .ach-missable")).toHaveLength(1);
+  });
+
   it("does not ask for a game without a guide", async () => {
     const api = fakeApi({ ...playing(hubA), hubs: [] });
     await start(api, board([mk("a1", "First Steps")]));
@@ -1251,9 +1262,23 @@ describe("find in guide", () => {
     vi.useRealTimers();
   });
 
-  const start = async (answer: FindResponse | null | Error, tm = timers()) => {
+  const loadFrames = (): void => {
+    for (const f of document.querySelectorAll("iframe")) f.dispatchEvent(new Event("load"));
+  };
+  const sectioned = (): Document =>
+    new DOMParser().parseFromString(
+      "<!doctype html><body><h2>Chapter One</h2><p id='one'>the First Steps, one</p>" +
+        "<h2>Chapter Two</h2><p id='two'>the First Steps, two</p></body>",
+      "text/html",
+    );
+
+  const start = async (
+    answer: FindResponse | null | Error,
+    tm = timers(),
+    achievementName = "First Steps",
+  ) => {
     const api = fakeApi(playing(hubA));
-    api.achievements = async () => board([mk("a1", "First Steps")]);
+    api.achievements = async () => board([mk("a1", achievementName)]);
     api.find = async (hubId, query) => {
       api.findCalls.push([hubId, query]);
       if (answer instanceof Error) throw answer;
@@ -1362,6 +1387,7 @@ describe("find in guide", () => {
     (document.querySelector(".ach-find") as HTMLElement).click();
     await vi.advanceTimersByTimeAsync(0);
     expect(shown()).toEqual([url]);
+    loadFrames();
     expect(toast().hidden).toBe(true);
     await vi.advanceTimersByTimeAsync(11_000);
     expect(toast().hidden).toBe(false);
@@ -1412,7 +1438,6 @@ describe("find in guide", () => {
     ["an unsafe address", "https://evil.example/doc/hA-coll"],
     ["a protocol-relative address", "//evil.example/doc/hA-coll"],
     ["an address outside /doc/", "/collection/hA-coll"],
-    ["a safe address that is not a page of this guide", "/doc/other-guide-page"],
   ])("ignores a match with %s", async (_name, url) => {
     await start({ matches: [match(url)], truncated: false });
     await find();
@@ -1469,6 +1494,10 @@ describe("find in guide", () => {
   it.each([
     ["a missing guide", null],
     ["a match", { matches: [match("/doc/hA-coll")], truncated: false }],
+    [
+      "several matches",
+      { matches: [match("/doc/hA-coll"), match("/doc/hA-checklist")], truncated: false },
+    ],
     ["an error", new Error("down")],
   ])("drops %s when the game changed while the search was running", async (_name, answer) => {
     const late = deferred<FindResponse | null>();
@@ -1486,6 +1515,242 @@ describe("find in guide", () => {
     expect($(".game-title")?.textContent).toBe("Zeta");
     expect(document.querySelector("iframe")).toBeNull();
     expect(toast().hidden).toBe(true);
+    expect($(".picker")?.hidden).toBe(true);
+    expect(document.querySelectorAll(".picker-matches .picker-item")).toHaveLength(0);
+  });
+
+  it("finds the text in the opened page without a notice", async () => {
+    vi.useFakeTimers();
+    const url = page(hubA, "coll");
+    frameDocs.set(url, docWith("Get the first steps trophy"));
+    await start({ matches: [match(url)], truncated: false });
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    await vi.advanceTimersByTimeAsync(0);
+    loadFrames();
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(shown()).toEqual([url]);
+    expect(toast().hidden).toBe(true);
+  });
+
+  describe("which occurrence on the page", () => {
+    let scroll: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      scroll = vi.fn();
+      Element.prototype.scrollIntoView = scroll as unknown as Element["scrollIntoView"];
+    });
+    afterEach(() => {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    });
+    const scrolledTo = (n: number): string => (scroll.mock.contexts[n] as Element).id;
+
+    it("scrolls to the occurrence under the chosen match's heading, for a single match", async () => {
+      vi.useFakeTimers();
+      const url = page(hubA, "coll");
+      frameDocs.set(url, sectioned());
+      await start({ matches: [match(url, { heading: "Chapter Two" })], truncated: false });
+      (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+      (document.querySelector(".ach-find") as HTMLElement).click();
+      await vi.advanceTimersByTimeAsync(0);
+      loadFrames();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(scrolledTo(0)).toBe("two");
+    });
+
+    it("uses the heading of the match picked from the list", async () => {
+      vi.useFakeTimers();
+      const url = page(hubA, "coll");
+      frameDocs.set(url, sectioned());
+      await start({
+        matches: [
+          match(url, { heading: "Chapter One", snippet: "one" }),
+          match(url, { heading: "Chapter Two", snippet: "two" }),
+        ],
+        truncated: false,
+      });
+      (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+      (document.querySelector(".ach-find") as HTMLElement).click();
+      await vi.advanceTimersByTimeAsync(0);
+      (document.querySelectorAll(".picker-matches .picker-item")[1] as HTMLElement).click();
+      loadFrames();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(scrolledTo(0)).toBe("two");
+    });
+
+    it("takes the first occurrence when the match has an empty or no heading", async () => {
+      vi.useFakeTimers();
+      const url = page(hubA, "coll");
+      frameDocs.set(url, sectioned());
+      await start({ matches: [match(url, { heading: "" })], truncated: false });
+      (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+      (document.querySelector(".ach-find") as HTMLElement).click();
+      await vi.advanceTimersByTimeAsync(0);
+      loadFrames();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(scrolledTo(0)).toBe("one");
+    });
+  });
+
+  it("shows no notice when the page is unpinned while the text is still being looked for", async () => {
+    vi.useFakeTimers();
+    const url = page(hubA, "coll");
+    frameDocs.set(url, docWith("nothing relevant"));
+    await start({ matches: [match(url)], truncated: false });
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shown()).toEqual([url]);
+    railButtons().at(-1)?.click();
+    const unpin = [...document.querySelectorAll<HTMLElement>(".picker-pages .picker-item.pinned")]
+      .map((i) => i.nextElementSibling as HTMLElement)
+      .find((b) => b.getAttribute("aria-label") === "Remove Collectibles from the sidebar");
+    (unpin as HTMLElement).click();
+    expect(document.querySelector("iframe")).toBeNull();
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("says the page could not be opened when the match is for a page the guide does not list", async () => {
+    await start({ matches: [match("/doc/other-guide-page")], truncated: false });
+    await find();
+    expect(document.querySelector("iframe")).toBeNull();
+    expect(toast().hidden).toBe(false);
+    expect(toast().querySelector(".toast-text")?.textContent).toBe("Could not open that page");
+  });
+
+  it("says the same for such a match chosen from the list", async () => {
+    await start({
+      matches: [match("/doc/other-guide-page"), match(page(hubA, "coll"))],
+      truncated: false,
+    });
+    await find();
+    (document.querySelectorAll(".picker-matches .picker-item")[0] as HTMLElement).click();
+    expect(toast().querySelector(".toast-text")?.textContent).toBe("Could not open that page");
+  });
+
+  it("keeps a guide chooser that opened while the search was running", async () => {
+    const twin: GuideHub = { ...hubZ, hubId: "hZ2", title: "Zeta DLC" };
+    const late = deferred<FindResponse | null>();
+    const { api, app } = await start(null);
+    api.find = () => late.promise;
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    api.nowValue = { ...playing(hubZ), hubs: [hubZ, twin] };
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    expect($(".picker")?.hidden).toBe(false);
+    expect(($('[data-tab="pages"]') as HTMLElement).hidden).toBe(true);
+    late.resolve({
+      matches: [match(page(hubA, "coll")), match(page(hubA, "checklist"))],
+      truncated: false,
+    });
+    await flush();
+    expect(($(".picker-matches") as HTMLElement).hidden).toBe(true);
+    expect(($(".picker-games") as HTMLElement).hidden).toBe(false);
+    expect(
+      [...document.querySelectorAll(".picker-games .picker-item .picker-title")].map(
+        (i) => i.textContent,
+      ),
+    ).toEqual(["Zeta", "Zeta DLC"]);
+    expect(($('[data-tab="pages"]') as HTMLElement).hidden).toBe(true);
+    (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
+    await app.tick();
+    expect($(".game-title")?.textContent).toBe("Zeta DLC");
+    expect($(".picker")?.hidden).toBe(true);
+  });
+
+  it("drops an answer that arrives while a load is queued behind a running poll", async () => {
+    const late = deferred<FindResponse | null>();
+    const { api, app } = await start(null);
+    api.find = () => late.promise;
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    const poll = deferred<NowResponse>();
+    api.now = () => poll.promise;
+    const inFlight = app.tick();
+    await flush();
+    railButtons().at(-1)?.click();
+    ($('[data-tab="games"]') as HTMLElement).click();
+    (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    late.resolve({ matches: [], truncated: false });
+    await flush();
+    expect(toast().hidden).toBe(true);
+    api.now = async () => api.nowValue;
+    poll.resolve(playing(hubA));
+    await inFlight;
+    await app.tick();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+  });
+
+  it("acts only on the answer to the most recent Find tap", async () => {
+    const first = deferred<FindResponse | null>();
+    const second = deferred<FindResponse | null>();
+    const answers = [first, second];
+    const { api } = await start(null);
+    api.find = () => (answers.shift() as typeof first).promise;
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    const wanted = page(hubA, "coll");
+    second.resolve({ matches: [match(wanted)], truncated: false });
+    await flush();
+    expect(shown()).toEqual([wanted]);
+    first.resolve({ matches: [match(page(hubA, "checklist"))], truncated: false });
+    await flush();
+    expect(shown()).toEqual([wanted]);
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("drops an older error and an older none once a newer tap has been answered", async () => {
+    const first = deferred<FindResponse | null>();
+    const second = deferred<FindResponse | null>();
+    const answers = [first, second];
+    const { api } = await start(null);
+    api.find = () => (answers.shift() as typeof first).promise;
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    second.resolve({ matches: [match(page(hubA, "coll"))], truncated: false });
+    await flush();
+    first.reject(new Error("down"));
+    await flush();
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("does not call the server for a name shorter than two characters", async () => {
+    const { api } = await start({ matches: [], truncated: false }, timers(), "Z");
+    await find();
+    expect(api.findCalls).toEqual([]);
+    expect(toast().querySelector(".toast-text")?.textContent).toBe("Not found in this guide");
+    expect(toast().hidden).toBe(false);
+  });
+
+  it("sends at most the first 100 characters, never splitting a surrogate pair, and looks for the same text", async () => {
+    vi.useFakeTimers();
+    const name = `${"x".repeat(99)}\u{1F600}tail`;
+    const sent = `${"x".repeat(99)}\u{1F600}`;
+    const url = page(hubA, "coll");
+    frameDocs.set(url, docWith(`before ${sent} after`));
+    const { api } = await start({ matches: [match(url)], truncated: false }, timers(), name);
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.findCalls).toEqual([["hA", sent]]);
+    expect([...sent]).toHaveLength(100);
+    loadFrames();
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(shown()).toEqual([url]);
+    // found: the shortened text, not the whole name, was looked for
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("leaves a name of exactly 100 characters whole", async () => {
+    const name = "y".repeat(100);
+    const { api } = await start({ matches: [], truncated: false }, timers(), name);
+    await find();
+    expect(api.findCalls).toEqual([["hA", name]]);
   });
 });
 
@@ -1742,5 +2007,80 @@ describe("unlock notice", () => {
     expect(pulsing()).toBe(true);
     vi.advanceTimersByTime(10_000);
     expect(pulsing()).toBe(false);
+  });
+
+  it("takes no baseline from a stale response, and does not announce against one", async () => {
+    const tm = timers();
+    const api = fakeApi(playing(hubA));
+    let next: AchievementsResponse = { ...board(list(["Alpha"])), stale: true };
+    api.achievements = async () => next;
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: tm.set,
+      achievementsPollMs: 0,
+    });
+    await app.ready;
+    next = board(list(["Alpha", "Bravo"]));
+    await app.tick();
+    expect(toast().hidden).toBe(true);
+    expect(pulsing()).toBe(false);
+    next = { ...board(list(["Alpha", "Bravo", "Charlie"])), stale: true };
+    await app.tick();
+    expect(toast().hidden).toBe(true);
+    next = board(list(["Alpha", "Bravo", "Charlie"]));
+    await app.tick();
+    expect(text()).toBe("Unlocked: Charlie");
+  });
+
+  it("hides the notice and stops the pulse when the game on screen changes", async () => {
+    const t = await start(["Alpha"]);
+    t.api.achievements = async (source) =>
+      source === "steam" ? boardZ(list([])) : board(list(["Alpha", "Bravo"]));
+    await t.app.tick();
+    expect(toast().hidden).toBe(false);
+    expect(pulsing()).toBe(true);
+    t.api.nowValue = playing(hubZ);
+    await t.app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await t.app.tick();
+    await flush();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    expect(toast().hidden).toBe(true);
+    expect(pulsing()).toBe(false);
+  });
+
+  it("keeps the notice when the same game is reloaded", async () => {
+    const t = await start(["Alpha"]);
+    t.set(["Alpha", "Bravo"]);
+    await t.app.tick();
+    expect(text()).toBe("Unlocked: Bravo");
+    t.api.nowValue = { ...playing(hubA), hubs: [] };
+    await t.app.tick();
+    expect(toast().hidden).toBe(false);
+  });
+
+  it("keeps the baseline when the same game is reloaded", async () => {
+    const api = fakeApi({ ...playing(hubA), hubs: [] });
+    let current = board(list(["Alpha"]));
+    api.achievements = async () => current;
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: timers().set,
+    });
+    await app.ready;
+    expect($(".game-note")?.textContent).toBe("No guide found");
+    expect(toast().hidden).toBe(true);
+    // The guide appears later: the same game is loaded again, now with one more unlock.
+    current = board(list(["Alpha", "Bravo"]));
+    api.nowValue = playing(hubA);
+    await app.tick();
+    expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("AC");
+    expect(text()).toBe("Unlocked: Bravo");
   });
 });

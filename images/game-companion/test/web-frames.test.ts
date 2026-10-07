@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFrames } from "../src/web/frames.js";
+
+/** What the browser does when a framed page has finished loading. */
+function loaded(frame: HTMLIFrameElement | undefined): void {
+  frame?.dispatchEvent(new Event("load"));
+}
 
 /** jsdom does not load a framed page, so give the frame a document of known content. */
 function showing(frame: HTMLIFrameElement | undefined, text: string): void {
@@ -114,13 +119,13 @@ describe("createFrames", () => {
     expect(f.element.querySelectorAll("iframe")).toHaveLength(0);
   });
 
-  it("locate reports false for a slot with no frame, and for a slot out of range", async () => {
+  it("locate reports gone for a slot with no frame, and for a slot out of range", async () => {
     const f = createFrames(document, 4);
-    expect(await f.locate(0, "Sample Boss")).toBe(false);
+    expect(await f.locate(0, "Sample Boss")).toBe("gone");
     f.show(1, "/doc/b");
-    expect(await f.locate(0, "Sample Boss")).toBe(false);
-    expect(await f.locate(9, "Sample Boss")).toBe(false);
-    expect(await f.locate(-1, "Sample Boss")).toBe(false);
+    expect(await f.locate(0, "Sample Boss")).toBe("gone");
+    expect(await f.locate(9, "Sample Boss")).toBe("gone");
+    expect(await f.locate(-1, "Sample Boss")).toBe("gone");
   });
 
   it("locate delegates to the frame of that slot, not to another one", async () => {
@@ -132,12 +137,14 @@ describe("createFrames", () => {
     const [a, b] = [...f.element.querySelectorAll("iframe")] as HTMLIFrameElement[];
     showing(a, "Nothing relevant");
     showing(b, "Here is the Sample Boss");
-    expect(await f.locate(1, "sample boss")).toBe(true);
+    loaded(a);
+    loaded(b);
+    expect(await f.locate(1, "sample boss")).toBe("found");
     vi.useFakeTimers();
     try {
       const other = f.locate(0, "sample boss");
       await vi.advanceTimersByTimeAsync(11_000);
-      expect(await other).toBe(false);
+      expect(await other).toBe("not-found");
     } finally {
       vi.useRealTimers();
     }
@@ -149,9 +156,123 @@ describe("createFrames", () => {
     document.body.append(f.element);
     f.show(0, "/doc/a");
     f.show(1, "/doc/b");
-    showing(f.element.querySelectorAll("iframe")[1], "Here is the Sample Boss");
+    const b = f.element.querySelectorAll("iframe")[1] as HTMLIFrameElement;
+    showing(b, "Here is the Sample Boss");
+    loaded(b);
     f.sync([null, "/doc/b", null, null]);
-    expect(await f.locate(0, "sample boss")).toBe(false);
-    expect(await f.locate(1, "sample boss")).toBe(true);
+    expect(await f.locate(0, "sample boss")).toBe("gone");
+    expect(await f.locate(1, "sample boss")).toBe("found");
+  });
+
+  it("locate passes the heading on to choose the occurrence", async () => {
+    document.body.innerHTML = "";
+    const f = createFrames(document, 4);
+    document.body.append(f.element);
+    f.show(0, "/doc/a");
+    const frame = f.element.querySelector("iframe") as HTMLIFrameElement;
+    showing(frame, "<h2>One</h2><p id='x'>Sample Boss</p><h2>Two</h2><p id='y'>Sample Boss</p>");
+    loaded(frame);
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      expect(await f.locate(0, "sample boss", "Two")).toBe("found");
+      expect((scroll.mock.contexts[0] as Element).id).toBe("y");
+    } finally {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    }
+  });
+
+  describe("locate while a slot is being re-pointed", () => {
+    afterEach(() => vi.useRealTimers());
+
+    /** A frame showing page A, loaded, then re-pointed to page B; reads of A's document are counted. */
+    function repointed() {
+      document.body.innerHTML = "";
+      const f = createFrames(document, 4);
+      document.body.append(f.element);
+      f.show(0, "/doc/a");
+      const frame = f.element.querySelector("iframe") as HTMLIFrameElement;
+      const docA = new DOMParser().parseFromString(
+        "<!doctype html><body><p>The Sample Boss is on page A</p></body>",
+        "text/html",
+      );
+      const reads = { a: 0 };
+      Object.defineProperty(frame, "contentDocument", {
+        get() {
+          reads.a += 1;
+          return docA;
+        },
+        configurable: true,
+      });
+      loaded(frame);
+      f.show(0, "/doc/b");
+      return { f, frame, reads };
+    }
+
+    it("does not touch the old page, stays pending, then searches the new page once it loads", async () => {
+      const { f, frame, reads } = repointed();
+      reads.a = 0;
+      const scroll = vi.fn();
+      Element.prototype.scrollIntoView = scroll;
+      try {
+        let settled: string | null = null;
+        const result = f.locate(0, "sample boss").then((r) => (settled = r));
+        await new Promise((r) => setTimeout(r, 50));
+        expect(reads.a).toBe(0);
+        expect(scroll).not.toHaveBeenCalled();
+        expect(settled).toBeNull();
+        showing(frame, "<p id='b'>Page B has the Sample Boss</p>");
+        loaded(frame);
+        expect(await result).toBe("found");
+        expect(scroll).toHaveBeenCalledTimes(1);
+        expect((scroll.mock.contexts[0] as Element).id).toBe("b");
+      } finally {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      }
+    });
+
+    it("resolves not-found at the deadline when the load never comes", async () => {
+      vi.useFakeTimers();
+      const { f, reads } = repointed();
+      reads.a = 0;
+      const result = f.locate(0, "sample boss");
+      await vi.advanceTimersByTimeAsync(9_900);
+      expect(reads.a).toBe(0);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(await result).toBe("not-found");
+      expect(reads.a).toBe(0);
+    });
+
+    it("waits for the first load of a frame it has just created", async () => {
+      vi.useFakeTimers();
+      document.body.innerHTML = "";
+      const f = createFrames(document, 4);
+      document.body.append(f.element);
+      f.show(0, "/doc/a");
+      const frame = f.element.querySelector("iframe") as HTMLIFrameElement;
+      showing(frame, "<p>The Sample Boss</p>");
+      let settled: string | null = null;
+      const result = f.locate(0, "sample boss").then((r) => (settled = r));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBeNull();
+      loaded(frame);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await result).toBe("found");
+    });
+
+    it("resolves gone when the page is unpinned or the frames are reset meanwhile", async () => {
+      vi.useFakeTimers();
+      const first = repointed();
+      const unpinned = first.f.locate(0, "sample boss");
+      first.f.sync([null, null, null, null]);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(await unpinned).toBe("gone");
+
+      const second = repointed();
+      const reset = second.f.locate(0, "sample boss");
+      second.f.reset();
+      await vi.advanceTimersByTimeAsync(400);
+      expect(await reset).toBe("gone");
+    });
   });
 });

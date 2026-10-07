@@ -19,6 +19,7 @@ import {
   activate,
   assignSlot,
   defaultLayout,
+  flattenPages,
   gameKey,
   isSafeDocUrl,
   loadLayout,
@@ -64,9 +65,9 @@ function keyFor(game: GameRef | null, hub: GuideHub | null): string {
     : `hub:${hub.hubId}`;
 }
 
-function pageUrls(pages: GuidePage[]): string[] {
-  return pages.flatMap((p) => [p.url, ...pageUrls(p.children)]);
-}
+/** The most the server accepts as a search text, in characters. */
+const FIND_MAX = 100;
+const FIND_MIN = 2;
 
 /** The text of the notice for achievements that just unlocked. */
 function unlockText(names: string[]): string {
@@ -86,7 +87,7 @@ function achievementsSource(c: Current): { source: Source; id: string } | null {
 
 export function startApp(opts: AppOptions): App {
   const { doc, api, storage } = opts;
-  const schedule = opts.setTimeout ?? setTimeout;
+  const afterDelay = opts.setTimeout ?? setTimeout;
   const nowPollMs = opts.nowPollMs ?? 30_000;
   const achievementsPollMs = opts.achievementsPollMs ?? 60_000;
 
@@ -219,6 +220,7 @@ export function startApp(opts: AppOptions): App {
   let findEnabled = false;
   // The search a list of matches in the picker belongs to.
   let findFor: { current: Current; name: string } | null = null;
+  let findSeq = 0;
   let toastSeq = 0;
 
   function showToast(text: string, ms = 6000): void {
@@ -226,7 +228,7 @@ export function startApp(opts: AppOptions): App {
     const mine = toastSeq;
     toastText.textContent = text;
     toast.hidden = false;
-    schedule(() => {
+    afterDelay(() => {
       if (toastSeq === mine) toast.hidden = true;
     }, ms);
   }
@@ -259,46 +261,71 @@ export function startApp(opts: AppOptions): App {
       return;
     }
     if (!Array.isArray(missable) || epoch !== marksEpoch) return;
-    marks = new Set(missable.map((name: string) => name.toLowerCase()));
+    marks = new Set(
+      missable
+        .filter((name): name is string => typeof name === "string")
+        .map((n) => n.toLowerCase()),
+    );
     showAchievements();
   }
 
   async function findInGuide(a: Achievement): Promise<void> {
     const c = current;
     if (c === null || c.hub === null) return;
-    let found;
-    try {
-      found = await api.find(c.hub.hubId, a.name);
-    } catch {
-      if (current === c) showToast("Could not search the guide");
+    findSeq += 1;
+    const mine = findSeq;
+    // The server takes 2 to 100 characters; never cut a surrogate pair in half.
+    const query = [...a.name].slice(0, FIND_MAX).join("");
+    if ([...query.trim()].length < FIND_MIN) {
+      showToast("Not found in this guide");
       return;
     }
-    if (current !== c) return;
+    let found;
+    let failed = false;
+    try {
+      found = await api.find(c.hub.hubId, query);
+    } catch {
+      failed = true;
+    }
+    // Only the newest tap counts, and only while the game it was for is still the one on screen
+    // and nothing else (a guide choice, a queued load) has taken over the picker.
+    if (mine !== findSeq || current !== c || choosingFor !== null || pending !== null) return;
+    if (failed) {
+      showToast("Could not search the guide");
+      return;
+    }
     const matches = found?.matches ?? [];
     const [only] = matches;
-    if (only === undefined || found === null) {
+    if (only === undefined || found === null || found === undefined) {
       showToast("Not found in this guide");
     } else if (matches.length === 1) {
-      openMatch(c, a.name, only);
+      openMatch(c, query, only);
     } else {
-      findFor = { current: c, name: a.name };
+      findFor = { current: c, name: query };
       picker.showMatches(a.name, matches, found.truncated);
     }
   }
 
   function openMatch(c: Current, name: string, match: FindMatch): void {
-    if (current !== c) return;
-    if (!isSafeDocUrl(match.pageUrl) || !pageUrls(c.pages).includes(match.pageUrl)) return;
+    if (current !== c || !isSafeDocUrl(match.pageUrl)) return;
+    if (!flattenPages(c.pages).some((p) => p.url === match.pageUrl)) {
+      showToast("Could not open that page");
+      return;
+    }
     c.layout = assignSlot(c.layout, { title: match.pageTitle, url: match.pageUrl });
     save();
     render();
     picker.setPages(c.pages, c.layout);
-    void frames.locate(c.layout.active, name).then((located) => {
-      if (!located && current === c) showToast("Opened the page, but could not find the text");
+    void frames.locate(c.layout.active, name, match.heading).then((result) => {
+      if (result === "not-found" && current === c) {
+        showToast("Opened the page, but could not find the text");
+      }
     });
   }
 
   function announceUnlocks(data: AchievementsResponse): void {
+    // A held copy says nothing about what unlocked just now.
+    if (data.stale) return;
     const unlockedNow = data.achievements.filter((a) => a.unlocked);
     if (seenUnlocked === null) {
       seenUnlocked = new Set(unlockedNow.map((a) => a.id));
@@ -435,7 +462,13 @@ export function startApp(opts: AppOptions): App {
     // A change of game drops the guide's marks and the record of what was unlocked.
     marks = new Set();
     marksEpoch += 1;
-    if (key !== current?.key) seenUnlocked = null;
+    if (key !== current?.key) {
+      seenUnlocked = null;
+      // The notice is about the game that was on screen; the pulse is stopped by letting it lapse now.
+      toastSeq += 1;
+      toast.hidden = true;
+      if (rail.element.querySelector(".pulse") !== null) rail.pulse(0);
+    }
     findFor = null;
     // A load ends any pending choice, even one a poll in flight has just reopened.
     if (choosingFor !== null) {

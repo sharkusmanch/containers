@@ -65,6 +65,18 @@ describe("createApi", () => {
     ]);
   });
 
+  it("puts a query full of reserved characters on the wire encoded, so it reads back unchanged", async () => {
+    const f = fake(200, { matches: [], truncated: false });
+    const text = "a#b%c+d&e f=g?h/i";
+    await createApi(f.fn).find("h1", text);
+    expect(f.urls[0]).toBe("api/guides/h1/find?q=a%23b%25c%2Bd%26e%20f%3Dg%3Fh%2Fi");
+    const url = new URL(f.urls[0] as string, "http://example.test/companion/");
+    expect(url.search.startsWith("?q=")).toBe(true);
+    expect([...url.searchParams.keys()]).toEqual(["q"]);
+    expect(url.searchParams.get("q")).toBe(text);
+    expect(url.hash).toBe("");
+  });
+
   it("returns the find response body", async () => {
     const body = {
       matches: [{ pageTitle: "P", pageUrl: "/doc/p", heading: null, snippet: "s" }],
