@@ -179,7 +179,10 @@ button {
   cursor: pointer;
 }
 
+/* Seven lines at most, then it scrolls, so a long line cannot take the whole screen. */
 .game-presence.expanded {
+  max-height: 130px;
+  overflow-y: auto;
   white-space: normal;
   overflow-wrap: anywhere;
 }
