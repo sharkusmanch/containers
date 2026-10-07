@@ -11,15 +11,15 @@ sidebar that frames real Outline pages and shows an achievements panel.
 From an achievement, **Find in guide** searches the game's guide pages and opens the page at
 that line. Achievements the guide marks as missable can be shown on their own, and a notice
 appears when an achievement unlocks while the page is open. While a RetroAchievements game is
-being played, the header shows the status line the game reports (its rich presence). The page
-can be added to the home screen and then opens full screen; it keeps the screen on and hides
-Outline's own sidebar and top bar inside the guide frames. Both can be switched off under ⋯ ›
-Display.
+being played, a row under the title shows the status line the game reports (its rich
+presence); a tap on it shows a long line in full. The page can be added to the home screen and
+then opens full screen; it keeps the screen on and hides Outline's own sidebar and top bar
+inside the guide frames. Both can be switched off under ⋯ › Display.
 
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.3.1
+- **Version**: v0.4.0
 
 ## Usage
 
@@ -30,7 +30,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.3.1
+  ghcr.io/sharkusmanch/containers/game-companion:v0.4.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
