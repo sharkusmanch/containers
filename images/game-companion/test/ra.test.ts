@@ -25,18 +25,26 @@ describe("cleanPresence", () => {
   it("trims", () => {
     expect(cleanPresence("  \n Level 3 \t")).toBe("Level 3");
   });
-  it("keeps 120 code points and cuts the 121st", () => {
-    expect(cleanPresence("a".repeat(120))).toBe("a".repeat(120));
-    expect(cleanPresence("a".repeat(121))).toBe("a".repeat(120));
+  it("returns a line of up to 300 code points whole, with no ellipsis", () => {
+    expect(cleanPresence("a".repeat(300))).toBe("a".repeat(300));
+    expect(cleanPresence("a".repeat(200))).toBe("a".repeat(200));
+  });
+  it("cuts a longer line to 299 code points and marks the cut with an ellipsis", () => {
+    const cut = cleanPresence("a".repeat(301));
+    expect(cut).toBe("a".repeat(299) + "\u2026");
+    expect([...(cut ?? "")]).toHaveLength(300);
+  });
+  it("leaves no space before the ellipsis when the cut lands after a space", () => {
+    expect(cleanPresence("a".repeat(298) + " bcd")).toBe("a".repeat(298) + "\u2026");
   });
   it("never splits a surrogate pair when cutting", () => {
-    const cut = cleanPresence("a".repeat(119) + "\u{1F600}" + "tail");
-    expect(cut).toBe("a".repeat(119) + "\u{1F600}");
-    expect([...(cut ?? "")]).toHaveLength(120);
-    expect(cleanPresence("a".repeat(120) + "\u{1F600}")).toBe("a".repeat(120));
+    expect(cleanPresence("a".repeat(299) + "\u{1F600}" + "tail")).toBe("a".repeat(299) + "\u2026");
+    const kept = cleanPresence("a".repeat(298) + "\u{1F600}" + "tail");
+    expect(kept).toBe("a".repeat(298) + "\u{1F600}\u2026");
+    expect([...(kept ?? "")]).toHaveLength(300);
   });
-  it("trims again after the cut", () => {
-    expect(cleanPresence("a".repeat(119) + " b")).toBe("a".repeat(119));
+  it("gives null, not a lone ellipsis, for a long line of invisible characters", () => {
+    expect(cleanPresence("\u200b".repeat(400))).toBeNull();
   });
   it("gives null for empty and white-space-only text", () => {
     expect(cleanPresence("")).toBeNull();

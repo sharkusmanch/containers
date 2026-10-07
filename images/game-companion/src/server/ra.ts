@@ -39,17 +39,26 @@ function rec(v: unknown): Rec {
   return v;
 }
 
-const PRESENCE_MAX_CODE_POINTS = 120;
+const PRESENCE_MAX_CODE_POINTS = 300;
 
 /** Nothing a person could see: format characters, separators and the blank letters. */
 const INVISIBLE_ONLY = /^[\p{Cf}\p{Z}\u3164\u2800\u115F\u1160]*$/u;
 
-/** A rich-presence line made safe to show on one line: single spaces, trimmed, at most 120 code points. */
+/**
+ * A rich-presence line made safe to show on one line: single spaces, trimmed. A line of at most
+ * 300 code points is returned whole; a longer one is cut to its first 299 code points, trimmed
+ * again, and ends in a single "…" so the cut is visible. Null when nothing visible is left.
+ */
 export function cleanPresence(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const flat = v.replace(/[\p{Cc}\s]+/gu, " ").trim();
-  const cut = Array.from(flat).slice(0, PRESENCE_MAX_CODE_POINTS).join("").trim();
-  return INVISIBLE_ONLY.test(cut) ? null : cut;
+  const points = Array.from(flat);
+  if (points.length <= PRESENCE_MAX_CODE_POINTS) return INVISIBLE_ONLY.test(flat) ? null : flat;
+  const cut = points
+    .slice(0, PRESENCE_MAX_CODE_POINTS - 1)
+    .join("")
+    .trim();
+  return INVISIBLE_ONLY.test(cut) ? null : `${cut}\u2026`;
 }
 
 /** "YYYY-MM-DD HH:MM:SS" read as UTC to epoch ms; NaN if malformed. */
