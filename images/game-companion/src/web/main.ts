@@ -124,10 +124,12 @@ export function startApp(opts: AppOptions): App {
 
   // ---- DOM, built once ----
   const title = el("span", "game-title", "Game Companion");
+  const presence = el("span", "game-presence");
+  presence.hidden = true;
   const note = el("span", "game-note");
   const topbar = doc.createElement("header");
   topbar.classList.add("topbar");
-  topbar.append(title, note);
+  topbar.append(title, presence, note);
 
   const bannerLabel = el("span", "switch-label");
   const accept = buttonEl("switch-accept", "Switch");
@@ -231,6 +233,8 @@ export function startApp(opts: AppOptions): App {
   let dismissedKey = "";
   let offered: NowResponse | null = null;
   let liveNow: NowResponse | null = null;
+  // The newest successful answer, whatever game it is about; null after a failed poll.
+  let lastNow: NowResponse | null = null;
   let unlockedCount: number | null = null;
   let lastAchievementsAt = 0;
   let lastAchievements: AchievementsResponse | null = null;
@@ -436,6 +440,23 @@ export function startApp(opts: AppOptions): App {
     note.textContent = noteText();
   }
 
+  // The game's own status line, only while the game on screen is the one being played now.
+  function renderPresence(): void {
+    const shown = current === null ? null : achievementsSource(current);
+    const game = lastNow?.game ?? null;
+    const text = lastNow?.presence;
+    const show =
+      typeof text === "string" &&
+      text !== "" &&
+      lastNow?.state === "playing" &&
+      shown !== null &&
+      game !== null &&
+      game.id === shown.id &&
+      game.source === shown.source;
+    presence.textContent = show ? text : "";
+    presence.hidden = !show;
+  }
+
   function render(): void {
     const layout = current?.layout ?? emptyLayout();
     rail.render(layout, unlockedCount);
@@ -521,6 +542,7 @@ export function startApp(opts: AppOptions): App {
     }
     if (key !== declinedKey) declinedKey = "";
     current = { game, hub, pages: [], layout: emptyLayout(), key, persist: false };
+    renderPresence();
     picker.setPages(current.pages, current.layout);
     render();
 
@@ -593,11 +615,15 @@ export function startApp(opts: AppOptions): App {
       now = await api.now();
     } catch {
       nowFailed = true;
+      lastNow = null;
+      renderPresence();
       renderHeader();
       return;
     }
     nowFailed = false;
     everReached = true;
+    lastNow = now;
+    renderPresence();
     if (!adoptedFirst) {
       adoptedFirst = true;
       // Only when nothing is on screen: a game the user picked by hand during an outage stays.

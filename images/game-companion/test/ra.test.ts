@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { UpstreamError } from "../src/server/fetch-json.js";
-import { parseRaDate, RaClient } from "../src/server/ra.js";
+import { cleanPresence, parseRaDate, RaClient } from "../src/server/ra.js";
 import { fakeFetch, fixture } from "./helpers.js";
 
 const opts = { apiKey: "KEY", username: "tester" };
@@ -14,6 +14,39 @@ describe("parseRaDate", () => {
   });
 });
 
+describe("cleanPresence", () => {
+  it("keeps plain text", () => {
+    expect(cleanPresence("Exploring the Sample Caves")).toBe("Exploring the Sample Caves");
+  });
+  it("turns tabs, newlines, non-breaking spaces and control characters into single spaces", () => {
+    expect(cleanPresence("a\tb\nc\u00a0d\u0000e\u007ff\u0085g\u009fh")).toBe("a b c d e f g h");
+    expect(cleanPresence("a \t\n\u00a0 b")).toBe("a b");
+  });
+  it("trims", () => {
+    expect(cleanPresence("  \n Level 3 \t")).toBe("Level 3");
+  });
+  it("keeps 120 code points and cuts the 121st", () => {
+    expect(cleanPresence("a".repeat(120))).toBe("a".repeat(120));
+    expect(cleanPresence("a".repeat(121))).toBe("a".repeat(120));
+  });
+  it("never splits a surrogate pair when cutting", () => {
+    const cut = cleanPresence("a".repeat(119) + "\u{1F600}" + "tail");
+    expect(cut).toBe("a".repeat(119) + "\u{1F600}");
+    expect([...(cut ?? "")]).toHaveLength(120);
+    expect(cleanPresence("a".repeat(120) + "\u{1F600}")).toBe("a".repeat(120));
+  });
+  it("trims again after the cut", () => {
+    expect(cleanPresence("a".repeat(119) + " b")).toBe("a".repeat(119));
+  });
+  it("gives null for empty and white-space-only text", () => {
+    expect(cleanPresence("")).toBeNull();
+    expect(cleanPresence(" \t\n\u00a0\u0000 ")).toBeNull();
+  });
+  it("gives null for anything that is not a string", () => {
+    for (const v of [42, null, undefined, {}, ["x"], true]) expect(cleanPresence(v)).toBeNull();
+  });
+});
+
 describe("RaClient", () => {
   it("summarises the last game and its presence time", async () => {
     const f = fakeFetch([["API_GetUserSummary", { body: fixture("ra-summary.json") }]]);
@@ -21,6 +54,7 @@ describe("RaClient", () => {
       gameId: "30002",
       title: "Test Quest",
       presenceAt: Date.UTC(2026, 0, 3, 4, 5, 6),
+      presence: "Exploring",
     });
     expect(f.calls[0]?.url).toContain("u=tester");
   });
@@ -31,7 +65,33 @@ describe("RaClient", () => {
       gameId: null,
       title: null,
       presenceAt: null,
+      presence: null,
     });
+  });
+
+  it("gives a null presence, without failing, when the response has no such field", async () => {
+    const f = fakeFetch([
+      [
+        "API_GetUserSummary",
+        { body: JSON.stringify({ LastGameID: 30002, LastGame: { Title: "Test Quest" } }) },
+      ],
+    ]);
+    expect(await new RaClient({ ...opts, fetchFn: f.fn }).summary()).toEqual({
+      gameId: "30002",
+      title: "Test Quest",
+      presenceAt: null,
+      presence: null,
+    });
+  });
+
+  it("cleans the presence it returns", async () => {
+    const f = fakeFetch([
+      [
+        "API_GetUserSummary",
+        { body: JSON.stringify({ LastGameID: 1, RichPresenceMsg: "  Chapter\t2\n " }) },
+      ],
+    ]);
+    expect((await new RaClient({ ...opts, fetchFn: f.fn }).summary()).presence).toBe("Chapter 2");
   });
 
   it("returns game progress with achievements in display order", async () => {

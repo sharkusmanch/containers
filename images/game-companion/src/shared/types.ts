@@ -33,6 +33,11 @@ export interface NowResponse {
   /** True when the newest poll of a source failed and this is older data. */
   stale: boolean;
   observedAt: string | null;
+  /**
+   * What the game reports the player is doing right now (RetroAchievements rich presence).
+   * Null unless that game is being played now.
+   */
+  presence: string | null;
   /** Hubs whose (source, gameId) equals the game. Empty when there is no guide. */
   hubs: GuideHub[];
 }

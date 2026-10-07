@@ -19,6 +19,8 @@ export interface Picked {
   game: GameRef | null;
   state: NowState;
   observedAt: number | null;
+  /** What the game reports the player is doing; set only for a RetroAchievements game being played now. */
+  presence: string | null;
 }
 
 /** Tolerated clock difference between this host and RetroAchievements. */
@@ -38,7 +40,8 @@ export function pickCurrent(input: PickInput): Picked {
   const { steam, ra, lastSteam, now, freshMs = 10 * 60_000 } = input;
 
   const live = steam ? steamGame(steam) : null;
-  if (live && live.id !== null) return { game: live, state: "playing", observedAt: now };
+  if (live && live.id !== null)
+    return { game: live, state: "playing", observedAt: now, presence: null };
 
   const raSeen: Observed | null =
     ra && ra.gameId !== null && ra.presenceAt !== null
@@ -49,19 +52,24 @@ export function pickCurrent(input: PickInput): Picked {
       : null;
 
   if (raSeen && raSeen.at <= now + SKEW_MS && now - raSeen.at <= freshMs) {
-    return { game: raSeen.game, state: "playing", observedAt: raSeen.at };
+    return {
+      game: raSeen.game,
+      state: "playing",
+      observedAt: raSeen.at,
+      presence: ra?.presence ?? null,
+    };
   }
 
   // A non-Steam shortcut has no id to look a guide up by, so it only wins when RA has nothing fresh.
-  if (live) return { game: live, state: "playing", observedAt: now };
+  if (live) return { game: live, state: "playing", observedAt: now, presence: null };
 
   // A presence time far in the future is not trusted for ordering; clamp it to now.
   const raForOrder = raSeen ? { ...raSeen, at: Math.min(raSeen.at, now) } : null;
   const last = [lastSteam, raForOrder]
     .filter((o): o is Observed => o !== null)
     .sort((a, b) => b.at - a.at)[0];
-  if (last) return { game: last.game, state: "last-played", observedAt: last.at };
-  return { game: null, state: "none", observedAt: null };
+  if (last) return { game: last.game, state: "last-played", observedAt: last.at, presence: null };
+  return { game: null, state: "none", observedAt: null, presence: null };
 }
 
 export interface DetectorSnapshot extends Picked {

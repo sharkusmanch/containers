@@ -99,6 +99,7 @@ const playing = (hub: GuideHub): NowResponse => ({
   state: "playing",
   stale: false,
   observedAt: "2026-10-06T18:00:00.000Z",
+  presence: null,
   hubs: [hub],
 });
 
@@ -208,7 +209,14 @@ describe("startApp", () => {
   });
 
   it("opens the game picker when nothing is detected, and loads a hand-picked game", async () => {
-    const api = fakeApi({ game: null, state: "none", stale: false, observedAt: null, hubs: [] });
+    const api = fakeApi({
+      game: null,
+      state: "none",
+      stale: false,
+      observedAt: null,
+      presence: null,
+      hubs: [],
+    });
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
     await app.ready;
     expect($(".picker")?.hidden).toBe(false);
@@ -225,6 +233,7 @@ describe("startApp", () => {
       state: "playing",
       stale: false,
       observedAt: null,
+      presence: null,
       hubs: [],
     });
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
@@ -245,6 +254,7 @@ describe("startApp", () => {
       state: "playing",
       stale: false,
       observedAt: null,
+      presence: null,
       hubs: [],
     });
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
@@ -353,6 +363,141 @@ describe("startApp", () => {
     expect(api.achCalls.length).toBe(before + 1);
   });
 
+  describe("rich presence", () => {
+    const withPresence = (hub: GuideHub, text: string | null): NowResponse => ({
+      ...playing(hub),
+      presence: text,
+    });
+    const text = (): string | null | undefined => $(".game-presence")?.textContent;
+    const hidden = (): unknown => $(".game-presence")?.hidden;
+
+    it("sits in the header between the title and the note, hidden until it has text", async () => {
+      const app = startApp({
+        doc: document,
+        api: fakeApi(playing(hubA)),
+        storage: memory(),
+        setInterval: noTimers,
+      });
+      await app.ready;
+      expect([...document.querySelectorAll(".topbar > span")].map((e) => e.className)).toEqual([
+        "game-title",
+        "game-presence",
+        "game-note",
+      ]);
+      expect(hidden()).toBe(true);
+      expect(text()).toBe("");
+    });
+
+    it("shows the status line of the detected game that is being played and on screen", async () => {
+      const api = fakeApi(withPresence(hubA, "Chapter 2: Sample Caves"));
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      expect(text()).toBe("Chapter 2: Sample Caves");
+      expect(hidden()).toBe(false);
+    });
+
+    it("hides it when the state is last-played", async () => {
+      const api = fakeApi({
+        ...withPresence(hubA, "Chapter 2: Sample Caves"),
+        state: "last-played",
+      });
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      expect(hidden()).toBe(true);
+      expect(text()).toBe("");
+    });
+
+    it("hides it when a different game was picked by hand while the detected one is playing", async () => {
+      const api = fakeApi(withPresence(hubA, "Chapter 2: Sample Caves"));
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      expect(hidden()).toBe(false);
+      (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+      ($('[data-tab="games"]') as HTMLElement).click();
+      (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
+      await app.tick();
+      expect($(".game-title")?.textContent).toBe("Zeta");
+      expect(hidden()).toBe(true);
+      expect(text()).toBe("");
+      await app.tick();
+      expect(hidden()).toBe(true);
+      expect(text()).toBe("");
+    });
+
+    it("follows the next poll: new text replaces the old, null clears it", async () => {
+      const api = fakeApi(withPresence(hubA, "Chapter 2: Sample Caves"));
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      api.nowValue = withPresence(hubA, "Chapter 3: Sample Keep");
+      await app.tick();
+      expect(text()).toBe("Chapter 3: Sample Keep");
+      expect(hidden()).toBe(false);
+      api.nowValue = withPresence(hubA, null);
+      await app.tick();
+      expect(text()).toBe("");
+      expect(hidden()).toBe(true);
+    });
+
+    it("clears at once when the game on screen changes, before the new game's data arrives", async () => {
+      const api = fakeApi(withPresence(hubA, "Chapter 2: Sample Caves"));
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      expect(hidden()).toBe(false);
+      let release: () => void = () => {};
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      api.hubTree = async (id) => {
+        await gate;
+        return tree(id === "hA" ? hubA : hubZ);
+      };
+      (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+      ($('[data-tab="games"]') as HTMLElement).click();
+      (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
+      const switching = app.tick();
+      await new Promise((r) => setTimeout(r, 0));
+      // The new game's guide is still loading: nothing of the old game's status may remain.
+      expect(text()).toBe("");
+      expect(hidden()).toBe(true);
+      release();
+      await switching;
+      expect(text()).toBe("");
+    });
+
+    it("is cleared when a poll fails and shown again when the next one succeeds", async () => {
+      const api = fakeApi(withPresence(hubA, "Chapter 2: Sample Caves"));
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      api.failNow = true;
+      await app.tick();
+      expect(hidden()).toBe(true);
+      expect(text()).toBe("");
+      api.failNow = false;
+      await app.tick();
+      expect(text()).toBe("Chapter 2: Sample Caves");
+    });
+
+    it("shows nothing, and throws nothing, when the server sends no presence field", async () => {
+      const old = playing(hubA) as Partial<NowResponse>;
+      delete old.presence;
+      const api = fakeApi(old as NowResponse);
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      await app.tick();
+      expect(hidden()).toBe(true);
+      expect(text()).toBe("");
+    });
+
+    it("shows markup in the text literally and creates no element", async () => {
+      const api = fakeApi(withPresence(hubA, "<b>x</b> & <img src=x>"));
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      expect(text()).toBe("<b>x</b> & <img src=x>");
+      expect($(".game-presence")?.children).toHaveLength(0);
+      expect(document.querySelector(".topbar b, .topbar img")).toBeNull();
+    });
+  });
+
   it("keeps the current game on screen when a poll fails", async () => {
     const api = fakeApi(playing(hubA));
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
@@ -372,7 +517,14 @@ describe("startApp", () => {
   });
 
   it("adopts a game that appears while nothing was loaded, closing the picker without a banner", async () => {
-    const api = fakeApi({ game: null, state: "none", stale: false, observedAt: null, hubs: [] });
+    const api = fakeApi({
+      game: null,
+      state: "none",
+      stale: false,
+      observedAt: null,
+      presence: null,
+      hubs: [],
+    });
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
     await app.ready;
     expect($(".picker")?.hidden).toBe(false);
@@ -426,7 +578,14 @@ describe("startApp", () => {
     ($(".switch-banner .switch-dismiss") as HTMLElement).click();
     await app.tick();
     expect($(".switch-banner")?.hidden).toBe(true);
-    api.nowValue = { game: null, state: "none", stale: false, observedAt: null, hubs: [] };
+    api.nowValue = {
+      game: null,
+      state: "none",
+      stale: false,
+      observedAt: null,
+      presence: null,
+      hubs: [],
+    };
     await app.tick();
     api.nowValue = playing(hubZ);
     await app.tick();
@@ -635,7 +794,14 @@ describe("startApp", () => {
   });
 
   it("re-fetches the guide list on ticks while it is unavailable, and when the picker opens", async () => {
-    const api = fakeApi({ game: null, state: "none", stale: false, observedAt: null, hubs: [] });
+    const api = fakeApi({
+      game: null,
+      state: "none",
+      stale: false,
+      observedAt: null,
+      presence: null,
+      hubs: [],
+    });
     const calls: (boolean | undefined)[] = [];
     let list = { available: false, hubs: [] as GuideHub[] };
     api.guides = async (refresh) => {
@@ -716,7 +882,14 @@ describe("startApp", () => {
     api.nowValue = playing(hubZ);
     await app.tick();
     expect($(".switch-banner")?.hidden).toBe(false);
-    api.nowValue = { game: null, state: "none", stale: false, observedAt: null, hubs: [] };
+    api.nowValue = {
+      game: null,
+      state: "none",
+      stale: false,
+      observedAt: null,
+      presence: null,
+      hubs: [],
+    };
     await app.tick();
     expect($(".switch-banner")?.hidden).toBe(true);
   });

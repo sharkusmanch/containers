@@ -23,8 +23,10 @@ const now: NowResponse = {
   state: "playing",
   stale: false,
   observedAt: "2026-10-06T00:00:00.000Z",
+  presence: "Chapter 2: Sample Caves",
   hubs: [hub],
 };
+let nowValue: NowResponse = now;
 const ach: AchievementsResponse = {
   source: "steam",
   id: "10",
@@ -54,7 +56,7 @@ let refreshCalls = 0;
 beforeAll(async () => {
   const deps: RouteDeps = {
     staticDir: "/nonexistent",
-    now: () => now,
+    now: () => nowValue,
     guides: () => ({ available: true, hubs: [hub] }),
     hubTree: (id) => (id === "h1" ? { hub, pages: [], defaultPins: ["Guide"] } : null),
     refreshGuides: () => {
@@ -93,6 +95,16 @@ afterAll(() => new Promise<void>((r) => server.close(() => r())));
 describe("browser client against the real request handler", () => {
   it("reads the current game", async () => {
     expect(await api.now()).toEqual(now);
+  });
+
+  it("reads the presence, and a null one, through the browser client", async () => {
+    expect((await api.now()).presence).toBe("Chapter 2: Sample Caves");
+    nowValue = { ...now, presence: null };
+    try {
+      expect((await api.now()).presence).toBeNull();
+    } finally {
+      nowValue = now;
+    }
   });
 
   it("reads the guide list, and asks for a refresh only when told to", async () => {

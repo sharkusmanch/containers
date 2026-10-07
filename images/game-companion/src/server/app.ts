@@ -53,6 +53,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
         state: snap.state,
         stale: snap.stale,
         observedAt: snap.observedAt === null ? null : new Date(snap.observedAt).toISOString(),
+        presence: snap.presence,
         hubs: game && game.id !== null ? index.lookup(game.source, game.id) : [],
       };
     },

@@ -19,7 +19,7 @@ describe("pickCurrent", () => {
   it("prefers the Steam game being played now", () => {
     const p = pickCurrent({
       steam: { appId: "10", name: "Steam Game" },
-      ra: { gameId: "20", title: "RA Game", presenceAt: NOW - MIN },
+      ra: { gameId: "20", title: "RA Game", presenceAt: NOW - MIN, presence: null },
       lastSteam: null,
       now: NOW,
     });
@@ -27,6 +27,7 @@ describe("pickCurrent", () => {
       game: { source: "steam", id: "10", title: "Steam Game" },
       state: "playing",
       observedAt: NOW,
+      presence: null,
     });
   });
 
@@ -44,7 +45,7 @@ describe("pickCurrent", () => {
   it("prefers a fresh RA game over a Steam shortcut, which has no id to find a guide by", () => {
     const p = pickCurrent({
       steam: { appId: "15564589419463376896", name: "Emulator" },
-      ra: { gameId: "20", title: "RA Game", presenceAt: NOW - MIN },
+      ra: { gameId: "20", title: "RA Game", presenceAt: NOW - MIN, presence: null },
       lastSteam: null,
       now: NOW,
     });
@@ -55,7 +56,7 @@ describe("pickCurrent", () => {
   it("uses RA when its presence is within ten minutes", () => {
     const p = pickCurrent({
       steam: { appId: null, name: null },
-      ra: { gameId: "20", title: "RA Game", presenceAt: NOW - 9 * MIN },
+      ra: { gameId: "20", title: "RA Game", presenceAt: NOW - 9 * MIN, presence: null },
       lastSteam: null,
       now: NOW,
     });
@@ -63,6 +64,7 @@ describe("pickCurrent", () => {
       game: { source: "ra", id: "20", title: "RA Game" },
       state: "playing",
       observedAt: NOW - 9 * MIN,
+      presence: null,
     });
   });
 
@@ -70,7 +72,7 @@ describe("pickCurrent", () => {
     const at = (age: number) =>
       pickCurrent({
         steam: null,
-        ra: { gameId: "20", title: "RA Game", presenceAt: NOW - age },
+        ra: { gameId: "20", title: "RA Game", presenceAt: NOW - age, presence: null },
         lastSteam: null,
         now: NOW,
       }).state;
@@ -83,15 +85,16 @@ describe("pickCurrent", () => {
       game: { source: "steam" as const, id: "10", title: "Steam Game" },
       at: NOW - 30 * MIN,
     };
-    const olderRa = { gameId: "20", title: "RA Game", presenceAt: NOW - 90 * MIN };
+    const olderRa = { gameId: "20", title: "RA Game", presenceAt: NOW - 90 * MIN, presence: null };
     expect(
       pickCurrent({ steam: { appId: null, name: null }, ra: olderRa, lastSteam, now: NOW }),
     ).toEqual({
       game: lastSteam.game,
       state: "last-played",
       observedAt: NOW - 30 * MIN,
+      presence: null,
     });
-    const newerRa = { gameId: "20", title: "RA Game", presenceAt: NOW - 20 * MIN };
+    const newerRa = { gameId: "20", title: "RA Game", presenceAt: NOW - 20 * MIN, presence: null };
     expect(
       pickCurrent({ steam: { appId: null, name: null }, ra: newerRa, lastSteam, now: NOW }).game
         ?.source,
@@ -103,11 +106,12 @@ describe("pickCurrent", () => {
       game: null,
       state: "none",
       observedAt: null,
+      presence: null,
     });
     expect(
       pickCurrent({
         steam: { appId: null, name: null },
-        ra: { gameId: null, title: null, presenceAt: null },
+        ra: { gameId: null, title: null, presenceAt: null, presence: null },
         lastSteam: null,
         now: NOW,
       }).state,
@@ -117,11 +121,84 @@ describe("pickCurrent", () => {
   it("ignores an RA presence time in the future beyond clock skew", () => {
     const p = pickCurrent({
       steam: null,
-      ra: { gameId: "20", title: "RA Game", presenceAt: NOW + 60 * MIN },
+      ra: { gameId: "20", title: "RA Game", presenceAt: NOW + 60 * MIN, presence: null },
       lastSteam: null,
       now: NOW,
     });
     expect(p.state).toBe("last-played");
+  });
+
+  describe("presence", () => {
+    const raGame = { source: "ra" as const, id: "20", title: "RA Game" };
+    const withPresence = (presenceAt: number) => ({
+      gameId: "20",
+      title: "RA Game",
+      presenceAt,
+      presence: "Chapter 2: Sample Caves",
+    });
+
+    it("carries the summary's presence for a fresh RA game", () => {
+      const p = pickCurrent({
+        steam: null,
+        ra: withPresence(NOW - MIN),
+        lastSteam: null,
+        now: NOW,
+      });
+      expect(p).toEqual({
+        game: raGame,
+        state: "playing",
+        observedAt: NOW - MIN,
+        presence: "Chapter 2: Sample Caves",
+      });
+    });
+
+    it("drops it for an RA game older than the fresh window", () => {
+      const p = pickCurrent({
+        steam: null,
+        ra: withPresence(NOW - 10 * MIN - 1),
+        lastSteam: null,
+        now: NOW,
+      });
+      expect(p).toMatchObject({ game: raGame, state: "last-played", presence: null });
+    });
+
+    it("drops it when a Steam game is being played", () => {
+      const p = pickCurrent({
+        steam: { appId: "10", name: "Steam Game" },
+        ra: withPresence(NOW - MIN),
+        lastSteam: null,
+        now: NOW,
+      });
+      expect(p).toMatchObject({ game: { source: "steam", id: "10" }, presence: null });
+    });
+
+    it("keeps it when a shortcut runs and the fresh RA game wins", () => {
+      const p = pickCurrent({
+        steam: { appId: "15564589419463376896", name: "Emulator" },
+        ra: withPresence(NOW - MIN),
+        lastSteam: null,
+        now: NOW,
+      });
+      expect(p).toMatchObject({
+        game: raGame,
+        state: "playing",
+        presence: "Chapter 2: Sample Caves",
+      });
+    });
+
+    it("drops it for a shortcut with no fresh RA game", () => {
+      const p = pickCurrent({
+        steam: { appId: "15564589419463376896", name: "Emulator" },
+        ra: withPresence(NOW - 30 * MIN),
+        lastSteam: null,
+        now: NOW,
+      });
+      expect(p).toMatchObject({ game: { source: "steam", id: null }, presence: null });
+    });
+
+    it("is null when nothing is detected", () => {
+      expect(pickCurrent({ steam: null, ra: null, lastSteam: null, now: NOW }).presence).toBeNull();
+    });
   });
 
   it("uses a title placeholder when Steam gives an id without a name", () => {
@@ -135,7 +212,12 @@ describe("pickCurrent", () => {
 describe("Detector", () => {
   function make(
     steam: () => Promise<{ appId: string | null; name: string | null }>,
-    ra: () => Promise<{ gameId: string | null; title: string | null; presenceAt: number | null }>,
+    ra: () => Promise<{
+      gameId: string | null;
+      title: string | null;
+      presenceAt: number | null;
+      presence: string | null;
+    }>,
     clock = { t: NOW },
   ) {
     return {
@@ -147,16 +229,39 @@ describe("Detector", () => {
   it("starts with no game and not stale", () => {
     const { d } = make(
       async () => ({ appId: null, name: null }),
-      async () => ({ gameId: null, title: null, presenceAt: null }),
+      async () => ({ gameId: null, title: null, presenceAt: null, presence: null }),
     );
-    expect(d.current()).toEqual({ game: null, state: "none", observedAt: null, stale: false });
+    expect(d.current()).toEqual({
+      game: null,
+      state: "none",
+      observedAt: null,
+      presence: null,
+      stale: false,
+    });
+  });
+
+  it("carries the presence through current()", async () => {
+    const { d, clock } = make(
+      async () => ({ appId: null, name: null }),
+      async () => ({
+        gameId: "20",
+        title: "RA Game",
+        presenceAt: NOW - MIN,
+        presence: "Chapter 2: Sample Caves",
+      }),
+    );
+    await d.pollSteam();
+    await d.pollRa();
+    expect(d.current()).toMatchObject({ state: "playing", presence: "Chapter 2: Sample Caves" });
+    clock.t += 20 * MIN;
+    expect(d.current()).toMatchObject({ state: "last-played", presence: null });
   });
 
   it("remembers the last Steam game after the player quits", async () => {
     let inGame = true;
     const { d, clock } = make(
       async () => (inGame ? { appId: "10", name: "Steam Game" } : { appId: null, name: null }),
-      async () => ({ gameId: null, title: null, presenceAt: null }),
+      async () => ({ gameId: null, title: null, presenceAt: null, presence: null }),
     );
     await d.pollSteam();
     expect(d.current().state).toBe("playing");
@@ -177,7 +282,7 @@ describe("Detector", () => {
     };
     const { d, clock } = make(
       async () => steam,
-      async () => ({ gameId: "20", title: "RA Game", presenceAt: NOW - MIN }),
+      async () => ({ gameId: "20", title: "RA Game", presenceAt: NOW - MIN, presence: null }),
     );
     await d.pollSteam();
     await d.pollRa();
@@ -195,7 +300,7 @@ describe("Detector", () => {
     };
     const { d } = make(
       async () => steam,
-      async () => ({ gameId: null, title: null, presenceAt: null }),
+      async () => ({ gameId: null, title: null, presenceAt: null, presence: null }),
     );
     await d.pollSteam();
     await d.pollRa();
@@ -208,7 +313,7 @@ describe("Detector", () => {
     let steam: { appId: string | null; name: string | null } = { appId: "10", name: "Steam Game" };
     const { d, clock } = make(
       async () => steam,
-      async () => ({ gameId: null, title: null, presenceAt: null }),
+      async () => ({ gameId: null, title: null, presenceAt: null, presence: null }),
     );
     await d.pollSteam();
     steam = { appId: null, name: null };
@@ -234,7 +339,7 @@ describe("Detector", () => {
         if (fail) throw new Error("down");
         return { appId: "10", name: "Steam Game" };
       },
-      async () => ({ gameId: null, title: null, presenceAt: null }),
+      async () => ({ gameId: null, title: null, presenceAt: null, presence: null }),
     );
     await d.pollSteam();
     fail = true;
@@ -272,7 +377,7 @@ describe("Detector", () => {
 
   describe("an unrefreshable Steam reading", () => {
     type Presence = { appId: string | null; name: string | null };
-    const noRa = async () => ({ gameId: null, title: null, presenceAt: null });
+    const noRa = async () => ({ gameId: null, title: null, presenceAt: null, presence: null });
 
     it("stops counting as playing after five minutes of failed polls when RA is fresh", async () => {
       let fail = false;
@@ -281,7 +386,7 @@ describe("Detector", () => {
           if (fail) throw new Error("down");
           return { appId: "10", name: "Steam Game" };
         },
-        async () => ({ gameId: "20", title: "RA Game", presenceAt: NOW + 5 * MIN }),
+        async () => ({ gameId: "20", title: "RA Game", presenceAt: NOW + 5 * MIN, presence: null }),
       );
       await d.pollSteam();
       await d.pollRa();
@@ -313,6 +418,7 @@ describe("Detector", () => {
         game: { source: "steam", id: "10", title: "Steam Game" },
         state: "last-played",
         observedAt: NOW,
+        presence: null,
         stale: true,
       });
     });
@@ -367,7 +473,7 @@ describe("Detector", () => {
         ra: {
           summary: async () => {
             if (raFail) throw new Error("down");
-            return { gameId: null, title: null, presenceAt: null };
+            return { gameId: null, title: null, presenceAt: null, presence: null };
           },
         },
         onStatus: (source, ok) => events.push([source, ok]),

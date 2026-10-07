@@ -21,6 +21,7 @@ function parts(over: Record<string, unknown> = {}) {
         game: { source: "steam" as const, id: "10", title: "Zeta" },
         state: "playing" as const,
         observedAt: Date.UTC(2026, 9, 6),
+        presence: null,
         stale: false,
       }),
     },
@@ -62,8 +63,26 @@ describe("buildDeps", () => {
       state: "playing",
       stale: false,
       observedAt: "2026-10-06T00:00:00.000Z",
+      presence: null,
       hubs: [hub],
     });
+  });
+
+  it("passes the detector's presence through to the answer", () => {
+    const d = buildDeps(
+      parts({
+        detector: {
+          current: () => ({
+            game: { source: "ra" as const, id: "20", title: "Zeta" },
+            state: "playing" as const,
+            observedAt: 1,
+            presence: "Chapter 2: Sample Caves",
+            stale: false,
+          }),
+        },
+      }),
+    );
+    expect(d.now().presence).toBe("Chapter 2: Sample Caves");
   });
 
   it("returns no hubs for a game without an id", () => {
@@ -74,6 +93,7 @@ describe("buildDeps", () => {
             game: { source: "steam" as const, id: null, title: "Emulator" },
             state: "playing" as const,
             observedAt: 1,
+            presence: null,
             stale: false,
           }),
         },
@@ -86,7 +106,13 @@ describe("buildDeps", () => {
     const d = buildDeps(
       parts({
         detector: {
-          current: () => ({ game: null, state: "none" as const, observedAt: null, stale: false }),
+          current: () => ({
+            game: null,
+            state: "none" as const,
+            observedAt: null,
+            presence: null,
+            stale: false,
+          }),
         },
       }),
     );
@@ -95,6 +121,7 @@ describe("buildDeps", () => {
       state: "none",
       stale: false,
       observedAt: null,
+      presence: null,
       hubs: [],
     });
   });
@@ -216,6 +243,7 @@ describe("achievements allowlist", () => {
       game: game && { ...game, title: "G" },
       state: game ? ("playing" as const) : ("none" as const),
       observedAt: 1,
+      presence: null,
       stale: false,
     }),
   });

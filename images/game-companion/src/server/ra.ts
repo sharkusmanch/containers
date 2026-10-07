@@ -7,6 +7,8 @@ export interface RaSummary {
   title: string | null;
   /** Epoch ms (UTC). */
   presenceAt: number | null;
+  /** What the game says the player is doing now (rich presence), cleaned; null when absent. */
+  presence: string | null;
 }
 export interface RaAchievementRaw {
   ID: number;
@@ -35,6 +37,16 @@ const isAbsent = (v: unknown): boolean => v === undefined || v === null;
 function rec(v: unknown): Rec {
   if (!isRec(v)) throw badShape();
   return v;
+}
+
+const PRESENCE_MAX_CODE_POINTS = 120;
+
+/** A rich-presence line made safe to show on one line: single spaces, trimmed, at most 120 code points. */
+export function cleanPresence(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  const flat = v.replace(/[\p{Cc}\s]+/gu, " ").trim();
+  const cut = Array.from(flat).slice(0, PRESENCE_MAX_CODE_POINTS).join("").trim();
+  return cut === "" ? null : cut;
 }
 
 /** "YYYY-MM-DD HH:MM:SS" read as UTC to epoch ms; NaN if malformed. */
@@ -107,7 +119,12 @@ export class RaClient {
 
     const at =
       typeof body.RichPresenceMsgDate === "string" ? parseRaDate(body.RichPresenceMsgDate) : NaN;
-    return { gameId, title, presenceAt: Number.isNaN(at) ? null : at };
+    return {
+      gameId,
+      title,
+      presenceAt: Number.isNaN(at) ? null : at,
+      presence: cleanPresence(body.RichPresenceMsg),
+    };
   }
 
   async gameProgress(gameId: string): Promise<RaGameProgress | null> {

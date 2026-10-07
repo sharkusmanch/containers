@@ -22,7 +22,15 @@ const hub: GuideHub = {
   platformLabel: "Steam",
   nowPlaying: false,
 };
-const now: NowResponse = { game: null, state: "none", stale: false, observedAt: null, hubs: [] };
+const now: NowResponse = {
+  game: null,
+  state: "none",
+  stale: false,
+  observedAt: null,
+  presence: null,
+  hubs: [],
+};
+let nowValue: NowResponse = now;
 const ach: AchievementsResponse = {
   source: "steam",
   id: "10",
@@ -52,7 +60,7 @@ beforeAll(async () => {
   await writeFile(join(dir, "icon-192.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const deps: RouteDeps = {
     staticDir: dir,
-    now: () => now,
+    now: () => nowValue,
     guides: () => ({ available: true, hubs: [hub] }),
     hubTree: (id) => (id === "h1" ? { hub, pages: [], defaultPins: ["Guide"] } : null),
     refreshGuides: () => {
@@ -130,6 +138,25 @@ describe("routes", () => {
       pages: [],
       defaultPins: ["Guide"],
     });
+  });
+
+  it("carries the presence in the now answer, a value or null", async () => {
+    const withPresence: NowResponse = {
+      ...now,
+      game: { source: "ra", id: "20", title: "Sample Quest" },
+      state: "playing",
+      presence: "Chapter 2: Sample Caves",
+    };
+    nowValue = withPresence;
+    try {
+      expect(await (await fetch(`${base}/companion/api/now`)).json()).toEqual(withPresence);
+      nowValue = { ...withPresence, presence: null };
+      expect(await (await fetch(`${base}/companion/api/now`)).json()).toMatchObject({
+        presence: null,
+      });
+    } finally {
+      nowValue = now;
+    }
   });
 
   it("404s an unknown hub", async () => {
