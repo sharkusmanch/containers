@@ -6,7 +6,9 @@ import type {
   GuideHub,
   GuidePage,
   NowResponse,
+  PageProgress,
   Source,
+  WhereMatch,
 } from "../shared/types.js";
 import type { Api } from "./api.js";
 import { createAchievementsView } from "./achievements-view.js";
@@ -22,13 +24,14 @@ import {
 } from "./device.js";
 import { createFrames } from "./frames.js";
 import { createPicker } from "./picker.js";
-import { createRail } from "./rail.js";
+import { createRail, type PageProgressLabel } from "./rail.js";
 import {
   ACHIEVEMENTS,
   SLOT_COUNT,
   activate,
   assignSlot,
   defaultLayout,
+  docId,
   flattenPages,
   gameKey,
   isSafeDocUrl,
@@ -49,7 +52,11 @@ export interface AppOptions {
   /** The browser's navigator, for the screen wake lock. Without it the lock is unsupported. */
   nav?: { wakeLock?: WakeLockLike };
   /** The browser window, to tell whether the page runs as an installed full-screen app. */
-  win?: { matchMedia?: (query: string) => { matches: boolean } };
+  win?: {
+    matchMedia?: (query: string) => { matches: boolean };
+    /** Lets the page refresh when the browser comes back online. */
+    addEventListener?: (type: string, listener: () => void) => void;
+  };
   nowPollMs?: number;
   achievementsPollMs?: number;
 }
@@ -82,6 +89,8 @@ function keyFor(game: GameRef | null, hub: GuideHub | null): string {
 /** The most the server accepts as a search text, in characters. */
 const FIND_MAX = 100;
 const FIND_MIN = 2;
+/** Waking after longer than this since the last refresh refreshes achievements and progress too. */
+const WAKE_REFRESH_MS = 15_000;
 
 /** The text of the notice for achievements that just unlocked. */
 function unlockText(names: string[]): string {
@@ -129,10 +138,13 @@ export function startApp(opts: AppOptions): App {
   const presenceRow = doc.createElement("div");
   presenceRow.classList.add("presence-row");
   presenceRow.hidden = true;
-  presenceRow.append(presence);
+  const jump = buttonEl("presence-jump", "");
+  jump.hidden = true;
+  presenceRow.append(presence, jump);
   presence.addEventListener("click", () => {
     setPresenceExpanded(!presence.classList.contains("expanded"));
   });
+  jump.addEventListener("click", () => jumpToGuide());
   const note = el("span", "game-note");
   const topbar = doc.createElement("header");
   topbar.classList.add("topbar");
@@ -147,11 +159,10 @@ export function startApp(opts: AppOptions): App {
   banner.append(bannerLabel, accept, dismiss);
 
   const view = createAchievementsView(doc, { storage, onFind: (a) => void findInGuide(a) });
-  const frames = createFrames(
-    doc,
-    SLOT_COUNT,
-    opts.setInterval === undefined ? {} : { setInterval: opts.setInterval },
-  );
+  const frames = createFrames(doc, SLOT_COUNT, {
+    ...(opts.setInterval === undefined ? {} : { setInterval: opts.setInterval }),
+    onInteract: () => onGuideInteract(),
+  });
   const toastText = el("span", "toast-text");
   const toast = doc.createElement("div");
   toast.classList.add("toast");
@@ -197,7 +208,7 @@ export function startApp(opts: AppOptions): App {
     },
     onMatch(match) {
       if (findFor === null) return;
-      openMatch(findFor.current, findFor.name, match);
+      openMatch(findFor.current, findFor.locate(match), match);
     },
     onSetting(name) {
       if (name === "fullscreen") {
@@ -208,6 +219,7 @@ export function startApp(opts: AppOptions): App {
       saveSettings(storage, settings);
       applySettings();
       showSettings();
+      renderPresence();
     },
     onUnpin(page) {
       if (current === null) return;
@@ -244,6 +256,13 @@ export function startApp(opts: AppOptions): App {
   let lastNow: NowResponse | null = null;
   let unlockedCount: number | null = null;
   let lastAchievementsAt = 0;
+  // Set when the page wakes and the last refresh is old: the next tick refreshes at once.
+  let refreshDue = false;
+  // Checklist progress of the open guide's pages, by document id; empty until it arrives.
+  let progress: ReadonlyMap<string, PageProgressLabel> = new Map();
+  let progressEpoch = 0;
+  // Bumped by every tap in a guide page and every load, so older follow-up timers do nothing.
+  let interactGen = 0;
   let lastAchievements: AchievementsResponse | null = null;
   let savedScroll = 0;
   let loadingLabel: string | null = null;
@@ -259,9 +278,18 @@ export function startApp(opts: AppOptions): App {
   let findEnabled = false;
   let settings = loadSettings(storage);
   const wakeLock = createWakeLock(opts.nav ?? {}, doc);
-  // The search a list of matches in the picker belongs to.
-  let findFor: { current: Current; name: string } | null = null;
+  // The search (or status line) a list of matches in the picker belongs to, and the text to look
+  // for on the page of the one picked.
+  let findFor: { current: Current; locate: (match: FindMatch) => string } | null = null;
   let findSeq = 0;
+  // The guide-jump answer for the status text it was asked about, for the game on screen.
+  let whereFor: { load: number; text: string; failed: boolean } | null = null;
+  let whereMatches: WhereMatch[] = [];
+  let whereSeq = 0;
+  // Counts the games loaded; a load replaces the game on screen even when its key is unchanged.
+  let loadCount = 0;
+  // The status text now showing, or null while the row is hidden.
+  let presenceShown: string | null = null;
   let toastSeq = 0;
 
   function showToast(text: string, ms = 6000): void {
@@ -342,8 +370,87 @@ export function startApp(opts: AppOptions): App {
     } else if (matches.length === 1) {
       openMatch(c, query, only);
     } else {
-      findFor = { current: c, name: query };
+      findFor = { current: c, locate: () => query };
       picker.showMatches(a.name, matches, found.truncated);
+    }
+  }
+
+  function renderJump(): void {
+    const [best] = whereMatches;
+    const offer =
+      presenceShown !== null &&
+      settings.guideJump &&
+      best !== undefined &&
+      whereFor !== null &&
+      whereFor.load === loadCount;
+    jump.textContent = offer ? `↪ ${best.phrase}` : "";
+    if (offer) jump.setAttribute("aria-label", `Open the guide at ${best.heading}`);
+    else jump.removeAttribute("aria-label");
+    jump.hidden = !offer;
+  }
+
+  function forgetWhere(): void {
+    whereSeq += 1;
+    whereFor = null;
+    whereMatches = [];
+  }
+
+  // Asks the server where in the guide the status line points, once per status text.
+  function syncJump(): void {
+    const c = current;
+    if (whereFor !== null && (whereFor.load !== loadCount || !settings.guideJump)) forgetWhere();
+    const text = presenceShown;
+    if (text === null || c === null || c.hub === null || !settings.guideJump) {
+      renderJump();
+      return;
+    }
+    if (whereFor === null || whereFor.text !== text) {
+      const hubId = c.hub.hubId;
+      whereSeq += 1;
+      const mine = whereSeq;
+      const load = loadCount;
+      whereFor = { load, text, failed: false };
+      whereMatches = [];
+      void api.where(hubId).then(
+        (answer) => {
+          // Only the newest question counts, and only while it is still about what is on screen.
+          if (mine !== whereSeq) return;
+          if (load !== loadCount || !settings.guideJump || presenceShown !== text) {
+            forgetWhere();
+          } else {
+            whereMatches = Array.isArray(answer?.matches) ? answer.matches : [];
+          }
+          renderJump();
+        },
+        () => {
+          if (mine !== whereSeq) return;
+          // Kept as a failure, so only the next status poll asks again.
+          whereMatches = [];
+          if (whereFor !== null) whereFor.failed = true;
+          renderJump();
+        },
+      );
+    }
+    renderJump();
+  }
+
+  function jumpToGuide(): void {
+    const c = current;
+    const [best, ...rest] = whereMatches;
+    if (c === null || best === undefined || whereFor?.load !== loadCount) return;
+    if (choosingFor !== null || pending !== null) return;
+    // The jump reuses the find flow: a match whose heading is the text to look for.
+    const asFind = (m: WhereMatch): FindMatch => ({
+      pageTitle: m.pageTitle,
+      pageUrl: m.pageUrl,
+      heading: null,
+      snippet: m.heading,
+    });
+    if (rest.length === 0) {
+      openMatch(c, best.heading, asFind(best));
+    } else {
+      findFor = { current: c, locate: (match) => match.snippet };
+      picker.showMatches(best.phrase, [best, ...rest].map(asFind), false);
     }
   }
 
@@ -467,6 +574,8 @@ export function startApp(opts: AppOptions): App {
     presenceRow.hidden = !show;
     // Expanded survives new text for the same game, but never a hidden row.
     if (!show) setPresenceExpanded(false);
+    presenceShown = show ? text : null;
+    syncJump();
   }
 
   function setPresenceExpanded(expanded: boolean): void {
@@ -476,7 +585,7 @@ export function startApp(opts: AppOptions): App {
 
   function render(): void {
     const layout = current?.layout ?? emptyLayout();
-    rail.render(layout, unlockedCount);
+    renderRail(layout);
     renderHeader();
     const canFind = current !== null && current.hub !== null && current.pages.length > 0;
     if (canFind !== findEnabled) {
@@ -495,6 +604,52 @@ export function startApp(opts: AppOptions): App {
       if (!view.element.hidden) savedScroll = view.element.scrollTop;
       view.element.hidden = true;
       frames.show(layout.active, slot.url);
+    }
+  }
+
+  function renderRail(layout: Layout): void {
+    rail.render(
+      layout,
+      unlockedCount,
+      layout.slots.map((slot) => (slot === null ? null : (progress.get(docId(slot.url)) ?? null))),
+    );
+  }
+
+  async function refreshProgress(c: Current, fresh = false): Promise<void> {
+    if (c.hub === null) return;
+    const epoch = progressEpoch;
+    let pages: unknown;
+    try {
+      const hubId = c.hub.hubId;
+      pages = (await (fresh ? api.progress(hubId, true) : api.progress(hubId)))?.pages;
+    } catch {
+      return;
+    }
+    if (!Array.isArray(pages) || epoch !== progressEpoch || current === null) return;
+    const byDoc = new Map<string, PageProgressLabel>();
+    for (const page of pages as Partial<PageProgress>[]) {
+      if (
+        typeof page?.url === "string" &&
+        typeof page.completed === "number" &&
+        typeof page.total === "number"
+      ) {
+        byDoc.set(docId(page.url), { completed: page.completed, total: page.total });
+      }
+    }
+    progress = byDoc;
+    renderRail(current.layout);
+  }
+
+  // A tap inside a guide page may have ticked a box: look again shortly, and once more later.
+  function onGuideInteract(): void {
+    const c = current;
+    if (c === null || c.hub === null) return;
+    interactGen += 1;
+    const mine = interactGen;
+    for (const ms of [4000, 12_000]) {
+      afterDelay(() => {
+        if (interactGen === mine && current === c) void refreshProgress(c, true);
+      }, ms);
     }
   }
 
@@ -528,10 +683,14 @@ export function startApp(opts: AppOptions): App {
         }
       }
     }
-    rail.render(current.layout, unlockedCount);
+    renderRail(current.layout);
   }
 
   async function load(game: GameRef | null, hub: GuideHub | null): Promise<void> {
+    loadCount += 1;
+    progress = new Map();
+    progressEpoch += 1;
+    interactGen += 1;
     frames.reset();
     hideBanner();
     picker.close();
@@ -577,6 +736,7 @@ export function startApp(opts: AppOptions): App {
       picker.setPages(current.pages, current.layout);
       render();
     }
+    void refreshProgress(current);
     await refreshAchievements(true);
   }
 
@@ -640,6 +800,7 @@ export function startApp(opts: AppOptions): App {
     nowFailed = false;
     everReached = true;
     lastNow = now;
+    if (whereFor?.failed === true) whereFor = null;
     renderPresence();
     if (!adoptedFirst) {
       adoptedFirst = true;
@@ -687,8 +848,10 @@ export function startApp(opts: AppOptions): App {
     if (
       current !== null &&
       doc.visibilityState === "visible" &&
-      Date.now() - lastAchievementsAt >= achievementsPollMs
+      (refreshDue || Date.now() - lastAchievementsAt >= achievementsPollMs)
     ) {
+      refreshDue = false;
+      void refreshProgress(current);
       await refreshAchievements(false);
     }
   }
@@ -765,6 +928,16 @@ export function startApp(opts: AppOptions): App {
     schedule(() => {
       if (inflight === 0) void tick();
     }, nowPollMs);
+    // Waking up (the page shown again, the network back) asks now instead of waiting for the poll.
+    const wake = (): void => {
+      if (Date.now() - lastAchievementsAt > WAKE_REFRESH_MS) refreshDue = true;
+      // One running and one waiting tick are enough: the waiting one sees everything newer.
+      if (inflight < 2) void tick();
+    };
+    doc.addEventListener("visibilitychange", () => {
+      if (doc.visibilityState === "visible") wake();
+    });
+    opts.win?.addEventListener?.("online", wake);
   })();
 
   return { ready, tick };

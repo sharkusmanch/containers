@@ -182,37 +182,28 @@ describe("find and marks against the real request handler", () => {
 });
 
 describe("where and progress against the real request handler", () => {
-  const get = async (path: string): Promise<{ status: number; body: unknown }> => {
-    const r = await fetch(`${origin}api/guides/${path}`);
-    return { status: r.status, body: await r.json() };
-  };
-
-  it("answers where with the dependency's matches and 404s an unknown hub", async () => {
-    expect(await get("h1/where")).toEqual({
-      status: 200,
-      body: {
-        matches: [
-          {
-            pageTitle: "Sample Guide",
-            pageUrl: "/doc/sample-guide",
-            heading: "Chapter One",
-            phrase: "Chapter One",
-          },
-        ],
-      },
+  it("answers where with the dependency's matches and maps an unknown hub to null", async () => {
+    expect(await api.where("h1")).toEqual({
+      matches: [
+        {
+          pageTitle: "Sample Guide",
+          pageUrl: "/doc/sample-guide",
+          heading: "Chapter One",
+          phrase: "Chapter One",
+        },
+      ],
     });
-    expect((await get("nope/where")).status).toBe(404);
+    expect(await api.where("nope")).toBeNull();
   });
 
-  it("answers progress, with refresh only for refresh=1, and 404s an unknown hub", async () => {
+  it("answers progress, with refresh only when asked, and maps an unknown hub to null", async () => {
     const pages = (completed: number) => ({
-      status: 200,
-      body: { pages: [{ url: "/doc/sample-guide", completed, total: 4 }] },
+      pages: [{ url: "/doc/sample-guide", completed, total: 4 }],
     });
-    expect(await get("h1/progress")).toEqual(pages(2));
-    expect(await get("h1/progress?refresh=0")).toEqual(pages(2));
-    expect(await get("h1/progress?refresh=1")).toEqual(pages(3));
-    expect((await get("nope/progress")).status).toBe(404);
+    expect(await api.progress("h1")).toEqual(pages(2));
+    expect(await api.progress("h1", false)).toEqual(pages(2));
+    expect(await api.progress("h1", true)).toEqual(pages(3));
+    expect(await api.progress("nope")).toBeNull();
   });
 });
 

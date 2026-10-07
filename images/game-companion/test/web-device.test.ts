@@ -23,10 +23,10 @@ function memory(initial: Record<string, string> = {}) {
 }
 
 describe("settings", () => {
-  it("defaults to keeping the screen on and hiding the wiki bars", () => {
-    expect(DEFAULT_SETTINGS).toEqual({ keepAwake: true, hideChrome: true });
+  it("defaults to keeping the screen on, hiding the wiki bars and offering the guide jump", () => {
+    expect(DEFAULT_SETTINGS).toEqual({ keepAwake: true, hideChrome: true, guideJump: true });
     expect(SETTINGS_STORAGE_KEY).toBe("game-companion:v1:settings");
-    expect(loadSettings(memory())).toEqual({ keepAwake: true, hideChrome: true });
+    expect(loadSettings(memory())).toEqual({ keepAwake: true, hideChrome: true, guideJump: true });
   });
 
   it("returns a fresh object every time, never the shared default", () => {
@@ -40,14 +40,22 @@ describe("settings", () => {
 
   it("round-trips through storage", () => {
     const storage = memory();
-    saveSettings(storage, { keepAwake: false, hideChrome: true });
+    saveSettings(storage, { keepAwake: false, hideChrome: true, guideJump: false });
     expect(JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string)).toEqual({
       keepAwake: false,
       hideChrome: true,
+      guideJump: false,
     });
-    expect(loadSettings(storage)).toEqual({ keepAwake: false, hideChrome: true });
-    saveSettings(storage, { keepAwake: true, hideChrome: false });
-    expect(loadSettings(storage)).toEqual({ keepAwake: true, hideChrome: false });
+    expect(loadSettings(storage)).toEqual({ keepAwake: false, hideChrome: true, guideJump: false });
+    saveSettings(storage, { keepAwake: true, hideChrome: false, guideJump: true });
+    expect(loadSettings(storage)).toEqual({ keepAwake: true, hideChrome: false, guideJump: true });
+  });
+
+  it("gives an older stored object without the guide jump key the default", () => {
+    const storage = memory({
+      [SETTINGS_STORAGE_KEY]: JSON.stringify({ keepAwake: false, hideChrome: false }),
+    });
+    expect(loadSettings(storage)).toEqual({ keepAwake: false, hideChrome: false, guideJump: true });
   });
 
   it.each([
@@ -67,12 +75,20 @@ describe("settings", () => {
     expect(load({ keepAwake: false, hideChrome: "yes" })).toEqual({
       keepAwake: false,
       hideChrome: true,
+      guideJump: true,
     });
     expect(load({ keepAwake: 0, hideChrome: false })).toEqual({
       keepAwake: true,
       hideChrome: false,
+      guideJump: true,
     });
     expect(load({ keepAwake: null, hideChrome: null })).toEqual(DEFAULT_SETTINGS);
+    expect(load({ keepAwake: false, hideChrome: false, guideJump: "off" })).toEqual({
+      keepAwake: false,
+      hideChrome: false,
+      guideJump: true,
+    });
+    expect(load({ guideJump: false })).toEqual({ ...DEFAULT_SETTINGS, guideJump: false });
   });
 
   it("never throws when storage does", () => {

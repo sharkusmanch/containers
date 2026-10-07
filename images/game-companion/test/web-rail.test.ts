@@ -83,6 +83,85 @@ describe("createRail", () => {
   });
 });
 
+describe("rail progress", () => {
+  const slotButtons = (rail: { element: HTMLElement }): HTMLElement[] =>
+    [...rail.element.querySelectorAll<HTMLElement>("button")].slice(1, 5);
+  const count = (b: HTMLElement | undefined): string | null | undefined =>
+    b?.querySelector(".rail-count")?.textContent;
+  const label = (b: HTMLElement | undefined): string | null | undefined =>
+    b?.querySelector(".rail-label")?.textContent;
+
+  it("holds the abbreviation and the progress text in two spans", () => {
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    rail.render(layout, 3, [{ completed: 7, total: 12 }, null, null, null]);
+    const [first, second] = slotButtons(rail);
+    expect([...(first as HTMLElement).children].map((c) => c.className)).toEqual([
+      "rail-label",
+      "rail-count",
+    ]);
+    expect(label(first)).toBe("AC");
+    expect(count(first)).toBe("7/12");
+    expect(first?.textContent).toBe("AC7/12");
+    expect(first?.getAttribute("aria-label")).toBe("Achievement Checklist, 7 of 12 done");
+    expect(label(second)).toBe("BP");
+    expect(count(second)).toBe("");
+    expect(second?.getAttribute("aria-label")).toBe("Blind Playthrough Essentials");
+  });
+
+  it("shows zero progress as 0/5", () => {
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    rail.render(layout, null, [{ completed: 0, total: 5 }, null, null, null]);
+    expect(count(slotButtons(rail)[0])).toBe("0/5");
+    expect(slotButtons(rail)[0]?.getAttribute("aria-label")).toBe(
+      "Achievement Checklist, 0 of 5 done",
+    );
+  });
+
+  it.each([
+    [{ completed: 99, total: 100 }, "99/100"],
+    [{ completed: 100, total: 100 }, "100%"],
+    [{ completed: 123, total: 1040 }, "11%"],
+    [{ completed: 1040, total: 1040 }, "100%"],
+    [{ completed: 5, total: 10000 }, "0%"],
+  ])("writes %j as %s", (progress, text) => {
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    rail.render(layout, null, [progress, null, null, null]);
+    expect(count(slotButtons(rail)[0])).toBe(text);
+    expect(slotButtons(rail)[0]?.getAttribute("aria-label")).toBe(
+      `Achievement Checklist, ${progress.completed} of ${progress.total} done`,
+    );
+  });
+
+  it("clears the progress when a later render has none, and without the argument", () => {
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    rail.render(layout, null, [{ completed: 1, total: 2 }, null, null, null]);
+    rail.render(layout, null, [null, null, null, null]);
+    expect(count(slotButtons(rail)[0])).toBe("");
+    expect(slotButtons(rail)[0]?.getAttribute("aria-label")).toBe("Achievement Checklist");
+    rail.render(layout, null, [{ completed: 1, total: 2 }, null, null, null]);
+    rail.render(layout, null);
+    expect(count(slotButtons(rail)[0])).toBe("");
+  });
+
+  it("leaves hidden slots, the achievements button and the more button alone", () => {
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    rail.render(layout, 12, [
+      { completed: 1, total: 2 },
+      { completed: 3, total: 4 },
+      { completed: 9, total: 9 },
+      null,
+    ]);
+    const buttons = [...rail.element.querySelectorAll<HTMLElement>("button")];
+    expect(buttons.map((b) => b.hidden)).toEqual([false, false, false, true, true, false]);
+    expect(count(buttons[3])).toBe("");
+    expect(buttons[3]?.getAttribute("aria-label")).toBe("Empty slot");
+    expect(buttons[0]?.querySelector(".rail-count")?.textContent).toBe("12");
+    expect(buttons[0]?.getAttribute("aria-label")).toBe("Achievements");
+    expect(buttons[5]?.textContent).toBe("⋯");
+    expect(buttons[5]?.getAttribute("aria-label")).toBe("Pages and games");
+  });
+});
+
 describe("rail pulse", () => {
   afterEach(() => vi.useRealTimers());
 

@@ -43,7 +43,11 @@ interface Entry {
 export function createFrames(
   doc: Document,
   slotCount: number,
-  options: { setInterval?: typeof setInterval } = {},
+  options: {
+    setInterval?: typeof setInterval;
+    /** Called with the slot index when the reader clicks inside a framed page. Never throws into the page. */
+    onInteract?: (index: number) => void;
+  } = {},
 ): Frames {
   const element = doc.createElement("div");
   element.classList.add("frames");
@@ -54,6 +58,32 @@ export function createFrames(
     try {
       const framed = entry.frame.contentDocument;
       if (framed !== null) applyChrome(framed, hideChrome);
+    } catch {
+      // The frame is on another origin.
+    }
+  };
+  // Documents already listened to, so a repeated load event does not stack listeners.
+  const listened = new WeakSet<Document>();
+  const watchClicks = (entry: Entry): void => {
+    const onInteract = options.onInteract;
+    if (onInteract === undefined) return;
+    try {
+      const framed = entry.frame.contentDocument;
+      if (framed === null || listened.has(framed)) return;
+      listened.add(framed);
+      // Capturing and passive: the page cannot hide a click from it, and it never holds one up.
+      framed.addEventListener(
+        "click",
+        () => {
+          try {
+            const index = entries.indexOf(entry);
+            if (index >= 0) onInteract(index);
+          } catch {
+            // A failing handler must not reach the page.
+          }
+        },
+        { capture: true, passive: true },
+      );
     } catch {
       // The frame is on another origin.
     }
@@ -86,6 +116,7 @@ export function createFrames(
         frame.addEventListener("load", () => {
           created.loading = false;
           if (hideChrome) applyTo(created);
+          watchClicks(created);
         });
         frame.setAttribute("src", url);
         element.append(frame);

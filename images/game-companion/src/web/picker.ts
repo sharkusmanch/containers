@@ -11,11 +11,12 @@ export interface PickerHandlers {
   onSetting(name: SettingName): void;
 }
 
-export type SettingName = "keepAwake" | "hideChrome" | "fullscreen";
+export type SettingName = "keepAwake" | "hideChrome" | "guideJump" | "fullscreen";
 
 export interface SettingsState {
   keepAwake: boolean;
   hideChrome: boolean;
+  guideJump: boolean;
   fullscreen: boolean;
   wakeLockSupported: boolean;
   fullscreenSupported: boolean;
@@ -80,6 +81,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     ["keepAwake", "setting-keep-awake"],
     ["hideChrome", "setting-hide-chrome"],
     ["fullscreen", "setting-fullscreen"],
+    ["guideJump", "setting-guide-jump"],
   ] as const) {
     const b = doc.createElement("button");
     b.setAttribute("type", "button");
@@ -255,6 +257,11 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
         `Full screen: ${state.fullscreen ? "on" : "off"}`,
         state.fullscreen,
         state.fullscreenSupported,
+      );
+      label(
+        "guideJump",
+        `Guide jump from status: ${state.guideJump ? "on" : "off"}`,
+        state.guideJump,
       );
     },
     showMatches(query, matches, truncated) {

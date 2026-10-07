@@ -106,10 +106,22 @@ button {
   line-height: 1;
 }
 
+.rail-label {
+  line-height: 1.2;
+  text-align: center;
+}
+
 .rail-count {
   font-size: 11px;
   line-height: 1.2;
   min-height: 1.2em;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* A pinned page with no checklist progress: the abbreviation alone stays centred. */
+.rail-slot .rail-count:empty {
+  min-height: 0;
 }
 
 .topbar {
@@ -149,6 +161,9 @@ button {
 .presence-row {
   grid-column: 2;
   grid-row: 2;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   min-width: 0;
   padding: 0 8px;
   background: var(--bg-raised);
@@ -162,7 +177,9 @@ button {
 
 .game-presence {
   display: block;
-  width: 100%;
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
   min-height: 22px;
   padding: 2px 0;
   margin: 0;
@@ -176,6 +193,25 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+/* The jump to the guide heading the status line points at, beside the status line. */
+.presence-jump {
+  flex: 0 1 auto;
+  max-width: 45%;
+  min-height: 22px;
+  padding: 2px 8px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
   cursor: pointer;
 }
 

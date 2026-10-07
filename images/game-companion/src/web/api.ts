@@ -2,6 +2,8 @@ import type {
   AchievementsResponse,
   FindResponse,
   GuideMarksResponse,
+  GuideProgressResponse,
+  GuideWhereResponse,
   GuidesResponse,
   HubTreeResponse,
   NowResponse,
@@ -27,6 +29,10 @@ export interface Api {
   find(hubId: string, query: string): Promise<FindResponse | null>;
   /** Null when the guide is unknown (404). */
   marks(hubId: string): Promise<GuideMarksResponse | null>;
+  /** Null when the guide is unknown (404). */
+  where(hubId: string): Promise<GuideWhereResponse | null>;
+  /** Null when the guide is unknown (404). `refresh` asks the server for a fresh read. */
+  progress(hubId: string, refresh?: boolean): Promise<GuideProgressResponse | null>;
 }
 
 export function createApi(
@@ -68,5 +74,11 @@ export function createApi(
       ),
     marks: (hubId) =>
       getJsonOrNull<GuideMarksResponse>(`guides/${encodeURIComponent(hubId)}/marks`),
+    where: (hubId) =>
+      getJsonOrNull<GuideWhereResponse>(`guides/${encodeURIComponent(hubId)}/where`),
+    progress: (hubId, refresh = false) =>
+      getJsonOrNull<GuideProgressResponse>(
+        `guides/${encodeURIComponent(hubId)}/progress${refresh ? "?refresh=1" : ""}`,
+      ),
   };
 }

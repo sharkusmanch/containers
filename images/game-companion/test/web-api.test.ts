@@ -109,4 +109,45 @@ describe("createApi", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(503);
   });
+
+  it("builds the where URL, returns the body, maps 404 to null and throws ApiError otherwise", async () => {
+    const body = {
+      matches: [
+        { pageTitle: "P", pageUrl: "/doc/p", heading: "Chapter One", phrase: "Chapter One" },
+      ],
+    };
+    const f = fake(200, body);
+    const api = createApi(f.fn);
+    expect(await api.where("h1")).toEqual(body);
+    await api.where("a/b");
+    expect(f.urls).toEqual(["api/guides/h1/where", "api/guides/a%2Fb/where"]);
+    expect(await createApi(fake(404, {}).fn).where("h1")).toBeNull();
+    const err = await createApi(fake(500, {}).fn)
+      .where("h1")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(500);
+  });
+
+  it("builds the progress URL with and without the refresh flag, maps 404 to null and throws ApiError otherwise", async () => {
+    const body = { pages: [{ url: "/doc/p", completed: 2, total: 9 }] };
+    const f = fake(200, body);
+    const api = createApi(f.fn);
+    expect(await api.progress("h1")).toEqual(body);
+    await api.progress("h1", false);
+    await api.progress("h1", true);
+    await api.progress("a/b", true);
+    expect(f.urls).toEqual([
+      "api/guides/h1/progress",
+      "api/guides/h1/progress",
+      "api/guides/h1/progress?refresh=1",
+      "api/guides/a%2Fb/progress?refresh=1",
+    ]);
+    expect(await createApi(fake(404, {}).fn).progress("h1")).toBeNull();
+    const err = await createApi(fake(500, {}).fn)
+      .progress("h1", true)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(500);
+  });
 });

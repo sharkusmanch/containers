@@ -9,8 +9,11 @@ import type {
   FindResponse,
   GuideHub,
   GuideMarksResponse,
+  GuideProgressResponse,
+  GuideWhereResponse,
   HubTreeResponse,
   NowResponse,
+  WhereMatch,
 } from "../src/shared/types.js";
 
 const hubA: GuideHub = {
@@ -62,6 +65,10 @@ interface Fake extends Api {
   achCalls: string[];
   markCalls: string[];
   findCalls: [string, string][];
+  whereCalls: string[];
+  progressCalls: [string, boolean | undefined][];
+  whereValue: GuideWhereResponse | null;
+  progressValue: GuideProgressResponse | null;
   failNow: boolean;
 }
 
@@ -71,6 +78,10 @@ function fakeApi(nowValue: NowResponse): Fake {
     achCalls: [],
     markCalls: [],
     findCalls: [],
+    whereCalls: [],
+    progressCalls: [],
+    whereValue: { matches: [] },
+    progressValue: { pages: [] },
     failNow: false,
     now: async () => {
       if (f.failNow) throw new Error("down");
@@ -89,6 +100,14 @@ function fakeApi(nowValue: NowResponse): Fake {
     marks: async (hubId) => {
       f.markCalls.push(hubId);
       return null;
+    },
+    where: async (hubId) => {
+      f.whereCalls.push(hubId);
+      return f.whereValue;
+    },
+    progress: async (hubId, refresh) => {
+      f.progressCalls.push([hubId, refresh]);
+      return f.progressValue;
     },
   };
   return f;
@@ -389,7 +408,7 @@ describe("startApp", () => {
       const row = $(".presence-row") as HTMLElement;
       expect(row.previousElementSibling).toBe($(".topbar"));
       expect(row.nextElementSibling).toBe($(".switch-banner"));
-      expect([...row.children]).toEqual([button()]);
+      expect([...row.children]).toEqual([button(), $(".presence-jump")]);
       expect(button().tagName).toBe("BUTTON");
       expect(button().getAttribute("type")).toBe("button");
       expect(hidden()).toBe(true);
@@ -2717,12 +2736,12 @@ describe("display settings", () => {
     expect(doc.getElementById("gc-chrome-style")).toBeNull();
     expect(row("setting-hide-chrome").textContent).toBe("Outline bars: shown");
     expect(row("setting-hide-chrome").getAttribute("aria-pressed")).toBe("false");
-    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: false });
+    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: false, guideJump: true });
     expect($(".picker")?.hidden).toBe(false);
     row("setting-hide-chrome").click();
     expect(doc.getElementById("gc-chrome-style")).not.toBeNull();
     expect(row("setting-hide-chrome").textContent).toBe("Outline bars: hidden");
-    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: true });
+    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: true, guideJump: true });
   });
 
   it("flips keep-awake: off releases the lock, on asks again, saved and relabelled", async () => {
@@ -2736,12 +2755,12 @@ describe("display settings", () => {
     expect(lock.sentinels[0]?.release).toHaveBeenCalledTimes(1);
     expect(row("setting-keep-awake").textContent).toBe("Keep screen on: off");
     expect(row("setting-keep-awake").getAttribute("aria-pressed")).toBe("false");
-    expect(stored(storage)).toEqual({ keepAwake: false, hideChrome: true });
+    expect(stored(storage)).toEqual({ keepAwake: false, hideChrome: true, guideJump: true });
     row("setting-keep-awake").click();
     await flush();
     expect(lock.request).toHaveBeenCalledTimes(2);
     expect(row("setting-keep-awake").textContent).toBe("Keep screen on: on");
-    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: true });
+    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: true, guideJump: true });
   });
 
   it("hides the keep-awake and full-screen rows where the browser has neither", async () => {
@@ -2844,5 +2863,693 @@ describe("display settings", () => {
     openDisplay();
     row("setting-hide-chrome").click();
     expect(row("setting-hide-chrome").textContent).toBe("Outline bars: shown");
+  });
+});
+
+// ---- guide jump from the status line ----
+
+describe("guide jump", () => {
+  const SETTINGS_KEY = "game-companion:v1:settings";
+  const wm = (over: Partial<WhereMatch> = {}): WhereMatch => ({
+    pageTitle: "Collectibles",
+    pageUrl: "/doc/hA-coll",
+    heading: "Chapter Two: Sample Keep",
+    phrase: "Sample Keep",
+    ...over,
+  });
+  const line = "Chapter Two: Sample Keep";
+  const nowWith = (hub: GuideHub, presence: string | null): NowResponse => ({
+    ...playing(hub),
+    presence,
+  });
+  const jump = (): HTMLButtonElement => $(".presence-jump") as HTMLButtonElement;
+  const settle = async (): Promise<void> => {
+    if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(0);
+    else await flush();
+  };
+  const frameDocs = new Map<string, Document>();
+  const sectioned = (): Document =>
+    new DOMParser().parseFromString(
+      "<!doctype html><body><h2 id='one'>Chapter One: Sample Caves</h2><p>cave notes</p>" +
+        "<h2 id='two'>Chapter Two: Sample Keep</h2><p>keep notes</p></body>",
+      "text/html",
+    );
+  const shown = (): string[] =>
+    [...document.querySelectorAll("iframe:not(.inactive)")].map((f) => f.getAttribute("src") ?? "");
+  const loadFrames = (): void => {
+    for (const f of document.querySelectorAll("iframe")) f.dispatchEvent(new Event("load"));
+  };
+  let scroll: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    frameDocs.clear();
+    vi.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockImplementation(function (
+      this: HTMLIFrameElement,
+    ) {
+      return frameDocs.get(this.getAttribute("src") ?? "") ?? null;
+    });
+    scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll as unknown as Element["scrollIntoView"];
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  });
+
+  async function started(
+    over: {
+      presence?: string | null;
+      matches?: WhereMatch[];
+      storage?: ReturnType<typeof memory>;
+    } = {},
+  ) {
+    const api = fakeApi(nowWith(hubA, over.presence === undefined ? line : over.presence));
+    api.whereValue = { matches: over.matches ?? [wm()] };
+    const app = startApp({
+      doc: document,
+      api,
+      storage: over.storage ?? memory(),
+      setInterval: noTimers,
+    });
+    await app.ready;
+    await settle();
+    return { api, app };
+  }
+  const settingsStorage = (guideJump: boolean) => {
+    const storage = memory();
+    storage.setItem(SETTINGS_KEY, JSON.stringify({ keepAwake: true, hideChrome: true, guideJump }));
+    return storage;
+  };
+  const toggleSetting = (): void => ($(".setting-guide-jump") as HTMLElement).click();
+
+  it("is a hidden button after the status line, and stays hidden with no status row", async () => {
+    const { api } = await started({ presence: null });
+    const row = $(".presence-row") as HTMLElement;
+    expect([...row.children].map((c) => c.className)).toEqual(["game-presence", "presence-jump"]);
+    expect(jump().tagName).toBe("BUTTON");
+    expect(jump().getAttribute("type")).toBe("button");
+    expect(jump().hidden).toBe(true);
+    expect(api.whereCalls).toEqual([]);
+  });
+
+  it("asks once when the status row shows and offers the best match", async () => {
+    const { api } = await started({
+      matches: [
+        wm({ phrase: "Sample Keep", heading: "Chapter Two: Sample Keep" }),
+        wm({ phrase: "Sample Caves", heading: "Chapter One: Sample Caves" }),
+      ],
+    });
+    expect(api.whereCalls).toEqual(["hA"]);
+    expect(($(".presence-row") as HTMLElement).hidden).toBe(false);
+    expect(jump().hidden).toBe(false);
+    expect(jump().textContent).toBe("↪ Sample Keep");
+    expect(jump().getAttribute("aria-label")).toBe("Open the guide at Chapter Two: Sample Keep");
+  });
+
+  it("does not ask again while the status text is unchanged, and asks when it changes", async () => {
+    const { api, app } = await started();
+    await app.tick();
+    await app.tick();
+    expect(api.whereCalls).toEqual(["hA"]);
+    api.nowValue = nowWith(hubA, "Chapter One: Sample Caves");
+    api.whereValue = {
+      matches: [wm({ phrase: "Sample Caves", heading: "Chapter One: Sample Caves" })],
+    };
+    await app.tick();
+    await settle();
+    expect(api.whereCalls).toEqual(["hA", "hA"]);
+    expect(jump().textContent).toBe("↪ Sample Caves");
+    expect(jump().getAttribute("aria-label")).toBe("Open the guide at Chapter One: Sample Caves");
+  });
+
+  it("is hidden when the answer has no matches or the guide is unknown", async () => {
+    const { api, app } = await started({ matches: [] });
+    expect(api.whereCalls).toEqual(["hA"]);
+    expect(jump().hidden).toBe(true);
+    api.nowValue = nowWith(hubA, "Another line");
+    api.whereValue = null;
+    await app.tick();
+    await settle();
+    expect(api.whereCalls).toHaveLength(2);
+    expect(jump().hidden).toBe(true);
+  });
+
+  it("hides with the status row and comes back with it, without asking again", async () => {
+    const { api, app } = await started();
+    api.nowValue = nowWith(hubA, null);
+    await app.tick();
+    expect(jump().hidden).toBe(true);
+    api.nowValue = nowWith(hubA, line);
+    await app.tick();
+    expect(jump().hidden).toBe(false);
+    expect(api.whereCalls).toEqual(["hA"]);
+  });
+
+  it("makes no request without a guide", async () => {
+    const api = fakeApi({ ...nowWith(hubA, line), hubs: [] });
+    api.whereValue = { matches: [wm()] };
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    await settle();
+    expect(($(".presence-row") as HTMLElement).hidden).toBe(false);
+    expect(api.whereCalls).toEqual([]);
+    expect(jump().hidden).toBe(true);
+  });
+
+  it("does nothing while the setting is off, and asks when it is turned on", async () => {
+    const { api, app } = await started({ storage: settingsStorage(false) });
+    await app.tick();
+    expect(api.whereCalls).toEqual([]);
+    expect(jump().hidden).toBe(true);
+    toggleSetting();
+    await settle();
+    expect(api.whereCalls).toEqual(["hA"]);
+    expect(jump().hidden).toBe(false);
+  });
+
+  it("hides at once when the setting is turned off, and asks again when it is turned on", async () => {
+    const { api } = await started();
+    expect(jump().hidden).toBe(false);
+    toggleSetting();
+    expect(jump().hidden).toBe(true);
+    toggleSetting();
+    await settle();
+    expect(api.whereCalls).toEqual(["hA", "hA"]);
+    expect(jump().hidden).toBe(false);
+  });
+
+  it("is cleared at once when the game changes, and asks about the new game", async () => {
+    const { api, app } = await started();
+    expect(jump().hidden).toBe(false);
+    const zeta = deferred<GuideWhereResponse | null>();
+    api.where = (hubId) => {
+      api.whereCalls.push(hubId);
+      return zeta.promise;
+    };
+    api.nowValue = nowWith(hubZ, line);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    expect(jump().hidden).toBe(true);
+    await app.tick();
+    expect(api.whereCalls).toEqual(["hA", "hZ"]);
+    expect(jump().hidden).toBe(true);
+    expect(jump().textContent).toBe("");
+    zeta.resolve({ matches: [wm({ pageUrl: "/doc/hZ-coll", phrase: "Zeta Hall" })] });
+    await settle();
+    expect(jump().textContent).toBe("↪ Zeta Hall");
+  });
+
+  describe("an answer that arrives late", () => {
+    const lateOne = async () => {
+      const first = deferred<GuideWhereResponse | null>();
+      const api = fakeApi(nowWith(hubA, line));
+      let n = 0;
+      api.where = (hubId) => {
+        api.whereCalls.push(hubId);
+        n += 1;
+        return n === 1 ? first.promise : Promise.resolve(api.whereValue);
+      };
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      await settle();
+      return { api, app, first };
+    };
+
+    it("is dropped after a game change", async () => {
+      const { api, app, first } = await lateOne();
+      api.nowValue = nowWith(hubZ, line);
+      await app.tick();
+      ($(".switch-banner .switch-accept") as HTMLElement).click();
+      await app.tick();
+      await settle();
+      first.resolve({ matches: [wm({ phrase: "Old Game" })] });
+      await settle();
+      expect(jump().hidden).toBe(true);
+      expect(jump().textContent).toBe("");
+    });
+
+    it("is dropped after the setting was turned off", async () => {
+      const { first } = await lateOne();
+      toggleSetting();
+      first.resolve({ matches: [wm({ phrase: "Too Late" })] });
+      await settle();
+      expect(jump().hidden).toBe(true);
+      expect(jump().textContent).toBe("");
+    });
+
+    it("is dropped after the status text changed, in favour of the newer answer", async () => {
+      const { api, app, first } = await lateOne();
+      api.nowValue = nowWith(hubA, "Chapter One: Sample Caves");
+      api.whereValue = { matches: [wm({ phrase: "Newer" })] };
+      await app.tick();
+      await settle();
+      expect(jump().textContent).toBe("↪ Newer");
+      first.resolve({ matches: [wm({ phrase: "Older" })] });
+      await settle();
+      expect(jump().textContent).toBe("↪ Newer");
+    });
+  });
+
+  it("stays hidden after a failed request and asks again at the next poll", async () => {
+    const api = fakeApi(nowWith(hubA, line));
+    let fail = true;
+    api.where = async (hubId) => {
+      api.whereCalls.push(hubId);
+      if (fail) throw new Error("down");
+      return { matches: [wm()] };
+    };
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    await settle();
+    expect(api.whereCalls).toEqual(["hA"]);
+    expect(jump().hidden).toBe(true);
+    fail = false;
+    await app.tick();
+    await settle();
+    expect(api.whereCalls).toEqual(["hA", "hA"]);
+    expect(jump().hidden).toBe(false);
+  });
+
+  describe("tapping it", () => {
+    it("opens the page of a single match in a slot and locates its heading without a hint", async () => {
+      vi.useFakeTimers();
+      frameDocs.set("/doc/hA-coll", sectioned());
+      await started();
+      jump().click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(shown()).toEqual(["/doc/hA-coll"]);
+      expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Collectibles");
+      expect($(".ach")?.hidden).toBe(true);
+      loadFrames();
+      await vi.advanceTimersByTimeAsync(0);
+      expect((scroll.mock.contexts[0] as Element).id).toBe("two");
+      expect(($(".toast") as HTMLElement).hidden).toBe(true);
+    });
+
+    it("says so when the page opens but the heading is not in it", async () => {
+      vi.useFakeTimers();
+      frameDocs.set("/doc/hA-coll", sectioned());
+      await started({ matches: [wm({ heading: "Chapter Nine: Nowhere" })] });
+      jump().click();
+      await vi.advanceTimersByTimeAsync(0);
+      loadFrames();
+      await vi.advanceTimersByTimeAsync(11_000);
+      expect(($(".toast") as HTMLElement).hidden).toBe(false);
+      expect($(".toast-text")?.textContent).toBe("Opened the page, but could not find the text");
+    });
+
+    it("says it could not open a page the guide does not list", async () => {
+      await started({ matches: [wm({ pageUrl: "/doc/hA-unlisted" })] });
+      jump().click();
+      expect(document.querySelector("iframe")).toBeNull();
+      expect($(".toast-text")?.textContent).toBe("Could not open that page");
+    });
+
+    it("lists several matches in the picker and opens the one picked", async () => {
+      vi.useFakeTimers();
+      frameDocs.set("/doc/hA-checklist", sectioned());
+      await started({
+        matches: [
+          wm({ phrase: "Sample Keep", heading: "Chapter Two: Sample Keep" }),
+          wm({
+            pageTitle: "Achievement Checklist",
+            pageUrl: "/doc/hA-checklist",
+            phrase: "Sample Caves",
+            heading: "Chapter One: Sample Caves",
+          }),
+        ],
+      });
+      jump().click();
+      expect($(".picker")?.hidden).toBe(false);
+      expect($(".picker-matches-title")?.textContent).toBe("In the guide: Sample Keep");
+      const items = [...document.querySelectorAll(".picker-matches .picker-item")];
+      expect(items.map((i) => i.querySelector(".picker-title")?.textContent)).toEqual([
+        "Collectibles",
+        "Achievement Checklist",
+      ]);
+      expect(items.map((i) => i.querySelector(".picker-snippet")?.textContent)).toEqual([
+        "Chapter Two: Sample Keep",
+        "Chapter One: Sample Caves",
+      ]);
+      (items[1] as HTMLElement).click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect($(".picker")?.hidden).toBe(true);
+      expect(shown()).toEqual(["/doc/hA-checklist"]);
+      loadFrames();
+      await vi.advanceTimersByTimeAsync(0);
+      expect((scroll.mock.contexts[0] as Element).id).toBe("one");
+    });
+
+    it("is ignored while a load is queued", async () => {
+      const { api, app } = await started();
+      api.nowValue = nowWith(hubZ, line);
+      await app.tick();
+      ($(".switch-banner .switch-accept") as HTMLElement).click();
+      jump().click();
+      expect(document.querySelector("iframe")).toBeNull();
+      expect($(".picker")?.hidden).toBe(true);
+    });
+
+    it("is ignored while a guide choice is pending", async () => {
+      const { api, app } = await started();
+      api.nowValue = { ...nowWith(hubZ, line), hubs: [hubZ, hubA] };
+      await app.tick();
+      ($(".switch-banner .switch-accept") as HTMLElement).click();
+      await app.tick();
+      expect($(".picker")?.hidden).toBe(false);
+      const before = document.querySelectorAll(".picker-matches .picker-item").length;
+      jump().click();
+      expect(document.querySelectorAll(".picker-matches .picker-item")).toHaveLength(before);
+      expect(document.querySelector("iframe")).toBeNull();
+    });
+  });
+});
+
+// ---- checklist progress on the sidebar ----
+
+describe("checklist progress", () => {
+  const frameDocs = new Map<string, Document>();
+  const pageDoc = (): Document =>
+    new DOMParser().parseFromString("<!doctype html><body><p id='p'>notes</p></body>", "text/html");
+  const slotCount = (i: number): string | null | undefined =>
+    railButtons()[i]?.querySelector(".rail-count")?.textContent;
+  const progressOf = (url: string, completed: number, total: number) => ({
+    pages: [{ url, completed, total }],
+  });
+
+  beforeEach(() => {
+    frameDocs.clear();
+    vi.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockImplementation(function (
+      this: HTMLIFrameElement,
+    ) {
+      return frameDocs.get(this.getAttribute("src") ?? "") ?? null;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const started = async (
+    over: { poll?: number; now?: NowResponse; progress?: GuideProgressResponse | null } = {},
+  ) => {
+    const api = fakeApi(over.now ?? playing(hubA));
+    api.progressValue =
+      over.progress === undefined ? progressOf("/doc/hA-checklist", 3, 7) : over.progress;
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      achievementsPollMs: over.poll ?? 60_000,
+    });
+    await app.ready;
+    await (vi.isFakeTimers() ? vi.advanceTimersByTimeAsync(0) : flush());
+    return { api, app };
+  };
+
+  it("is fetched when the game loads and shown on the pinned page's button", async () => {
+    const { api } = await started();
+    expect(api.progressCalls).toEqual([["hA", undefined]]);
+    expect(slotCount(1)).toBe("3/7");
+    expect(railButtons()[1]?.getAttribute("aria-label")).toBe("Achievement Checklist, 3 of 7 done");
+    expect(slotCount(2)).toBe("");
+  });
+
+  it("matches a page by its document id, not the whole path", async () => {
+    await started({ progress: progressOf("/doc/an-older-slug-checklist", 1, 40) });
+    expect(slotCount(1)).toBe("1/40");
+  });
+
+  it("ignores progress for a page that is not pinned, and a malformed answer", async () => {
+    await started({ progress: progressOf("/doc/hA-other", 1, 4) });
+    expect(slotCount(1)).toBe("");
+    const bad = {
+      pages: [{ url: 7, completed: "x", total: null }, null],
+    } as unknown as GuideProgressResponse;
+    document.body.innerHTML = '<main id="app"></main>';
+    await started({ progress: bad });
+    expect(slotCount(1)).toBe("");
+    document.body.innerHTML = '<main id="app"></main>';
+    await started({ progress: { pages: "nope" } as unknown as GuideProgressResponse });
+    expect(slotCount(1)).toBe("");
+  });
+
+  it("is fetched again with the achievements refresh and shows the new numbers", async () => {
+    const { api, app } = await started({ poll: 0 });
+    api.progressValue = progressOf("/doc/hA-checklist", 5, 7);
+    await app.tick();
+    expect(api.progressCalls).toEqual([
+      ["hA", undefined],
+      ["hA", undefined],
+    ]);
+    expect(slotCount(1)).toBe("5/7");
+  });
+
+  it("is not fetched on a tick when the achievements are not due", async () => {
+    const { api, app } = await started();
+    await app.tick();
+    expect(api.progressCalls).toHaveLength(1);
+  });
+
+  it("keeps the last good numbers when a request fails or the guide is unknown", async () => {
+    const { api, app } = await started({ poll: 0 });
+    api.progress = async (hubId, refresh) => {
+      api.progressCalls.push([hubId, refresh]);
+      throw new Error("down");
+    };
+    await app.tick();
+    expect(api.progressCalls).toHaveLength(2);
+    expect(slotCount(1)).toBe("3/7");
+    api.progress = async () => null;
+    await app.tick();
+    expect(slotCount(1)).toBe("3/7");
+  });
+
+  it("is cleared at once when the game changes", async () => {
+    const { api, app } = await started();
+    const never = new Promise<GuideProgressResponse | null>(() => undefined);
+    api.progress = async (hubId, refresh) => {
+      api.progressCalls.push([hubId, refresh]);
+      return never;
+    };
+    api.nowValue = playing(hubZ);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    expect(api.progressCalls.at(-1)).toEqual(["hZ", undefined]);
+    expect(slotCount(1)).toBe("");
+    expect(railButtons()[1]?.getAttribute("aria-label")).toBe("Achievement Checklist");
+  });
+
+  it("drops an answer for the old game that arrives after a game change", async () => {
+    const late = deferred<GuideProgressResponse | null>();
+    const api = fakeApi(playing(hubA));
+    api.progress = (hubId, refresh) => {
+      api.progressCalls.push([hubId, refresh]);
+      return hubId === "hA" ? late.promise : Promise.resolve({ pages: [] });
+    };
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    api.nowValue = playing(hubZ);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    late.resolve(progressOf("/doc/hZ-checklist", 9, 9));
+    await flush();
+    expect(slotCount(1)).toBe("");
+  });
+
+  it("is not requested for a game without a guide", async () => {
+    const { api, app } = await started({ poll: 0, now: { ...playing(hubA), hubs: [] } });
+    await app.tick();
+    expect(api.progressCalls).toEqual([]);
+  });
+
+  describe("after a click inside a guide page", () => {
+    const startedWithFrame = async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+      const url = "/doc/hA-checklist";
+      frameDocs.set(url, pageDoc());
+      const run = await started();
+      railButtons()[1]?.click();
+      const frame = document.querySelector("iframe") as HTMLIFrameElement;
+      frame.dispatchEvent(new Event("load"));
+      const clickInFrame = (): void =>
+        void (frameDocs.get(url) as Document).body.dispatchEvent(
+          new MouseEvent("click", { bubbles: true }),
+        );
+      const fresh = (): number => run.api.progressCalls.filter(([, r]) => r === true).length;
+      return { ...run, clickInFrame, fresh };
+    };
+
+    it("asks for fresh numbers 4 and 12 seconds later and shows them", async () => {
+      const { api, clickInFrame, fresh } = await startedWithFrame();
+      api.progressValue = progressOf("/doc/hA-checklist", 4, 7);
+      clickInFrame();
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(fresh()).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.progressCalls.at(-1)).toEqual(["hA", true]);
+      expect(slotCount(1)).toBe("4/7");
+      api.progressValue = progressOf("/doc/hA-checklist", 5, 7);
+      await vi.advanceTimersByTimeAsync(7_999);
+      expect(fresh()).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fresh()).toBe(2);
+      expect(slotCount(1)).toBe("5/7");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fresh()).toBe(2);
+    });
+
+    it("restarts both timers on a second click", async () => {
+      const { clickInFrame, fresh } = await startedWithFrame();
+      clickInFrame();
+      await vi.advanceTimersByTimeAsync(3_000);
+      clickInFrame();
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(fresh()).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fresh()).toBe(1);
+      await vi.advanceTimersByTimeAsync(8_000);
+      expect(fresh()).toBe(2);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fresh()).toBe(2);
+    });
+
+    it("is cancelled by a game change", async () => {
+      const { api, app, clickInFrame, fresh } = await startedWithFrame();
+      clickInFrame();
+      api.nowValue = playing(hubZ);
+      await app.tick();
+      ($(".switch-banner .switch-accept") as HTMLElement).click();
+      await app.tick();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(fresh()).toBe(0);
+    });
+  });
+});
+
+// ---- refresh on wake ----
+
+describe("refresh on wake", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const hidden = (state: "visible" | "hidden"): void => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue(state);
+  };
+  const countingNow = (api: Fake) => {
+    const gate = { now: 0, active: 0, max: 0, release: null as (() => void) | null };
+    const inner = api.now.bind(api);
+    api.now = async () => {
+      gate.now += 1;
+      gate.active += 1;
+      gate.max = Math.max(gate.max, gate.active);
+      try {
+        if (gate.release !== null) await new Promise<void>((r) => (gate.release = r));
+        return await inner();
+      } finally {
+        gate.active -= 1;
+      }
+    };
+    return gate;
+  };
+  const started = async (win?: EventTarget) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const api = fakeApi(playing(hubA));
+    const gate = countingNow(api);
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      ...(win === undefined
+        ? {}
+        : {
+            win: {
+              addEventListener: (type: string, cb: () => void) => win.addEventListener(type, cb),
+            },
+          }),
+    });
+    await app.ready;
+    await flush();
+    gate.now = 0;
+    api.achCalls.length = 0;
+    api.progressCalls.length = 0;
+    return { api, app, gate };
+  };
+  const wake = async (): Promise<void> => {
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flush();
+  };
+
+  it("runs a tick at once when the page becomes visible", async () => {
+    const { gate } = await started();
+    await wake();
+    expect(gate.now).toBe(1);
+  });
+
+  it("refreshes achievements and progress when the last refresh is older than 15 seconds", async () => {
+    const { api } = await started();
+    vi.setSystemTime(Date.now() + 16_000);
+    await wake();
+    expect(api.achCalls).toEqual(["ra:20"]);
+    expect(api.progressCalls).toEqual([["hA", undefined]]);
+  });
+
+  it("leaves them alone when the last refresh is newer than 15 seconds", async () => {
+    const { api, gate } = await started();
+    vi.setSystemTime(Date.now() + 14_000);
+    await wake();
+    expect(gate.now).toBe(1);
+    expect(api.achCalls).toEqual([]);
+    expect(api.progressCalls).toEqual([]);
+  });
+
+  it("does nothing when the page becomes hidden", async () => {
+    const { api, gate } = await started();
+    vi.setSystemTime(Date.now() + 60_000);
+    hidden("hidden");
+    await wake();
+    expect(gate.now).toBe(0);
+    expect(api.achCalls).toEqual([]);
+  });
+
+  it("does the same when the browser comes back online and the window reports it", async () => {
+    const win = new EventTarget();
+    const { api, gate } = await started(win);
+    vi.setSystemTime(Date.now() + 16_000);
+    win.dispatchEvent(new Event("online"));
+    await flush();
+    expect(gate.now).toBe(1);
+    expect(api.achCalls).toEqual(["ra:20"]);
+    expect(api.progressCalls).toEqual([["hA", undefined]]);
+  });
+
+  it("runs no tick on the online event when no window listener is given", async () => {
+    const { gate } = await started();
+    window.dispatchEvent(new Event("online"));
+    await flush();
+    expect(gate.now).toBe(0);
+  });
+
+  it("does not run two ticks at once for two events in a row", async () => {
+    const win = new EventTarget();
+    const { gate } = await started(win);
+    gate.release = () => undefined;
+    document.dispatchEvent(new Event("visibilitychange"));
+    win.dispatchEvent(new Event("online"));
+    await flush();
+    expect(gate.active).toBe(1);
+    const open = gate.release;
+    gate.release = null;
+    open?.();
+    await flush();
+    await flush();
+    expect(gate.max).toBe(1);
   });
 });

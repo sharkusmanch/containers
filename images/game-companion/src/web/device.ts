@@ -3,9 +3,10 @@ import type { StorageLike } from "./state.js";
 export interface Settings {
   keepAwake: boolean;
   hideChrome: boolean;
+  guideJump: boolean;
 }
 
-export const DEFAULT_SETTINGS: Settings = { keepAwake: true, hideChrome: true };
+export const DEFAULT_SETTINGS: Settings = { keepAwake: true, hideChrome: true, guideJump: true };
 export const SETTINGS_STORAGE_KEY = "game-companion:v1:settings";
 
 export function loadSettings(storage: StorageLike | null | undefined): Settings {
@@ -21,6 +22,7 @@ export function loadSettings(storage: StorageLike | null | undefined): Settings 
     return {
       keepAwake: flag(parsed["keepAwake"], DEFAULT_SETTINGS.keepAwake),
       hideChrome: flag(parsed["hideChrome"], DEFAULT_SETTINGS.hideChrome),
+      guideJump: flag(parsed["guideJump"], DEFAULT_SETTINGS.guideJump),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -31,7 +33,11 @@ export function saveSettings(storage: StorageLike | null | undefined, s: Setting
   try {
     storage?.setItem(
       SETTINGS_STORAGE_KEY,
-      JSON.stringify({ keepAwake: s.keepAwake, hideChrome: s.hideChrome }),
+      JSON.stringify({
+        keepAwake: s.keepAwake,
+        hideChrome: s.hideChrome,
+        guideJump: s.guideJump,
+      }),
     );
   } catch {
     // Storage may be blocked or full; the settings just will not persist.

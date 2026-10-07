@@ -582,3 +582,129 @@ describe("createFrames", () => {
     });
   });
 });
+
+describe("onInteract", () => {
+  const click = (frame: HTMLIFrameElement | undefined): void => {
+    const doc = frame?.contentDocument;
+    doc?.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  };
+  const frameAt = (f: ReturnType<typeof createFrames>, i: number): HTMLIFrameElement =>
+    f.element.querySelectorAll("iframe")[i] as HTMLIFrameElement;
+
+  it("is called with the slot index for a click inside a loaded frame", () => {
+    const onInteract = vi.fn();
+    const f = createFrames(document, 4, { onInteract });
+    f.show(0, "/doc/a");
+    f.show(2, "/doc/b");
+    showing(frameAt(f, 0), "<p>a</p>");
+    showing(frameAt(f, 1), "<p>b</p>");
+    loaded(frameAt(f, 0));
+    loaded(frameAt(f, 1));
+    click(frameAt(f, 1));
+    expect(onInteract.mock.calls).toEqual([[2]]);
+    click(frameAt(f, 0));
+    expect(onInteract.mock.calls).toEqual([[2], [0]]);
+  });
+
+  it("follows the slot when sync re-keys the frames", () => {
+    const onInteract = vi.fn();
+    const f = createFrames(document, 4, { onInteract });
+    f.show(0, "/doc/a");
+    f.show(1, "/doc/b");
+    showing(frameAt(f, 0), "<p>a</p>");
+    showing(frameAt(f, 1), "<p>b</p>");
+    loaded(frameAt(f, 0));
+    loaded(frameAt(f, 1));
+    f.sync([null, "/doc/a"]);
+    click(frameAt(f, 0));
+    expect(onInteract.mock.calls).toEqual([[1]]);
+  });
+
+  it("listens again after the frame loads a new document, and not on the old one", () => {
+    const onInteract = vi.fn();
+    const f = createFrames(document, 4, { onInteract });
+    f.show(0, "/doc/a");
+    const frame = frameAt(f, 0);
+    showing(frame, "<p>first</p>");
+    loaded(frame);
+    const first = frame.contentDocument as Document;
+    showing(frame, "<p>second</p>");
+    f.show(0, "/doc/c");
+    loaded(frame);
+    click(frame);
+    expect(onInteract.mock.calls).toEqual([[0]]);
+    first.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onInteract).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not listen twice when the same document reports a load twice", () => {
+    const onInteract = vi.fn();
+    const f = createFrames(document, 4, { onInteract });
+    f.show(0, "/doc/a");
+    showing(frameAt(f, 0), "<p>a</p>");
+    loaded(frameAt(f, 0));
+    loaded(frameAt(f, 0));
+    click(frameAt(f, 0));
+    expect(onInteract).toHaveBeenCalledTimes(1);
+  });
+
+  it("is never called for a frame without a document, and a missing handler is fine", () => {
+    const onInteract = vi.fn();
+    const f = createFrames(document, 4, { onInteract });
+    f.show(0, "/doc/a");
+    expect(() => loaded(frameAt(f, 0))).not.toThrow();
+    expect(onInteract).not.toHaveBeenCalled();
+    const plain = createFrames(document, 4);
+    plain.show(0, "/doc/a");
+    showing(frameAt(plain, 0), "<p>a</p>");
+    expect(() => loaded(frameAt(plain, 0))).not.toThrow();
+    expect(() => click(frameAt(plain, 0))).not.toThrow();
+  });
+
+  it("survives a document it cannot reach", () => {
+    const onInteract = vi.fn();
+    const f = createFrames(document, 4, { onInteract });
+    f.show(0, "/doc/a");
+    Object.defineProperty(frameAt(f, 0), "contentDocument", {
+      get() {
+        throw new Error("cross-origin");
+      },
+      configurable: true,
+    });
+    expect(() => loaded(frameAt(f, 0))).not.toThrow();
+    expect(onInteract).not.toHaveBeenCalled();
+  });
+
+  it("a throwing handler breaks neither the click nor the frame", () => {
+    const onInteract = vi.fn(() => {
+      throw new Error("boom");
+    });
+    const f = createFrames(document, 4, { onInteract });
+    f.show(0, "/doc/a");
+    showing(frameAt(f, 0), "<a id='x' href='#'>go</a>");
+    loaded(frameAt(f, 0));
+    const doc = frameAt(f, 0).contentDocument as Document;
+    const seen = vi.fn();
+    doc.getElementById("x")?.addEventListener("click", seen);
+    expect(() =>
+      doc.getElementById("x")?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+    ).not.toThrow();
+    expect(onInteract).toHaveBeenCalledTimes(1);
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(frameAt(f, 0).classList.contains("inactive")).toBe(false);
+    f.show(0, "/doc/z");
+    expect(frameAt(f, 0).getAttribute("src")).toBe("/doc/z");
+  });
+
+  it("still hears a click the page stops from propagating", () => {
+    const onInteract = vi.fn();
+    const f = createFrames(document, 4, { onInteract });
+    f.show(0, "/doc/a");
+    showing(frameAt(f, 0), "<button id='x'>go</button>");
+    loaded(frameAt(f, 0));
+    const doc = frameAt(f, 0).contentDocument as Document;
+    doc.getElementById("x")?.addEventListener("click", (e) => e.stopPropagation());
+    doc.getElementById("x")?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onInteract).toHaveBeenCalledTimes(1);
+  });
+});

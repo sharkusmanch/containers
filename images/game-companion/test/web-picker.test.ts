@@ -464,6 +464,7 @@ describe("display settings", () => {
   const all = {
     keepAwake: true,
     hideChrome: true,
+    guideJump: true,
     fullscreen: false,
     wakeLockSupported: true,
     fullscreenSupported: true,
@@ -497,7 +498,7 @@ describe("display settings", () => {
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
   });
 
-  it("holds three buttons and a hint", () => {
+  it("holds four buttons and a hint, the guide jump last before the hint", () => {
     const { picker } = make();
     picker.setSettings(all);
     const list = picker.element.querySelector(".picker-settings") as HTMLElement;
@@ -506,6 +507,7 @@ describe("display settings", () => {
       "setting-keep-awake",
       "setting-hide-chrome",
       "setting-fullscreen",
+      "setting-guide-jump",
     ]);
     expect(rows.every((b) => b.getAttribute("type") === "button")).toBe(true);
     const hint = list.querySelector("p.setting-hint");
@@ -522,7 +524,17 @@ describe("display settings", () => {
     expect(row(picker, "setting-hide-chrome").textContent).toBe("Outline bars: hidden");
     expect(row(picker, "setting-hide-chrome").getAttribute("aria-pressed")).toBe("true");
     expect(row(picker, "setting-fullscreen").textContent).toBe("Full screen: off");
-    picker.setSettings({ ...all, keepAwake: false, hideChrome: false, fullscreen: true });
+    expect(row(picker, "setting-guide-jump").textContent).toBe("Guide jump from status: on");
+    expect(row(picker, "setting-guide-jump").getAttribute("aria-pressed")).toBe("true");
+    picker.setSettings({
+      ...all,
+      keepAwake: false,
+      hideChrome: false,
+      guideJump: false,
+      fullscreen: true,
+    });
+    expect(row(picker, "setting-guide-jump").textContent).toBe("Guide jump from status: off");
+    expect(row(picker, "setting-guide-jump").getAttribute("aria-pressed")).toBe("false");
     expect(row(picker, "setting-keep-awake").textContent).toBe("Keep screen on: off");
     expect(row(picker, "setting-keep-awake").getAttribute("aria-pressed")).toBe("false");
     expect(row(picker, "setting-hide-chrome").textContent).toBe("Outline bars: shown");
@@ -537,6 +549,7 @@ describe("display settings", () => {
     expect(row(picker, "setting-keep-awake").hidden).toBe(true);
     expect(row(picker, "setting-fullscreen").hidden).toBe(true);
     expect(row(picker, "setting-hide-chrome").hidden).toBe(false);
+    expect(row(picker, "setting-guide-jump").hidden).toBe(false);
     expect(picker.element.querySelector(".setting-hint")).not.toBeNull();
     picker.setSettings(all);
     expect(row(picker, "setting-keep-awake").hidden).toBe(false);
@@ -551,7 +564,13 @@ describe("display settings", () => {
     row(picker, "setting-keep-awake").click();
     row(picker, "setting-hide-chrome").click();
     row(picker, "setting-fullscreen").click();
-    expect(handlers.onSetting.mock.calls).toEqual([["keepAwake"], ["hideChrome"], ["fullscreen"]]);
+    row(picker, "setting-guide-jump").click();
+    expect(handlers.onSetting.mock.calls).toEqual([
+      ["keepAwake"],
+      ["hideChrome"],
+      ["fullscreen"],
+      ["guideJump"],
+    ]);
     expect(picker.element.hidden).toBe(false);
     expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(false);
     expect(handlers.onClose).not.toHaveBeenCalled();
