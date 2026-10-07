@@ -359,7 +359,8 @@ button {
   border-radius: 6px;
 }
 
-.ach-filter .ach-missable-only {
+.ach-filter .ach-missable-only,
+.ach-filter .ach-kind-only {
   flex: 0 0 auto;
   min-height: 44px;
   padding: 0 8px;
@@ -369,7 +370,8 @@ button {
   border-radius: 6px;
 }
 
-.ach-filter .ach-missable-only[aria-pressed="true"] {
+.ach-filter .ach-missable-only[aria-pressed="true"],
+.ach-filter .ach-kind-only[aria-pressed="true"] {
   background: var(--bg-active);
   border-color: var(--accent);
   color: var(--text);
@@ -393,11 +395,11 @@ button {
 
 .ach-row {
   display: grid;
-  grid-template-columns: 32px 1fr auto;
+  grid-template-columns: 32px minmax(0, 1fr) auto auto;
   grid-template-areas:
-    "icon name pct"
-    "icon desc pct"
-    "icon missable pct";
+    "icon name kind pct"
+    "icon desc desc pct"
+    "icon missable missable pct";
   column-gap: 8px;
   align-items: center;
   width: 100%;
@@ -445,6 +447,24 @@ button {
   justify-self: start;
   font-size: 11px;
   color: var(--warn);
+}
+
+/* On the name line, in its own auto column so the name shrinks (with its ellipsis) before the
+   percentage is pushed off the row. */
+.ach-kind {
+  grid-area: kind;
+  justify-self: end;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.ach-kind-win {
+  border-color: var(--accent);
 }
 
 .ach-pct {

@@ -871,7 +871,7 @@ describe("missable toggle", () => {
       [...(view.element.querySelector(".ach-filter") as HTMLElement).children].map(
         (c) => c.className,
       ),
-    ).toEqual(["ach-filter-input", "ach-filter-clear", "ach-missable-only"]);
+    ).toEqual(["ach-filter-input", "ach-filter-clear", "ach-missable-only", "ach-kind-only"]);
     expect(toggle(view.element).textContent).toBe("Missable");
     expect(toggle(view.element).getAttribute("aria-pressed")).toBe("false");
     expect(toggle(view.element).getAttribute("type")).toBe("button");
@@ -1222,5 +1222,306 @@ describe("find in guide", () => {
     }
     expect(view.element.querySelectorAll(".ach-find").length).toBeGreaterThan(3);
     expect(view.element.querySelectorAll("button button")).toHaveLength(0);
+  });
+});
+
+describe("kind chips", () => {
+  const storyList: Achievement[] = [
+    a({ id: "s-open", kind: "progression", unlockPercent: 40 }),
+    a({ id: "e-open", kind: "win", unlockPercent: 20 }),
+    a({ id: "plain", unlockPercent: 60 }),
+    a({
+      id: "s-done",
+      kind: "progression",
+      unlocked: true,
+      unlockedAt: "2026-10-02T10:00:00.000Z",
+      unlockPercent: 90,
+    }),
+    a({
+      id: "e-done",
+      kind: "win",
+      unlocked: true,
+      unlockedAt: "2026-10-03T10:00:00.000Z",
+      unlockPercent: 70,
+    }),
+  ];
+  const storyData: AchievementsResponse = {
+    ...data,
+    id: "kinds",
+    total: 5,
+    unlocked: 2,
+    achievements: storyList,
+  };
+  const rowOf = (el: HTMLElement, id: string, within = ""): HTMLElement =>
+    el.querySelector(`${within} .ach-row[data-id="${id}"]`) as HTMLElement;
+
+  it("shows Story for progression, Ending for win and nothing for null", () => {
+    const view = createAchievementsView(document);
+    view.update(storyData);
+    const story = rowOf(view.element, "s-open").querySelectorAll(".ach-kind");
+    expect(story).toHaveLength(1);
+    expect(story[0]?.textContent).toBe("Story");
+    expect(story[0]?.classList.contains("ach-kind-win")).toBe(false);
+    expect(story[0]?.tagName).toBe("SPAN");
+    const ending = rowOf(view.element, "e-open").querySelectorAll(".ach-kind");
+    expect(ending).toHaveLength(1);
+    expect(ending[0]?.textContent).toBe("Ending");
+    expect(ending[0]?.classList.contains("ach-kind-win")).toBe(true);
+    expect(rowOf(view.element, "plain").querySelector(".ach-kind")).toBeNull();
+  });
+
+  it("puts the chip after the name and after the missable marker, before the percentage", () => {
+    const view = createAchievementsView(document);
+    view.update({
+      ...storyData,
+      achievements: [a({ id: "both", kind: "win", missable: true, unlockPercent: 5 })],
+    });
+    expect([...rowOf(view.element, "both").children].map((c) => c.className)).toEqual([
+      "ach-name",
+      "ach-desc",
+      "ach-missable",
+      "ach-kind ach-kind-win",
+      "ach-pct",
+    ]);
+  });
+
+  it("shows the chip on a masked row while the name stays masked", () => {
+    const view = createAchievementsView(document);
+    view.update({
+      ...storyData,
+      achievements: [
+        a({
+          id: "mask",
+          kind: "progression",
+          hidden: true,
+          name: "Secret Sample Name",
+          description: "Secret sample text",
+        }),
+      ],
+    });
+    const row = rowOf(view.element, "mask");
+    expect(row.querySelector(".ach-name")?.textContent).toBe("Hidden achievement");
+    expect(row.querySelector(".ach-kind")?.textContent).toBe("Story");
+    expect(view.element.textContent).not.toContain("Secret sample");
+  });
+
+  it("shows the chip in the recent strip and the Unlocked section", () => {
+    const view = createAchievementsView(document);
+    view.update(storyData);
+    expect(
+      rowOf(view.element, "e-done", ".ach-recent").querySelector(".ach-kind")?.textContent,
+    ).toBe("Ending");
+    expect(
+      rowOf(view.element, "s-done", ".ach-recent").querySelector(".ach-kind")?.textContent,
+    ).toBe("Story");
+    expect(
+      rowOf(view.element, "s-done", "details.ach-unlocked").querySelector(".ach-kind")?.textContent,
+    ).toBe("Story");
+    expect(
+      rowOf(view.element, "e-done", "details.ach-unlocked").querySelector(".ach-kind-win")
+        ?.textContent,
+    ).toBe("Ending");
+    expect(rowOf(view.element, "s-open", ".ach-locked").querySelector(".ach-kind")).not.toBeNull();
+  });
+
+  it("builds the chip with textContent, so a name with markup creates no elements", () => {
+    const view = createAchievementsView(document);
+    view.update({
+      ...storyData,
+      achievements: [
+        a({ id: "evil", kind: "win", name: "<b class=x>Sample</b>", description: "<i>d</i>" }),
+      ],
+    });
+    const row = rowOf(view.element, "evil");
+    expect(row.querySelector("b")).toBeNull();
+    expect(row.querySelector("i")).toBeNull();
+    expect(row.querySelector(".ach-kind")?.children).toHaveLength(0);
+    expect(row.querySelector(".ach-kind")?.textContent).toBe("Ending");
+  });
+});
+
+describe("story filter", () => {
+  const toggle = (el: HTMLElement): HTMLButtonElement =>
+    el.querySelector(".ach-filter .ach-kind-only") as HTMLButtonElement;
+  const missable = (el: HTMLElement): HTMLButtonElement =>
+    el.querySelector(".ach-filter .ach-missable-only") as HTMLButtonElement;
+  const input = (el: HTMLElement): HTMLInputElement =>
+    el.querySelector(".ach-filter-input") as HTMLInputElement;
+  const type = (el: HTMLElement, text: string): void => {
+    input(el).value = text;
+    input(el).dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const lockedIds = (el: HTMLElement): (string | undefined)[] =>
+    [...el.querySelectorAll(".ach-locked .ach-row")].map((e) => (e as HTMLElement).dataset.id);
+
+  const kinds: Achievement[] = [
+    a({ id: "s1", kind: "progression", unlockPercent: 80, description: "shared words" }),
+    a({ id: "s2", kind: "progression", unlockPercent: 30, missable: true }),
+    a({ id: "e1", kind: "win", unlockPercent: 10, missable: true, description: "shared words" }),
+    a({ id: "p1", unlockPercent: 90, missable: true }),
+    a({ id: "p2", unlockPercent: 50 }),
+    a({
+      id: "sd",
+      kind: "progression",
+      unlocked: true,
+      unlockedAt: "2026-10-02T10:00:00.000Z",
+      unlockPercent: 95,
+    }),
+  ];
+  const kindData: AchievementsResponse = {
+    ...data,
+    id: "kinds",
+    total: 6,
+    unlocked: 1,
+    achievements: kinds,
+  };
+  const noKinds: AchievementsResponse = {
+    ...kindData,
+    achievements: kinds.map((x) => ({ ...x, kind: null })),
+  };
+
+  it("sits after the Missable button, reads Story and starts off", () => {
+    const view = createAchievementsView(document);
+    view.update(kindData);
+    expect(
+      [...(view.element.querySelector(".ach-filter") as HTMLElement).children].map(
+        (c) => c.className,
+      ),
+    ).toEqual(["ach-filter-input", "ach-filter-clear", "ach-missable-only", "ach-kind-only"]);
+    expect(toggle(view.element).textContent).toBe("Story");
+    expect(toggle(view.element).getAttribute("type")).toBe("button");
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("is hidden when no achievement has a kind and shown when one does", () => {
+    const view = createAchievementsView(document);
+    view.update(noKinds);
+    expect(toggle(view.element).hidden).toBe(true);
+    view.update(kindData);
+    expect(toggle(view.element).hidden).toBe(false);
+  });
+
+  it("lists only achievements with a kind when on, and the full list again when off", () => {
+    const view = createAchievementsView(document);
+    view.update(kindData);
+    const full = lockedIds(view.element);
+    expect(full).toEqual(["p1", "s1", "p2", "s2", "e1"]);
+    toggle(view.element).click();
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("true");
+    expect(lockedIds(view.element)).toEqual(["s1", "s2", "e1"]);
+    expect(view.element.querySelector(".ach-empty")).toBeNull();
+    toggle(view.element).click();
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("false");
+    expect(lockedIds(view.element)).toEqual(full);
+    expect(view.element.querySelector(".ach-recent")).not.toBeNull();
+    expect(view.element.querySelector("details.ach-unlocked")).not.toBeNull();
+  });
+
+  it("drops the recent strip and the Unlocked section while on, as the Missable toggle does", () => {
+    const view = createAchievementsView(document);
+    view.update(kindData);
+    toggle(view.element).click();
+    expect(view.element.querySelector(".ach-recent")).toBeNull();
+    expect(view.element.querySelector("details.ach-unlocked")).toBeNull();
+    expect(view.element.querySelector('.ach-row[data-id="sd"]')).toBeNull();
+    expect(view.element.querySelector(".ach-summary")?.textContent).toBe("1 / 6 · 17%");
+  });
+
+  it("combines with the Missable toggle", () => {
+    const view = createAchievementsView(document);
+    view.update(kindData);
+    toggle(view.element).click();
+    missable(view.element).click();
+    expect(lockedIds(view.element)).toEqual(["s2", "e1"]);
+    toggle(view.element).click();
+    expect(lockedIds(view.element)).toEqual(["p1", "s2", "e1"]);
+  });
+
+  it("combines with the text filter", () => {
+    const view = createAchievementsView(document);
+    view.update(kindData);
+    toggle(view.element).click();
+    type(view.element, "shared");
+    expect(lockedIds(view.element)).toEqual(["s1", "e1"]);
+    type(view.element, "p2");
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe("No matching achievements");
+  });
+
+  it("combines with hide-unlocked", () => {
+    const view = createAchievementsView(document);
+    view.update(kindData);
+    toggle(view.element).click();
+    (view.element.querySelector(".ach-hide-unlocked") as HTMLElement).click();
+    expect(lockedIds(view.element)).toEqual(["s1", "s2", "e1"]);
+    expect(view.element.querySelector("details.ach-unlocked")).toBeNull();
+    toggle(view.element).click();
+    expect(lockedIds(view.element)).toEqual(["p1", "s1", "p2", "s2", "e1"]);
+    expect(view.element.querySelector("details.ach-unlocked")).toBeNull();
+  });
+
+  it("says so when the filters leave nothing", () => {
+    const view = createAchievementsView(document);
+    view.update(kindData);
+    toggle(view.element).click();
+    view.update({
+      ...kindData,
+      achievements: kinds.map((x) =>
+        x.kind === null ? x : { ...x, unlocked: true, unlockedAt: "2026-10-03T10:00:00.000Z" },
+      ),
+    });
+    expect(toggle(view.element).hidden).toBe(false);
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe(
+      "No story achievements left",
+    );
+    expect(view.element.querySelectorAll(".ach-row")).toHaveLength(0);
+    type(view.element, "zzz");
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe("No matching achievements");
+    type(view.element, "");
+    missable(view.element).click();
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe("No matching achievements");
+  });
+
+  it("resets on a change of game and survives same-game updates", () => {
+    const view = createAchievementsView(document);
+    view.update(kindData);
+    toggle(view.element).click();
+    view.update({ ...kindData });
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("true");
+    expect(lockedIds(view.element)).toEqual(["s1", "s2", "e1"]);
+    view.update(null, "Loading…");
+    view.update({ ...kindData });
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("true");
+    view.update({ ...kindData, id: "other" });
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("false");
+    expect(lockedIds(view.element)).toEqual(["p1", "s1", "p2", "s2", "e1"]);
+    view.update({ ...kindData, id: "other" });
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("is treated as off while hidden, and the choice returns with the next kind", () => {
+    const view = createAchievementsView(document);
+    view.update(kindData);
+    toggle(view.element).click();
+    view.update(noKinds);
+    expect(toggle(view.element).hidden).toBe(true);
+    expect(lockedIds(view.element)).toEqual(["p1", "s1", "p2", "s2", "e1"]);
+    view.update(kindData);
+    expect(toggle(view.element).getAttribute("aria-pressed")).toBe("true");
+    expect(lockedIds(view.element)).toEqual(["s1", "s2", "e1"]);
+  });
+
+  it("is not stored and keeps the same button across renders", () => {
+    const s = memory();
+    const view = createAchievementsView(document, { storage: s });
+    document.body.append(view.element);
+    view.update(kindData);
+    const button = toggle(view.element);
+    button.click();
+    type(view.element, "s");
+    view.update({ ...kindData });
+    view.update({ ...kindData, id: "other" });
+    expect(toggle(view.element)).toBe(button);
+    expect([...s.store.keys()]).toEqual([]);
+    view.element.remove();
   });
 });

@@ -156,6 +156,7 @@ export function createAchievementsView(
   // Per-game, like revealed and expanded; never stored.
   let filter = "";
   let missableOnly = false;
+  let kindOnly = false;
   // Set by the page once a guide is loaded; the action needs one.
   let findEnabled = false;
 
@@ -184,6 +185,12 @@ export function createAchievementsView(
     row.append(textEl("span", "ach-name", masked ? "Hidden achievement" : a.name));
     row.append(textEl("span", "ach-desc", masked ? "Tap to reveal" : (a.description ?? "")));
     if (a.missable) row.append(textEl("span", "ach-missable", "Missable"));
+    if (a.kind === "progression") row.append(textEl("span", "ach-kind", "Story"));
+    else if (a.kind === "win") {
+      const chip = textEl("span", "ach-kind", "Ending");
+      chip.classList.add("ach-kind-win");
+      row.append(chip);
+    }
     row.append(textEl("span", "ach-pct", a.unlockPercent === null ? "" : `${a.unlockPercent}%`));
     return row;
   };
@@ -248,6 +255,11 @@ export function createAchievementsView(
     render();
   });
   missableButton.textContent = "Missable";
+  const kindButton = control("ach-kind-only", () => {
+    kindOnly = !kindOnly;
+    render();
+  });
+  kindButton.textContent = "Story";
   const sortRow = doc.createElement("div");
   sortRow.classList.add("ach-sort");
   sortRow.append(keyButton, dirButton, hideButton);
@@ -276,13 +288,18 @@ export function createAchievementsView(
   clearButton.hidden = true;
   const filterRow = doc.createElement("div");
   filterRow.classList.add("ach-filter");
-  filterRow.append(filterInput, clearButton, missableButton);
+  filterRow.append(filterInput, clearButton, missableButton, kindButton);
 
   const summaryEl = textEl("div", "ach-summary", "");
   const staleEl = textEl("div", "ach-stale", "Showing older data");
   let listNodes: HTMLElement[] = [];
 
-  const syncControls = (hasMissable: boolean, missableActive: boolean): void => {
+  const syncControls = (
+    hasMissable: boolean,
+    missableActive: boolean,
+    hasKind: boolean,
+    kindActive: boolean,
+  ): void => {
     const keyLabel = KEY_LABEL[sortPref.key];
     keyButton.textContent = keyLabel;
     keyButton.setAttribute("aria-label", `Sort by: ${keyLabel}`);
@@ -295,6 +312,8 @@ export function createAchievementsView(
     clearButton.hidden = filter === "";
     missableButton.hidden = !hasMissable;
     missableButton.setAttribute("aria-pressed", missableActive ? "true" : "false");
+    kindButton.hidden = !hasKind;
+    kindButton.setAttribute("aria-pressed", kindActive ? "true" : "false");
   };
 
   const render = (): void => {
@@ -316,7 +335,10 @@ export function createAchievementsView(
     // The option applies only while the data has a missable achievement; the choice itself is kept.
     const hasMissable = data.achievements.some((a) => a.missable);
     const missableActive = missableOnly && hasMissable;
-    syncControls(hasMissable, missableActive);
+    // Likewise for the Story option: it needs an achievement that has a kind (never on Steam).
+    const hasKind = data.achievements.some((a) => a.kind !== null);
+    const kindActive = kindOnly && hasKind;
+    syncControls(hasMissable, missableActive, hasKind, kindActive);
 
     const masked = (a: Achievement): boolean => isMasked(a, revealed);
     const listed = (unlocked: boolean): Achievement[] =>
@@ -325,6 +347,7 @@ export function createAchievementsView(
           (a) =>
             a.unlocked === unlocked &&
             (!missableActive || a.missable) &&
+            (!kindActive || a.kind !== null) &&
             matchesFilter(a, filter, masked(a)),
         ),
         sortPref,
@@ -332,15 +355,24 @@ export function createAchievementsView(
       );
     const filtering = filter.trim() !== "";
     const locked = listed(false);
-    const showUnlocked = !hideUnlocked && !missableActive;
+    const showUnlocked = !hideUnlocked && !missableActive && !kindActive;
     const unlocked = showUnlocked ? listed(true) : [];
 
-    if ((filtering || missableActive) && locked.length === 0 && unlocked.length === 0) {
+    if (
+      (filtering || missableActive || kindActive) &&
+      locked.length === 0 &&
+      unlocked.length === 0
+    ) {
+      const narrowedBy = filtering || (missableActive && kindActive);
       listNodes.push(
         textEl(
           "p",
           "ach-empty",
-          filtering ? "No matching achievements" : "No missable achievements left",
+          narrowedBy
+            ? "No matching achievements"
+            : missableActive
+              ? "No missable achievements left"
+              : "No story achievements left",
         ),
       );
     } else {
@@ -389,6 +421,7 @@ export function createAchievementsView(
           unlockedSection = null;
           filter = "";
           missableOnly = false;
+          kindOnly = false;
           lastGame = game;
         }
       }
