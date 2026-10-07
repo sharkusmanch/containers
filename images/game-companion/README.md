@@ -36,7 +36,8 @@ The page is served at `/companion/` and must be reached on the **same hostname a
 be framed by its own origin, so the guide frames stay blank on any other hostname.
 
 There is no sign-in. Every endpoint is read-only. Put it only where everyone who can reach
-it may see achievement progress and guide page titles.
+it may see achievement progress and the text of the guide pages: the guide search returns
+headings and matching lines from them, although Outline itself requires a sign-in.
 
 ## Environment Variables
 
