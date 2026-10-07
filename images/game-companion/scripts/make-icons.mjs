@@ -37,7 +37,7 @@ function pixel(x, y, size) {
   return ring || dot ? GLYPH : BACKGROUND;
 }
 
-export function makePng(size) {
+function makePng(size) {
   const header = Buffer.alloc(13);
   header.writeUInt32BE(size, 0);
   header.writeUInt32BE(size, 4);

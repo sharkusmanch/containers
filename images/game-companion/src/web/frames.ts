@@ -29,6 +29,10 @@ interface Entry {
   url: string;
   /** True from the moment this module starts a navigation until that frame's load event. */
   loading: boolean;
+  /** Counts the navigations this module has started in the frame (creating it counts as one). */
+  generation: number;
+  /** The search now running in this frame; starting another ends it. */
+  live: AbortController | null;
 }
 
 /**
@@ -54,10 +58,13 @@ export function createFrames(
       // The frame is on another origin.
     }
   };
-  // The wiki redraws its bars when the reader follows a link inside the frame.
+  // The wiki redraws its bars when the reader follows a link inside the frame. Only the frame on
+  // screen is swept, and not while the companion itself is in the background.
   (options.setInterval ?? setInterval)(() => {
-    if (!hideChrome) return;
-    for (const entry of entries) if (entry !== null) applyTo(entry);
+    if (!hideChrome || doc.visibilityState === "hidden") return;
+    for (const entry of entries) {
+      if (entry !== null && !entry.frame.classList.contains("inactive")) applyTo(entry);
+    }
   }, 1500);
 
   const hideAll = (): void => {
@@ -75,7 +82,7 @@ export function createFrames(
         const frame = doc.createElement("iframe");
         frame.classList.add("frame");
         frame.setAttribute("title", "Guide page");
-        const created: Entry = { frame, url, loading: true };
+        const created: Entry = { frame, url, loading: true, generation: 1, live: null };
         frame.addEventListener("load", () => {
           created.loading = false;
           if (hideChrome) applyTo(created);
@@ -86,10 +93,15 @@ export function createFrames(
         entries[index] = entry;
       } else if (entry.url !== url) {
         entry.loading = true;
+        entry.generation += 1;
+        // A search on the page being left would only ever look at the page that replaces it.
+        entry.live?.abort();
         entry.frame.setAttribute("src", url);
         entry.url = url;
       }
       entry.frame.classList.remove("inactive");
+      // A frame that is still navigating is applied by its load handler.
+      if (hideChrome && !entry.loading) applyTo(entry);
     },
     hideAll,
     sync(urls) {
@@ -114,13 +126,19 @@ export function createFrames(
     async locate(index, text, heading) {
       const entry = Number.isInteger(index) ? (entries[index] ?? null) : null;
       if (entry === null) return "gone";
-      const dropped = (): boolean => !entries.includes(entry);
+      entry.live?.abort();
+      const mine = new AbortController();
+      entry.live = mine;
+      const generation = entry.generation;
+      const dropped = (): boolean => !entries.includes(entry) || entry.generation !== generation;
       const found = await locateInFrame(entry.frame, text, heading, {
         ready: () => !entry.loading,
         gone: dropped,
+        signal: mine.signal,
       });
+      if (entry.live === mine) entry.live = null;
       if (found) return "found";
-      return dropped() ? "gone" : "not-found";
+      return mine.signal.aborted || dropped() ? "gone" : "not-found";
     },
   };
 }

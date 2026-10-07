@@ -103,6 +103,32 @@ describe("findTextRange", () => {
     expect(findTextRange(inside, "sample boss")?.startOffset).toBe(dotted.length);
   });
 
+  it("treats a non-breaking space or a line break in the page like a space", () => {
+    const nbsp = page("<p>See Alpha&nbsp;One now</p>");
+    const range = findTextRange(nbsp, "Alpha One");
+    expect(range?.toString()).toBe("Alpha\u00a0One");
+    const newline = page("<p>See Alpha\nOne now</p>");
+    expect(findTextRange(newline, "alpha one")?.toString()).toBe("Alpha\nOne");
+    const tab = page("<p>See Alpha\tOne</p>");
+    expect(findTextRange(tab, "Alpha One")?.toString()).toBe("Alpha\tOne");
+  });
+
+  it("treats white space in the searched text like a space too", () => {
+    const doc = page("<p>Open Alpha One today</p>");
+    expect(findTextRange(doc, "Alpha\u00a0One")?.toString()).toBe("Alpha One");
+    expect(findTextRange(doc, "Alpha\nOne")?.toString()).toBe("Alpha One");
+  });
+
+  it("does not collapse runs of white space, and keeps offsets right after one", () => {
+    const doc = page("<p>Alpha  One</p><p>x\u00a0\u00a0y Alpha&nbsp;One</p>");
+    expect(findTextRange(doc, "Alpha One")?.startContainer.nodeValue).toBe(
+      "x\u00a0\u00a0y Alpha\u00a0One",
+    );
+    const range = findTextRange(doc, "Alpha One");
+    expect(range?.startOffset).toBe(5);
+    expect(range?.toString()).toBe("Alpha\u00a0One");
+  });
+
   it("searches only the page text: ProseMirror first, then the main role, then the body", () => {
     const sidebar = "<nav>Sample Boss in the sidebar</nav>";
     const both = page(`${sidebar}<main role="main"><p>Sample Boss in the page</p></main>`);
@@ -428,6 +454,78 @@ describe("locateInFrame", () => {
         }),
       ).toBe(false);
       expect(Date.now() - started).toBeLessThan(1000);
+    });
+  });
+
+  describe("when told to stop", () => {
+    it("resolves false at once for a signal that is already aborted, reading nothing", async () => {
+      const frame = makeFrame("<p>Sample Boss</p>");
+      let reads = 0;
+      const real = frameDoc(frame);
+      Object.defineProperty(frame, "contentDocument", {
+        get() {
+          reads += 1;
+          return real;
+        },
+      });
+      const controller = new AbortController();
+      controller.abort();
+      expect(await locateInFrame(frame, "Sample Boss", { signal: controller.signal })).toBe(false);
+      expect(reads).toBe(0);
+    });
+
+    it("resolves false promptly while waiting, and stops polling", async () => {
+      vi.useFakeTimers();
+      const frame = makeFrame("<p>nothing</p>");
+      let reads = 0;
+      const real = frameDoc(frame);
+      Object.defineProperty(frame, "contentDocument", {
+        get() {
+          reads += 1;
+          return real;
+        },
+      });
+      const controller = new AbortController();
+      const result = locateInFrame(frame, "Sample Boss", { signal: controller.signal });
+      await vi.advanceTimersByTimeAsync(1000);
+      const before = reads;
+      expect(before).toBeGreaterThan(1);
+      controller.abort();
+      expect(await result).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(reads).toBe(before);
+    });
+
+    it("takes its own highlight down when stopped, and its clean-up never touches a newer one", async () => {
+      vi.useFakeTimers();
+      class FakeHighlight {
+        readonly ranges: Range[];
+        constructor(...ranges: Range[]) {
+          this.ranges = ranges;
+        }
+      }
+      const frame = makeFrame("<p>Sample Boss</p><p>Hidden Key</p>");
+      const highlights = new Map<string, FakeHighlight>();
+      Object.defineProperty(frameWin(frame), "CSS", { value: { highlights }, configurable: true });
+      Object.defineProperty(frameWin(frame), "Highlight", {
+        value: FakeHighlight,
+        configurable: true,
+      });
+      const first = new AbortController();
+      await locateInFrame(frame, "Sample Boss", { signal: first.signal, highlightMs: 1000 });
+      expect(highlights.get("gc-find")?.ranges[0]?.toString()).toBe("Sample Boss");
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(300);
+      first.abort();
+      expect(highlights.has("gc-find")).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      await locateInFrame(frame, "Hidden Key", { highlightMs: 1000 });
+      // the first search's original expiry passes: the second highlight is still there
+      await vi.advanceTimersByTimeAsync(800);
+      expect(highlights.get("gc-find")?.ranges[0]?.toString()).toBe("Hidden Key");
+      await vi.advanceTimersByTimeAsync(300);
+      expect(highlights.has("gc-find")).toBe(false);
     });
   });
 

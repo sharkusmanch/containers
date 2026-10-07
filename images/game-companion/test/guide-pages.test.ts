@@ -204,6 +204,54 @@ describe("findInPages", () => {
     });
   });
 
+  describe("heading text is plain text", () => {
+    const headingOf = (line: string): string | null | undefined =>
+      findInPages([page("a", `${line}\nneedle`)], "needle").matches[0]?.heading;
+
+    it("drops link syntax and emphasis marks", () => {
+      expect(headingOf("## **Area One** \u2014 [map](/doc/x)")).toBe("Area One \u2014 map");
+    });
+
+    it("removes emphasis, strike and code marks and keeps escaped characters literal", () => {
+      expect(headingOf("### \\*literal\\* _x_ `code`")).toBe("*literal* x code");
+      expect(headingOf("## ~~old~~ *new* __bold__")).toBe("old new bold");
+      expect(headingOf("## ***both*** and _**mixed**_")).toBe("both and mixed");
+    });
+
+    it("drops images and keeps link text, even with marks inside it", () => {
+      expect(headingOf("## Map ![icon](/img/a.png) [**Zone** Two](/doc/z)")).toBe("Map  Zone Two");
+    });
+
+    it("keeps characters that only look like marks inside a word", () => {
+      expect(headingOf("## snake_case_name and 2*3")).toBe("snake_case_name and 2*3");
+    });
+
+    it("keeps a link whose address has one level of parentheses", () => {
+      expect(headingOf("## [Page](/wiki/A_(b)) end")).toBe("Page end");
+    });
+
+    it("still ends with a closing hash run removed and the cap applied after the markup", () => {
+      expect(headingOf("## **Bold** title ##")).toBe("Bold title");
+      const long = `## ${"[x](/u) ".repeat(100)}`;
+      const h = headingOf(long) as string;
+      expect(h.length).toBeLessThanOrEqual(160);
+      expect(h.startsWith("x x x")).toBe(true);
+    });
+
+    it("is null when nothing but markup is left", () => {
+      expect(headingOf("## ![only](/img/a.png)")).toBeNull();
+    });
+
+    it("handles a 5000-character heading of brackets promptly, within the cap", () => {
+      for (const unit of ["[", "](", "[a](", "*", "_", "\\", "`"]) {
+        const started = performance.now();
+        const h = headingOf(`## ${unit.repeat(5000)}`);
+        expect(performance.now() - started).toBeLessThan(50);
+        expect((h ?? "").length).toBeLessThanOrEqual(160);
+      }
+    });
+  });
+
   it("cuts a very long heading to 160 characters", () => {
     const r = findInPages([page("a", `## ${"h".repeat(300)}\nneedle`)], "needle");
     const h = r.matches[0]?.heading as string;

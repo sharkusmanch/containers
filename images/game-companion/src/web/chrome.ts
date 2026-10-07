@@ -5,13 +5,33 @@ const STYLE_TEXT =
   '[role="main"]{margin-inline-start:0!important}' +
   '[data-gc-chrome="header"]{display:none!important}';
 
+/** The most elements one pass looks at when searching for the top bar. */
+const SEARCH_LIMIT = 300;
+
+const isTopBar = (view: Window, el: Element): boolean => {
+  const style = view.getComputedStyle(el);
+  return style.position === "sticky" && style.top === "0px";
+};
+
 /**
- * The first element in document order inside the main region, outside the document body editor,
- * that sticks to the top of the page. Subtrees of the editor are not walked.
+ * The element that is already tagged, if it is still the top bar; else the first element in
+ * document order inside the main region, outside the document body editor, that sticks to the top
+ * of the page. The editor's subtrees are not walked and at most SEARCH_LIMIT elements are examined.
  */
 function findTopBar(doc: Document): Element | null {
   const view = doc.defaultView;
   if (view === null) return null;
+  const kept = doc.querySelector(`[${ATTRIBUTE}="header"]`);
+  if (
+    kept !== null &&
+    kept.isConnected &&
+    kept.closest('[role="main"]') !== null &&
+    kept.closest(".ProseMirror") === null &&
+    isTopBar(view, kept)
+  ) {
+    return kept;
+  }
+  let examined = 0;
   for (const main of doc.querySelectorAll('[role="main"]')) {
     if (main.closest(".ProseMirror") !== null) continue;
     const walker = doc.createTreeWalker(main, 1 /* NodeFilter.SHOW_ELEMENT */, {
@@ -19,8 +39,9 @@ function findTopBar(doc: Document): Element | null {
         (node as Element).classList.contains("ProseMirror") ? 2 /* REJECT */ : 1 /* ACCEPT */,
     });
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-      const style = view.getComputedStyle(node as Element);
-      if (style.position === "sticky" && style.top === "0px") return node as Element;
+      if (examined === SEARCH_LIMIT) return null;
+      examined += 1;
+      if (isTopBar(view, node as Element)) return node as Element;
     }
   }
   return null;

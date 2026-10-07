@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyChrome } from "../src/web/chrome.js";
 
 const STICKY = "position:sticky;top:0";
@@ -22,6 +22,18 @@ function makeFrame(body: string): Document {
   const doc = frame.contentDocument as Document;
   doc.body.innerHTML = body;
   return doc;
+}
+
+/** Records every element the frame's window is asked to compute a style for. */
+function spyOnStyles(doc: Document): Element[] {
+  const view = doc.defaultView as Window;
+  const real = view.getComputedStyle.bind(view);
+  const asked: Element[] = [];
+  vi.spyOn(view, "getComputedStyle").mockImplementation((el: Element, pseudo?: string | null) => {
+    asked.push(el);
+    return real(el, pseudo);
+  });
+  return asked;
 }
 
 const tagged = (doc: Document): string[] =>
@@ -208,5 +220,126 @@ describe("applyChrome", () => {
     });
     expect(() => applyChrome(hostile, true)).not.toThrow();
     expect(() => applyChrome(hostile, false)).not.toThrow();
+  });
+});
+
+describe("applyChrome: bounded search", () => {
+  const many = (n: number): string =>
+    Array.from({ length: n }, (_, i) => `<div class="row" id="r${i}">row ${i}</div>`).join("");
+
+  it("keeps a tagged bar that is still valid with a single style computation", () => {
+    const doc = makeFrame(
+      `<div role="main"><div>one</div><div>two</div><div>three</div>` +
+        `<div id="topbar" style="${STICKY}">bar</div></div>`,
+    );
+    applyChrome(doc, true);
+    const asked = spyOnStyles(doc);
+    applyChrome(doc, true);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]?.id).toBe("topbar");
+    expect(tagged(doc)).toEqual(["topbar"]);
+  });
+
+  it("keeps the tagged bar even when an earlier sticky element has appeared", () => {
+    const doc = makeFrame(PAGE);
+    applyChrome(doc, true);
+    doc
+      .querySelector('[role="main"]')
+      ?.insertAdjacentHTML("afterbegin", `<div id="early" style="${STICKY}">e</div>`);
+    const asked = spyOnStyles(doc);
+    applyChrome(doc, true);
+    expect(asked).toHaveLength(1);
+    expect(tagged(doc)).toEqual(["topbar"]);
+  });
+
+  it("examines at most 300 elements per pass on a page with no sticky bar", () => {
+    const doc = makeFrame(`<div role="main">${many(2000)}</div>`);
+    const asked = spyOnStyles(doc);
+    applyChrome(doc, true);
+    expect(asked.length).toBeLessThanOrEqual(300);
+    expect(asked.length).toBeGreaterThan(0);
+    expect(tagged(doc)).toEqual([]);
+    asked.length = 0;
+    applyChrome(doc, true);
+    expect(asked.length).toBeLessThanOrEqual(300);
+  });
+
+  it("counts the limit across several main regions", () => {
+    const doc = makeFrame(`<div role="main">${many(200)}</div><div role="main">${many(500)}</div>`);
+    const asked = spyOnStyles(doc);
+    applyChrome(doc, true);
+    expect(asked.length).toBeLessThanOrEqual(300);
+  });
+
+  it("still finds a bar within the first 300 elements", () => {
+    const doc = makeFrame(
+      `<div role="main">${many(100)}<div id="bar" style="${STICKY}">b</div>${many(2000)}</div>`,
+    );
+    applyChrome(doc, true);
+    expect(tagged(doc)).toEqual(["bar"]);
+  });
+
+  it("never asks about an element inside the document body editor, nor walks into it", () => {
+    const doc = makeFrame(
+      `<div role="main"><div id="bar" style="${STICKY}">b</div>` +
+        `<div class="ProseMirror" id="ed"><div id="deep1">x</div>${many(500)}</div></div>`,
+    );
+    const asked = spyOnStyles(doc);
+    applyChrome(doc, false);
+    applyChrome(doc, true);
+    expect(asked.some((el) => el.closest(".ProseMirror") !== null)).toBe(false);
+    const withoutBar = makeFrame(
+      `<div role="main"><div>top</div><div class="ProseMirror">${many(800)}</div><div>after</div></div>`,
+    );
+    const askedAgain = spyOnStyles(withoutBar);
+    applyChrome(withoutBar, true);
+    expect(askedAgain.some((el) => el.closest(".ProseMirror") !== null)).toBe(false);
+    // main's two plain children are all that is examined
+    expect(askedAgain).toHaveLength(2);
+  });
+
+  it("untags a tagged element that stopped being sticky, and searches again", () => {
+    const doc = makeFrame(PAGE);
+    applyChrome(doc, true);
+    doc.getElementById("topbar")?.setAttribute("style", "position:relative");
+    doc.getElementById("plain")?.setAttribute("style", STICKY);
+    applyChrome(doc, true);
+    expect(tagged(doc)).toEqual(["plain"]);
+  });
+
+  it("untags a tagged element that was removed from the main region", () => {
+    const doc = makeFrame(PAGE);
+    applyChrome(doc, true);
+    const bar = doc.getElementById("topbar") as Element;
+    doc.body.append(bar);
+    applyChrome(doc, true);
+    expect(tagged(doc)).toEqual([]);
+  });
+
+  it("untags a tagged element that is now inside the document body editor", () => {
+    const doc = makeFrame(PAGE);
+    applyChrome(doc, true);
+    (doc.querySelector(".ProseMirror") as Element).append(doc.getElementById("topbar") as Element);
+    applyChrome(doc, true);
+    expect(tagged(doc)).toEqual([]);
+  });
+
+  it("writes nothing on a pass that changes nothing, with or without a bar", () => {
+    for (const body of [PAGE, `<div role="main">${many(50)}</div>`]) {
+      const doc = makeFrame(body);
+      applyChrome(doc, true);
+      const records: MutationRecord[] = [];
+      const observer = new MutationObserver((r) => records.push(...r));
+      observer.observe(doc, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        characterData: true,
+      });
+      applyChrome(doc, true);
+      records.push(...observer.takeRecords());
+      observer.disconnect();
+      expect(records).toHaveLength(0);
+    }
   });
 });

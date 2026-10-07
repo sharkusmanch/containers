@@ -20,6 +20,12 @@ const LEADING_MARKERS = /^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[
 // `[text](url)`, where the url may hold one level of parentheses.
 const LINK = /\[([^[\]]*)\]\((?:[^()]|\([^()]*\))*\)/g;
 const EMPHASIS_AND_CODE = /\*\*|__|`/g;
+// `![alt](url)`, delimited like LINK.
+const IMAGE = /!\[[^[\]]*\]\((?:[^()]|\([^()]*\))*\)/g;
+// One pass over what is left: a backslash escape, a backtick, or a run of emphasis/strike marks.
+const MARKS = /\\([!-/:-@[-`{-~])|`|[*_~]+/g;
+// A heading line is read up to this many characters; the rest could never reach the 160-character cap.
+const HEADING_READ_MAX = 500;
 
 const CHECKBOX_LINE = /^[ \t]*[-*][ \t]+\[[ xX]\]/;
 const WARNING_SIGN = "⚠";
@@ -49,7 +55,31 @@ function headingText(line: string): string | null | undefined {
   if (end < text.length && end > 0 && /\s/.test(text[end - 1] as string)) {
     text = text.slice(0, end).trimEnd();
   }
+  text = plainHeading(text);
   return text === "" ? null : cutEnd(text);
+}
+
+/**
+ * A heading as the wiki renders it, as far as the markdown marks go: link text without its
+ * address, no images, no emphasis, strike or code marks, escaped characters kept as written.
+ * A run of marks only counts when it opens or closes a word, so `snake_case` and `2*3` stay.
+ */
+function plainHeading(raw: string): string {
+  let text = raw.slice(0, HEADING_READ_MAX);
+  if (isHigh(text.charCodeAt(text.length - 1))) text = text.slice(0, -1);
+  text = text.replace(IMAGE, "").replace(LINK, "$1");
+  return text
+    .replace(MARKS, (match, escaped: string | undefined, offset: number, whole: string) => {
+      if (escaped !== undefined) return escaped;
+      if (match === "`") return "";
+      const before = whole[offset - 1];
+      const after = whole[offset + match.length];
+      const opens = after !== undefined && !/\s/.test(after) && !/[\p{L}\p{N}]/u.test(before ?? "");
+      const closes =
+        before !== undefined && !/\s/.test(before) && !/[\p{L}\p{N}]/u.test(after ?? "");
+      return opens || closes ? "" : match;
+    })
+    .trim();
 }
 
 const isHigh = (code: number): boolean => code >= 0xd800 && code <= 0xdbff;

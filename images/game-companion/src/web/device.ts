@@ -61,6 +61,8 @@ export function createWakeLock(
   let enabled = false;
   let held: Sentinel | null = null;
   let requesting = false;
+  // A wake-up that arrived while a request was in flight; it is run once when that one settles.
+  let skipped = false;
 
   const wanted = (): boolean => enabled && doc.visibilityState === "visible";
   const release = (sentinel: Sentinel): void => {
@@ -72,7 +74,11 @@ export function createWakeLock(
   };
 
   async function acquire(): Promise<void> {
-    if (api === undefined || !wanted() || held !== null || requesting) return;
+    if (api === undefined || !wanted() || held !== null) return;
+    if (requesting) {
+      skipped = true;
+      return;
+    }
     requesting = true;
     try {
       const sentinel = await api.request("screen");
@@ -90,6 +96,11 @@ export function createWakeLock(
       // The browser may refuse, for example on low battery.
     } finally {
       requesting = false;
+      if (skipped) {
+        skipped = false;
+        // Still wanted and nothing held: the wake-up that arrived meanwhile gets its turn.
+        void acquire();
+      }
     }
   }
 
@@ -116,6 +127,22 @@ export function fullscreenSupported(doc: Document): boolean {
     typeof doc.exitFullscreen === "function" &&
     doc.fullscreenEnabled !== false
   );
+}
+
+/**
+ * True when the page is running as an installed app that already fills the screen (or the window),
+ * where there is nothing left to enter. False when it cannot be told.
+ */
+export function displayModeFullscreen(win: {
+  matchMedia?: (query: string) => { matches: boolean };
+}): boolean {
+  try {
+    return ["(display-mode: fullscreen)", "(display-mode: standalone)"].some(
+      (query) => win.matchMedia?.(query).matches === true,
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function isFullscreen(doc: Document): boolean {

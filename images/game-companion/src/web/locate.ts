@@ -3,18 +3,21 @@ const HIGHLIGHT_NAME = "gc-find";
 const STYLE_ID = "gc-find-style";
 const STYLE_TEXT = "::highlight(gc-find){background:#ffd54a;color:#111}";
 
+const plainSpaces = (text: string): string => text.replace(/\s/g, " ");
+
 /**
- * Lower-cases `text` without changing its length, so offsets in the folded copy are offsets in the
- * original. A character whose lower-case form has a different length (for example the dotted
- * capital I) is left unfolded rather than shifting every offset after it.
+ * Lower-cases `text` and turns every white-space character (a non-breaking space or a line break
+ * included) into a plain space, without changing its length, so offsets in the folded copy are
+ * offsets in the original. A character whose lower-case form has a different length (for example
+ * the dotted capital I) is left unfolded rather than shifting every offset after it.
  */
 function fold(text: string): string {
   const lower = text.toLowerCase();
-  if (lower.length === text.length) return lower;
+  if (lower.length === text.length) return plainSpaces(lower);
   let out = "";
   for (const ch of text) {
     const l = ch.toLowerCase();
-    out += l.length === ch.length ? l : ch;
+    out += plainSpaces(l.length === ch.length ? l : ch);
   }
   return out;
 }
@@ -93,10 +96,15 @@ interface HighlightWindow {
   getSelection(): Selection | null;
 }
 
-/** Marks the range for `highlightMs`, by the highlight API when the frame has it, else by selection. */
-function highlight(doc: Document, range: Range, highlightMs: number): void {
+/**
+ * Marks the range for `highlightMs`, by the highlight API when the frame has it, else by selection.
+ * Aborting `signal` takes the mark down at once and cancels the pending clean-up, so a stopped
+ * search can never touch a newer one's mark.
+ */
+function highlight(doc: Document, range: Range, highlightMs: number, signal?: AbortSignal): void {
   const win = doc.defaultView as unknown as HighlightWindow | null;
   if (win === null) return;
+  let clear: () => void;
   const registry = win.CSS?.highlights;
   if (registry !== undefined && typeof win.Highlight === "function") {
     if (doc.getElementById(STYLE_ID) === null && doc.head !== null) {
@@ -107,46 +115,55 @@ function highlight(doc: Document, range: Range, highlightMs: number): void {
     }
     const mark = new win.Highlight(range);
     registry.set(HIGHLIGHT_NAME, mark);
-    setTimeout(() => {
+    clear = () => {
       try {
         // A later search may have replaced it.
         if (registry.get(HIGHLIGHT_NAME) === mark) registry.delete(HIGHLIGHT_NAME);
       } catch {
         // The frame is gone.
       }
-    }, highlightMs);
-    return;
-  }
-  const selection = win.getSelection();
-  if (selection === null) return;
-  selection.removeAllRanges();
-  selection.addRange(range);
-  setTimeout(() => {
-    try {
-      const now = selection.rangeCount === 1 ? selection.getRangeAt(0) : null;
-      // Leave a selection the reader made since.
-      if (
-        now !== null &&
-        now.startContainer === range.startContainer &&
-        now.startOffset === range.startOffset &&
-        now.endContainer === range.endContainer &&
-        now.endOffset === range.endOffset
-      ) {
-        selection.removeAllRanges();
+    };
+  } else {
+    const selection = win.getSelection();
+    if (selection === null) return;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    clear = () => {
+      try {
+        const now = selection.rangeCount === 1 ? selection.getRangeAt(0) : null;
+        // Leave a selection the reader made since.
+        if (
+          now !== null &&
+          now.startContainer === range.startContainer &&
+          now.startOffset === range.startOffset &&
+          now.endContainer === range.endContainer &&
+          now.endOffset === range.endOffset
+        ) {
+          selection.removeAllRanges();
+        }
+      } catch {
+        // The frame is gone.
       }
-    } catch {
-      // The frame is gone.
-    }
-  }, highlightMs);
+    };
+  }
+  const timer = setTimeout(clear, highlightMs);
+  signal?.addEventListener(
+    "abort",
+    () => {
+      clearTimeout(timer);
+      clear();
+    },
+    { once: true },
+  );
 }
 
-function reveal(doc: Document, range: Range, highlightMs: number): void {
+function reveal(doc: Document, range: Range, highlightMs: number, signal?: AbortSignal): void {
   try {
     const target = range.startContainer.parentElement;
     if (target !== null && typeof target.scrollIntoView === "function") {
       target.scrollIntoView({ block: "center" });
     }
-    highlight(doc, range, highlightMs);
+    highlight(doc, range, highlightMs, signal);
   } catch {
     // The text was found; failing to decorate it is not a failure to locate it.
   }
@@ -160,6 +177,8 @@ export interface LocateOptions {
   ready?: () => boolean;
   /** When this returns true the frame has been dropped and the search stops. */
   gone?: () => boolean;
+  /** Aborting stops the search (it resolves false) and takes down any highlight it made. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -190,7 +209,7 @@ export function locateInFrame(
   const intervalMs = opts.intervalMs ?? 300;
   const highlightMs = opts.highlightMs ?? 6_000;
   return new Promise<boolean>((resolve) => {
-    if (text.trim() === "") {
+    if (text.trim() === "" || opts.signal?.aborted === true) {
       resolve(false);
       return;
     }
@@ -199,8 +218,12 @@ export function locateInFrame(
     const finish = (result: boolean): void => {
       clearTimeout(timer);
       frame.removeEventListener("load", attempt);
+      opts.signal?.removeEventListener("abort", stop);
       resolve(result);
     };
+    function stop(): void {
+      finish(false);
+    }
     function attempt(): void {
       clearTimeout(timer);
       if (opts.gone?.() === true) {
@@ -220,7 +243,7 @@ export function locateInFrame(
         }
       }
       if (found !== null) {
-        reveal(found.doc, found.range, highlightMs);
+        reveal(found.doc, found.range, highlightMs, opts.signal);
         finish(true);
       } else if (Date.now() >= deadline) {
         finish(false);
@@ -229,6 +252,7 @@ export function locateInFrame(
       }
     }
     frame.addEventListener("load", attempt);
+    opts.signal?.addEventListener("abort", stop);
     attempt();
   });
 }

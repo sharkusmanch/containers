@@ -4,6 +4,7 @@ import {
   DEFAULT_SETTINGS,
   SETTINGS_STORAGE_KEY,
   createWakeLock,
+  displayModeFullscreen,
   fullscreenSupported,
   isFullscreen,
   loadSettings,
@@ -253,6 +254,107 @@ describe("createWakeLock", () => {
     expect(s.release).toHaveBeenCalled();
   });
 
+  it("retries once when a wake-up arrived while a request was pending and that request fails", async () => {
+    const t = setup();
+    let fail: (e: Error) => void = () => undefined;
+    t.request.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    t.controller.setEnabled(true);
+    // while the first request is still pending the page is shown again, and the setting re-applied
+    t.setVisible(true);
+    t.controller.setEnabled(true);
+    await settle();
+    expect(t.request).toHaveBeenCalledTimes(1);
+    fail(new Error("low battery"));
+    await settle();
+    expect(t.request).toHaveBeenCalledTimes(2);
+    expect(t.held()).toHaveLength(1);
+  });
+
+  it("follows a skipped wake-up with exactly one more request, never a loop", async () => {
+    const t = setup();
+    t.request.mockRejectedValue(new Error("refused"));
+    t.controller.setEnabled(true);
+    t.setVisible(true);
+    await settle();
+    await settle();
+    // one follow-up for the skipped wake-up, which also fails; nothing further
+    expect(t.request).toHaveBeenCalledTimes(2);
+    await settle();
+    expect(t.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry when the pending request ends with the lock held", async () => {
+    const t = setup();
+    t.controller.setEnabled(true);
+    t.setVisible(true);
+    t.controller.setEnabled(true);
+    await settle();
+    await settle();
+    expect(t.request).toHaveBeenCalledTimes(1);
+    expect(t.held()).toHaveLength(1);
+  });
+
+  it("does not retry a skipped wake-up once the setting is off", async () => {
+    const t = setup();
+    let fail: (e: Error) => void = () => undefined;
+    t.request.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    t.controller.setEnabled(true);
+    t.setVisible(true);
+    t.controller.setEnabled(false);
+    fail(new Error("refused"));
+    await settle();
+    expect(t.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a release event from an old lock once a new one is held", async () => {
+    const t = setup();
+    t.controller.setEnabled(true);
+    await settle();
+    const old = t.sentinels[0] as Sentinel;
+    old.fire();
+    await settle();
+    expect(t.request).toHaveBeenCalledTimes(2);
+    const current = t.sentinels[1] as Sentinel;
+    old.fire();
+    await settle();
+    expect(t.request).toHaveBeenCalledTimes(2);
+    expect(current.released).toBe(false);
+    expect(current.release).not.toHaveBeenCalled();
+    expect(t.held()).toEqual([current]);
+  });
+
+  it("releases a lock granted after the page went hidden, and asks again on becoming visible", async () => {
+    const t = setup();
+    let grant: (s: Sentinel) => void = () => undefined;
+    t.request.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          grant = resolve;
+        }),
+    );
+    t.controller.setEnabled(true);
+    t.setVisible(false);
+    const late = makeSentinel();
+    grant(late);
+    await settle();
+    expect(late.release).toHaveBeenCalledTimes(1);
+    expect(t.request).toHaveBeenCalledTimes(1);
+    t.setVisible(true);
+    await settle();
+    expect(t.request).toHaveBeenCalledTimes(2);
+    expect(t.held()).toHaveLength(1);
+  });
+
   it("does nothing without a wake lock", async () => {
     const controller = createWakeLock({}, document);
     expect(() => controller.setEnabled(true)).not.toThrow();
@@ -322,5 +424,37 @@ describe("full screen", () => {
       throw new Error("sync");
     });
     await expect(toggleFullscreen(document)).resolves.toBeUndefined();
+  });
+});
+
+describe("displayModeFullscreen", () => {
+  const media = (...matching: string[]) => ({
+    matchMedia: vi.fn((q: string) => ({ matches: matching.includes(q) })),
+  });
+
+  it("is true for an installed app in full-screen display mode", () => {
+    const win = media("(display-mode: fullscreen)");
+    expect(displayModeFullscreen(win)).toBe(true);
+    expect(win.matchMedia).toHaveBeenCalledWith("(display-mode: fullscreen)");
+  });
+
+  it("is true for standalone display mode", () => {
+    expect(displayModeFullscreen(media("(display-mode: standalone)"))).toBe(true);
+  });
+
+  it("is false in a browser tab", () => {
+    expect(displayModeFullscreen(media("(display-mode: browser)"))).toBe(false);
+    expect(displayModeFullscreen(media())).toBe(false);
+  });
+
+  it("is false when matchMedia is missing or throws", () => {
+    expect(displayModeFullscreen({})).toBe(false);
+    expect(
+      displayModeFullscreen({
+        matchMedia: () => {
+          throw new Error("blocked");
+        },
+      }),
+    ).toBe(false);
   });
 });

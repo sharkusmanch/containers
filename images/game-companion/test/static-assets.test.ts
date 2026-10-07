@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateSync } from "node:zlib";
@@ -55,6 +55,22 @@ function decode(file: Buffer): {
   };
 }
 
+/** The header and the inflated pixel bytes of a PNG, so a different compressor cannot matter. */
+function readPng(file: Buffer): { header: Buffer; pixels: Buffer } {
+  expect(file.subarray(0, 8).equals(SIGNATURE)).toBe(true);
+  let header = Buffer.alloc(0);
+  const data: Buffer[] = [];
+  for (let at = 8; at < file.length;) {
+    const length = file.readUInt32BE(at);
+    const type = file.toString("latin1", at + 4, at + 8);
+    const body = file.subarray(at + 8, at + 8 + length);
+    if (type === "IHDR") header = Buffer.from(body);
+    if (type === "IDAT") data.push(body);
+    at += 12 + length;
+  }
+  return { header, pixels: inflateSync(Buffer.concat(data)) };
+}
+
 describe("manifest", () => {
   it("has the fields the page needs, with relative URLs", () => {
     const m = manifest();
@@ -107,17 +123,42 @@ describe("icons", () => {
     expect(drawn).toBeGreaterThan(size);
   });
 
-  it("are reproduced byte for byte by the generator", () => {
+  it("are reproduced, pixel for pixel, by the generator", () => {
     const out = mkdtempSync(join(tmpdir(), "gc-icons-"));
     execFileSync(process.execPath, [SCRIPT, out]);
-    for (const name of ["icon-192.png", "icon-512.png"]) {
-      expect(readFileSync(join(out, name)).equals(readFileSync(join(WEB, name)))).toBe(true);
+    for (const [name, size] of [
+      ["icon-192.png", 192],
+      ["icon-512.png", 512],
+    ] as const) {
+      const made = readPng(readFileSync(join(out, name)));
+      const committed = readPng(readFileSync(join(WEB, name)));
+      expect(made.header.equals(committed.header)).toBe(true);
+      expect(made.header.readUInt32BE(0)).toBe(size);
+      expect(made.pixels.equals(committed.pixels)).toBe(true);
     }
-    const again = mkdtempSync(join(tmpdir(), "gc-icons-"));
-    execFileSync(process.execPath, [SCRIPT, again]);
-    expect(
-      readFileSync(join(again, "icon-512.png")).equals(readFileSync(join(out, "icon-512.png"))),
-    ).toBe(true);
+  });
+
+  it("are the same on every run of the generator", () => {
+    const first = mkdtempSync(join(tmpdir(), "gc-icons-"));
+    const second = mkdtempSync(join(tmpdir(), "gc-icons-"));
+    execFileSync(process.execPath, [SCRIPT, first]);
+    execFileSync(process.execPath, [SCRIPT, second]);
+    const a = readPng(readFileSync(join(first, "icon-512.png")));
+    const b = readPng(readFileSync(join(second, "icon-512.png")));
+    expect(a.pixels.equals(b.pixels)).toBe(true);
+  });
+
+  it("the generator exports nothing", async () => {
+    const out = mkdtempSync(join(tmpdir(), "gc-icons-"));
+    const saved = process.argv[2];
+    process.argv[2] = out;
+    try {
+      const loaded = (await import(`${SCRIPT}?exports`)) as Record<string, unknown>;
+      expect(Object.keys(loaded)).toEqual([]);
+    } finally {
+      if (saved === undefined) process.argv.length = 2;
+      else process.argv[2] = saved;
+    }
   });
 });
 
@@ -137,11 +178,18 @@ describe("index.html", () => {
 });
 
 describe("build", () => {
-  it("copies the whole web-static directory, so the manifest and icons ship", () => {
-    const script = readFileSync(
-      join(import.meta.dirname, "..", "scripts", "copy-static.mjs"),
-      "utf8",
+  it("copies the manifest, the icons and the page into dist/web", () => {
+    const work = mkdtempSync(join(tmpdir(), "gc-build-"));
+    cpSync(WEB, join(work, "web-static"), { recursive: true });
+    execFileSync(
+      process.execPath,
+      [join(import.meta.dirname, "..", "scripts", "copy-static.mjs")],
+      {
+        cwd: work,
+      },
     );
-    expect(script).toContain('cp("web-static", "dist/web", { recursive: true })');
+    for (const name of ["manifest.webmanifest", "icon-192.png", "icon-512.png", "index.html"]) {
+      expect(existsSync(join(work, "dist", "web", name))).toBe(true);
+    }
   });
 });

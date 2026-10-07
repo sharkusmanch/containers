@@ -12,6 +12,7 @@ import type { Api } from "./api.js";
 import { createAchievementsView } from "./achievements-view.js";
 import {
   createWakeLock,
+  displayModeFullscreen,
   fullscreenSupported,
   isFullscreen,
   loadSettings,
@@ -47,6 +48,8 @@ export interface AppOptions {
   setTimeout?: typeof setTimeout;
   /** The browser's navigator, for the screen wake lock. Without it the lock is unsupported. */
   nav?: { wakeLock?: WakeLockLike };
+  /** The browser window, to tell whether the page runs as an installed full-screen app. */
+  win?: { matchMedia?: (query: string) => { matches: boolean } };
   nowPollMs?: number;
   achievementsPollMs?: number;
 }
@@ -375,7 +378,7 @@ export function startApp(opts: AppOptions): App {
       ...settings,
       fullscreen: isFullscreen(doc),
       wakeLockSupported: wakeLock.supported,
-      fullscreenSupported: fullscreenSupported(doc),
+      fullscreenSupported: fullscreenSupported(doc) && !displayModeFullscreen(opts.win ?? {}),
     });
   }
 

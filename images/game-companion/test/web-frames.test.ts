@@ -276,6 +276,100 @@ describe("createFrames", () => {
     });
   });
 
+  describe("a locate that is superseded", () => {
+    afterEach(() => vi.useRealTimers());
+
+    function fullSlot() {
+      document.body.innerHTML = "";
+      const f = createFrames(document, 4);
+      document.body.append(f.element);
+      f.show(3, "/doc/a");
+      const frame = f.element.querySelector("iframe") as HTMLIFrameElement;
+      showing(frame, "<p>Page A has the Alpha Boss</p>");
+      loaded(frame);
+      return { f, frame };
+    }
+
+    it("resolves gone when its slot is re-pointed, and never reports not-found", async () => {
+      vi.useFakeTimers();
+      const { f, frame } = fullSlot();
+      f.show(3, "/doc/b");
+      const first = f.locate(3, "alpha boss");
+      f.show(3, "/doc/c");
+      const second = f.locate(3, "beta boss");
+      // The first search ends at once, long before its own deadline.
+      expect(await first).toBe("gone");
+      showing(frame, "<p>Page C has the Beta Boss</p>");
+      loaded(frame);
+      expect(await second).toBe("found");
+      await vi.advanceTimersByTimeAsync(11_000);
+    });
+
+    it("is unaffected for a locate started by the show that re-pointed the slot", async () => {
+      vi.useFakeTimers();
+      const { f, frame } = fullSlot();
+      f.show(3, "/doc/b");
+      const only = f.locate(3, "beta boss");
+      showing(frame, "<p>Page B has the Beta Boss</p>");
+      loaded(frame);
+      expect(await only).toBe("found");
+    });
+
+    it("lets one locate per frame live: a new one ends the previous as gone", async () => {
+      vi.useFakeTimers();
+      const { f } = fullSlot();
+      const first = f.locate(3, "no such text");
+      const second = f.locate(3, "alpha boss");
+      expect(await first).toBe("gone");
+      expect(await second).toBe("found");
+    });
+
+    it("still reports not-found for the one locate that runs to its deadline", async () => {
+      vi.useFakeTimers();
+      const { f } = fullSlot();
+      const only = f.locate(3, "no such text");
+      await vi.advanceTimersByTimeAsync(10_500);
+      expect(await only).toBe("not-found");
+    });
+
+    it("does not let the earlier search's clean-up touch the later one's highlight", async () => {
+      vi.useFakeTimers();
+      document.body.innerHTML = "";
+      const f = createFrames(document, 4);
+      document.body.append(f.element);
+      f.show(0, "/doc/a");
+      const frame = f.element.querySelector("iframe") as HTMLIFrameElement;
+      const holder = document.createElement("iframe");
+      document.body.append(holder);
+      const real = holder.contentDocument as Document;
+      real.body.innerHTML = "<p>Sample Boss</p><p>Hidden Key</p>";
+      Object.defineProperty(frame, "contentDocument", { value: real, configurable: true });
+      const highlights = new Map<string, { ranges: Range[] }>();
+      const win = holder.contentWindow as unknown as Record<string, unknown>;
+      Object.defineProperty(win, "CSS", { value: { highlights }, configurable: true });
+      Object.defineProperty(win, "Highlight", {
+        value: class {
+          readonly ranges: Range[];
+          constructor(...ranges: Range[]) {
+            this.ranges = ranges;
+          }
+        },
+        configurable: true,
+      });
+      loaded(frame);
+      expect(await f.locate(0, "sample boss")).toBe("found");
+      expect(highlights.get("gc-find")?.ranges[0]?.toString()).toBe("Sample Boss");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(await f.locate(0, "hidden key")).toBe("found");
+      expect(highlights.get("gc-find")?.ranges[0]?.toString()).toBe("Hidden Key");
+      // the first highlight's own six seconds are over: the second one stays
+      await vi.advanceTimersByTimeAsync(5100);
+      expect(highlights.get("gc-find")?.ranges[0]?.toString()).toBe("Hidden Key");
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(highlights.has("gc-find")).toBe(false);
+    });
+  });
+
   describe("hiding the wiki's bars", () => {
     const style = (frame: HTMLIFrameElement | undefined): Element | null =>
       frame?.contentDocument?.getElementById("gc-chrome-style") ?? null;
@@ -313,7 +407,7 @@ describe("createFrames", () => {
       expect(style(frameAt(f, 0))).toBeNull();
     });
 
-    it("re-applies to every frame on the repeating timer, every 1500 ms", () => {
+    it("re-applies on the repeating timer, every 1500 ms, to the frame on screen", () => {
       const { f, tick, ticks } = withTimer();
       expect(ticks.map((t) => t.ms)).toEqual([1500]);
       f.setHideChrome(true);
@@ -321,13 +415,16 @@ describe("createFrames", () => {
       f.show(1, "/doc/b");
       showing(frameAt(f, 0), "<p>A</p>");
       showing(frameAt(f, 1), "<p>B</p>");
+      loaded(frameAt(f, 0));
+      loaded(frameAt(f, 1));
+      style(frameAt(f, 0))?.remove();
+      style(frameAt(f, 1))?.remove();
       tick();
-      expect(style(frameAt(f, 0))).not.toBeNull();
       expect(style(frameAt(f, 1))).not.toBeNull();
       // the wiki re-rendered the page and dropped our style: the timer puts it back
-      style(frameAt(f, 0))?.remove();
+      style(frameAt(f, 1))?.remove();
       tick();
-      expect(style(frameAt(f, 0))).not.toBeNull();
+      expect(style(frameAt(f, 1))).not.toBeNull();
     });
 
     it("does nothing on the timer while hiding is off", () => {
@@ -392,6 +489,84 @@ describe("createFrames", () => {
       expect(() => f.setHideChrome(false)).not.toThrow();
       expect(() => f.setHideChrome(true)).not.toThrow();
       expect(style(frameAt(f, 1))).not.toBeNull();
+    });
+
+    describe("sweeping only the frame on screen", () => {
+      afterEach(() => {
+        Reflect.deleteProperty(document, "visibilityState");
+      });
+
+      /** Two loaded frames, both styled, then both stripped of the style again; slot 1 is showing. */
+      function two() {
+        const t = withTimer();
+        t.f.setHideChrome(true);
+        t.f.show(0, "/doc/a");
+        t.f.show(1, "/doc/b");
+        showing(frameAt(t.f, 0), "<p>A</p>");
+        showing(frameAt(t.f, 1), "<p>B</p>");
+        loaded(frameAt(t.f, 0));
+        loaded(frameAt(t.f, 1));
+        for (const i of [0, 1]) style(frameAt(t.f, i))?.remove();
+        return t;
+      }
+
+      it("touches the active frame only on a tick", () => {
+        const { f, tick } = two();
+        tick();
+        expect(style(frameAt(f, 1))).not.toBeNull();
+        expect(style(frameAt(f, 0))).toBeNull();
+      });
+
+      it("touches no frame on a tick while every frame is hidden", () => {
+        const { f, tick } = two();
+        f.hideAll();
+        tick();
+        expect(style(frameAt(f, 0))).toBeNull();
+        expect(style(frameAt(f, 1))).toBeNull();
+      });
+
+      it("applies to a frame the moment it becomes active, without waiting for a tick", () => {
+        const { f } = two();
+        f.show(0, "/doc/a");
+        expect(style(frameAt(f, 0))).not.toBeNull();
+        expect(style(frameAt(f, 1))).toBeNull();
+      });
+
+      it("leaves a frame that is still navigating to its load handler", () => {
+        const { f } = two();
+        f.show(0, "/doc/c");
+        expect(style(frameAt(f, 0))).toBeNull();
+        showing(frameAt(f, 0), "<p>C</p>");
+        loaded(frameAt(f, 0));
+        expect(style(frameAt(f, 0))).not.toBeNull();
+      });
+
+      it("does not touch a frame it shows while hiding is off", () => {
+        const { f } = two();
+        f.setHideChrome(false);
+        f.show(0, "/doc/a");
+        expect(style(frameAt(f, 0))).toBeNull();
+      });
+
+      it("does no work on a tick while the companion's own document is hidden", () => {
+        const { f, tick } = two();
+        Object.defineProperty(document, "visibilityState", {
+          get: () => "hidden",
+          configurable: true,
+        });
+        tick();
+        expect(style(frameAt(f, 1))).toBeNull();
+        Reflect.deleteProperty(document, "visibilityState");
+        tick();
+        expect(style(frameAt(f, 1))).not.toBeNull();
+      });
+
+      it("still applies a changed setting to every frame at once", () => {
+        const { f } = two();
+        f.setHideChrome(true);
+        expect(style(frameAt(f, 0))).not.toBeNull();
+        expect(style(frameAt(f, 1))).not.toBeNull();
+      });
     });
 
     it("leaves the find highlight's style element alone", () => {

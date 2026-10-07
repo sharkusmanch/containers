@@ -1276,6 +1276,7 @@ describe("find in guide", () => {
     answer: FindResponse | null | Error,
     tm = timers(),
     achievementName = "First Steps",
+    storage = memory(),
   ) => {
     const api = fakeApi(playing(hubA));
     api.achievements = async () => board([mk("a1", achievementName)]);
@@ -1287,12 +1288,12 @@ describe("find in guide", () => {
     const app = startApp({
       doc: document,
       api,
-      storage: memory(),
+      storage,
       setInterval: noTimers,
       setTimeout: tm.set,
     });
     await app.ready;
-    return { api, app, tm };
+    return { api, app, tm, storage };
   };
   const find = async (): Promise<void> => {
     if (document.querySelector(".ach-find") === null) {
@@ -1501,7 +1502,7 @@ describe("find in guide", () => {
     ["an error", new Error("down")],
   ])("drops %s when the game changed while the search was running", async (_name, answer) => {
     const late = deferred<FindResponse | null>();
-    const { api, app } = await start(null);
+    const { api, app, storage } = await start(null);
     api.find = () => late.promise;
     (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
     (document.querySelector(".ach-find") as HTMLElement).click();
@@ -1514,9 +1515,67 @@ describe("find in guide", () => {
     await flush();
     expect($(".game-title")?.textContent).toBe("Zeta");
     expect(document.querySelector("iframe")).toBeNull();
+    // Nothing of the old game's search may reach the new game: no pin saved for either game,
+    // the achievements panel still showing, no frame for the old game's page.
+    expect(storage.getItem("game-companion:v1:layout:hZ")).toBeNull();
+    expect(storage.getItem("game-companion:v1:layout:hA")).toBeNull();
+    expect(document.querySelector('iframe[src="/doc/hA-coll"]')).toBeNull();
+    expect($(".ach")?.hidden).toBe(false);
+    expect(railButtons()[0]?.classList.contains("active")).toBe(true);
     expect(toast().hidden).toBe(true);
     expect($(".picker")?.hidden).toBe(true);
     expect(document.querySelectorAll(".picker-matches .picker-item")).toHaveLength(0);
+  });
+
+  it("gives no could-not-find notice when a second find re-points the same full slot", async () => {
+    vi.useFakeTimers();
+    const pages = ["One", "Two", "Three", "Four", "Five", "Six"].map((title) => ({
+      title,
+      url: `/doc/hA-${title.toLowerCase()}`,
+      children: [],
+    }));
+    const api = fakeApi(playing(hubA));
+    api.achievements = async () => board([mk("a1", "First Steps"), mk("a2", "Second Quest")]);
+    api.hubTree = async () => ({
+      hub: hubA,
+      pages,
+      defaultPins: ["One", "Two", "Three", "Four"],
+    });
+    const answers = [pages[4] as (typeof pages)[number], pages[5] as (typeof pages)[number]];
+    api.find = async () => ({
+      matches: [match((answers.shift() as (typeof pages)[number]).url, { pageTitle: "Next" })],
+      truncated: false,
+    });
+    frameDocs.set("/doc/hA-five", docWith("nothing relevant"));
+    frameDocs.set("/doc/hA-six", docWith("the Second Quest is here"));
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: timers().set,
+    });
+    await app.ready;
+    expect(
+      railButtons()
+        .slice(1, 5)
+        .every((b) => !b.hidden),
+    ).toBe(true);
+    const tapFind = async (id: string): Promise<void> => {
+      (document.querySelector(`.ach-row[data-id="${id}"]`) as HTMLElement).click();
+      (
+        document.querySelector(`.ach-row[data-id="${id}"] + .ach-actions .ach-find`) as HTMLElement
+      ).click();
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    await tapFind("a1");
+    expect(shown()).toEqual(["/doc/hA-five"]);
+    await tapFind("a2");
+    expect(shown()).toEqual(["/doc/hA-six"]);
+    expect(document.querySelectorAll("iframe")).toHaveLength(1);
+    loadFrames();
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(toast().hidden).toBe(true);
   });
 
   it("finds the text in the opened page without a notice", async () => {
@@ -2229,6 +2288,38 @@ describe("display settings", () => {
     expect(row("setting-keep-awake").hidden).toBe(true);
     expect(row("setting-fullscreen").hidden).toBe(true);
     expect(row("setting-hide-chrome").hidden).toBe(false);
+  });
+
+  it("hides the full-screen row in an installed app that already fills the screen", async () => {
+    Object.defineProperty(document.documentElement, "requestFullscreen", {
+      value: async () => undefined,
+      configurable: true,
+    });
+    Object.defineProperty(document, "exitFullscreen", {
+      value: async () => undefined,
+      configurable: true,
+    });
+    const win = {
+      matchMedia: (q: string) => ({ matches: q === "(display-mode: fullscreen)" }),
+    };
+    await start(memory(), { win });
+    openDisplay();
+    expect(row("setting-fullscreen").hidden).toBe(true);
+    expect(row("setting-hide-chrome").hidden).toBe(false);
+  });
+
+  it("keeps the full-screen row in a browser tab", async () => {
+    Object.defineProperty(document.documentElement, "requestFullscreen", {
+      value: async () => undefined,
+      configurable: true,
+    });
+    Object.defineProperty(document, "exitFullscreen", {
+      value: async () => undefined,
+      configurable: true,
+    });
+    await start(memory(), { win: { matchMedia: () => ({ matches: false }) } });
+    openDisplay();
+    expect(row("setting-fullscreen").hidden).toBe(false);
   });
 
   it("toggles full screen, and keeps the label right when the browser changes it", async () => {
