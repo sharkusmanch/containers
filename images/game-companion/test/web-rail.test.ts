@@ -131,4 +131,27 @@ describe("rail pulse", () => {
     vi.advanceTimersByTime(400);
     expect(first.classList.contains("pulse")).toBe(false);
   });
+
+  it("stopPulse removes the class at once and cancels the pending removal", () => {
+    vi.useFakeTimers();
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    const first = rail.element.querySelector("button") as HTMLElement;
+    rail.pulse(1000);
+    expect(first.classList.contains("pulse")).toBe(true);
+    rail.stopPulse();
+    expect(first.classList.contains("pulse")).toBe(false);
+    rail.pulse(1000);
+    rail.stopPulse();
+    rail.pulse(5000);
+    vi.advanceTimersByTime(1000);
+    expect(first.classList.contains("pulse")).toBe(true);
+    vi.advanceTimersByTime(4000);
+    expect(first.classList.contains("pulse")).toBe(false);
+  });
+
+  it("stopPulse with nothing pulsing does nothing", () => {
+    const rail = createRail(document, { onSelect: vi.fn(), onMore: vi.fn() });
+    rail.stopPulse();
+    expect(rail.element.querySelector(".pulse")).toBeNull();
+  });
 });

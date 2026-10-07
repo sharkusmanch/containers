@@ -10,6 +10,15 @@ import type {
 } from "../shared/types.js";
 import type { Api } from "./api.js";
 import { createAchievementsView } from "./achievements-view.js";
+import {
+  createWakeLock,
+  fullscreenSupported,
+  isFullscreen,
+  loadSettings,
+  saveSettings,
+  toggleFullscreen,
+  type WakeLockLike,
+} from "./device.js";
 import { createFrames } from "./frames.js";
 import { createPicker } from "./picker.js";
 import { createRail } from "./rail.js";
@@ -36,6 +45,8 @@ export interface AppOptions {
   storage: StorageLike;
   setInterval?: typeof setInterval;
   setTimeout?: typeof setTimeout;
+  /** The browser's navigator, for the screen wake lock. Without it the lock is unsupported. */
+  nav?: { wakeLock?: WakeLockLike };
   nowPollMs?: number;
   achievementsPollMs?: number;
 }
@@ -124,7 +135,11 @@ export function startApp(opts: AppOptions): App {
   banner.append(bannerLabel, accept, dismiss);
 
   const view = createAchievementsView(doc, { storage, onFind: (a) => void findInGuide(a) });
-  const frames = createFrames(doc, SLOT_COUNT);
+  const frames = createFrames(
+    doc,
+    SLOT_COUNT,
+    opts.setInterval === undefined ? {} : { setInterval: opts.setInterval },
+  );
   const toastText = el("span", "toast-text");
   const toast = doc.createElement("div");
   toast.classList.add("toast");
@@ -172,6 +187,16 @@ export function startApp(opts: AppOptions): App {
       if (findFor === null) return;
       openMatch(findFor.current, findFor.name, match);
     },
+    onSetting(name) {
+      if (name === "fullscreen") {
+        void toggleFullscreen(doc).then(showSettings);
+        return;
+      }
+      settings = { ...settings, [name]: !settings[name] };
+      saveSettings(storage, settings);
+      applySettings();
+      showSettings();
+    },
     onUnpin(page) {
       if (current === null) return;
       current.layout = removeSlot(current.layout, page.url);
@@ -218,6 +243,8 @@ export function startApp(opts: AppOptions): App {
   // Ids unlocked as of the first fetch for this game, plus those announced since.
   let seenUnlocked: Set<string> | null = null;
   let findEnabled = false;
+  let settings = loadSettings(storage);
+  const wakeLock = createWakeLock(opts.nav ?? {}, doc);
   // The search a list of matches in the picker belongs to.
   let findFor: { current: Current; name: string } | null = null;
   let findSeq = 0;
@@ -336,6 +363,20 @@ export function startApp(opts: AppOptions): App {
     for (const a of fresh) seenUnlocked.add(a.id);
     rail.pulse();
     showToast(unlockText(fresh.map((a) => a.name)), 10_000);
+  }
+
+  function applySettings(): void {
+    wakeLock.setEnabled(settings.keepAwake);
+    frames.setHideChrome(settings.hideChrome);
+  }
+
+  function showSettings(): void {
+    picker.setSettings({
+      ...settings,
+      fullscreen: isFullscreen(doc),
+      wakeLockSupported: wakeLock.supported,
+      fullscreenSupported: fullscreenSupported(doc),
+    });
   }
 
   function setChoosingFor(game: GameRef | null): void {
@@ -464,10 +505,10 @@ export function startApp(opts: AppOptions): App {
     marksEpoch += 1;
     if (key !== current?.key) {
       seenUnlocked = null;
-      // The notice is about the game that was on screen; the pulse is stopped by letting it lapse now.
+      // The notice is about the game that was on screen; the pulse stops with it.
       toastSeq += 1;
       toast.hidden = true;
-      if (rail.element.querySelector(".pulse") !== null) rail.pulse(0);
+      rail.stopPulse();
     }
     findFor = null;
     // A load ends any pending choice, even one a poll in flight has just reopened.
@@ -656,6 +697,10 @@ export function startApp(opts: AppOptions): App {
     if (offered !== null) dismissedKey = gameKey(offered.game);
     hideBanner();
   });
+
+  applySettings();
+  showSettings();
+  doc.addEventListener("fullscreenchange", showSettings);
 
   render();
 

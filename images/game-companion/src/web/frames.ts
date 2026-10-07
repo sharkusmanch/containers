@@ -1,3 +1,4 @@
+import { applyChrome } from "./chrome.js";
 import { locateInFrame } from "./locate.js";
 import { isSafeDocUrl } from "./state.js";
 
@@ -11,6 +12,8 @@ export interface Frames {
    */
   sync(urls: (string | null)[]): void;
   reset(): void;
+  /** Hides (or restores) the wiki's sidebar and top bar in every frame, now and as they load. */
+  setHideChrome(hide: boolean): void;
   /**
    * Finds `text` (preferably under `heading`) in the page framed in slot `index` and highlights it.
    * Waits for a navigation this module started to finish first. "gone" when the slot has no frame or
@@ -33,10 +36,29 @@ interface Entry {
  * made invisible by class: removing it from rendering (hidden, display: none) makes some
  * browsers reset its scroll position.
  */
-export function createFrames(doc: Document, slotCount: number): Frames {
+export function createFrames(
+  doc: Document,
+  slotCount: number,
+  options: { setInterval?: typeof setInterval } = {},
+): Frames {
   const element = doc.createElement("div");
   element.classList.add("frames");
   const entries: (Entry | null)[] = Array.from({ length: slotCount }, () => null);
+
+  let hideChrome = false;
+  const applyTo = (entry: Entry): void => {
+    try {
+      const framed = entry.frame.contentDocument;
+      if (framed !== null) applyChrome(framed, hideChrome);
+    } catch {
+      // The frame is on another origin.
+    }
+  };
+  // The wiki redraws its bars when the reader follows a link inside the frame.
+  (options.setInterval ?? setInterval)(() => {
+    if (!hideChrome) return;
+    for (const entry of entries) if (entry !== null) applyTo(entry);
+  }, 1500);
 
   const hideAll = (): void => {
     for (const entry of entries) entry?.frame.classList.add("inactive");
@@ -56,6 +78,7 @@ export function createFrames(doc: Document, slotCount: number): Frames {
         const created: Entry = { frame, url, loading: true };
         frame.addEventListener("load", () => {
           created.loading = false;
+          if (hideChrome) applyTo(created);
         });
         frame.setAttribute("src", url);
         element.append(frame);
@@ -83,6 +106,10 @@ export function createFrames(doc: Document, slotCount: number): Frames {
     reset() {
       element.replaceChildren();
       entries.fill(null);
+    },
+    setHideChrome(hide) {
+      hideChrome = hide;
+      for (const entry of entries) if (entry !== null) applyTo(entry);
     },
     async locate(index, text, heading) {
       const entry = Number.isInteger(index) ? (entries[index] ?? null) : null;

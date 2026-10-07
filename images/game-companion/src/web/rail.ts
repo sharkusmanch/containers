@@ -10,6 +10,8 @@ export interface Rail {
   render(layout: Layout, unlockedCount: number | null): void;
   /** Marks the achievements button for a while, to draw the eye to it. */
   pulse(ms?: number): void;
+  /** Ends a pulse at once. */
+  stopPulse(): void;
 }
 
 export function createRail(doc: Document, handlers: RailHandlers): Rail {
@@ -53,6 +55,10 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
       clearTimeout(pulseTimer);
       achievements.classList.add("pulse");
       pulseTimer = setTimeout(() => achievements.classList.remove("pulse"), ms);
+    },
+    stopPulse() {
+      clearTimeout(pulseTimer);
+      achievements.classList.remove("pulse");
     },
     render(layout, unlockedCount) {
       count.textContent = unlockedCount === null ? "" : String(unlockedCount);

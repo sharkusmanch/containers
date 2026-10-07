@@ -275,4 +275,135 @@ describe("createFrames", () => {
       expect(await reset).toBe("gone");
     });
   });
+
+  describe("hiding the wiki's bars", () => {
+    const style = (frame: HTMLIFrameElement | undefined): Element | null =>
+      frame?.contentDocument?.getElementById("gc-chrome-style") ?? null;
+
+    /** Frames whose repeating timer is driven by the test. */
+    function withTimer() {
+      const ticks: { fn: () => void; ms: number }[] = [];
+      const fake = ((fn: () => void, ms: number) => {
+        ticks.push({ fn, ms });
+        return ticks.length;
+      }) as unknown as typeof setInterval;
+      document.body.innerHTML = "";
+      const f = createFrames(document, 4, { setInterval: fake });
+      document.body.append(f.element);
+      return { f, tick: () => ticks.forEach((t) => t.fn()), ticks };
+    }
+    const frameAt = (f: { element: HTMLElement }, i: number): HTMLIFrameElement =>
+      f.element.querySelectorAll("iframe")[i] as HTMLIFrameElement;
+
+    it("applies when a frame loads, while hiding is on", () => {
+      const { f } = withTimer();
+      f.setHideChrome(true);
+      f.show(0, "/doc/a");
+      showing(frameAt(f, 0), "<p>Sample page</p>");
+      expect(style(frameAt(f, 0))).toBeNull();
+      loaded(frameAt(f, 0));
+      expect(style(frameAt(f, 0))?.textContent).toContain("#sidebar{display:none!important}");
+    });
+
+    it("does not touch a frame that loads while hiding is off", () => {
+      const { f } = withTimer();
+      f.show(0, "/doc/a");
+      showing(frameAt(f, 0), "<p>Sample page</p>");
+      loaded(frameAt(f, 0));
+      expect(style(frameAt(f, 0))).toBeNull();
+    });
+
+    it("re-applies to every frame on the repeating timer, every 1500 ms", () => {
+      const { f, tick, ticks } = withTimer();
+      expect(ticks.map((t) => t.ms)).toEqual([1500]);
+      f.setHideChrome(true);
+      f.show(0, "/doc/a");
+      f.show(1, "/doc/b");
+      showing(frameAt(f, 0), "<p>A</p>");
+      showing(frameAt(f, 1), "<p>B</p>");
+      tick();
+      expect(style(frameAt(f, 0))).not.toBeNull();
+      expect(style(frameAt(f, 1))).not.toBeNull();
+      // the wiki re-rendered the page and dropped our style: the timer puts it back
+      style(frameAt(f, 0))?.remove();
+      tick();
+      expect(style(frameAt(f, 0))).not.toBeNull();
+    });
+
+    it("does nothing on the timer while hiding is off", () => {
+      const { f, tick } = withTimer();
+      f.show(0, "/doc/a");
+      showing(frameAt(f, 0), "<p>A</p>");
+      tick();
+      expect(style(frameAt(f, 0))).toBeNull();
+    });
+
+    it("applies at once to every existing frame when the setting is switched on", () => {
+      const { f } = withTimer();
+      f.show(0, "/doc/a");
+      f.show(1, "/doc/b");
+      showing(frameAt(f, 0), "<p>A</p>");
+      showing(frameAt(f, 1), "<p>B</p>");
+      f.setHideChrome(true);
+      expect(style(frameAt(f, 0))).not.toBeNull();
+      expect(style(frameAt(f, 1))).not.toBeNull();
+    });
+
+    it("restores every frame at once when it is switched off, and stops applying", () => {
+      const { f, tick } = withTimer();
+      f.show(0, "/doc/a");
+      f.show(1, "/doc/b");
+      showing(frameAt(f, 0), "<p>A</p>");
+      showing(frameAt(f, 1), "<p>B</p>");
+      const before = [0, 1].map((i) => frameAt(f, i).contentDocument?.documentElement.outerHTML);
+      f.setHideChrome(true);
+      f.setHideChrome(false);
+      expect(style(frameAt(f, 0))).toBeNull();
+      expect(style(frameAt(f, 1))).toBeNull();
+      expect([0, 1].map((i) => frameAt(f, i).contentDocument?.documentElement.outerHTML)).toEqual(
+        before,
+      );
+      tick();
+      loaded(frameAt(f, 0));
+      expect(style(frameAt(f, 0))).toBeNull();
+    });
+
+    it("applies to a frame created after the setting was switched on, once it loads", () => {
+      const { f } = withTimer();
+      f.setHideChrome(true);
+      f.show(2, "/doc/c");
+      showing(frameAt(f, 0), "<p>C</p>");
+      loaded(frameAt(f, 0));
+      expect(style(frameAt(f, 0))).not.toBeNull();
+    });
+
+    it("skips a frame whose document cannot be read, and carries on with the others", () => {
+      const { f, tick } = withTimer();
+      f.setHideChrome(true);
+      f.show(0, "/doc/a");
+      f.show(1, "/doc/b");
+      Object.defineProperty(frameAt(f, 0), "contentDocument", {
+        get() {
+          throw new Error("Blocked a frame from another origin");
+        },
+      });
+      showing(frameAt(f, 1), "<p>B</p>");
+      expect(() => tick()).not.toThrow();
+      expect(() => f.setHideChrome(false)).not.toThrow();
+      expect(() => f.setHideChrome(true)).not.toThrow();
+      expect(style(frameAt(f, 1))).not.toBeNull();
+    });
+
+    it("leaves the find highlight's style element alone", () => {
+      const { f, tick } = withTimer();
+      f.setHideChrome(true);
+      f.show(0, "/doc/a");
+      showing(frameAt(f, 0), "<p>A</p>");
+      const doc = frameAt(f, 0).contentDocument as Document;
+      doc.head.insertAdjacentHTML("beforeend", '<style id="gc-find-style">x{}</style>');
+      tick();
+      f.setHideChrome(false);
+      expect(doc.getElementById("gc-find-style")?.textContent).toBe("x{}");
+    });
+  });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { startApp } from "../src/web/main.js";
 import type { Api } from "../src/web/api.js";
 import type {
@@ -2046,7 +2046,6 @@ describe("unlock notice", () => {
     await t.app.tick();
     ($(".switch-banner .switch-accept") as HTMLElement).click();
     await t.app.tick();
-    await flush();
     expect($(".game-title")?.textContent).toBe("Zeta");
     expect(toast().hidden).toBe(true);
     expect(pulsing()).toBe(false);
@@ -2082,5 +2081,215 @@ describe("unlock notice", () => {
     await app.tick();
     expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("AC");
     expect(text()).toBe("Unlocked: Bravo");
+  });
+});
+
+// ---- display settings: keep awake, wiki bars, full screen ----
+
+describe("display settings", () => {
+  const KEY = "game-companion:v1:settings";
+
+  interface Sentinel {
+    release: Mock<() => Promise<void>>;
+    addEventListener: (type: "release", cb: () => void) => void;
+  }
+  function wakeLockStub() {
+    const sentinels: Sentinel[] = [];
+    const request = vi.fn(async () => {
+      const sentinel: Sentinel = {
+        release: vi.fn(async () => undefined),
+        addEventListener: () => {},
+      };
+      sentinels.push(sentinel);
+      return sentinel;
+    });
+    return { nav: { wakeLock: { request } }, request, sentinels };
+  }
+
+  const frameDocs = new Map<string, Document>();
+  const framed = (url: string): Document => {
+    const doc = new DOMParser().parseFromString(
+      "<!doctype html><body><div id='sidebar'>s</div><div role='main'><p>Sample</p></div></body>",
+      "text/html",
+    );
+    frameDocs.set(url, doc);
+    return doc;
+  };
+  beforeEach(() => {
+    frameDocs.clear();
+    vi.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockImplementation(function (
+      this: HTMLIFrameElement,
+    ) {
+      return frameDocs.get(this.getAttribute("src") ?? "") ?? null;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const name of ["exitFullscreen", "fullscreenElement", "fullscreenEnabled"]) {
+      Reflect.deleteProperty(document, name);
+    }
+    Reflect.deleteProperty(document.documentElement, "requestFullscreen");
+  });
+
+  const start = async (storage = memory(), extra: Partial<Parameters<typeof startApp>[0]> = {}) => {
+    const api = fakeApi(playing(hubA));
+    const app = startApp({ doc: document, api, storage, setInterval: noTimers, ...extra });
+    await app.ready;
+    return { app, api, storage };
+  };
+  const openDisplay = (): void => {
+    railButtons().at(-1)?.click();
+    ($('[data-tab="settings"]') as HTMLElement).click();
+  };
+  const row = (name: string): HTMLButtonElement =>
+    $(`.picker-settings .${name}`) as HTMLButtonElement;
+  const stored = (storage: ReturnType<typeof memory>): unknown =>
+    JSON.parse(storage.getItem(KEY) as string);
+  const showChecklist = (): HTMLIFrameElement => {
+    framed("/doc/hA-checklist");
+    railButtons()[1]?.click();
+    const frame = $("iframe") as HTMLIFrameElement;
+    frame.dispatchEvent(new Event("load"));
+    return frame;
+  };
+
+  it("starts with keep-awake on and the wiki bars hidden, and requests a screen lock", async () => {
+    const lock = wakeLockStub();
+    await start(memory(), { nav: lock.nav });
+    await flush();
+    expect(lock.request).toHaveBeenCalledTimes(1);
+    expect(lock.request).toHaveBeenCalledWith("screen");
+    openDisplay();
+    expect(row("setting-keep-awake").textContent).toBe("Keep screen on: on");
+    expect(row("setting-keep-awake").hidden).toBe(false);
+    expect(row("setting-hide-chrome").textContent).toBe("Outline bars: hidden");
+  });
+
+  it("loads the saved settings and applies them", async () => {
+    const lock = wakeLockStub();
+    const storage = memory();
+    storage.setItem(KEY, JSON.stringify({ keepAwake: false, hideChrome: false }));
+    await start(storage, { nav: lock.nav });
+    await flush();
+    expect(lock.request).not.toHaveBeenCalled();
+    openDisplay();
+    expect(row("setting-keep-awake").textContent).toBe("Keep screen on: off");
+    expect(row("setting-hide-chrome").textContent).toBe("Outline bars: shown");
+    document.querySelector<HTMLElement>(".picker-close")?.click();
+    const frame = showChecklist();
+    expect(frame.contentDocument?.getElementById("gc-chrome-style")).toBeNull();
+  });
+
+  it("hides the wiki's bars in a frame that loads, by default", async () => {
+    await start();
+    const frame = showChecklist();
+    expect(frame.contentDocument?.getElementById("gc-chrome-style")).not.toBeNull();
+  });
+
+  it("flips the wiki bars setting: saves it, applies it at once and relabels", async () => {
+    const { storage } = await start();
+    const frame = showChecklist();
+    const doc = frame.contentDocument as Document;
+    expect(doc.getElementById("gc-chrome-style")).not.toBeNull();
+    openDisplay();
+    row("setting-hide-chrome").click();
+    expect(doc.getElementById("gc-chrome-style")).toBeNull();
+    expect(row("setting-hide-chrome").textContent).toBe("Outline bars: shown");
+    expect(row("setting-hide-chrome").getAttribute("aria-pressed")).toBe("false");
+    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: false });
+    expect($(".picker")?.hidden).toBe(false);
+    row("setting-hide-chrome").click();
+    expect(doc.getElementById("gc-chrome-style")).not.toBeNull();
+    expect(row("setting-hide-chrome").textContent).toBe("Outline bars: hidden");
+    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: true });
+  });
+
+  it("flips keep-awake: off releases the lock, on asks again, saved and relabelled", async () => {
+    const lock = wakeLockStub();
+    const { storage } = await start(memory(), { nav: lock.nav });
+    await flush();
+    expect(lock.sentinels).toHaveLength(1);
+    openDisplay();
+    row("setting-keep-awake").click();
+    await flush();
+    expect(lock.sentinels[0]?.release).toHaveBeenCalledTimes(1);
+    expect(row("setting-keep-awake").textContent).toBe("Keep screen on: off");
+    expect(row("setting-keep-awake").getAttribute("aria-pressed")).toBe("false");
+    expect(stored(storage)).toEqual({ keepAwake: false, hideChrome: true });
+    row("setting-keep-awake").click();
+    await flush();
+    expect(lock.request).toHaveBeenCalledTimes(2);
+    expect(row("setting-keep-awake").textContent).toBe("Keep screen on: on");
+    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: true });
+  });
+
+  it("hides the keep-awake and full-screen rows where the browser has neither", async () => {
+    await start();
+    openDisplay();
+    expect(row("setting-keep-awake").hidden).toBe(true);
+    expect(row("setting-fullscreen").hidden).toBe(true);
+    expect(row("setting-hide-chrome").hidden).toBe(false);
+  });
+
+  it("toggles full screen, and keeps the label right when the browser changes it", async () => {
+    const enter = vi.fn(async () => undefined);
+    const exit = vi.fn(async () => undefined);
+    Object.defineProperty(document.documentElement, "requestFullscreen", {
+      value: enter,
+      configurable: true,
+    });
+    Object.defineProperty(document, "exitFullscreen", { value: exit, configurable: true });
+    await start();
+    openDisplay();
+    expect(row("setting-fullscreen").hidden).toBe(false);
+    expect(row("setting-fullscreen").textContent).toBe("Full screen: off");
+    row("setting-fullscreen").click();
+    await flush();
+    expect(enter).toHaveBeenCalledTimes(1);
+    expect($(".picker")?.hidden).toBe(false);
+    Object.defineProperty(document, "fullscreenElement", {
+      value: document.documentElement,
+      configurable: true,
+    });
+    document.dispatchEvent(new Event("fullscreenchange"));
+    expect(row("setting-fullscreen").textContent).toBe("Full screen: on");
+    expect(row("setting-fullscreen").getAttribute("aria-pressed")).toBe("true");
+    row("setting-fullscreen").click();
+    await flush();
+    expect(exit).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, "fullscreenElement", { value: null, configurable: true });
+    document.dispatchEvent(new Event("fullscreenchange"));
+    expect(row("setting-fullscreen").textContent).toBe("Full screen: off");
+  });
+
+  it("does not save anything for the full-screen toggle", async () => {
+    Object.defineProperty(document.documentElement, "requestFullscreen", {
+      value: async () => undefined,
+      configurable: true,
+    });
+    Object.defineProperty(document, "exitFullscreen", {
+      value: async () => undefined,
+      configurable: true,
+    });
+    const { storage } = await start();
+    openDisplay();
+    row("setting-fullscreen").click();
+    await flush();
+    expect(storage.getItem(KEY)).toBeNull();
+  });
+
+  it("keeps working when storage refuses the settings", async () => {
+    const storage = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("full");
+      },
+    };
+    await start(storage);
+    openDisplay();
+    row("setting-hide-chrome").click();
+    expect(row("setting-hide-chrome").textContent).toBe("Outline bars: shown");
   });
 });

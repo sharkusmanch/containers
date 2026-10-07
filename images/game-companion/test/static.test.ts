@@ -13,6 +13,8 @@ beforeAll(async () => {
   await writeFile(join(root, "index.html"), "<p>hi</p>");
   await writeFile(join(root, "sub", "a.js"), "export {}");
   await writeFile(join(root, "notes.txt"), "x");
+  await writeFile(join(root, "manifest.webmanifest"), "{}");
+  await writeFile(join(root, "icon.png"), "png");
   await writeFile(join(base, "secret.js"), "nope");
 });
 
@@ -27,6 +29,16 @@ describe("serveStatic", () => {
     expect((await serveStatic(root, "sub/a.js"))?.contentType).toBe(
       "text/javascript; charset=utf-8",
     );
+  });
+
+  it("serves a web app manifest as application/manifest+json", async () => {
+    expect((await serveStatic(root, "manifest.webmanifest"))?.contentType).toBe(
+      "application/manifest+json",
+    );
+  });
+
+  it("serves a PNG as image/png", async () => {
+    expect((await serveStatic(root, "icon.png"))?.contentType).toBe("image/png");
   });
 
   it.each([

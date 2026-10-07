@@ -635,3 +635,25 @@ button {
     background: var(--bg-active);
   }
 }
+
+/* ---- Picker: display settings ---- */
+
+.picker-settings button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-settings button[aria-pressed="true"] {
+  background: var(--bg-active);
+}
+
+.setting-hint {
+  margin: 0;
+  padding: 16px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+}

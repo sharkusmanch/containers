@@ -40,6 +40,7 @@ function make() {
     onClose: vi.fn(),
     onUnpin: vi.fn(),
     onMatch: vi.fn(),
+    onSetting: vi.fn(),
   };
   const picker = createPicker(document, handlers);
   picker.setPages(pages, defaultLayout(pages, ["Achievement Checklist"]));
@@ -161,6 +162,7 @@ describe("game groups", () => {
       onClose: vi.fn(),
       onUnpin: vi.fn(),
       onMatch: vi.fn(),
+      onSetting: vi.fn(),
     };
     const picker = createPicker(document, handlers);
     picker.setHubs(hubs, available);
@@ -352,7 +354,7 @@ describe("matches view", () => {
     expect(list.querySelector(".picker-matches-title")?.textContent).toBe(
       "In the guide: Sample Boss",
     );
-    expect(tabs(picker)).toHaveLength(2);
+    expect(tabs(picker)).toHaveLength(3);
     expect(tabs(picker).every((t) => t.hidden)).toBe(true);
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(true);
     expect((picker.element.querySelector(".picker-games") as HTMLElement).hidden).toBe(true);
@@ -445,7 +447,7 @@ describe("matches view", () => {
     picker.setChoosing(true);
     picker.showMatches("x", matches, false);
     picker.open("games");
-    expect(tabs(picker).map((t) => t.hidden)).toEqual([true, false]);
+    expect(tabs(picker).map((t) => t.hidden)).toEqual([true, false, true]);
   });
 
   it("is not affected by page or game refreshes while showing", () => {
@@ -455,5 +457,134 @@ describe("matches view", () => {
     picker.setHubs(hubs, true);
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(true);
     expect((picker.element.querySelector(".picker-matches") as HTMLElement).hidden).toBe(false);
+  });
+});
+
+describe("display settings", () => {
+  const all = {
+    keepAwake: true,
+    hideChrome: true,
+    fullscreen: false,
+    wakeLockSupported: true,
+    fullscreenSupported: true,
+  };
+  const row = (picker: { element: HTMLElement }, name: string): HTMLButtonElement =>
+    picker.element.querySelector(`.picker-settings .${name}`) as HTMLButtonElement;
+  const tab = (picker: { element: HTMLElement }): HTMLButtonElement =>
+    picker.element.querySelector('[data-tab="settings"]') as HTMLButtonElement;
+
+  it("adds a Display tab after Pages and Games that shows only the settings list", () => {
+    const { picker } = make();
+    picker.setSettings(all);
+    expect(
+      [...picker.element.querySelectorAll(".picker-tab")].map((t) => [
+        (t as HTMLElement).dataset["tab"],
+        t.textContent,
+      ]),
+    ).toEqual([
+      ["pages", "Pages"],
+      ["games", "Games"],
+      ["settings", "Display"],
+    ]);
+    picker.open("pages");
+    tab(picker).click();
+    expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(false);
+    expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(true);
+    expect((picker.element.querySelector(".picker-games") as HTMLElement).hidden).toBe(true);
+    expect(tab(picker).classList.contains("active")).toBe(true);
+    (picker.element.querySelector('[data-tab="pages"]') as HTMLElement).click();
+    expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(true);
+    expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("holds three buttons and a hint", () => {
+    const { picker } = make();
+    picker.setSettings(all);
+    const list = picker.element.querySelector(".picker-settings") as HTMLElement;
+    const rows = [...list.querySelectorAll("button")];
+    expect(rows.map((b) => b.className)).toEqual([
+      "setting-keep-awake",
+      "setting-hide-chrome",
+      "setting-fullscreen",
+    ]);
+    expect(rows.every((b) => b.getAttribute("type") === "button")).toBe(true);
+    const hint = list.querySelector("p.setting-hint");
+    expect(hint?.textContent).toBe(
+      "To use it like an app, open the browser menu and choose Add to Home screen.",
+    );
+  });
+
+  it("labels each row for both states, with aria-pressed", () => {
+    const { picker } = make();
+    picker.setSettings(all);
+    expect(row(picker, "setting-keep-awake").textContent).toBe("Keep screen on: on");
+    expect(row(picker, "setting-keep-awake").getAttribute("aria-pressed")).toBe("true");
+    expect(row(picker, "setting-hide-chrome").textContent).toBe("Outline bars: hidden");
+    expect(row(picker, "setting-hide-chrome").getAttribute("aria-pressed")).toBe("true");
+    expect(row(picker, "setting-fullscreen").textContent).toBe("Full screen: off");
+    picker.setSettings({ ...all, keepAwake: false, hideChrome: false, fullscreen: true });
+    expect(row(picker, "setting-keep-awake").textContent).toBe("Keep screen on: off");
+    expect(row(picker, "setting-keep-awake").getAttribute("aria-pressed")).toBe("false");
+    expect(row(picker, "setting-hide-chrome").textContent).toBe("Outline bars: shown");
+    expect(row(picker, "setting-hide-chrome").getAttribute("aria-pressed")).toBe("false");
+    expect(row(picker, "setting-fullscreen").textContent).toBe("Full screen: on");
+    expect(row(picker, "setting-fullscreen").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("hides the rows the browser cannot support, and shows them again", () => {
+    const { picker } = make();
+    picker.setSettings({ ...all, wakeLockSupported: false, fullscreenSupported: false });
+    expect(row(picker, "setting-keep-awake").hidden).toBe(true);
+    expect(row(picker, "setting-fullscreen").hidden).toBe(true);
+    expect(row(picker, "setting-hide-chrome").hidden).toBe(false);
+    expect(picker.element.querySelector(".setting-hint")).not.toBeNull();
+    picker.setSettings(all);
+    expect(row(picker, "setting-keep-awake").hidden).toBe(false);
+    expect(row(picker, "setting-fullscreen").hidden).toBe(false);
+  });
+
+  it("reports a click on each row and leaves the picker open", () => {
+    const { picker, handlers } = make();
+    picker.setSettings(all);
+    picker.open("pages");
+    tab(picker).click();
+    row(picker, "setting-keep-awake").click();
+    row(picker, "setting-hide-chrome").click();
+    row(picker, "setting-fullscreen").click();
+    expect(handlers.onSetting.mock.calls).toEqual([["keepAwake"], ["hideChrome"], ["fullscreen"]]);
+    expect(picker.element.hidden).toBe(false);
+    expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(false);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+  });
+
+  it("hides the Display tab while a guide choice is pending, and brings it back", () => {
+    const { picker } = make();
+    picker.setChoosing(true);
+    picker.open("games");
+    expect(tab(picker).hidden).toBe(true);
+    expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(true);
+    tab(picker).click();
+    expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(true);
+    picker.setChoosing(false);
+    expect(tab(picker).hidden).toBe(false);
+  });
+
+  it("hides the Display tab and the settings while matches are shown, and restores them", () => {
+    const { picker } = make();
+    picker.open("pages");
+    tab(picker).click();
+    picker.showMatches("x", [], false);
+    expect(tab(picker).hidden).toBe(true);
+    expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(true);
+    picker.open("pages");
+    expect(tab(picker).hidden).toBe(false);
+    expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("restores the tab after the matches view is closed", () => {
+    const { picker } = make();
+    picker.showMatches("x", [], false);
+    (picker.element.querySelector(".picker-close") as HTMLElement).click();
+    expect(tab(picker).hidden).toBe(false);
   });
 });

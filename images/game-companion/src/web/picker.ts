@@ -7,6 +7,18 @@ export interface PickerHandlers {
   onClose(): void;
   onUnpin(page: Slot): void;
   onMatch(match: FindMatch): void;
+  /** A display setting was tapped. The picker stays open. */
+  onSetting(name: SettingName): void;
+}
+
+export type SettingName = "keepAwake" | "hideChrome" | "fullscreen";
+
+export interface SettingsState {
+  keepAwake: boolean;
+  hideChrome: boolean;
+  fullscreen: boolean;
+  wakeLockSupported: boolean;
+  fullscreenSupported: boolean;
 }
 
 export interface Picker {
@@ -19,9 +31,11 @@ export interface Picker {
   setChoosing(choosing: boolean): void;
   /** Opens the picker showing only the places a guide mentions `query`. */
   showMatches(query: string, matches: FindMatch[], truncated: boolean): void;
+  /** Updates the labels of the Display tab. */
+  setSettings(state: SettingsState): void;
 }
 
-type Tab = "pages" | "games";
+type Tab = "pages" | "games" | "settings";
 
 export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   const element = doc.createElement("div");
@@ -34,6 +48,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   for (const [tab, label] of [
     ["pages", "Pages"],
     ["games", "Games"],
+    ["settings", "Display"],
   ] as const) {
     const b = doc.createElement("button");
     b.setAttribute("type", "button");
@@ -58,7 +73,26 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   const matchesList = doc.createElement("div");
   matchesList.classList.add("picker-matches");
   matchesList.hidden = true;
-  element.append(header, pagesList, gamesList, matchesList);
+  const settingsList = doc.createElement("div");
+  settingsList.classList.add("picker-settings");
+  const settingRows = new Map<SettingName, HTMLButtonElement>();
+  for (const [name, className] of [
+    ["keepAwake", "setting-keep-awake"],
+    ["hideChrome", "setting-hide-chrome"],
+    ["fullscreen", "setting-fullscreen"],
+  ] as const) {
+    const b = doc.createElement("button");
+    b.setAttribute("type", "button");
+    b.classList.add(className);
+    b.addEventListener("click", () => handlers.onSetting(name));
+    settingRows.set(name, b);
+    settingsList.append(b);
+  }
+  const hint = doc.createElement("p");
+  hint.classList.add("setting-hint");
+  hint.textContent = "To use it like an app, open the browser menu and choose Add to Home screen.";
+  settingsList.append(hint);
+  element.append(header, pagesList, gamesList, matchesList, settingsList);
 
   let choosing = false;
   let matchesShowing = false;
@@ -69,8 +103,9 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     matchesList.hidden = true;
     pagesList.hidden = next !== "pages";
     gamesList.hidden = next !== "games";
+    settingsList.hidden = next !== "settings";
     for (const [name, b] of tabButtons) {
-      b.hidden = name === "pages" && choosing;
+      b.hidden = name !== "games" && choosing;
       b.classList.toggle("active", name === next);
     }
   }
@@ -193,9 +228,34 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     setChoosing(value) {
       choosing = value;
       if (matchesShowing) return;
-      const pagesTab = tabButtons.get("pages");
-      if (pagesTab !== undefined) pagesTab.hidden = value;
+      for (const [name, b] of tabButtons) if (name !== "games") b.hidden = value;
       if (value) showTab("games");
+    },
+    setSettings(state) {
+      const label = (name: SettingName, text: string, pressed: boolean, supported = true): void => {
+        const b = settingRows.get(name);
+        if (b === undefined) return;
+        b.textContent = text;
+        b.setAttribute("aria-pressed", pressed ? "true" : "false");
+        b.hidden = !supported;
+      };
+      label(
+        "keepAwake",
+        `Keep screen on: ${state.keepAwake ? "on" : "off"}`,
+        state.keepAwake,
+        state.wakeLockSupported,
+      );
+      label(
+        "hideChrome",
+        `Outline bars: ${state.hideChrome ? "hidden" : "shown"}`,
+        state.hideChrome,
+      );
+      label(
+        "fullscreen",
+        `Full screen: ${state.fullscreen ? "on" : "off"}`,
+        state.fullscreen,
+        state.fullscreenSupported,
+      );
     },
     showMatches(query, matches, truncated) {
       const title = doc.createElement("h3");
@@ -225,6 +285,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
       matchesList.hidden = false;
       pagesList.hidden = true;
       gamesList.hidden = true;
+      settingsList.hidden = true;
       for (const b of tabButtons.values()) b.hidden = true;
       element.hidden = false;
     },

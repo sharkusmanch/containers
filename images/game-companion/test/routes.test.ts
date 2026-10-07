@@ -48,6 +48,8 @@ beforeAll(async () => {
   const dir = await mkdtemp(join(tmpdir(), "gc-routes-"));
   await writeFile(join(dir, "index.html"), "<p>shell</p>");
   await writeFile(join(dir, "app.js"), "export {}");
+  await writeFile(join(dir, "manifest.webmanifest"), '{"name":"Sample"}');
+  await writeFile(join(dir, "icon-192.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const deps: RouteDeps = {
     staticDir: dir,
     now: () => now,
@@ -82,6 +84,19 @@ describe("routes", () => {
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).not.toContain("unsafe-inline");
     expect(r.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("allows the manifest in the content policy, and serves the manifest and icons with their types", async () => {
+    const csp = (await fetch(`${base}/companion/`)).headers.get("content-security-policy") ?? "";
+    expect(csp.split("; ")).toContain("manifest-src 'self'");
+    const manifest = await fetch(`${base}/companion/manifest.webmanifest`);
+    expect(manifest.status).toBe(200);
+    expect(manifest.headers.get("content-type")).toBe("application/manifest+json");
+    expect(await manifest.text()).toBe('{"name":"Sample"}');
+    const icon = await fetch(`${base}/companion/icon-192.png`);
+    expect(icon.status).toBe(200);
+    expect(icon.headers.get("content-type")).toBe("image/png");
+    expect(icon.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
   it("redirects the bare path to the trailing-slash form", async () => {
