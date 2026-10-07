@@ -10,14 +10,16 @@ sidebar that frames real Outline pages and shows an achievements panel.
 
 From an achievement, **Find in guide** searches the game's guide pages and opens the page at
 that line. Achievements the guide marks as missable can be shown on their own, and a notice
-appears when an achievement unlocks while the page is open. The page can be added to the home
-screen and then opens full screen; it keeps the screen on and hides Outline's own sidebar and
-top bar inside the guide frames. Both can be switched off under ⋯ › Display.
+appears when an achievement unlocks while the page is open. While a RetroAchievements game is
+being played, the header shows the status line the game reports (its rich presence). The page
+can be added to the home screen and then opens full screen; it keeps the screen on and hides
+Outline's own sidebar and top bar inside the guide frames. Both can be switched off under ⋯ ›
+Display.
 
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.2.0
+- **Version**: v0.3.0
 
 ## Usage
 
@@ -28,16 +30,17 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.2.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.3.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
 (route `/companion` on Outline's hostname to this container). Outline only allows itself to
 be framed by its own origin, so the guide frames stay blank on any other hostname.
 
-There is no sign-in. Every endpoint is read-only. Put it only where everyone who can reach
-it may see achievement progress and the text of the guide pages: the guide search returns
-headings and matching lines from them, although Outline itself requires a sign-in.
+There is no sign-in. Every endpoint is read-only. Put it only where everyone who can reach it
+may see what is being played, achievement progress and the text of the guide pages: the guide
+search returns headings and matching lines from them, although Outline itself requires a
+sign-in.
 
 ## Environment Variables
 
@@ -65,7 +68,7 @@ The Outline key needs only these scopes:
 | ----------------------------------------------- | -------------------------------------------------------------------- |
 | `GET /companion/`                               | The page                                                             |
 | `GET /companion/healthz`                        | `{"ok":true}`                                                        |
-| `GET /companion/api/now`                        | The current game and its matching guide                              |
+| `GET /companion/api/now`                        | The current game, its matching guide and its live status line        |
 | `GET /companion/api/guides`                     | Every guide hub with its platform (`?refresh=1` asks for a re-index) |
 | `GET /companion/api/guides/<hubId>`             | One hub's page tree                                                  |
 | `GET /companion/api/guides/<hubId>/find?q=…`    | Lines in the hub's pages that contain the text (2–100 characters)    |
