@@ -12,14 +12,24 @@ From an achievement, **Find in guide** searches the game's guide pages and opens
 that line. Achievements the guide marks as missable can be shown on their own, and a notice
 appears when an achievement unlocks while the page is open. While a RetroAchievements game is
 being played, a row under the title shows the status line the game reports (its rich
-presence); a tap on it shows a long line in full. The page can be added to the home screen and
-then opens full screen; it keeps the screen on and hides Outline's own sidebar and top bar
-inside the guide frames. Both can be switched off under ⋯ › Display.
+presence); a tap on it shows a long line in full. When that line names a place or chapter that
+is also a heading in the guide, a button beside it opens the guide at that section (with
+several matching sections it lists them); **Guide jump from status** under ⋯ › Display turns
+this off. The page can be added to the home screen and then opens full screen; it keeps the
+screen on and hides Outline's own sidebar and top bar inside the guide frames. Both can be
+switched off under ⋯ › Display.
+
+Each pinned page's sidebar button shows how many of its checkboxes are ticked (`done/total`,
+or a percentage when that is longer than six characters); the count follows a tick made in the
+guide page within a few seconds. RetroAchievements achievements on the story path carry a
+**Story** chip and the one for beating the game an **Ending** chip, and a **Story** switch
+narrows the list to them. The page refreshes at once when it is shown again or the network
+returns.
 
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.4.0
+- **Version**: v0.5.0
 
 ## Usage
 
@@ -30,7 +40,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.4.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.5.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -38,9 +48,9 @@ The page is served at `/companion/` and must be reached on the **same hostname a
 be framed by its own origin, so the guide frames stay blank on any other hostname.
 
 There is no sign-in. Every endpoint is read-only. Put it only where everyone who can reach it
-may see what is being played, achievement progress and the text of the guide pages: the guide
-search returns headings and matching lines from them, although Outline itself requires a
-sign-in.
+may see what is being played, achievement progress, checklist counts and the text of the guide
+pages: the guide search returns headings and matching lines from them, although Outline itself
+requires a sign-in.
 
 ## Environment Variables
 
@@ -64,21 +74,25 @@ The Outline key needs only these scopes:
 
 ## Endpoints
 
-| Path                                            | Returns                                                              |
-| ----------------------------------------------- | -------------------------------------------------------------------- |
-| `GET /companion/`                               | The page                                                             |
-| `GET /companion/healthz`                        | `{"ok":true}`                                                        |
-| `GET /companion/api/now`                        | The current game, its matching guide and its live status line        |
-| `GET /companion/api/guides`                     | Every guide hub with its platform (`?refresh=1` asks for a re-index) |
-| `GET /companion/api/guides/<hubId>`             | One hub's page tree                                                  |
-| `GET /companion/api/guides/<hubId>/find?q=…`    | Lines in the hub's pages that contain the text (2–100 characters)    |
-| `GET /companion/api/guides/<hubId>/marks`       | Names the hub's pages mark as missable                               |
-| `GET /companion/api/achievements/<source>/<id>` | Achievements for a game that has a guide or is being played          |
+| Path                                            | Returns                                                               |
+| ----------------------------------------------- | --------------------------------------------------------------------- |
+| `GET /companion/`                               | The page                                                              |
+| `GET /companion/healthz`                        | `{"ok":true}`                                                         |
+| `GET /companion/api/now`                        | The current game, its matching guide and its live status line         |
+| `GET /companion/api/guides`                     | Every guide hub with its platform (`?refresh=1` asks for a re-index)  |
+| `GET /companion/api/guides/<hubId>`             | One hub's page tree                                                   |
+| `GET /companion/api/guides/<hubId>/find?q=…`    | Lines in the hub's pages that contain the text (2–100 characters)     |
+| `GET /companion/api/guides/<hubId>/marks`       | Names the hub's pages mark as missable                                |
+| `GET /companion/api/guides/<hubId>/where`       | Guide headings that match the status line of the game being played    |
+| `GET /companion/api/guides/<hubId>/progress`    | Ticked and total checkboxes per page (`?refresh=1` re-reads the wiki) |
+| `GET /companion/api/achievements/<source>/<id>` | Achievements for a game that has a guide or is being played           |
 
 Achievement requests are limited to games the service knows about, and the number of
 upstream fetches per minute is capped, because the API keys are usually shared with other
-tools. Guide page text is read from Outline at most a few times a minute and kept in memory
-for ten minutes.
+tools. Guide page text is read from Outline at most a few times a minute and kept in memory. Search
+and missable marks use a copy up to ten minutes old; while a page is open, the guide being
+shown is read again about once a minute, and a few seconds after a tap inside a guide page, so
+the checkbox counts stay current.
 
 ## Guide format
 
@@ -89,6 +103,8 @@ The service finds a game's guide by reading the guide documents themselves. It e
 - A table row in each guide naming the game: `| Steam App ID | 1234 |` or
   `| RA Game ID | 5678 |` (the label may be bold; the number may be a link to the store or
   RetroAchievements page). A guide with neither row can still be opened by hand.
+- Checkbox lines (`- [ ]` / `- [x]`) are what the sidebar counts. Headings are what the status
+  line is matched against, so sections named for places or chapters work best.
 - Optionally, a `⚠` on a checklist line (`- [ ] **Name** ⚠ …`) to mark that achievement as
   missable. RetroAchievements' own missable flag is used as well.
 - Optionally, a title ending in `(<console> — RetroAchievements)`, which becomes the

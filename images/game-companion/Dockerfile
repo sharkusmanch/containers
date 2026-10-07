@@ -2,7 +2,7 @@
 
 # This directory is the source: there is no upstream. Bump on every change that should ship;
 # the build workflow tags the image with the first *_VERSION ARG in this file.
-ARG GAME_COMPANION_VERSION=v0.4.0
+ARG GAME_COMPANION_VERSION=v0.5.0
 
 # renovate: datasource=docker depName=node
 ARG NODE_VERSION=24.21.0
