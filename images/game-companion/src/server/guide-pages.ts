@@ -192,6 +192,8 @@ export function missableMarks(pages: PageText[]): string[] {
 }
 
 const WHERE_LIMIT = 5;
+/** Limiter slots a load made only for freshness leaves free for first loads. */
+const FRESHNESS_RESERVE = 2;
 const WHERE_MIN_LENGTH = 4;
 // Fixed alternations of literals: no part of a heading can make this backtrack.
 const HEADING_PARTS = /[,&/|:;()[\]—–•·→]| - | (?:and|to|or) /i;
@@ -240,11 +242,51 @@ const GENERIC_HEADINGS = new Set([
   "equipment",
   "summary",
   "contents",
+  // Labels a game's status bar shows.
+  "gold",
+  "money",
+  "score",
+  "time",
+  "lives",
+  "life",
+  "health",
+  "battle",
+  "combat",
+  "menu",
+  "mode",
+  "hard mode",
+  "normal mode",
+  "easy mode",
+  "playing",
+  "paused",
+  "title",
+  "title screen",
+  "game over",
+  "credits",
+  "loading",
 ]);
+/** A status that reads "in <place>" names the place; such a match ranks first. */
+const LOCATIVE_WORDS = new Set([
+  "in",
+  "at",
+  "near",
+  "inside",
+  "outside",
+  "entering",
+  "exploring",
+  "visiting",
+  "around",
+]);
+/** Words must be this long to be allowed one wrong letter. */
+const NEAR_MIN_LENGTH = 6;
 
-/** Lower-case, every character that is not a letter or number a space, runs collapsed, trimmed. */
+/**
+ * Composed form, lower-case, every character that is not a letter or number a space, runs
+ * collapsed, trimmed.
+ */
 const normalise = (text: string): string =>
   text
+    .normalize("NFKC")
     .toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
@@ -257,24 +299,86 @@ function withoutLeadingNumbers(part: string): string {
   return "";
 }
 
-/** The parts of a heading, as written, that could name a place; each with and without its number. */
-function headingCandidates(heading: string): { phrase: string; key: string }[] {
-  const out: { phrase: string; key: string }[] = [];
-  for (const raw of heading.split(HEADING_PARTS)) {
+interface Candidate {
+  /** As written in the heading. */
+  phrase: string;
+  /** Normalised. */
+  key: string;
+  words: string[];
+}
+
+/**
+ * What a heading could be called: the whole heading and each of its parts, each with and
+ * without its leading numbers, minus anything too short, without a letter, or too generic.
+ */
+function headingCandidates(heading: string): Candidate[] {
+  const out: Candidate[] = [];
+  const seen = new Set<string>();
+  for (const raw of [heading, ...heading.split(HEADING_PARTS)]) {
     const part = raw.trim();
-    for (const phrase of new Set([part, withoutLeadingNumbers(part).trim()])) {
+    for (const phrase of [part, withoutLeadingNumbers(part).trim()]) {
+      if (seen.has(phrase)) continue;
+      seen.add(phrase);
       const key = normalise(phrase);
       if (key.length >= WHERE_MIN_LENGTH && HAS_LETTER.test(key) && !GENERIC_HEADINGS.has(key)) {
-        out.push({ phrase, key });
+        out.push({ phrase, key, words: key.split(" ") });
       }
     }
   }
   return out;
 }
 
+/** True when the words differ by exactly one character substituted, inserted or removed. */
+function oneEditApart(a: string, b: string): boolean {
+  const [long, short] = a.length >= b.length ? [a, b] : [b, a];
+  if (long.length - short.length > 1) return false;
+  let i = 0;
+  while (i < short.length && long[i] === short[i]) i += 1;
+  if (i === short.length) return long.length !== short.length;
+  const rest = long.length === short.length ? i + 1 : i;
+  return long.slice(i + 1) === short.slice(rest);
+}
+
+// Match scores, best first: a place the status puts after a locative word, then exactness.
+const SCORE_LOCATIVE = 2;
+const SCORE_EXACT = 1;
+
 /**
- * Guide headings that name something the game's status line names: a part of the heading,
- * as whole words, found in the status. The longest part per heading, longest phrase first.
+ * The best score of the candidate's words standing in the status words, or -1 for none. A word
+ * of the status may be one letter off when both are long enough; such a match is not exact.
+ */
+function scoreWords(spoken: string[], words: string[]): number {
+  let best = -1;
+  for (let at = 0; at + words.length <= spoken.length; at += 1) {
+    let exact = true;
+    let all = true;
+    for (let j = 0; j < words.length; j += 1) {
+      const heard = spoken[at + j] as string;
+      const word = words[j] as string;
+      if (heard === word) continue;
+      if (
+        heard.length >= NEAR_MIN_LENGTH &&
+        word.length >= NEAR_MIN_LENGTH &&
+        oneEditApart(heard, word)
+      ) {
+        exact = false;
+        continue;
+      }
+      all = false;
+      break;
+    }
+    if (!all) continue;
+    const locative = at > 0 && LOCATIVE_WORDS.has(spoken[at - 1] as string);
+    best = Math.max(best, (locative ? SCORE_LOCATIVE : 0) + (exact ? SCORE_EXACT : 0));
+  }
+  return best;
+}
+
+/**
+ * Guide headings that name something the game's status line names: the heading or a part of
+ * it, word by word (a long word may be one letter off), found in the status. Per heading the
+ * best candidate counts; a place after "in", "at" and the like comes first, then exact before
+ * near, then the longer phrase, then document order.
  */
 export function whereInPages(
   pages: PageText[],
@@ -283,33 +387,34 @@ export function whereInPages(
 ): GuideWhereResponse {
   const spoken = normalise(status);
   if (spoken === "") return { matches: [] };
-  const padded = ` ${spoken} `;
-  const found: { match: WhereMatch; length: number }[] = [];
+  const heard = spoken.split(" ");
+  const found: { match: WhereMatch; score: number; length: number }[] = [];
   for (const page of pages) {
     const seen = new Set<string>();
     for (const line of lines(page.text)) {
       const heading = headingText(line);
       if (!heading || seen.has(heading)) continue;
       seen.add(heading);
-      let best: { phrase: string; key: string } | undefined;
+      let best: { phrase: string; score: number; length: number } | undefined;
       for (const c of headingCandidates(heading)) {
-        if (padded.includes(` ${c.key} `) && (!best || c.key.length > best.key.length)) best = c;
+        const score = scoreWords(heard, c.words);
+        if (score < 0) continue;
+        if (!best || score > best.score || (score === best.score && c.key.length > best.length)) {
+          best = { phrase: c.phrase, score, length: c.key.length };
+        }
       }
       if (best) {
+        const { phrase, score, length } = best;
         found.push({
-          match: {
-            pageTitle: page.title,
-            pageUrl: page.url,
-            heading,
-            phrase: best.phrase,
-          },
-          length: best.key.length,
+          match: { pageTitle: page.title, pageUrl: page.url, heading, phrase },
+          score,
+          length,
         });
       }
     }
   }
-  // Array.prototype.sort is stable, so equal lengths stay in document order.
-  found.sort((a, b) => b.length - a.length);
+  // Array.prototype.sort is stable, so equal entries stay in document order.
+  found.sort((a, b) => b.score - a.score || b.length - a.length);
   return { matches: found.slice(0, limit).map((f) => f.match) };
 }
 
@@ -360,6 +465,8 @@ export interface GuidePageServiceOptions {
 interface CacheEntry {
   pages: PageText[];
   at: number;
+  /** When a load for this hub last started (or the copy was stored), successful or not. */
+  attemptAt: number;
   ttlMs: number;
   chars: number;
 }
@@ -462,11 +569,8 @@ export class GuidePageService {
     if (source === null || refs.length === 0) return [];
 
     const cached = this.cache.get(hubId);
-    const age = cached ? this.now() - cached.at : 0;
-    if (cached && fresh?.refresh && age >= this.refreshMinAgeMs) {
-      return this.reload(hubId, source, refs, cached);
-    }
-    if (cached && age < (fresh ? fresh.maxAgeMs : cached.ttlMs)) return cached.pages;
+    if (cached && fresh) return this.freshPages(hubId, source, refs, cached, fresh);
+    if (cached && this.now() - cached.at < cached.ttlMs) return cached.pages;
 
     if (cached) {
       // Expired but held: answer from it now (the wiki may be slow) and refresh behind it,
@@ -480,20 +584,40 @@ export class GuidePageService {
     return this.withDeadline(load);
   }
 
-  /** A new copy of the pages, waiting for a load (joining one in flight); the held copy if that cannot be had. */
-  private async reload(
+  /**
+   * The held copy, or a newer one when `fresh.refresh` asks and the copy is old enough. Loads
+   * started only for freshness leave limiter slots for first loads, and a hub gets at most one
+   * attempt per `maxAgeMs` (per `refreshMinAgeMs` for a requested refresh), failed or not.
+   * Never rejects.
+   */
+  private async freshPages(
     hubId: string,
     source: { docText(id: string): Promise<string> },
     refs: PageRef[],
     held: CacheEntry,
+    fresh: { maxAgeMs: number; refresh: boolean },
   ): Promise<PageText[]> {
-    const load = this.inFlight.get(hubId) ?? this.startLoad(hubId, source, refs, held);
-    if (!load) return held.pages;
-    try {
-      return await this.withDeadline(load);
-    } catch {
-      return held.pages;
+    const t = this.now();
+    const age = t - held.at;
+    const sinceAttempt = t - held.attemptAt;
+    const running = this.inFlight.get(hubId);
+    if (fresh.refresh && age >= this.refreshMinAgeMs) {
+      const load =
+        running ??
+        (sinceAttempt >= this.refreshMinAgeMs
+          ? this.startLoad(hubId, source, refs, held, FRESHNESS_RESERVE)
+          : null);
+      if (!load) return held.pages;
+      try {
+        return await this.withDeadline(load);
+      } catch {
+        return held.pages;
+      }
     }
+    if (age >= fresh.maxAgeMs && !running && sinceAttempt >= fresh.maxAgeMs) {
+      void this.startLoad(hubId, source, refs, held, FRESHNESS_RESERVE);
+    }
+    return held.pages;
   }
 
   /** Starts a load unless the limiter refuses; it fills the cache whenever it finishes. */
@@ -502,13 +626,16 @@ export class GuidePageService {
     source: { docText(id: string): Promise<string> },
     refs: PageRef[],
     held: CacheEntry | undefined,
+    reserve = 0,
   ): Promise<PageText[]> | null {
-    if (!this.takeLoadSlot()) return null;
+    if (!this.takeLoadSlot(reserve)) return null;
+    if (held) held.attemptAt = this.now();
     const load = this.load(source, refs, held?.pages)
       .then(({ pages, complete }) => {
         this.store(hubId, {
           pages,
           at: this.now(),
+          attemptAt: this.now(),
           ttlMs: complete ? this.ttlMs : this.partialTtlMs,
           chars: pages.reduce((n, p) => n + p.text.length, 0),
         });
@@ -541,12 +668,13 @@ export class GuidePageService {
     });
   }
 
-  private takeLoadSlot(): boolean {
+  /** `reserve` slots of the minute's allowance are left for loads that may not wait. */
+  private takeLoadSlot(reserve: number): boolean {
     const t = this.now();
     while (this.loadTimes.length > 0 && t - (this.loadTimes[0] as number) >= 60_000) {
       this.loadTimes.shift();
     }
-    if (this.loadTimes.length >= this.maxLoadsPerMinute) return false;
+    if (this.loadTimes.length >= this.maxLoadsPerMinute - reserve) return false;
     this.loadTimes.push(t);
     return true;
   }

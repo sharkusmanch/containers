@@ -356,6 +356,20 @@ describe("guide where and progress", () => {
     }
   });
 
+  it("never matches a hub that has no source or game id, even when the detected game's id is null", async () => {
+    for (const other of [
+      { ...hub, gameId: null },
+      { ...hub, source: null, gameId: null },
+    ]) {
+      const { d, asked } = setup(
+        detecting({ source: "steam", id: null }, "playing", "In Mock Village"),
+        { h1: other },
+      );
+      expect(await d.where("h1")).toEqual({ matches: [] });
+      expect(asked).toEqual([]);
+    }
+  });
+
   it("answers null for an unknown hub without the page service", async () => {
     const { d, asked } = setup(detecting(playing, "playing", "In Mock Village"));
     expect(await d.where("nope")).toBeNull();

@@ -327,7 +327,7 @@ describe("whereInPages", () => {
   });
 
   it("matches whole words only", () => {
-    expect(where("in Mock Villages now", "## Mock Village")).toEqual([]);
+    expect(where("in Mock Vile now", "## Mock Village")).toEqual([]);
     expect(where("at the Portal", "## Port")).toEqual([]);
     expect(where("at the Port", "## Port")).toHaveLength(1);
   });
@@ -352,11 +352,11 @@ describe("whereInPages", () => {
       "Alpha Hall/Beta Hall | Gamma Hall: Delta Hall; Epsilon Hall (Zeta Hall) [Eta Hall]",
       "Theta Hall — Iota Hall – Kappa Hall • Lambda Hall · Mu Hall → Nu Hall",
       "Xi Hall - Omicron Hall and Pi Hall to Rho Hall or Sigma Hall",
-      "Tau Hall & Upsilon Hall, Phi Hall",
+      "Tau Hall & Quillon Hall, Phi Hall",
     ];
     const text = headings.map((h) => `## ${h}`).join("\n");
     const names =
-      "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu Nu Xi Omicron Pi Rho Sigma Tau Upsilon Phi".split(
+      "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu Nu Xi Omicron Pi Rho Sigma Tau Quillon Phi".split(
         " ",
       );
     for (const name of names) {
@@ -433,16 +433,192 @@ describe("whereInPages", () => {
     expect(m.map((x) => [x.heading, x.phrase])).toEqual([["Mock Village (map)", "Mock Village"]]);
   });
 
-  it("answers promptly for a long status and thousands of headings", () => {
-    const text = Array.from(
-      { length: 5000 },
-      (_, i) => `## Place ${i}, Region ${i} & Spot ${i}`,
-    ).join("\n");
-    const status = `region 4999 ${"in the middle of nowhere ".repeat(12)}`.slice(0, 300);
+  it("answers within three seconds for 20 pages of 5000 lines, 2000 headings and a long status", () => {
+    const pages = Array.from({ length: 20 }, (_, p) =>
+      page(
+        `p${p}`,
+        Array.from({ length: 5000 }, (_, i) =>
+          i % 50 === 0
+            ? `## Place ${p}-${i}, Region ${p}-${i} & Spot ${p}-${i}`
+            : `body line ${i} with some words in it`,
+        )
+          .concat(p === 3 ? ["## Zephyr Hollow"] : [])
+          .join("\n"),
+      ),
+    );
+    const status = `heading to zephyr hollow ${"in the middle of nowhere ".repeat(12)}`.slice(
+      0,
+      300,
+    );
     const t0 = Date.now();
-    const m = where(status, text);
-    expect(Date.now() - t0).toBeLessThan(1000);
-    expect(m.map((x) => x.phrase)).toEqual(["Region 4999"]);
+    const m = whereInPages(pages, status).matches;
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(m.map((x) => x.phrase)).toEqual(["Zephyr Hollow"]);
+  });
+
+  describe("one wrong letter", () => {
+    it.each([
+      ["a letter missing", "Stormclif Harbor"],
+      ["a letter substituted", "Stormcleff Harbor"],
+      ["a letter added", "Stormcliffe Harbor"],
+    ])("matches %s in a word of six letters or more", (_name, status) => {
+      const m = where(`near ${status} docks`, "## Stormcliff Harbor");
+      expect(m.map((x) => x.phrase)).toEqual(["Stormcliff Harbor"]);
+    });
+
+    it("does not match two edits in one word", () => {
+      expect(where("near Stormclaaf Harbor", "## Stormcliff Harbor")).toEqual([]);
+    });
+
+    it("gives short words no tolerance", () => {
+      expect(where("near Glass Mersh", "## Glass Marsh")).toEqual([]);
+      expect(where("near Glass Marsh", "## Glass Marsh")).toHaveLength(1);
+    });
+
+    it("needs both words to be six letters or more", () => {
+      expect(where("near Harbo", "## Harbor")).toEqual([]);
+    });
+
+    it("lets every word of a phrase differ by one edit", () => {
+      expect(where("near Stormclif Harbur", "## Stormcliff Harbor")).toHaveLength(1);
+      expect(where("near Stormclif Harbxx", "## Stormcliff Harbor")).toEqual([]);
+      expect(where("near Stormclif Harborage", "## Stormcliff Harborages")).toHaveLength(1);
+      expect(where("near Stormclif Harboragee", "## Stormcliff Harborage")).toHaveLength(1);
+    });
+
+    it("ranks an exact match before a longer near one", () => {
+      const m = where(
+        "walking through Stormclif Harbor Quarter and Mock Town",
+        "## Stormcliff Harbor Quarter\n## Mock Town",
+      );
+      expect(m.map((x) => x.heading)).toEqual(["Mock Town", "Stormcliff Harbor Quarter"]);
+    });
+  });
+
+  describe("order", () => {
+    it("puts a place that follows a locative word first, even when others are longer", () => {
+      const text = [
+        "## Sir Longnamed Character",
+        "## Extraordinary Blade of Doom",
+        "## Old Docks",
+      ].join("\n");
+      const m = where(
+        "Sir Longnamed Character wields Extraordinary Blade of Doom in Old Docks",
+        text,
+      );
+      expect(m.map((x) => x.heading)).toEqual([
+        "Old Docks",
+        "Extraordinary Blade of Doom",
+        "Sir Longnamed Character",
+      ]);
+    });
+
+    it("does not let five longer matches push the place out", () => {
+      const others = [
+        "Alphabetical Wanderer",
+        "Bravissimo Wanderer",
+        "Cinnamon Wanderer",
+        "Dandelion Wanderer",
+        "Evergreen Wanderer",
+        "Fantastic Wanderer",
+      ];
+      const text = [...others, "Old Docks"].map((n) => `## ${n}`).join("\n");
+      const m = where(`${others.join(" ")} at Old Docks`, text);
+      expect(m).toHaveLength(5);
+      expect(m[0]?.phrase).toBe("Old Docks");
+    });
+
+    it.each([
+      "in",
+      "at",
+      "near",
+      "inside",
+      "outside",
+      "entering",
+      "exploring",
+      "visiting",
+      "around",
+    ])("treats %s as a locative word", (word) => {
+      const m = where(
+        `Longer Wanderer Name ${word} Old Docks`,
+        "## Longer Wanderer Name\n## Old Docks",
+      );
+      expect(m[0]?.phrase).toBe("Old Docks");
+    });
+
+    it("does not treat other words as locative", () => {
+      const m = where(
+        "Longer Wanderer Name beside Old Docks",
+        "## Longer Wanderer Name\n## Old Docks",
+      );
+      expect(m[0]?.phrase).toBe("Longer Wanderer Name");
+    });
+
+    it("ranks a near match after a locative word before an exact one that does not follow one", () => {
+      const m = where("in Stormclif Harbor and Mock Town", "## Stormcliff Harbor\n## Mock Town");
+      expect(m.map((x) => x.phrase)).toEqual(["Stormcliff Harbor", "Mock Town"]);
+    });
+
+    it("ranks a locative match before an exact one", () => {
+      const m = where("Ruined Keep and in Old Docks", "## Ruined Keep\n## Old Docks");
+      expect(m.map((x) => x.phrase)).toEqual(["Old Docks", "Ruined Keep"]);
+    });
+  });
+
+  describe("whole heading", () => {
+    it("matches a heading that holds a splitting word, and outranks a shorter heading", () => {
+      const m = where("on the Road to Mock Town", "## Mock Town\n## Road to Mock Town");
+      expect(m.map((x) => [x.heading, x.phrase])).toEqual([
+        ["Road to Mock Town", "Road to Mock Town"],
+        ["Mock Town", "Mock Town"],
+      ]);
+    });
+
+    it("drops leading numbers from the whole heading too", () => {
+      const m = where("on the Road to Mock Town", "## 4. Road to Mock Town");
+      expect(m.map((x) => x.phrase)).toEqual(["Road to Mock Town"]);
+    });
+
+    it.each(["AND", "To", "OR"])("splits at a separating word whatever its case (%s)", (word) => {
+      const m = where("in Mock Village", `## Ruined Keep ${word} Mock Village`);
+      expect(m.map((x) => x.phrase)).toEqual(["Mock Village"]);
+    });
+  });
+
+  it.each([
+    "Gold",
+    "Money",
+    "Score",
+    "Time",
+    "Lives",
+    "Life",
+    "Health",
+    "Battle",
+    "Combat",
+    "Menu",
+    "Mode",
+    "Hard Mode",
+    "Normal Mode",
+    "Easy Mode",
+    "Playing",
+    "Paused",
+    "Title",
+    "Title Screen",
+    "Game Over",
+    "Credits",
+    "Loading",
+  ])("never offers the status-bar label %s", (label) => {
+    expect(where(`${label} 1234 ${label.toLowerCase()}`, `## ${label}`)).toEqual([]);
+  });
+
+  it("treats composed and decomposed accents as the same, and full-width letters as plain", () => {
+    expect(where("in Café Noir", "## Café Noir").map((x) => x.phrase)).toEqual(["Café Noir"]);
+    expect(where("in Café Noir", "## Café Noir")).toHaveLength(1);
+    expect(where("in Ｍｏｃｋ Village", "## Mock Village")).toHaveLength(1);
+  });
+
+  it("lists a heading repeated on one page once", () => {
+    expect(where("in Mock Village", "## Mock Village\ntext\n## Mock Village")).toHaveLength(1);
   });
 });
 
@@ -1026,6 +1202,16 @@ describe("GuidePageService", () => {
       expect(state.loads).toEqual(["a", "b"]);
     });
 
+    it("keeps the ordinary lifetime: a copy five minutes old is served with no load", async () => {
+      const { make, state } = setup({ texts });
+      const svc = make();
+      await svc.find("h1", "item");
+      state.clock += 5 * 60_000;
+      await svc.where("h1", "in mock village");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(state.loads).toEqual(["a", "b"]);
+    });
+
     it("rejects, without upstream text, when nothing can be loaded", async () => {
       const { make } = setup({ texts, failing: new Set(["a", "b"]) });
       const err = await make()
@@ -1263,6 +1449,113 @@ describe("GuidePageService", () => {
       await svc.find("h1", "one"); // ten minutes: expired, answered at once, refreshed behind
       await settle();
       expect(state.loads).toHaveLength(4);
+    });
+
+    describe("freshness loads leave room for first loads", () => {
+      const hubs = Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`h${i}`, [`p${i}`]]));
+      const only = { p0: "- [ ] x", p1: "- [ ] x", p2: "- [ ] x", p3: "- [ ] x" };
+
+      it("does not start a freshness load once four loads have started in the minute", async () => {
+        const { make, state } = setup({ hubs, texts: only });
+        const svc = make({ progressTtlMs: 1_000 });
+        for (const h of ["h0", "h1", "h2", "h3"]) await svc.progress(h);
+        state.clock += 2_000;
+        expect(counts(await svc.progress("h0"))).toEqual(["/doc/p0 0/1"]); // background: refused
+        await settle();
+        expect(counts(await svc.progress("h0", { refresh: true }))).toEqual(["/doc/p0 0/1"]);
+        expect(state.loads).toEqual(["p0", "p1", "p2", "p3"]);
+        // Two slots remain for first loads of other hubs.
+        await svc.find("h4", "x");
+        await svc.find("h5", "x");
+        expect(state.loads).toEqual(["p0", "p1", "p2", "p3", "p4", "p5"]);
+      });
+
+      it("starts one while fewer than four have started", async () => {
+        const { make, state } = setup({ hubs, texts: only });
+        const svc = make({ progressTtlMs: 1_000 });
+        for (const h of ["h0", "h1", "h2"]) await svc.progress(h);
+        state.clock += 2_000;
+        await svc.progress("h0");
+        await settle();
+        expect(state.loads).toEqual(["p0", "p1", "p2", "p0"]);
+        state.clock += 2_000;
+        await svc.progress("h1", { refresh: true });
+        expect(state.loads).toEqual(["p0", "p1", "p2", "p0"]);
+      });
+
+      it("keeps two slots whatever maxLoadsPerMinute is", async () => {
+        const { make, state } = setup({ hubs, texts: only });
+        const svc = make({ progressTtlMs: 1_000, maxLoadsPerMinute: 3 });
+        await svc.progress("h0");
+        await svc.progress("h1");
+        state.clock += 2_000;
+        await svc.progress("h0");
+        await settle();
+        expect(state.loads).toEqual(["p0", "p1"]);
+      });
+    });
+
+    describe("freshness attempts are spaced", () => {
+      const held = () => ({ a: "- [ ] one\n- [x] two", b: "- [x] three" });
+
+      it("does not retry a failing wiki on every poll", async () => {
+        const { make, state, failing } = setup({ texts: held() });
+        const svc = make();
+        await svc.progress("h1");
+        failing.add("a").add("b");
+        state.clock += 61_000;
+        await svc.progress("h1");
+        await settle();
+        expect(state.loads).toHaveLength(4);
+        state.clock += 1_000;
+        expect(counts(await svc.progress("h1"))).toEqual(["/doc/a 1/2", "/doc/b 1/1"]);
+        await settle();
+        expect(state.loads).toHaveLength(4);
+        state.clock += 58_999; // 59.999 s after the attempt
+        await svc.progress("h1");
+        await settle();
+        expect(state.loads).toHaveLength(4);
+        state.clock += 1_001; // 61 s after the attempt
+        await svc.progress("h1");
+        await settle();
+        expect(state.loads).toHaveLength(6);
+      });
+
+      it("counts a successful refresh as an attempt too", async () => {
+        const { make, state } = setup({ texts: held() });
+        const svc = make({ progressTtlMs: 1_000 });
+        await svc.progress("h1");
+        state.clock += 1_000;
+        await svc.progress("h1");
+        await settle();
+        expect(state.loads).toHaveLength(4);
+        state.clock += 999;
+        await svc.progress("h1");
+        await settle();
+        expect(state.loads).toHaveLength(4);
+      });
+
+      it("starts one load for two refreshes within five seconds of a failed attempt", async () => {
+        const { make, state, failing } = setup({ texts: held() });
+        const svc = make();
+        await svc.progress("h1");
+        failing.add("a").add("b");
+        state.clock += 10_000;
+        expect(counts(await svc.progress("h1", { refresh: true }))).toEqual([
+          "/doc/a 1/2",
+          "/doc/b 1/1",
+        ]);
+        expect(state.loads).toHaveLength(4);
+        state.clock += 4_999;
+        expect(counts(await svc.progress("h1", { refresh: true }))).toEqual([
+          "/doc/a 1/2",
+          "/doc/b 1/1",
+        ]);
+        expect(state.loads).toHaveLength(4);
+        state.clock += 1;
+        await svc.progress("h1", { refresh: true });
+        expect(state.loads).toHaveLength(6);
+      });
     });
 
     it("lets find and marks use a copy that progress has just refreshed", async () => {
