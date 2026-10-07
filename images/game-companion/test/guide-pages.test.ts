@@ -620,6 +620,107 @@ describe("whereInPages", () => {
   it("lists a heading repeated on one page once", () => {
     expect(where("in Mock Village", "## Mock Village\ntext\n## Mock Village")).toHaveLength(1);
   });
+
+  describe("an article after the locative word", () => {
+    it.each(["in the", "at a", "near an", "inside the"])(
+      "ranks a place after %s first, ahead of longer exact matches",
+      (lead) => {
+        const m = where(
+          `Wandering Merchant Guildhall ${lead} Mock Harbour`,
+          "## Wandering Merchant Guildhall\n## Mock Harbour",
+        );
+        expect(m.map((x) => x.phrase)).toEqual(["Mock Harbour", "Wandering Merchant Guildhall"]);
+      },
+    );
+
+    it("steps over one article only", () => {
+      const m = where(
+        "Wandering Merchant Guildhall in the the Mock Harbour",
+        "## Wandering Merchant Guildhall\n## Mock Harbour",
+      );
+      expect(m.map((x) => x.phrase)).toEqual(["Wandering Merchant Guildhall", "Mock Harbour"]);
+    });
+
+    it("needs a locative word before the article", () => {
+      const m = where(
+        "Wandering Merchant Guildhall beside the Mock Harbour",
+        "## Wandering Merchant Guildhall\n## Mock Harbour",
+      );
+      expect(m.map((x) => x.phrase)).toEqual(["Wandering Merchant Guildhall", "Mock Harbour"]);
+    });
+
+    it("leaves a heading that itself starts with The unaffected", () => {
+      const text = "## Wandering Merchant Guildhall\n## The Old Docks";
+      expect(
+        where("Wandering Merchant Guildhall at The Old Docks", text).map((x) => x.phrase),
+      ).toEqual(["The Old Docks", "Wandering Merchant Guildhall"]);
+      expect(where("on The Old Docks", text).map((x) => x.phrase)).toEqual(["The Old Docks"]);
+    });
+  });
+
+  describe("a near match never smuggles in a generic word", () => {
+    it("drops a heading that is only a near form of a generic word", () => {
+      const m = where("In Battle - Mock Harbour", "## Battles\n## Mock Harbour");
+      expect(m.map((x) => x.phrase)).toEqual(["Mock Harbour"]);
+    });
+
+    it("drops a plural of a generic word", () => {
+      expect(where("Entering Dungeon", "## Dungeons")).toEqual([]);
+    });
+
+    it("does not touch an exact match of a heading that is not generic", () => {
+      expect(where("Entering Dungeon of Mock", "## Dungeon of Mock").map((x) => x.phrase)).toEqual([
+        "Dungeon of Mock",
+      ]);
+    });
+
+    it("keeps a near match whose aligned words are not generic", () => {
+      expect(where("near Stormclif Harbor", "## Stormcliff Harbor")).toHaveLength(1);
+    });
+  });
+
+  describe("a whole heading of generic parts", () => {
+    it.each(["Notes and Tips", "Gold and Money", "Items & Equipment", "1. Notes / Tips"])(
+      "is not a candidate (%s)",
+      (heading) => {
+        expect(
+          where("notes and tips, gold and money, items & equipment, notes tips", `## ${heading}`),
+        ).toEqual([]);
+      },
+    );
+
+    it("still matches a heading with one real part, whole", () => {
+      expect(where("on the Road to Mock Town", "## Road to Mock Town")[0]?.phrase).toBe(
+        "Road to Mock Town",
+      );
+      expect(where("tips and Mock Town", "## Tips and Mock Town")[0]?.phrase).toBe(
+        "Tips and Mock Town",
+      );
+    });
+  });
+
+  it("splits a heading at the full-width separators", () => {
+    const heading = "\uff21\u753a\uff0cMock Harbour\uff06Old Docks";
+    expect(where("in Mock Harbour", `## ${heading}`).map((x) => x.phrase)).toEqual([
+      "Mock Harbour",
+    ]);
+    for (const [mark, a, b] of [
+      ["\uff0f", "Alpha Quay", "Bravo Quay"],
+      ["\uff1a", "Charlie Quay", "Delta Quay"],
+      ["\uff08", "Echo Quay", "Foxtrot Quay"],
+      ["\uff1b", "Golf Quay", "Hotel Quay"],
+    ] as const) {
+      expect(where(`in ${b}`, `## ${a}${mark}${b}\uff09`).map((x) => x.phrase)).toEqual([b]);
+    }
+  });
+
+  it("picks a heading's best candidate by the same keys as the overall order", () => {
+    const m = where(
+      "Lantern Street Market stalls, in Old Docks",
+      "## Old Docks / Lantern Street Market",
+    );
+    expect(m.map((x) => x.phrase)).toEqual(["Old Docks"]);
+  });
 });
 
 describe("missableMarks", () => {
@@ -1462,6 +1563,8 @@ describe("GuidePageService", () => {
         state.clock += 2_000;
         expect(counts(await svc.progress("h0"))).toEqual(["/doc/p0 0/1"]); // background: refused
         await settle();
+        // Old enough (8 s, over the 5 s minimum) for a requested refresh to try a load.
+        state.clock += 6_000;
         expect(counts(await svc.progress("h0", { refresh: true }))).toEqual(["/doc/p0 0/1"]);
         expect(state.loads).toEqual(["p0", "p1", "p2", "p3"]);
         // Two slots remain for first loads of other hubs.
@@ -1478,9 +1581,29 @@ describe("GuidePageService", () => {
         await svc.progress("h0");
         await settle();
         expect(state.loads).toEqual(["p0", "p1", "p2", "p0"]);
-        state.clock += 2_000;
+        // Four loads have started: a requested refresh of a copy over five seconds old is refused.
+        state.clock += 6_000;
         await svc.progress("h1", { refresh: true });
         expect(state.loads).toEqual(["p0", "p1", "p2", "p0"]);
+      });
+
+      it("starts a requested refresh while fewer than four have started", async () => {
+        const { make, state } = setup({ hubs, texts: only });
+        const svc = make({ progressTtlMs: 1_000 });
+        for (const h of ["h0", "h1", "h2"]) await svc.progress(h);
+        state.clock += 6_000;
+        expect(counts(await svc.progress("h0", { refresh: true }))).toEqual(["/doc/p0 0/1"]);
+        expect(state.loads).toEqual(["p0", "p1", "p2", "p0"]);
+      });
+
+      it("does not hold the ten minute reload by find to the reserve", async () => {
+        const { make, state } = setup({ hubs, texts: only });
+        const svc = make({ ttlMs: 1_000 });
+        for (const h of ["h0", "h1", "h2", "h3"]) await svc.find(h, "x");
+        state.clock += 2_000;
+        await svc.find("h0", "x");
+        await settle();
+        expect(state.loads).toEqual(["p0", "p1", "p2", "p3", "p0"]);
       });
 
       it("keeps two slots whatever maxLoadsPerMinute is", async () => {

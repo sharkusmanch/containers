@@ -196,7 +196,7 @@ const WHERE_LIMIT = 5;
 const FRESHNESS_RESERVE = 2;
 const WHERE_MIN_LENGTH = 4;
 // Fixed alternations of literals: no part of a heading can make this backtrack.
-const HEADING_PARTS = /[,&/|:;()[\]—–•·→]| - | (?:and|to|or) /i;
+const HEADING_PARTS = /[,&/|:;()[\]—–•·→，＆／：（）；]| - | (?:and|to|or) /i;
 const WORD = /[\p{L}\p{N}]+/gu;
 const ONLY_DIGITS = /^\p{N}+$/u;
 const HAS_LETTER = /\p{L}/u;
@@ -279,6 +279,8 @@ const LOCATIVE_WORDS = new Set([
 ]);
 /** Words must be this long to be allowed one wrong letter. */
 const NEAR_MIN_LENGTH = 6;
+/** One of these between a locative word and a place does not break the "in <place>" reading. */
+const ARTICLES = new Set(["the", "a", "an"]);
 
 /**
  * Composed form, lower-case, every character that is not a letter or number a space, runs
@@ -307,22 +309,26 @@ interface Candidate {
   words: string[];
 }
 
+const usable = (key: string): boolean =>
+  key.length >= WHERE_MIN_LENGTH && HAS_LETTER.test(key) && !GENERIC_HEADINGS.has(key);
+
 /**
- * What a heading could be called: the whole heading and each of its parts, each with and
+ * What a heading could be called: each of its parts and the whole heading, each with and
  * without its leading numbers, minus anything too short, without a letter, or too generic.
+ * A heading none of whose parts is usable once its number is dropped ("Notes and Tips") has
+ * no candidates at all, however long the whole is.
  */
 function headingCandidates(heading: string): Candidate[] {
+  const parts = heading.split(HEADING_PARTS).map((raw) => raw.trim());
+  if (!parts.some((part) => usable(normalise(withoutLeadingNumbers(part))))) return [];
   const out: Candidate[] = [];
   const seen = new Set<string>();
-  for (const raw of [heading, ...heading.split(HEADING_PARTS)]) {
-    const part = raw.trim();
-    for (const phrase of [part, withoutLeadingNumbers(part).trim()]) {
+  for (const text of [heading, ...parts]) {
+    for (const phrase of [text, withoutLeadingNumbers(text).trim()]) {
       if (seen.has(phrase)) continue;
       seen.add(phrase);
       const key = normalise(phrase);
-      if (key.length >= WHERE_MIN_LENGTH && HAS_LETTER.test(key) && !GENERIC_HEADINGS.has(key)) {
-        out.push({ phrase, key, words: key.split(" ") });
-      }
+      if (usable(key)) out.push({ phrase, key, words: key.split(" ") });
     }
   }
   return out;
@@ -368,7 +374,11 @@ function scoreWords(spoken: string[], words: string[]): number {
       break;
     }
     if (!all) continue;
-    const locative = at > 0 && LOCATIVE_WORDS.has(spoken[at - 1] as string);
+    // A word one letter off must not turn a generic status label into a place ("Battles").
+    if (!exact && GENERIC_HEADINGS.has(spoken.slice(at, at + words.length).join(" "))) continue;
+    let before = at - 1;
+    if (before >= 0 && ARTICLES.has(spoken[before] as string)) before -= 1;
+    const locative = before >= 0 && LOCATIVE_WORDS.has(spoken[before] as string);
     best = Math.max(best, (locative ? SCORE_LOCATIVE : 0) + (exact ? SCORE_EXACT : 0));
   }
   return best;
