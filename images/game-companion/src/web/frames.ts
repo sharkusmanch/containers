@@ -1,5 +1,5 @@
 import { applyChrome } from "./chrome.js";
-import { locateInFrame } from "./locate.js";
+import { locateInFrame, type LocateMode } from "./locate.js";
 import { isSafeDocUrl } from "./state.js";
 
 export interface Frames {
@@ -16,10 +16,16 @@ export interface Frames {
   setHideChrome(hide: boolean): void;
   /**
    * Finds `text` (preferably under `heading`) in the page framed in slot `index` and highlights it.
+   * In "heading" mode it looks for the section heading carrying `text` instead (see findTextRange).
    * Waits for a navigation this module started to finish first. "gone" when the slot has no frame or
    * its frame was dropped meanwhile.
    */
-  locate(index: number, text: string, heading?: string | null): Promise<LocateResult>;
+  locate(
+    index: number,
+    text: string,
+    heading?: string | null,
+    mode?: LocateMode,
+  ): Promise<LocateResult>;
 }
 
 export type LocateResult = "found" | "not-found" | "gone";
@@ -154,7 +160,7 @@ export function createFrames(
       hideChrome = hide;
       for (const entry of entries) if (entry !== null) applyTo(entry);
     },
-    async locate(index, text, heading) {
+    async locate(index, text, heading, mode = "text") {
       const entry = Number.isInteger(index) ? (entries[index] ?? null) : null;
       if (entry === null) return "gone";
       entry.live?.abort();
@@ -166,6 +172,7 @@ export function createFrames(
         ready: () => !entry.loading,
         gone: dropped,
         signal: mine.signal,
+        mode,
       });
       if (entry.live === mine) entry.live = null;
       if (found) return "found";

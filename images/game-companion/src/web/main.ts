@@ -23,6 +23,7 @@ import {
   type WakeLockLike,
 } from "./device.js";
 import { createFrames } from "./frames.js";
+import type { LocateMode } from "./locate.js";
 import { createPicker } from "./picker.js";
 import { createRail, type PageProgressLabel } from "./rail.js";
 import {
@@ -208,7 +209,7 @@ export function startApp(opts: AppOptions): App {
     },
     onMatch(match) {
       if (findFor === null) return;
-      openMatch(findFor.current, findFor.locate(match), match);
+      openMatch(findFor.current, findFor.locate(match), match, findFor.mode);
     },
     onSetting(name) {
       if (name === "fullscreen") {
@@ -261,6 +262,9 @@ export function startApp(opts: AppOptions): App {
   // Checklist progress of the open guide's pages, by document id; empty until it arrives.
   let progress: ReadonlyMap<string, PageProgressLabel> = new Map();
   let progressEpoch = 0;
+  // Numbers the progress requests; an answer older than the last one applied is ignored.
+  let progressSeq = 0;
+  let progressApplied = 0;
   // Bumped by every tap in a guide page and every load, so older follow-up timers do nothing.
   let interactGen = 0;
   let lastAchievements: AchievementsResponse | null = null;
@@ -280,7 +284,11 @@ export function startApp(opts: AppOptions): App {
   const wakeLock = createWakeLock(opts.nav ?? {}, doc);
   // The search (or status line) a list of matches in the picker belongs to, and the text to look
   // for on the page of the one picked.
-  let findFor: { current: Current; locate: (match: FindMatch) => string } | null = null;
+  let findFor: {
+    current: Current;
+    locate: (match: FindMatch) => string;
+    mode: LocateMode;
+  } | null = null;
   let findSeq = 0;
   // The guide-jump answer for the status text it was asked about, for the game on screen.
   let whereFor: { load: number; text: string; failed: boolean } | null = null;
@@ -370,7 +378,7 @@ export function startApp(opts: AppOptions): App {
     } else if (matches.length === 1) {
       openMatch(c, query, only);
     } else {
-      findFor = { current: c, locate: () => query };
+      findFor = { current: c, locate: () => query, mode: "text" };
       picker.showMatches(a.name, matches, found.truncated);
     }
   }
@@ -382,7 +390,10 @@ export function startApp(opts: AppOptions): App {
       settings.guideJump &&
       best !== undefined &&
       whereFor !== null &&
-      whereFor.load === loadCount;
+      whereFor.load === loadCount &&
+      // As with Find, nothing to open until the page list is there.
+      current !== null &&
+      current.pages.length > 0;
     jump.textContent = offer ? `↪ ${best.phrase}` : "";
     if (offer) jump.setAttribute("aria-label", `Open the guide at ${best.heading}`);
     else jump.removeAttribute("aria-label");
@@ -439,6 +450,8 @@ export function startApp(opts: AppOptions): App {
     const [best, ...rest] = whereMatches;
     if (c === null || best === undefined || whereFor?.load !== loadCount) return;
     if (choosingFor !== null || pending !== null) return;
+    // A Find answer still in flight must not replace what the jump shows.
+    findSeq += 1;
     // The jump reuses the find flow: a match whose heading is the text to look for.
     const asFind = (m: WhereMatch): FindMatch => ({
       pageTitle: m.pageTitle,
@@ -447,14 +460,14 @@ export function startApp(opts: AppOptions): App {
       snippet: m.heading,
     });
     if (rest.length === 0) {
-      openMatch(c, best.heading, asFind(best));
+      openMatch(c, best.heading, asFind(best), "heading");
     } else {
-      findFor = { current: c, locate: (match) => match.snippet };
+      findFor = { current: c, locate: (match) => match.snippet, mode: "heading" };
       picker.showMatches(best.phrase, [best, ...rest].map(asFind), false);
     }
   }
 
-  function openMatch(c: Current, name: string, match: FindMatch): void {
+  function openMatch(c: Current, name: string, match: FindMatch, mode: LocateMode = "text"): void {
     if (current !== c || !isSafeDocUrl(match.pageUrl)) return;
     if (!flattenPages(c.pages).some((p) => p.url === match.pageUrl)) {
       showToast("Could not open that page");
@@ -464,7 +477,7 @@ export function startApp(opts: AppOptions): App {
     save();
     render();
     picker.setPages(c.pages, c.layout);
-    void frames.locate(c.layout.active, name, match.heading).then((result) => {
+    void frames.locate(c.layout.active, name, match.heading, mode).then((result) => {
       if (result === "not-found" && current === c) {
         showToast("Opened the page, but could not find the text");
       }
@@ -618,6 +631,8 @@ export function startApp(opts: AppOptions): App {
   async function refreshProgress(c: Current, fresh = false): Promise<void> {
     if (c.hub === null) return;
     const epoch = progressEpoch;
+    progressSeq += 1;
+    const mine = progressSeq;
     let pages: unknown;
     try {
       const hubId = c.hub.hubId;
@@ -626,6 +641,8 @@ export function startApp(opts: AppOptions): App {
       return;
     }
     if (!Array.isArray(pages) || epoch !== progressEpoch || current === null) return;
+    if (mine < progressApplied) return;
+    progressApplied = mine;
     const byDoc = new Map<string, PageProgressLabel>();
     for (const page of pages as Partial<PageProgress>[]) {
       if (
@@ -774,7 +791,20 @@ export function startApp(opts: AppOptions): App {
     }
   }
 
+  // The wake's "refresh now" is spent by the tick that sees it, whatever that tick does; only a
+  // failed now request keeps it for the next good one.
+  let nowLost = false;
   async function runTick(): Promise<void> {
+    const due = refreshDue;
+    nowLost = false;
+    try {
+      await runTickBody(due);
+    } finally {
+      if (due && !nowLost) refreshDue = false;
+    }
+  }
+
+  async function runTickBody(due: boolean): Promise<void> {
     if (pending !== null) {
       const p = pending;
       pending = null;
@@ -792,6 +822,7 @@ export function startApp(opts: AppOptions): App {
       now = await api.now();
     } catch {
       nowFailed = true;
+      nowLost = true;
       lastNow = null;
       renderPresence();
       renderHeader();
@@ -848,10 +879,10 @@ export function startApp(opts: AppOptions): App {
     if (
       current !== null &&
       doc.visibilityState === "visible" &&
-      (refreshDue || Date.now() - lastAchievementsAt >= achievementsPollMs)
+      (due || Date.now() - lastAchievementsAt >= achievementsPollMs)
     ) {
-      refreshDue = false;
-      void refreshProgress(current);
+      // After a wake the numbers may be a minute old: ask for a fresh read.
+      void refreshProgress(current, due);
       await refreshAchievements(false);
     }
   }

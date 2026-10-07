@@ -198,6 +198,60 @@ describe("findTextRange", () => {
   });
 });
 
+describe("findTextRange in heading mode", () => {
+  const owner = (r: Range | null): Element | null | undefined => r?.startContainer.parentElement;
+
+  it("selects the heading, where text mode selects the earlier paragraph", () => {
+    const doc = page(
+      "<p id='intro'>Before you reach Mock Harbour, rest.</p><h2 id='h'>Mock Harbour</h2><p>Docks.</p>",
+    );
+    expect(owner(findTextRange(doc, "mock harbour", null, "text"))?.id).toBe("intro");
+    expect(owner(findTextRange(doc, "mock harbour"))?.id).toBe("intro");
+    const range = findTextRange(doc, "mock harbour", null, "heading");
+    expect(owner(range)?.id).toBe("h");
+    expect(range?.toString()).toBe("Mock Harbour");
+  });
+
+  it("prefers an exact heading over an earlier heading that merely contains the text", () => {
+    const doc = page("<h2 id='a'>Mock Harbour Docks</h2><p>x</p><h3 id='b'>  mock   HARBOUR </h3>");
+    expect(owner(findTextRange(doc, "Mock Harbour", null, "heading"))?.id).toBe("b");
+  });
+
+  it("takes the first heading that contains the text when none is exact", () => {
+    const doc = page(
+      "<p>Mock Harbour</p><h2 id='a'>Around Mock Harbour</h2><h2 id='b'>Mock Harbour Docks</h2>",
+    );
+    expect(owner(findTextRange(doc, "mock harbour", null, "heading"))?.id).toBe("a");
+  });
+
+  it("finds a heading with inner markup and covers all of its text", () => {
+    const doc = page("<p id='p'>Mock Harbour</p><h3 id='h'>Mock <a href='#x'>Harbour</a></h3>");
+    const range = findTextRange(doc, "Mock Harbour", null, "heading");
+    expect(range?.toString()).toBe("Mock Harbour");
+    expect(owner(range)?.id).toBe("h");
+    expect(range?.startContainer.parentElement?.closest("h3")?.id).toBe("h");
+    expect(range?.endContainer.parentElement?.closest("h3")?.id).toBe("h");
+  });
+
+  it("falls back to the first text occurrence when no heading has the text", () => {
+    const doc = page("<h2>Other</h2><p id='one'>see Mock Harbour</p><p id='two'>Mock Harbour</p>");
+    expect(owner(findTextRange(doc, "mock harbour", null, "heading"))?.id).toBe("one");
+    expect(findTextRange(doc, "nowhere", null, "heading")).toBeNull();
+  });
+
+  it("ignores a heading outside the search root", () => {
+    const doc = page(
+      "<h1 id='out'>Mock Harbour</h1><div class='ProseMirror'><p id='in'>Mock Harbour</p></div>",
+    );
+    expect(owner(findTextRange(doc, "mock harbour", null, "heading"))?.id).toBe("in");
+  });
+
+  it("does not use the heading hint to choose a heading", () => {
+    const doc = page("<h2 id='a'>Mock Harbour</h2><h2>Two</h2><h2 id='b'>Mock Harbour</h2>");
+    expect(owner(findTextRange(doc, "mock harbour", "Two", "heading"))?.id).toBe("a");
+  });
+});
+
 function makeFrame(bodyHtml = ""): HTMLIFrameElement {
   document.body.innerHTML = "";
   const frame = document.createElement("iframe");
@@ -387,6 +441,20 @@ describe("locateInFrame", () => {
       await vi.advanceTimersByTimeAsync(500);
       expect(highlights.has("gc-find")).toBe(false);
     });
+  });
+
+  it("in heading mode scrolls to the heading, not an earlier sentence that mentions it", async () => {
+    const frame = makeFrame(
+      "<p id='mention'>Go to Mock Harbour soon.</p><h2 id='head'>Mock Harbour</h2><p>Docks</p>",
+    );
+    const scroll = vi.fn();
+    frameWin(frame).Element.prototype.scrollIntoView = scroll;
+    expect(
+      await locateInFrame(frame, "Mock Harbour", null, { intervalMs: 5, mode: "heading" }),
+    ).toBe(true);
+    expect((scroll.mock.contexts[0] as Element).id).toBe("head");
+    expect(await locateInFrame(frame, "Mock Harbour", null, { intervalMs: 5 })).toBe(true);
+    expect((scroll.mock.contexts[1] as Element).id).toBe("mention");
   });
 
   it("scrolls to the occurrence under the given heading", async () => {

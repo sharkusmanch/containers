@@ -182,6 +182,28 @@ describe("createFrames", () => {
     }
   });
 
+  it("locate passes the mode on: heading mode lands on the heading, text mode on the sentence", async () => {
+    document.body.innerHTML = "";
+    const f = createFrames(document, 4);
+    document.body.append(f.element);
+    f.show(0, "/doc/a");
+    const frame = f.element.querySelector("iframe") as HTMLIFrameElement;
+    showing(frame, "<p id='say'>Go to Mock Harbour.</p><h2 id='head'>Mock Harbour</h2>");
+    loaded(frame);
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      expect(await f.locate(0, "mock harbour", null, "heading")).toBe("found");
+      expect((scroll.mock.contexts[0] as Element).id).toBe("head");
+      expect(await f.locate(0, "mock harbour", null, "text")).toBe("found");
+      expect((scroll.mock.contexts[1] as Element).id).toBe("say");
+      expect(await f.locate(0, "mock harbour")).toBe("found");
+      expect((scroll.mock.contexts[2] as Element).id).toBe("say");
+    } finally {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    }
+  });
+
   describe("locate while a slot is being re-pointed", () => {
     afterEach(() => vi.useRealTimers());
 

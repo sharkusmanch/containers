@@ -35,12 +35,24 @@ interface Piece {
   end: number;
 }
 
+/** What a search is for: a piece of text anywhere, or the section heading that carries it. */
+export type LocateMode = "text" | "heading";
+
 /**
  * First place `text` occurs in the page text of `doc`, ignoring case, as a Range. The text may
  * span adjacent text nodes. With a `heading`, the first occurrence after the first heading of
  * that name is preferred; the first occurrence anywhere is the fallback. Null when absent.
+ *
+ * In "heading" mode the target is instead the first h1-h6 whose text equals `text` (folded the
+ * same way), else the first one that contains it, and the range covers that heading's text; with
+ * no such heading it behaves as "text" mode. The `heading` hint is not used then.
  */
-export function findTextRange(doc: Document, text: string, heading?: string | null): Range | null {
+export function findTextRange(
+  doc: Document,
+  text: string,
+  heading?: string | null,
+  mode: LocateMode = "text",
+): Range | null {
   const needle = fold(text.trim());
   const root = searchRoot(doc);
   if (needle === "" || root === null) return null;
@@ -54,6 +66,23 @@ export function findTextRange(doc: Document, text: string, heading?: string | nu
     if (data === "") continue;
     pieces.push({ node: node as Text, start: all.length, end: all.length + data.length });
     all += fold(data);
+  }
+
+  if (mode === "heading") {
+    const wantedTitle = collapse(text);
+    const titles = [...root.querySelectorAll("h1, h2, h3, h4, h5, h6")];
+    const title =
+      titles.find((h) => collapse(h.textContent ?? "") === wantedTitle) ??
+      titles.find((h) => collapse(h.textContent ?? "").includes(wantedTitle));
+    const inside = title === undefined ? [] : pieces.filter((p) => title.contains(p.node));
+    const first = inside[0];
+    const last = inside[inside.length - 1];
+    if (first !== undefined && last !== undefined) {
+      const range = doc.createRange();
+      range.setStart(first.node, 0);
+      range.setEnd(last.node, last.node.length);
+      return range;
+    }
   }
 
   let at = -1;
@@ -177,6 +206,8 @@ export interface LocateOptions {
   ready?: () => boolean;
   /** When this returns true the frame has been dropped and the search stops. */
   gone?: () => boolean;
+  /** "heading" looks for the section heading carrying the text; default "text". */
+  mode?: LocateMode;
   /** Aborting stops the search (it resolves false) and takes down any highlight it made. */
   signal?: AbortSignal;
 }
@@ -236,7 +267,8 @@ export function locateInFrame(
         try {
           // The wiki renders after load; a frame on another origin throws. Both mean "not yet".
           const doc = frame.contentDocument;
-          const range = doc === null ? null : findTextRange(doc, text, heading);
+          const range =
+            doc === null ? null : findTextRange(doc, text, heading, opts.mode ?? "text");
           if (doc !== null && range !== null) found = { doc, range };
         } catch {
           found = null;

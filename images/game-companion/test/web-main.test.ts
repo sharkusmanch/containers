@@ -16,6 +16,24 @@ import type {
   WhereMatch,
 } from "../src/shared/types.js";
 
+// Records every call to frames.locate (and still runs it), so tests can pin the exact arguments.
+const locateCalls = vi.hoisted(() => [] as unknown[][]);
+vi.mock("../src/web/frames.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/web/frames.js")>();
+  return {
+    ...real,
+    createFrames: (...args: Parameters<typeof real.createFrames>) => {
+      const frames = real.createFrames(...args);
+      const locate = frames.locate.bind(frames);
+      frames.locate = (...a) => {
+        locateCalls.push(a);
+        return locate(...a);
+      };
+      return frames;
+    },
+  };
+});
+
 const hubA: GuideHub = {
   hubId: "hA",
   title: "Alpha",
@@ -127,6 +145,7 @@ const $ = (sel: string): HTMLElement | null => document.querySelector(sel);
 
 beforeEach(() => {
   document.body.innerHTML = '<main id="app"></main>';
+  locateCalls.length = 0;
 });
 
 describe("startApp", () => {
@@ -1818,6 +1837,8 @@ describe("find in guide", () => {
     await start({ matches: [match(url)], truncated: false });
     await find();
     await flush();
+    // Find passes the match's heading as a hint and searches as text, never as a heading.
+    expect(locateCalls.map((c) => c.slice(1))).toEqual([["First Steps", "Chapter One", "text"]]);
     expect(shown()).toEqual([url]);
     expect($(".ach")?.hidden).toBe(true);
     expect($(".picker")?.hidden).toBe(true);
@@ -2890,7 +2911,9 @@ describe("guide jump", () => {
   const frameDocs = new Map<string, Document>();
   const sectioned = (): Document =>
     new DOMParser().parseFromString(
-      "<!doctype html><body><h2 id='one'>Chapter One: Sample Caves</h2><p>cave notes</p>" +
+      "<!doctype html><body><p id='mention'>Rumour: Chapter Two: Sample Keep is near, " +
+        "and so is Chapter One: Sample Caves.</p>" +
+        "<h2 id='one'>Chapter One: Sample Caves</h2><p>cave notes</p>" +
         "<h2 id='two'>Chapter Two: Sample Keep</h2><p>keep notes</p></body>",
       "text/html",
     );
@@ -2922,10 +2945,12 @@ describe("guide jump", () => {
       presence?: string | null;
       matches?: WhereMatch[];
       storage?: ReturnType<typeof memory>;
+      tweak?: (api: Fake) => void;
     } = {},
   ) {
     const api = fakeApi(nowWith(hubA, over.presence === undefined ? line : over.presence));
     api.whereValue = { matches: over.matches ?? [wm()] };
+    over.tweak?.(api);
     const app = startApp({
       doc: document,
       api,
@@ -3145,6 +3170,10 @@ describe("guide jump", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect((scroll.mock.contexts[0] as Element).id).toBe("two");
       expect(($(".toast") as HTMLElement).hidden).toBe(true);
+      // The heading's text, no heading hint, and the heading mode: exactly this.
+      expect(locateCalls.map((c) => c.slice(1))).toEqual([
+        ["Chapter Two: Sample Keep", null, "heading"],
+      ]);
     });
 
     it("says so when the page opens but the heading is not in it", async () => {
@@ -3199,6 +3228,9 @@ describe("guide jump", () => {
       loadFrames();
       await vi.advanceTimersByTimeAsync(0);
       expect((scroll.mock.contexts[0] as Element).id).toBe("one");
+      expect(locateCalls.map((c) => c.slice(1))).toEqual([
+        ["Chapter One: Sample Caves", null, "heading"],
+      ]);
     });
 
     it("is ignored while a load is queued", async () => {
@@ -3223,6 +3255,113 @@ describe("guide jump", () => {
       expect(document.querySelectorAll(".picker-matches .picker-item")).toHaveLength(before);
       expect(document.querySelector("iframe")).toBeNull();
     });
+  });
+
+  describe("beside Find in guide", () => {
+    const first = { ...mk("a1", "First Steps") };
+    const findMatch = (url: string, over: Partial<FindMatch> = {}): FindMatch => ({
+      pageTitle: "Collectibles",
+      pageUrl: url,
+      heading: "Chapter One",
+      snippet: "the First Steps are here",
+      ...over,
+    });
+    const tapFind = async (): Promise<void> => {
+      (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+      (document.querySelector(".ach-find") as HTMLElement).click();
+      await settle();
+    };
+
+    it("drops a Find answer still in flight when a guide jump is started", async () => {
+      const late = deferred<FindResponse | null>();
+      await started({
+        tweak: (api) => {
+          api.achievements = async () => board([first]);
+          api.find = () => late.promise;
+        },
+      });
+      await tapFind();
+      jump().click();
+      expect($(".picker")?.hidden).toBe(true);
+      late.resolve({
+        matches: [findMatch("/doc/hA-coll"), findMatch("/doc/hA-checklist")],
+        truncated: false,
+      });
+      await settle();
+      expect($(".picker")?.hidden).toBe(true);
+      expect(document.querySelectorAll(".picker-matches .picker-item")).toHaveLength(0);
+      expect(shown()).toEqual(["/doc/hA-coll"]);
+    });
+
+    it("lets a Find started later show its own list over an open where-list, and a pick from it searches as text", async () => {
+      const two = [
+        wm(),
+        wm({ pageTitle: "Achievement Checklist", pageUrl: "/doc/hA-checklist", phrase: "Caves" }),
+      ];
+      await started({
+        matches: two,
+        tweak: (api) => {
+          api.achievements = async () => board([first]);
+          api.find = async () => ({
+            matches: [
+              findMatch("/doc/hA-coll"),
+              findMatch("/doc/hA-checklist", { pageTitle: "Achievement Checklist" }),
+            ],
+            truncated: false,
+          });
+        },
+      });
+      jump().click();
+      expect($(".picker-matches-title")?.textContent).toBe("In the guide: Sample Keep");
+      await tapFind();
+      expect($(".picker-matches-title")?.textContent).toBe("In the guide: First Steps");
+      (document.querySelectorAll(".picker-matches .picker-item")[1] as HTMLElement).click();
+      await settle();
+      expect(locateCalls.map((c) => c.slice(1))).toEqual([["First Steps", "Chapter One", "text"]]);
+    });
+  });
+
+  it("is hidden while the game has no page list, and offered once the list arrives", async () => {
+    let treeUp = false;
+    const { app } = await started({
+      tweak: (api) => {
+        api.hubTree = async (id) => {
+          if (!treeUp) throw new Error("down");
+          return tree(id === "hA" ? hubA : hubZ);
+        };
+      },
+    });
+    expect(($(".presence-row") as HTMLElement).hidden).toBe(false);
+    expect(jump().hidden).toBe(true);
+    treeUp = true;
+    await app.tick();
+    await settle();
+    expect(jump().hidden).toBe(false);
+  });
+
+  it("drops an answer that arrives while the status row is hidden, and asks again when the same text returns", async () => {
+    const held = deferred<GuideWhereResponse | null>();
+    let n = 0;
+    const { api, app } = await started({
+      tweak: (a) => {
+        a.where = (hubId) => {
+          a.whereCalls.push(hubId);
+          n += 1;
+          return n === 1 ? held.promise : Promise.resolve({ matches: [wm({ phrase: "Again" })] });
+        };
+      },
+    });
+    api.nowValue = { ...nowWith(hubA, line), state: "last-played" };
+    await app.tick();
+    expect(($(".presence-row") as HTMLElement).hidden).toBe(true);
+    held.resolve({ matches: [wm({ phrase: "Held" })] });
+    await settle();
+    expect(jump().hidden).toBe(true);
+    api.nowValue = nowWith(hubA, line);
+    await app.tick();
+    await settle();
+    expect(api.whereCalls).toEqual(["hA", "hA"]);
+    expect(jump().textContent).toBe("↪ Again");
   });
 });
 
@@ -3252,11 +3391,17 @@ describe("checklist progress", () => {
   });
 
   const started = async (
-    over: { poll?: number; now?: NowResponse; progress?: GuideProgressResponse | null } = {},
+    over: {
+      poll?: number;
+      now?: NowResponse;
+      progress?: GuideProgressResponse | null;
+      tweak?: (api: Fake) => void;
+    } = {},
   ) => {
     const api = fakeApi(over.now ?? playing(hubA));
     api.progressValue =
       over.progress === undefined ? progressOf("/doc/hA-checklist", 3, 7) : over.progress;
+    over.tweak?.(api);
     const app = startApp({
       doc: document,
       api,
@@ -3368,11 +3513,11 @@ describe("checklist progress", () => {
   });
 
   describe("after a click inside a guide page", () => {
-    const startedWithFrame = async () => {
+    const startedWithFrame = async (tweak?: (api: Fake) => void) => {
       vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
       const url = "/doc/hA-checklist";
       frameDocs.set(url, pageDoc());
-      const run = await started();
+      const run = await started(tweak === undefined ? {} : { tweak });
       railButtons()[1]?.click();
       const frame = document.querySelector("iframe") as HTMLIFrameElement;
       frame.dispatchEvent(new Event("load"));
@@ -3401,6 +3546,25 @@ describe("checklist progress", () => {
       expect(slotCount(1)).toBe("5/7");
       await vi.advanceTimersByTimeAsync(60_000);
       expect(fresh()).toBe(2);
+    });
+
+    it("keeps the newer counts when an older ordinary answer arrives after a fresh one", async () => {
+      const held = deferred<GuideProgressResponse | null>();
+      const { api, clickInFrame } = await startedWithFrame((a) => {
+        a.progress = (hubId, refresh) => {
+          a.progressCalls.push([hubId, refresh]);
+          return refresh === true
+            ? Promise.resolve(progressOf("/doc/hA-checklist", 5, 7))
+            : held.promise;
+        };
+      });
+      expect(api.progressCalls).toEqual([["hA", undefined]]);
+      clickInFrame();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(slotCount(1)).toBe("5/7");
+      held.resolve(progressOf("/doc/hA-checklist", 3, 7));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(slotCount(1)).toBe("5/7");
     });
 
     it("restarts both timers on a second click", async () => {
@@ -3498,7 +3662,8 @@ describe("refresh on wake", () => {
     vi.setSystemTime(Date.now() + 16_000);
     await wake();
     expect(api.achCalls).toEqual(["ra:20"]);
-    expect(api.progressCalls).toEqual([["hA", undefined]]);
+    // A wake asks for a fresh read, not the ordinary poll.
+    expect(api.progressCalls).toEqual([["hA", true]]);
   });
 
   it("leaves them alone when the last refresh is newer than 15 seconds", async () => {
@@ -3527,7 +3692,7 @@ describe("refresh on wake", () => {
     await flush();
     expect(gate.now).toBe(1);
     expect(api.achCalls).toEqual(["ra:20"]);
-    expect(api.progressCalls).toEqual([["hA", undefined]]);
+    expect(api.progressCalls).toEqual([["hA", true]]);
   });
 
   it("runs no tick on the online event when no window listener is given", async () => {
@@ -3535,6 +3700,71 @@ describe("refresh on wake", () => {
     window.dispatchEvent(new Event("online"));
     await flush();
     expect(gate.now).toBe(0);
+  });
+
+  it("starts at most one tick beyond the one already queued for events arriving together", async () => {
+    const win = new EventTarget();
+    const { gate } = await started(win);
+    document.dispatchEvent(new Event("visibilitychange"));
+    win.dispatchEvent(new Event("online"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flush();
+    await flush();
+    expect(gate.now).toBe(2);
+  });
+
+  it("keeps the refresh due after a failed now request, so the next good tick refreshes", async () => {
+    const { api, app } = await started();
+    vi.setSystemTime(Date.now() + 16_000);
+    api.failNow = true;
+    await wake();
+    expect(api.achCalls).toEqual([]);
+    api.failNow = false;
+    await app.tick();
+    expect(api.achCalls).toEqual(["ra:20"]);
+    expect(api.progressCalls).toEqual([["hA", true]]);
+    await app.tick();
+    expect(api.achCalls).toEqual(["ra:20"]);
+  });
+
+  it("spends the refresh on a tick that only loads a queued game", async () => {
+    const { api, app } = await started();
+    api.nowValue = playing(hubZ);
+    await app.tick();
+    vi.setSystemTime(Date.now() + 16_000);
+    api.achCalls.length = 0;
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flush();
+    await flush();
+    // The load fetched the new game's achievements itself; the later tick has nothing left due.
+    expect(api.achCalls).toEqual(["steam:10"]);
+    await app.tick();
+    expect(api.achCalls).toEqual(["steam:10"]);
+  });
+
+  it("spends the refresh on a tick that finds nothing on screen", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const api = fakeApi({
+      game: null,
+      state: "none",
+      stale: false,
+      observedAt: null,
+      presence: null,
+      hubs: [],
+    });
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    await flush();
+    vi.setSystemTime(Date.now() + 16_000);
+    await wake();
+    (document.querySelectorAll(".picker-games .picker-item")[0] as HTMLElement).click();
+    await app.tick();
+    await flush();
+    const before = api.achCalls.length;
+    expect(before).toBe(1);
+    await app.tick();
+    expect(api.achCalls).toHaveLength(before);
   });
 
   it("does not run two ticks at once for two events in a row", async () => {
