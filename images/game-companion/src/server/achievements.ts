@@ -37,6 +37,7 @@ export function normaliseSteam(appId: string, data: SteamGameData): Achievements
       unlockPercent: pct === undefined ? null : round1(pct),
       hidden: s.hidden === 1,
       missable: false,
+      kind: null,
     };
   });
   return {
@@ -70,6 +71,7 @@ export function normaliseRa(gameId: string, data: RaGameProgress): AchievementsR
           : null,
       hidden: a.Type === "progression" || a.Type === "win_condition",
       missable: a.Type === "missable",
+      kind: a.Type === "progression" ? "progression" : a.Type === "win_condition" ? "win" : null,
     };
   });
   return {

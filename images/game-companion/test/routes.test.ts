@@ -10,6 +10,8 @@ import type {
   FindResponse,
   GuideHub,
   GuideMarksResponse,
+  GuideProgressResponse,
+  GuideWhereResponse,
   NowResponse,
 } from "../src/shared/types.js";
 
@@ -46,11 +48,26 @@ const found: FindResponse = {
   truncated: false,
 };
 const marked: GuideMarksResponse = { missable: ["sample trophy"] };
+const whereHere: GuideWhereResponse = {
+  matches: [
+    {
+      pageTitle: "Walkthrough",
+      pageUrl: "/doc/w1",
+      heading: "Mock Village",
+      phrase: "Mock Village",
+    },
+  ],
+};
+const progressed: GuideProgressResponse = {
+  pages: [{ url: "/doc/c1", completed: 2, total: 5 }],
+};
 
 let server: Server;
 let base: string;
 let refreshCalls = 0;
 const findCalls: [string, string][] = [];
+const whereCalls: unknown[][] = [];
+const progressCalls: unknown[][] = [];
 
 beforeAll(async () => {
   const dir = await mkdtemp(join(tmpdir(), "gc-routes-"));
@@ -72,6 +89,14 @@ beforeAll(async () => {
       return hubId === "h1" ? found : null;
     },
     marks: async (hubId) => (hubId === "h1" ? marked : null),
+    where: async (...args: [string]) => {
+      whereCalls.push(args);
+      return args[0] === "h1" ? whereHere : null;
+    },
+    progress: async (...args: [string, { refresh: boolean }]) => {
+      progressCalls.push(args);
+      return args[0] === "h1" ? progressed : null;
+    },
   };
   server = createServer((req, res) => void createHandler(deps)(req, res));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -253,11 +278,17 @@ describe("routes", () => {
         marks: async () => {
           throw new Error("secret detail");
         },
+        where: async () => {
+          throw new Error("secret detail");
+        },
+        progress: async () => {
+          throw new Error("secret detail");
+        },
       };
       const s = createServer((req, res) => void createHandler(deps)(req, res));
       await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
       const origin = `http://127.0.0.1:${(s.address() as AddressInfo).port}/companion/api/guides/h1`;
-      for (const path of ["/find?q=needle", "/marks"]) {
+      for (const path of ["/find?q=needle", "/marks", "/where", "/progress?refresh=1"]) {
         const r = await fetch(origin + path);
         expect(r.status).toBe(500);
         const body = await r.text();
@@ -265,6 +296,84 @@ describe("routes", () => {
         expect(body).not.toContain("needle");
       }
       await new Promise<void>((res) => s.close(() => res()));
+    });
+  });
+
+  describe("guide where and progress", () => {
+    const get = (path: string, init?: RequestInit) =>
+      fetch(`${base}/companion/api/guides/${path}`, init);
+
+    it("returns the where matches for a known hub as uncached JSON", async () => {
+      const r = await get("h1/where");
+      expect(r.status).toBe(200);
+      expect(await r.json()).toEqual(whereHere);
+      expect(r.headers.get("cache-control")).toBe("no-store");
+      expect(r.headers.get("content-security-policy")).toContain("default-src 'none'");
+    });
+
+    it("404s where for an unknown hub", async () => {
+      const r = await get("nope/where");
+      expect(r.status).toBe(404);
+      expect(await r.json()).toEqual({ error: "unknown guide" });
+    });
+
+    it("hands nothing but the hub id to where, whatever the request carries", async () => {
+      whereCalls.length = 0;
+      await get("h1/where?q=anything&status=Mock%20Village", {
+        headers: { cookie: "session=abc", "x-status": "Mock Village" },
+      });
+      expect(whereCalls).toEqual([["h1"]]);
+    });
+
+    it("returns the progress for a known hub as uncached JSON", async () => {
+      const r = await get("h1/progress");
+      expect(r.status).toBe(200);
+      expect(await r.json()).toEqual(progressed);
+      expect(r.headers.get("cache-control")).toBe("no-store");
+    });
+
+    it("404s progress for an unknown hub", async () => {
+      const r = await get("nope/progress?refresh=1");
+      expect(r.status).toBe(404);
+      expect(await r.json()).toEqual({ error: "unknown guide" });
+    });
+
+    it("passes refresh=1 as a refresh and anything else as none", async () => {
+      progressCalls.length = 0;
+      for (const qs of [
+        "",
+        "?refresh=1",
+        "?refresh=0",
+        "?refresh=true",
+        "?refresh=",
+        "?refresh=11",
+      ]) {
+        await get(`h1/progress${qs}`);
+      }
+      expect(progressCalls).toEqual([
+        ["h1", { refresh: false }],
+        ["h1", { refresh: true }],
+        ["h1", { refresh: false }],
+        ["h1", { refresh: false }],
+        ["h1", { refresh: false }],
+        ["h1", { refresh: false }],
+      ]);
+    });
+
+    it("rejects writes and answers HEAD without a body", async () => {
+      for (const p of ["h1/where", "h1/progress"]) {
+        const w = await get(p, { method: "POST" });
+        expect(w.status).toBe(405);
+        expect(w.headers.get("allow")).toBe("GET, HEAD");
+        const h = await get(p, { method: "HEAD" });
+        expect(h.status).toBe(200);
+        expect(await h.text()).toBe("");
+      }
+    });
+
+    it("rejects a hub id outside the pattern", async () => {
+      expect((await get("h1.x/where")).status).toBe(404);
+      expect((await get(`${"a".repeat(65)}/progress`)).status).toBe(404);
     });
   });
 
@@ -337,6 +446,8 @@ describe("routes", () => {
       achievements: async () => null,
       find: async () => null,
       marks: async () => null,
+      where: async () => null,
+      progress: async () => null,
     };
     const s = createServer((req, res) => void createHandler(deps)(req, res));
     await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));

@@ -66,6 +66,11 @@ export interface Achievement {
   unlockPercent: number | null;
   hidden: boolean;
   missable: boolean;
+  /**
+   * RetroAchievements' own label: part of the story path, or beating the game. Null for
+   * everything else and for every Steam achievement.
+   */
+  kind: "progression" | "win" | null;
 }
 
 export interface AchievementsResponse {
@@ -98,6 +103,35 @@ export interface FindResponse {
 export interface GuideMarksResponse {
   /** Lower-cased achievement names that the guide marks as missable. */
   missable: string[];
+}
+
+/** A guide heading whose text matches part of the game's status line. */
+export interface WhereMatch {
+  pageTitle: string;
+  /** Same-origin path of the page, starting with `/doc/`. */
+  pageUrl: string;
+  /** The heading's text, markdown marks removed. */
+  heading: string;
+  /** The part of the heading that matched, as written in the heading. */
+  phrase: string;
+}
+
+export interface GuideWhereResponse {
+  /** Best match first, at most 5. */
+  matches: WhereMatch[];
+}
+
+/** How far a reader has got through the checklist of one guide page. */
+export interface PageProgress {
+  /** Same-origin path of the page, starting with `/doc/`. */
+  url: string;
+  completed: number;
+  total: number;
+}
+
+export interface GuideProgressResponse {
+  /** Pages that hold at least one checkbox, in guide order. */
+  pages: PageProgress[];
 }
 
 export interface ErrorResponse {

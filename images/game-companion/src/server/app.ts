@@ -14,7 +14,7 @@ export interface AppParts {
   detector: Pick<Detector, "current">;
   index: Pick<GuideIndex, "available" | "hubs" | "lookup" | "tree" | "requestRefresh">;
   achievements: Pick<AchievementService, "get">;
-  pages: Pick<GuidePageService, "find" | "marks">;
+  pages: Pick<GuidePageService, "find" | "marks" | "where" | "progress">;
 }
 
 /**
@@ -74,5 +74,19 @@ export function buildDeps(parts: AppParts): RouteDeps {
     },
     find: (hubId, query) => pages.find(hubId, query),
     marks: (hubId) => pages.marks(hubId),
+    where: async (hubId) => {
+      const hub = index.tree(hubId)?.hub;
+      if (!hub) return null;
+      // The status text is the detector's own. It is offered only for the game being played, so
+      // a guide for any other game never sees it.
+      const snap = snapshot();
+      const game = snap.game;
+      const status = snap.presence;
+      if (snap.state !== "playing" || status === null || game === null) return { matches: [] };
+      if (hub.source === null || hub.gameId === null) return { matches: [] };
+      if (game.source !== hub.source || game.id !== hub.gameId) return { matches: [] };
+      return pages.where(hubId, status);
+    },
+    progress: (hubId, opts) => pages.progress(hubId, opts),
   };
 }

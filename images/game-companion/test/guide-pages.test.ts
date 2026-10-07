@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  checkboxProgress,
   findInPages,
   GuidePageService,
   missableMarks,
   type PageText,
+  whereInPages,
 } from "../src/server/guide-pages.js";
 
 // Code-unit mode (no `u` flag): matches a half of a surrogate pair standing alone.
@@ -299,6 +301,151 @@ describe("findInPages", () => {
   });
 });
 
+describe("whereInPages", () => {
+  const where = (status: string, ...texts: string[]) =>
+    whereInPages(
+      texts.map((t, i) => page(`p${i}`, t)),
+      status,
+    ).matches;
+
+  it("offers the heading holding a place named in the status, with the part that matched", () => {
+    expect(
+      whereInPages(
+        [page("a", "# Sample Abbey, Mock Village & Ruined Keep\nbody", "Sample Guide")],
+        "Exploring in Mock Village at Level 3",
+      ),
+    ).toEqual({
+      matches: [
+        {
+          pageTitle: "Sample Guide",
+          pageUrl: "/doc/a",
+          heading: "Sample Abbey, Mock Village & Ruined Keep",
+          phrase: "Mock Village",
+        },
+      ],
+    });
+  });
+
+  it("matches whole words only", () => {
+    expect(where("in Mock Villages now", "## Mock Village")).toEqual([]);
+    expect(where("at the Portal", "## Port")).toEqual([]);
+    expect(where("at the Port", "## Port")).toHaveLength(1);
+  });
+
+  it("ignores case and punctuation on both sides", () => {
+    expect(where("IN MOCK-VILLAGE!!", "## mock village")).toHaveLength(1);
+    expect(where("in mock village", "## Mock-Village")).toHaveLength(1);
+  });
+
+  it("matches a numbered heading and reports the phrase without the number", () => {
+    const m = where("Up the road to Mock Village", "## 3. Mock Village");
+    expect(m.map((x) => [x.heading, x.phrase])).toEqual([["3. Mock Village", "Mock Village"]]);
+  });
+
+  it("prefers the numbered form when the status has the number too", () => {
+    const m = where("now at 3 mock village", "## 3. Mock Village");
+    expect(m.map((x) => x.phrase)).toEqual(["3. Mock Village"]);
+  });
+
+  it("splits a heading at every separator", () => {
+    const headings = [
+      "Alpha Hall/Beta Hall | Gamma Hall: Delta Hall; Epsilon Hall (Zeta Hall) [Eta Hall]",
+      "Theta Hall — Iota Hall – Kappa Hall • Lambda Hall · Mu Hall → Nu Hall",
+      "Xi Hall - Omicron Hall and Pi Hall to Rho Hall or Sigma Hall",
+      "Tau Hall & Upsilon Hall, Phi Hall",
+    ];
+    const text = headings.map((h) => `## ${h}`).join("\n");
+    const names =
+      "Alpha Beta Gamma Delta Epsilon Zeta Eta Theta Iota Kappa Lambda Mu Nu Xi Omicron Pi Rho Sigma Tau Upsilon Phi".split(
+        " ",
+      );
+    for (const name of names) {
+      const phrase = `${name} Hall`;
+      expect(where(`standing in ${phrase}`, text).map((m) => m.phrase)).toEqual([phrase]);
+    }
+  });
+
+  it("does not split a hyphen without spaces", () => {
+    expect(where("in North-West Keep", "## North-West Keep").map((m) => m.phrase)).toEqual([
+      "North-West Keep",
+    ]);
+  });
+
+  it("never offers a generic heading, even when the status holds the word", () => {
+    const text = "# Notes\n# Tips\n# Level\n# The Hero\n# Main Story\n# Side Quests\n# Post-Game";
+    expect(where("notes tips level the hero main story side quests post game", text)).toEqual([]);
+  });
+
+  it("never offers a part of three characters or fewer, or one with no letter", () => {
+    expect(where("in Ash and 2024 and 123 4567", "## Ash, 2024, 123 4567")).toEqual([]);
+  });
+
+  it("lists a longer phrase first, then document order across pages", () => {
+    const m = whereInPages(
+      [
+        page("a", "# Mock Village\n# Sample Town"),
+        page("b", "# Ruined Keep Gate\n# Mock Village Square"),
+      ],
+      "mock village square, ruined keep gate, sample town, mock village",
+    ).matches;
+    expect(m.map((x) => x.heading)).toEqual([
+      "Mock Village Square",
+      "Ruined Keep Gate",
+      "Mock Village",
+      "Sample Town",
+    ]);
+    const ties = whereInPages(
+      [page("a", "# Alpha Hall\n# Gamma Hall"), page("b", "# Beta Hall")],
+      "alpha hall beta hall gamma hall",
+    ).matches;
+    expect(ties.map((x) => x.heading)).toEqual(["Alpha Hall", "Gamma Hall", "Beta Hall"]);
+  });
+
+  it("returns at most five by default and honours a limit", () => {
+    const names = ["Alpha", "Bravo", "Cedar", "Delta", "Ember", "Fjord", "Grove", "Haven"];
+    const text = names.map((n) => `# ${n} Hall`).join("\n");
+    const status = names.map((n) => `${n} Hall`).join(" ");
+    expect(where(status, text).map((m) => m.phrase)).toEqual(
+      names.slice(0, 5).map((n) => `${n} Hall`),
+    );
+    expect(whereInPages([page("a", text)], status, 2).matches).toHaveLength(2);
+  });
+
+  it("lists one heading once, however many of its parts match", () => {
+    expect(where("mock village and ruined keep", "## Mock Village / Ruined Keep")).toHaveLength(1);
+    expect(where("mock village and ruined keep", "## Mock Village / Ruined Keep")[0]?.phrase).toBe(
+      "Mock Village",
+    );
+  });
+
+  it("gives the longest matching part of a heading", () => {
+    const m = where("big mock village east", "## Mock Village, Big Mock Village East");
+    expect(m.map((x) => x.phrase)).toEqual(["Big Mock Village East"]);
+  });
+
+  it("gives nothing for an empty or white-space status", () => {
+    expect(where("", "## Mock Village")).toEqual([]);
+    expect(where("  \t ", "## Mock Village")).toEqual([]);
+  });
+
+  it("uses the plain heading text, markdown marks removed", () => {
+    const m = where("in mock village", "## **Mock Village** ([map](https://example.test/m))");
+    expect(m.map((x) => [x.heading, x.phrase])).toEqual([["Mock Village (map)", "Mock Village"]]);
+  });
+
+  it("answers promptly for a long status and thousands of headings", () => {
+    const text = Array.from(
+      { length: 5000 },
+      (_, i) => `## Place ${i}, Region ${i} & Spot ${i}`,
+    ).join("\n");
+    const status = `region 4999 ${"in the middle of nowhere ".repeat(12)}`.slice(0, 300);
+    const t0 = Date.now();
+    const m = where(status, text);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(m.map((x) => x.phrase)).toEqual(["Region 4999"]);
+  });
+});
+
 describe("missableMarks", () => {
   const marks = (...lines: string[]): string[] => missableMarks([page("a", lines.join("\n"))]);
 
@@ -361,6 +508,40 @@ describe("missableMarks", () => {
       "crlf",
       "two",
     ]);
+  });
+});
+
+describe("checkboxProgress", () => {
+  it("counts ticked and unticked boxes, nested, with either bullet and either case", () => {
+    const text = [
+      "# Chapter",
+      "- [ ] one",
+      "- [x] two",
+      "  - [ ] nested",
+      "\t* [X] starred",
+      "* [ ] star open",
+      "plain line [x]",
+      "1. [x] numbered is not a checkbox line",
+    ].join("\n");
+    expect(checkboxProgress([page("a", text)])).toEqual({
+      pages: [{ url: "/doc/a", completed: 2, total: 5 }],
+    });
+  });
+
+  it("leaves out a page with no checkbox and keeps the pages' order", () => {
+    const r = checkboxProgress([
+      page("b", "- [x] one"),
+      page("c", "just text\n- a bullet"),
+      page("a", "- [ ] one\r\n- [ ] two"),
+    ]);
+    expect(r.pages).toEqual([
+      { url: "/doc/b", completed: 1, total: 1 },
+      { url: "/doc/a", completed: 0, total: 2 },
+    ]);
+  });
+
+  it("answers an empty list for no pages", () => {
+    expect(checkboxProgress([])).toEqual({ pages: [] });
   });
 });
 
@@ -810,6 +991,290 @@ describe("GuidePageService", () => {
       expect(state.loads).toHaveLength(25);
       await svc.find("h0", "x");
       expect(state.loads).toHaveLength(26);
+    });
+  });
+
+  describe("where", () => {
+    const texts = { a: "# Mock Village\nbody", b: "## Ruined Keep\n- [ ] item" };
+
+    it("answers null for an unknown hub without loading", async () => {
+      const { make, state } = setup({ texts });
+      expect(await make().where("nope", "in Mock Village")).toBeNull();
+      expect(state.loads).toEqual([]);
+    });
+
+    it("answers no matches for an empty status without loading", async () => {
+      const { make, state } = setup({ texts });
+      expect(await make().where("h1", "  ")).toEqual({ matches: [] });
+      expect(state.loads).toEqual([]);
+    });
+
+    it("finds headings in the hub's pages", async () => {
+      const { make } = setup({ texts });
+      const r = await make().where("h1", "Inside the ruined keep");
+      expect(r?.matches.map((m) => [m.pageUrl, m.heading, m.phrase])).toEqual([
+        ["/doc/b", "Ruined Keep", "Ruined Keep"],
+      ]);
+    });
+
+    it("uses the cache like find does", async () => {
+      const { make, state } = setup({ texts });
+      const svc = make();
+      await svc.find("h1", "item");
+      await svc.where("h1", "mock village");
+      await svc.where("h1", "ruined keep");
+      expect(state.loads).toEqual(["a", "b"]);
+    });
+
+    it("rejects, without upstream text, when nothing can be loaded", async () => {
+      const { make } = setup({ texts, failing: new Set(["a", "b"]) });
+      const err = await make()
+        .where("h1", "mock village")
+        .catch((e: unknown) => e as Error);
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).not.toContain("secret");
+    });
+  });
+
+  describe("progress", () => {
+    const settle = () => new Promise((r) => setTimeout(r, 20));
+    const hang = (state: { gate: Promise<void> | null }): (() => void) => {
+      let release = () => {};
+      state.gate = new Promise<void>((r) => {
+        release = r;
+      });
+      return () => {
+        state.gate = null;
+        release();
+      };
+    };
+    const texts = () => ({ a: "- [ ] one\n- [x] two", b: "- [x] three" });
+    const counts = (r: { pages: { url: string; completed: number; total: number }[] } | null) =>
+      r?.pages.map((p) => `${p.url} ${p.completed}/${p.total}`);
+
+    it("answers null for an unknown hub without loading", async () => {
+      const { make, state } = setup({ texts: texts() });
+      expect(await make().progress("nope")).toBeNull();
+      expect(state.loads).toEqual([]);
+    });
+
+    it("answers an empty list for a hub with no pages or no source", async () => {
+      const { make, state } = setup({ hubs: { h1: [] } });
+      expect(await make().progress("h1")).toEqual({ pages: [] });
+      expect(await make({ source: null }).progress("h1")).toEqual({ pages: [] });
+      expect(state.loads).toEqual([]);
+    });
+
+    it("counts the boxes of each page, in guide order", async () => {
+      const { make } = setup({ texts: texts() });
+      expect(counts(await make().progress("h1"))).toEqual(["/doc/a 1/2", "/doc/b 1/1"]);
+    });
+
+    it("serves a copy younger than a minute without a load", async () => {
+      const { make, state, texts: held } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      held.a = "- [x] one\n- [x] two";
+      state.clock += 59_999;
+      expect(counts(await svc.progress("h1"))).toEqual(["/doc/a 1/2", "/doc/b 1/1"]);
+      await settle();
+      expect(state.loads).toEqual(["a", "b"]);
+    });
+
+    it("serves an older copy at once and refreshes behind it, ignoring the ten minute lifetime", async () => {
+      const { make, state, texts: held } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      held.a = "- [x] one\n- [x] two";
+      state.clock += 60_000;
+      const release = hang(state);
+      expect(counts(await svc.progress("h1"))).toEqual(["/doc/a 1/2", "/doc/b 1/1"]);
+      expect(state.loads).toEqual(["a", "b", "a", "b"]);
+      // One refresh at a time.
+      await svc.progress("h1");
+      expect(state.loads).toHaveLength(4);
+      release();
+      await settle();
+      expect(counts(await svc.progress("h1"))).toEqual(["/doc/a 2/2", "/doc/b 1/1"]);
+      expect(state.loads).toHaveLength(4);
+    });
+
+    it("does not wait for the background refresh or touch the deadline timer", async () => {
+      const { make, state } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      state.clock += 120_000;
+      const release = hang(state);
+      const before = state.timers.length;
+      await svc.progress("h1");
+      expect(state.timers).toHaveLength(before);
+      release();
+      await settle();
+    });
+
+    it("waits for a load when asked to refresh and answers from the new copy", async () => {
+      const { make, state, texts: held } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      held.b = "- [x] three\n- [ ] four";
+      state.clock += 5_000;
+      expect(counts(await svc.progress("h1", { refresh: true }))).toEqual([
+        "/doc/a 1/2",
+        "/doc/b 1/2",
+      ]);
+      expect(state.loads).toHaveLength(4);
+      // The new copy is now the held one.
+      expect(counts(await svc.progress("h1"))).toEqual(["/doc/a 1/2", "/doc/b 1/2"]);
+      expect(state.loads).toHaveLength(4);
+    });
+
+    it("does not reload for a refresh when the copy is younger than five seconds", async () => {
+      const { make, state, texts: held } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      held.a = "";
+      state.clock += 4_999;
+      expect(counts(await svc.progress("h1", { refresh: true }))).toEqual([
+        "/doc/a 1/2",
+        "/doc/b 1/1",
+      ]);
+      expect(state.loads).toEqual(["a", "b"]);
+    });
+
+    it("treats refresh: false like no refresh", async () => {
+      const { make, state } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      state.clock += 30_000;
+      await svc.progress("h1", { refresh: false });
+      expect(state.loads).toEqual(["a", "b"]);
+    });
+
+    it("joins a refresh already running instead of starting another", async () => {
+      const { make, state, texts: held } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      held.a = "- [x] one\n- [x] two";
+      state.clock += 61_000;
+      const release = hang(state);
+      await svc.progress("h1"); // starts the background refresh
+      const waiting = svc.progress("h1", { refresh: true });
+      await settle();
+      release();
+      expect(counts(await waiting)).toEqual(["/doc/a 2/2", "/doc/b 1/1"]);
+      expect(state.loads).toHaveLength(4);
+    });
+
+    it("answers from the held copy when the limiter refuses a refresh", async () => {
+      const { make, state, texts: held } = setup({ texts: texts() });
+      const svc = make({ maxLoadsPerMinute: 1 });
+      await svc.progress("h1");
+      held.a = "";
+      state.clock += 10_000;
+      expect(counts(await svc.progress("h1", { refresh: true }))).toEqual([
+        "/doc/a 1/2",
+        "/doc/b 1/1",
+      ]);
+      expect(state.loads).toEqual(["a", "b"]);
+    });
+
+    it("answers from the held copy when the refresh fails", async () => {
+      const { make, state, failing } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      failing.add("a").add("b");
+      state.clock += 10_000;
+      expect(counts(await svc.progress("h1", { refresh: true }))).toEqual([
+        "/doc/a 1/2",
+        "/doc/b 1/1",
+      ]);
+      expect(state.loads).toHaveLength(4);
+    });
+
+    it("answers from the held copy when the refresh outlasts the deadline", async () => {
+      const { make, state } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      state.clock += 10_000;
+      const release = hang(state);
+      const pending = svc.progress("h1", { refresh: true });
+      await settle();
+      const timers = state.timers.filter((t) => !t.cancelled);
+      expect(timers.map((t) => t.ms)).toEqual([6000]);
+      timers[0]?.fn();
+      expect(counts(await pending)).toEqual(["/doc/a 1/2", "/doc/b 1/1"]);
+      release();
+      await settle();
+    });
+
+    it("loads like find when no copy is held, refresh or not", async () => {
+      const { make, state } = setup({ texts: texts() });
+      expect(counts(await make().progress("h1", { refresh: true }))).toEqual([
+        "/doc/a 1/2",
+        "/doc/b 1/1",
+      ]);
+      expect(state.loads).toEqual(["a", "b"]);
+      expect(state.timers.map((t) => t.ms)).toEqual([6000]);
+    });
+
+    it("rejects, without upstream text, when no copy is held and nothing loads", async () => {
+      const { make } = setup({ texts: texts(), failing: new Set(["a", "b"]) });
+      for (const opts of [undefined, { refresh: true }]) {
+        const err = await make()
+          .progress("h1", opts)
+          .catch((e: unknown) => e as Error);
+        expect(err).toBeInstanceOf(Error);
+        expect((err as Error).message).not.toContain("secret");
+      }
+    });
+
+    it("rejects when the limiter refuses and no copy is held", async () => {
+      const { make } = setup({ texts: texts() });
+      const svc = make({ maxLoadsPerMinute: 0 });
+      await expect(svc.progress("h1")).rejects.toThrow();
+    });
+
+    it("honours progressTtlMs and refreshMinAgeMs", async () => {
+      const { make, state } = setup({ texts: texts() });
+      const svc = make({ progressTtlMs: 1_000, refreshMinAgeMs: 100 });
+      await svc.progress("h1");
+      state.clock += 99;
+      await svc.progress("h1", { refresh: true });
+      expect(state.loads).toHaveLength(2);
+      state.clock += 1;
+      await svc.progress("h1", { refresh: true });
+      expect(state.loads).toHaveLength(4);
+      state.clock += 1_000;
+      await svc.progress("h1");
+      await settle();
+      expect(state.loads).toHaveLength(6);
+    });
+
+    it("leaves find and marks freshness unchanged", async () => {
+      const { make, state } = setup({ texts: texts() });
+      const svc = make();
+      await svc.find("h1", "one");
+      state.clock += 5 * 60_000;
+      await svc.find("h1", "one");
+      await svc.marks("h1");
+      await settle();
+      expect(state.loads).toEqual(["a", "b"]);
+      state.clock += 5 * 60_000;
+      await svc.find("h1", "one"); // ten minutes: expired, answered at once, refreshed behind
+      await settle();
+      expect(state.loads).toHaveLength(4);
+    });
+
+    it("lets find and marks use a copy that progress has just refreshed", async () => {
+      const { make, state } = setup({ texts: texts() });
+      const svc = make();
+      await svc.progress("h1");
+      state.clock += 8 * 60_000;
+      await svc.progress("h1", { refresh: true });
+      state.clock += 5 * 60_000; // 13 minutes after the first load, 5 after the second
+      await svc.find("h1", "one");
+      await settle();
+      expect(state.loads).toHaveLength(4);
     });
   });
 

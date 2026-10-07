@@ -1052,6 +1052,7 @@ describe("startApp", () => {
         unlockPercent: 50,
         hidden: false,
         missable: false,
+        kind: null,
       },
     ],
   });
@@ -1395,6 +1396,7 @@ const mk = (id: string, name: string, unlocked = false): Achievement => ({
   unlockPercent: 10,
   hidden: false,
   missable: false,
+  kind: null,
 });
 const board = (list: Achievement[]): AchievementsResponse => ({
   source: "ra",

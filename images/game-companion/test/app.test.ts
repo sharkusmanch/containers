@@ -33,7 +33,12 @@ function parts(over: Record<string, unknown> = {}) {
       requestRefresh: () => {},
     },
     achievements: { get: async () => null },
-    pages: { find: async () => null, marks: async () => null },
+    pages: {
+      find: async () => null,
+      marks: async () => null,
+      where: async () => null,
+      progress: async () => null,
+    },
     ...over,
   };
 }
@@ -215,6 +220,162 @@ describe("guide pages", () => {
     const d = buildDeps(parts());
     expect(await d.find("nope", "needle")).toBeNull();
     expect(await d.marks("nope")).toBeNull();
+  });
+});
+
+describe("guide where and progress", () => {
+  const ra = (id: string): GuideHub => ({
+    ...hub,
+    hubId: "h2",
+    source: "ra",
+    gameId: id,
+    platformLabel: "RA",
+  });
+  const detecting = (
+    game: { source: "steam" | "ra"; id: string | null } | null,
+    state: "playing" | "last-played" | "none",
+    presence: string | null,
+  ) => ({
+    current: () => ({
+      game: game && { ...game, title: "Zeta" },
+      state,
+      observedAt: 1,
+      presence,
+      stale: false,
+    }),
+  });
+  function setup(
+    snapshot: ReturnType<typeof detecting>,
+    hubs: Record<string, GuideHub | null> = { h1: hub },
+  ) {
+    const asked: unknown[][] = [];
+    const pages = {
+      find: async () => null,
+      marks: async () => null,
+      where: async (...args: unknown[]) => {
+        asked.push(["where", ...args]);
+        return { matches: [] };
+      },
+      progress: async (...args: unknown[]) => {
+        asked.push(["progress", ...args]);
+        return { pages: [{ url: "/doc/a", completed: 1, total: 2 }] };
+      },
+    };
+    const index = {
+      ...parts().index,
+      tree: (id: string) => {
+        const h = hubs[id];
+        return h ? { hub: h, pages: [] } : null;
+      },
+    };
+    return { asked, d: buildDeps(parts({ pages, index, detector: snapshot })) };
+  }
+  const playing = { source: "steam" as const, id: "10" };
+
+  it("hands the detector's presence to the page service when this game is being played", async () => {
+    const { d, asked } = setup(detecting(playing, "playing", "In Mock Village"));
+    await d.where("h1");
+    expect(asked).toEqual([["where", "h1", "In Mock Village"]]);
+  });
+
+  it("answers the page service's value for a match", async () => {
+    const pages = {
+      find: async () => null,
+      marks: async () => null,
+      where: async () => ({
+        matches: [{ pageTitle: "G", pageUrl: "/doc/a", heading: "Mock Village", phrase: "Mock" }],
+      }),
+      progress: async () => null,
+    };
+    const d = buildDeps(
+      parts({
+        pages,
+        index: { ...parts().index, tree: () => ({ hub, pages: [] }) },
+        detector: detecting(playing, "playing", "Mock Village"),
+      }),
+    );
+    expect((await d.where("h1"))?.matches).toHaveLength(1);
+  });
+
+  it("calls the page service as methods, keeping their `this`", async () => {
+    class Pages {
+      private readonly url = "/doc/a";
+      find = async () => null;
+      marks = async () => null;
+      async where(hubId: string, status: string) {
+        return {
+          matches: [{ pageTitle: hubId, pageUrl: this.url, heading: status, phrase: status }],
+        };
+      }
+      async progress(_hubId: string, opts?: { refresh?: boolean }) {
+        return { pages: [{ url: this.url, completed: opts?.refresh ? 2 : 1, total: 3 }] };
+      }
+    }
+    const d = buildDeps(
+      parts({
+        pages: new Pages(),
+        index: { ...parts().index, tree: () => ({ hub, pages: [] }) },
+        detector: detecting(playing, "playing", "Mock Village"),
+      }),
+    );
+    expect((await d.where("h1"))?.matches[0]?.pageUrl).toBe("/doc/a");
+    expect(await d.progress("h1", { refresh: true })).toEqual({
+      pages: [{ url: "/doc/a", completed: 2, total: 3 }],
+    });
+  });
+
+  it.each([
+    ["the state is last-played", detecting(playing, "last-played", "In Mock Village")],
+    ["the state is none", detecting(null, "none", "In Mock Village")],
+    ["there is no presence", detecting(playing, "playing", null)],
+    [
+      "another steam game is being played",
+      detecting({ source: "steam", id: "11" }, "playing", "x"),
+    ],
+    [
+      "the same id on the other source is being played",
+      detecting({ source: "ra", id: "10" }, "playing", "x"),
+    ],
+    ["the game has no id", detecting({ source: "steam", id: null }, "playing", "x")],
+  ])("answers no matches, without the page service, when %s", async (_name, snapshot) => {
+    const { d, asked } = setup(snapshot);
+    expect(await d.where("h1")).toEqual({ matches: [] });
+    expect(asked).toEqual([]);
+  });
+
+  it("answers no matches for a hub of another game or source, or with no game id", async () => {
+    for (const other of [
+      ra("10"),
+      { ...hub, gameId: "11" },
+      { ...hub, source: null },
+      { ...hub, gameId: null },
+    ]) {
+      const { d, asked } = setup(detecting(playing, "playing", "In Mock Village"), { h1: other });
+      expect(await d.where("h1")).toEqual({ matches: [] });
+      expect(asked).toEqual([]);
+    }
+  });
+
+  it("answers null for an unknown hub without the page service", async () => {
+    const { d, asked } = setup(detecting(playing, "playing", "In Mock Village"));
+    expect(await d.where("nope")).toBeNull();
+    expect(asked).toEqual([]);
+  });
+
+  it("passes the hub and the refresh flag on to progress", async () => {
+    const { d, asked } = setup(detecting(null, "none", null));
+    expect(await d.progress("h1", { refresh: true })).toEqual({
+      pages: [{ url: "/doc/a", completed: 1, total: 2 }],
+    });
+    await d.progress("h1", { refresh: false });
+    expect(asked).toEqual([
+      ["progress", "h1", { refresh: true }],
+      ["progress", "h1", { refresh: false }],
+    ]);
+  });
+
+  it("passes an unknown hub through as null for progress", async () => {
+    expect(await buildDeps(parts()).progress("nope", { refresh: false })).toBeNull();
   });
 });
 

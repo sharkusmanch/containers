@@ -1,4 +1,12 @@
-import type { FindMatch, FindResponse, GuideMarksResponse } from "../shared/types.js";
+import type {
+  FindMatch,
+  FindResponse,
+  GuideMarksResponse,
+  GuideProgressResponse,
+  GuideWhereResponse,
+  PageProgress,
+  WhereMatch,
+} from "../shared/types.js";
 import type { PageRef } from "./guide-index.js";
 
 export interface PageText {
@@ -27,7 +35,7 @@ const MARKS = /\\([!-/:-@[-`{-~])|`|[*_~]+/g;
 // A heading line is read up to this many characters; the rest could never reach the 160-character cap.
 const HEADING_READ_MAX = 500;
 
-const CHECKBOX_LINE = /^[ \t]*[-*][ \t]+\[[ xX]\]/;
+const CHECKBOX_LINE = /^[ \t]*[-*][ \t]+\[([ xX])\]/;
 const WARNING_SIGN = "⚠";
 const BOLD_SPAN = /\*\*(.+?)\*\*/;
 const LEADING_SIGNS = /^(?:\s|\u26A0\uFE0F?)+/;
@@ -183,6 +191,145 @@ export function missableMarks(pages: PageText[]): string[] {
   return [...names];
 }
 
+const WHERE_LIMIT = 5;
+const WHERE_MIN_LENGTH = 4;
+// Fixed alternations of literals: no part of a heading can make this backtrack.
+const HEADING_PARTS = /[,&/|:;()[\]—–•·→]| - | (?:and|to|or) /i;
+const WORD = /[\p{L}\p{N}]+/gu;
+const ONLY_DIGITS = /^\p{N}+$/u;
+const HAS_LETTER = /\p{L}/u;
+const GENERIC_HEADINGS = new Set([
+  "notes",
+  "tips",
+  "story",
+  "main story",
+  "boss",
+  "bosses",
+  "item",
+  "items",
+  "level",
+  "levels",
+  "intro",
+  "introduction",
+  "overview",
+  "walkthrough",
+  "checklist",
+  "achievements",
+  "collectibles",
+  "side quests",
+  "missable",
+  "missables",
+  "part",
+  "chapter",
+  "area",
+  "world",
+  "town",
+  "dungeon",
+  "hero",
+  "the hero",
+  "party",
+  "post game",
+  "postgame",
+  "early game",
+  "mid game",
+  "late game",
+  "general",
+  "optional",
+  "rewards",
+  "shops",
+  "equipment",
+  "summary",
+  "contents",
+]);
+
+/** Lower-case, every character that is not a letter or number a space, runs collapsed, trimmed. */
+const normalise = (text: string): string =>
+  text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+
+/** The part without its leading tokens that are pure numbers ("1. Sample Town" gives "Sample Town"). */
+function withoutLeadingNumbers(part: string): string {
+  for (const word of part.matchAll(WORD)) {
+    if (!ONLY_DIGITS.test(word[0])) return part.slice(word.index);
+  }
+  return "";
+}
+
+/** The parts of a heading, as written, that could name a place; each with and without its number. */
+function headingCandidates(heading: string): { phrase: string; key: string }[] {
+  const out: { phrase: string; key: string }[] = [];
+  for (const raw of heading.split(HEADING_PARTS)) {
+    const part = raw.trim();
+    for (const phrase of new Set([part, withoutLeadingNumbers(part).trim()])) {
+      const key = normalise(phrase);
+      if (key.length >= WHERE_MIN_LENGTH && HAS_LETTER.test(key) && !GENERIC_HEADINGS.has(key)) {
+        out.push({ phrase, key });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Guide headings that name something the game's status line names: a part of the heading,
+ * as whole words, found in the status. The longest part per heading, longest phrase first.
+ */
+export function whereInPages(
+  pages: PageText[],
+  status: string,
+  limit: number = WHERE_LIMIT,
+): GuideWhereResponse {
+  const spoken = normalise(status);
+  if (spoken === "") return { matches: [] };
+  const padded = ` ${spoken} `;
+  const found: { match: WhereMatch; length: number }[] = [];
+  for (const page of pages) {
+    const seen = new Set<string>();
+    for (const line of lines(page.text)) {
+      const heading = headingText(line);
+      if (!heading || seen.has(heading)) continue;
+      seen.add(heading);
+      let best: { phrase: string; key: string } | undefined;
+      for (const c of headingCandidates(heading)) {
+        if (padded.includes(` ${c.key} `) && (!best || c.key.length > best.key.length)) best = c;
+      }
+      if (best) {
+        found.push({
+          match: {
+            pageTitle: page.title,
+            pageUrl: page.url,
+            heading,
+            phrase: best.phrase,
+          },
+          length: best.key.length,
+        });
+      }
+    }
+  }
+  // Array.prototype.sort is stable, so equal lengths stay in document order.
+  found.sort((a, b) => b.length - a.length);
+  return { matches: found.slice(0, limit).map((f) => f.match) };
+}
+
+/** Ticked and total checkbox lines of each page that has any, in the pages' order. */
+export function checkboxProgress(pages: PageText[]): GuideProgressResponse {
+  const out: PageProgress[] = [];
+  for (const page of pages) {
+    let completed = 0;
+    let total = 0;
+    for (const line of lines(page.text)) {
+      const box = CHECKBOX_LINE.exec(line)?.[1];
+      if (box === undefined) continue;
+      total += 1;
+      if (box !== " ") completed += 1;
+    }
+    if (total > 0) out.push({ url: page.url, completed, total });
+  }
+  return { pages: out };
+}
+
 export interface GuidePageServiceOptions {
   index: { pageRefs(hubId: string): PageRef[] | null };
   /** The Outline client; null when no key is configured. */
@@ -204,6 +351,10 @@ export interface GuidePageServiceOptions {
   maxLoadsPerMinute?: number;
   /** Pages fetched at the same time within one load. Default 4. */
   concurrency?: number;
+  /** How long a held copy is answered as is by `progress`, before a refresh starts behind it. Default one minute. */
+  progressTtlMs?: number;
+  /** Younger than this, a held copy is not reloaded even when `progress` is asked to refresh. Default five seconds. */
+  refreshMinAgeMs?: number;
 }
 
 interface CacheEntry {
@@ -239,6 +390,8 @@ export class GuidePageService {
   private readonly maxChars: number;
   private readonly maxLoadsPerMinute: number;
   private readonly concurrency: number;
+  private readonly progressTtlMs: number;
+  private readonly refreshMinAgeMs: number;
 
   constructor(private readonly opts: GuidePageServiceOptions) {
     this.now = opts.now ?? Date.now;
@@ -250,6 +403,8 @@ export class GuidePageService {
     this.maxChars = opts.maxChars ?? 30_000_000;
     this.maxLoadsPerMinute = opts.maxLoadsPerMinute ?? 6;
     this.concurrency = opts.concurrency ?? 4;
+    this.progressTtlMs = opts.progressTtlMs ?? 60_000;
+    this.refreshMinAgeMs = opts.refreshMinAgeMs ?? 5_000;
   }
 
   /** Null for an unknown hub. Rejects when the pages cannot be loaded and no copy is held. */
@@ -266,14 +421,52 @@ export class GuidePageService {
     return pages && { missable: missableMarks(pages) };
   }
 
-  private async pages(hubId: string): Promise<PageText[] | null> {
+  /** Null for an unknown hub. Headings of the hub's pages that match the status line. */
+  async where(hubId: string, status: string): Promise<GuideWhereResponse | null> {
+    if (this.opts.index.pageRefs(hubId) === null) return null;
+    // Nothing can match, so there is nothing to load.
+    if (status.trim() === "") return { matches: [] };
+    const pages = await this.pages(hubId);
+    return pages && whereInPages(pages, status);
+  }
+
+  /**
+   * Null for an unknown hub. Readers tick boxes in the wiki and expect the count to follow, so
+   * a copy is trusted for a minute only (not ten); `refresh` asks for a load when the copy is
+   * older than a few seconds. With a copy held it never rejects.
+   */
+  async progress(
+    hubId: string,
+    opts: { refresh?: boolean } = {},
+  ): Promise<GuideProgressResponse | null> {
+    const pages = await this.pages(hubId, {
+      maxAgeMs: this.progressTtlMs,
+      refresh: opts.refresh === true,
+    });
+    return pages && checkboxProgress(pages);
+  }
+
+  /**
+   * The hub's pages. Without `fresh` the copy's own lifetime applies (ten minutes, or one for a
+   * partial copy). With it: a copy younger than `maxAgeMs` is answered as is, an older one at
+   * once with a refresh behind it, and `refresh` makes a copy older than the minimum age wait
+   * for a load, answering from the held copy if none can be had in time.
+   */
+  private async pages(
+    hubId: string,
+    fresh?: { maxAgeMs: number; refresh: boolean },
+  ): Promise<PageText[] | null> {
     const refs = this.opts.index.pageRefs(hubId);
     if (refs === null) return null;
     const source = this.opts.source;
     if (source === null || refs.length === 0) return [];
 
     const cached = this.cache.get(hubId);
-    if (cached && this.now() - cached.at < cached.ttlMs) return cached.pages;
+    const age = cached ? this.now() - cached.at : 0;
+    if (cached && fresh?.refresh && age >= this.refreshMinAgeMs) {
+      return this.reload(hubId, source, refs, cached);
+    }
+    if (cached && age < (fresh ? fresh.maxAgeMs : cached.ttlMs)) return cached.pages;
 
     if (cached) {
       // Expired but held: answer from it now (the wiki may be slow) and refresh behind it,
@@ -285,6 +478,22 @@ export class GuidePageService {
     const load = this.inFlight.get(hubId) ?? this.startLoad(hubId, source, refs, undefined);
     if (!load) throw new Error("guide page load limit reached");
     return this.withDeadline(load);
+  }
+
+  /** A new copy of the pages, waiting for a load (joining one in flight); the held copy if that cannot be had. */
+  private async reload(
+    hubId: string,
+    source: { docText(id: string): Promise<string> },
+    refs: PageRef[],
+    held: CacheEntry,
+  ): Promise<PageText[]> {
+    const load = this.inFlight.get(hubId) ?? this.startLoad(hubId, source, refs, held);
+    if (!load) return held.pages;
+    try {
+      return await this.withDeadline(load);
+    } catch {
+      return held.pages;
+    }
   }
 
   /** Starts a load unless the limiter refuses; it fills the cache whenever it finishes. */

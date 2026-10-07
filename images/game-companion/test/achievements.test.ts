@@ -145,7 +145,12 @@ describe("normaliseSteam", () => {
       unlockPercent: 92.7,
       hidden: false,
       missable: false,
+      kind: null,
     });
+  });
+
+  it("never sets a kind on a Steam achievement", () => {
+    expect(r.achievements.map((a) => a.kind)).toEqual([null, null, null]);
   });
 
   it("marks hidden achievements, which have no description, and uses the grey icon when locked", () => {
@@ -198,7 +203,12 @@ describe("normaliseRa", () => {
       unlockPercent: 90,
       hidden: false,
       missable: false,
+      kind: null,
     });
+  });
+
+  it("maps RetroAchievements' own label to kind", () => {
+    expect(r.achievements.map((a) => a.kind)).toEqual([null, null, "progression", null, "win"]);
   });
 
   it("uses the locked badge for locked achievements", () => {

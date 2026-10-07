@@ -27,6 +27,7 @@ const a = (over: Partial<Achievement> & { id: string }): Achievement => ({
   unlockPercent: null,
   hidden: false,
   missable: false,
+  kind: null,
   ...over,
 });
 

@@ -3,7 +3,9 @@ import type {
   AchievementsResponse,
   FindResponse,
   GuideMarksResponse,
+  GuideProgressResponse,
   GuidesResponse,
+  GuideWhereResponse,
   HubTreeResponse,
   NowResponse,
   Source,
@@ -23,6 +25,13 @@ export interface RouteDeps {
   find(hubId: string, query: string): Promise<FindResponse | null>;
   /** Null for an unknown hub. */
   marks(hubId: string): Promise<GuideMarksResponse | null>;
+  /**
+   * Null for an unknown hub. Takes the hub id and nothing else: the status text it is matched
+   * against is the server's own, never the caller's.
+   */
+  where(hubId: string): Promise<GuideWhereResponse | null>;
+  /** Null for an unknown hub. `refresh` is true only for the fixed flag `?refresh=1`. */
+  progress(hubId: string, opts: { refresh: boolean }): Promise<GuideProgressResponse | null>;
 }
 
 /** Bounds on the trimmed search text, in characters (code points). */
@@ -100,12 +109,22 @@ export function createHandler(
         if (query.get("refresh") === "1") deps.refreshGuides();
         return json(res, 200, deps.guides());
       }
-      const subMatch = /^api\/guides\/([A-Za-z0-9-]{1,64})\/(find|marks)$/.exec(rest);
+      const subMatch = /^api\/guides\/([A-Za-z0-9-]{1,64})\/(find|marks|where|progress)$/.exec(
+        rest,
+      );
       if (subMatch) {
         const hubId = subMatch[1] as string;
         if (subMatch[2] === "marks") {
           const marks = await deps.marks(hubId);
           return marks ? json(res, 200, marks) : json(res, 404, { error: "unknown guide" });
+        }
+        if (subMatch[2] === "where") {
+          const where = await deps.where(hubId);
+          return where ? json(res, 200, where) : json(res, 404, { error: "unknown guide" });
+        }
+        if (subMatch[2] === "progress") {
+          const progress = await deps.progress(hubId, { refresh: query.get("refresh") === "1" });
+          return progress ? json(res, 200, progress) : json(res, 404, { error: "unknown guide" });
         }
         const q = query.get("q");
         const length = q === null ? 0 : [...q.trim()].length;

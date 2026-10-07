@@ -45,12 +45,14 @@ const ach: AchievementsResponse = {
       unlockPercent: 5,
       hidden: false,
       missable: false,
+      kind: null,
     },
   ],
 };
 
 let server: Server;
 let api: Api;
+let origin = "";
 let refreshCalls = 0;
 
 beforeAll(async () => {
@@ -82,10 +84,27 @@ beforeAll(async () => {
           }
         : null,
     marks: async (id) => (id === "h1" ? { missable: ["first"] } : null),
+    where: async (id) =>
+      id === "h1"
+        ? {
+            matches: [
+              {
+                pageTitle: "Sample Guide",
+                pageUrl: "/doc/sample-guide",
+                heading: "Chapter One",
+                phrase: "Chapter One",
+              },
+            ],
+          }
+        : null,
+    progress: async (id, opts) =>
+      id === "h1"
+        ? { pages: [{ url: "/doc/sample-guide", completed: opts.refresh ? 3 : 2, total: 4 }] }
+        : null,
   };
   server = createServer((req, res) => void createHandler(deps)(req, res));
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-  const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}/companion/`;
+  origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}/companion/`;
   const fetchFn: typeof fetch = (input, init) => fetch(new URL(input as string, origin), init);
   api = createApi(fetchFn);
 });
@@ -159,6 +178,41 @@ describe("find and marks against the real request handler", () => {
 
   it("reads the missable marks of a known guide", async () => {
     expect(await api.marks("h1")).toEqual({ missable: ["first"] });
+  });
+});
+
+describe("where and progress against the real request handler", () => {
+  const get = async (path: string): Promise<{ status: number; body: unknown }> => {
+    const r = await fetch(`${origin}api/guides/${path}`);
+    return { status: r.status, body: await r.json() };
+  };
+
+  it("answers where with the dependency's matches and 404s an unknown hub", async () => {
+    expect(await get("h1/where")).toEqual({
+      status: 200,
+      body: {
+        matches: [
+          {
+            pageTitle: "Sample Guide",
+            pageUrl: "/doc/sample-guide",
+            heading: "Chapter One",
+            phrase: "Chapter One",
+          },
+        ],
+      },
+    });
+    expect((await get("nope/where")).status).toBe(404);
+  });
+
+  it("answers progress, with refresh only for refresh=1, and 404s an unknown hub", async () => {
+    const pages = (completed: number) => ({
+      status: 200,
+      body: { pages: [{ url: "/doc/sample-guide", completed, total: 4 }] },
+    });
+    expect(await get("h1/progress")).toEqual(pages(2));
+    expect(await get("h1/progress?refresh=0")).toEqual(pages(2));
+    expect(await get("h1/progress?refresh=1")).toEqual(pages(3));
+    expect((await get("nope/progress")).status).toBe(404);
   });
 });
 
