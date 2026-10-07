@@ -431,6 +431,7 @@ export function startApp(opts: AppOptions): App {
   }
 
   function renderHeader(): void {
+    renderPresence();
     if (loadingLabel !== null) {
       title.textContent = loadingLabel;
       note.textContent = "Loading…";
@@ -445,7 +446,9 @@ export function startApp(opts: AppOptions): App {
     const shown = current === null ? null : achievementsSource(current);
     const game = lastNow?.game ?? null;
     const text = lastNow?.presence;
+    // While another game's title is shown as loading, no earlier status line may sit under it.
     const show =
+      loadingLabel === null &&
       typeof text === "string" &&
       text !== "" &&
       lastNow?.state === "playing" &&

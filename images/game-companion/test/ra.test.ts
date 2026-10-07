@@ -42,6 +42,22 @@ describe("cleanPresence", () => {
     expect(cleanPresence("")).toBeNull();
     expect(cleanPresence(" \t\n\u00a0\u0000 ")).toBeNull();
   });
+  it("gives null when nothing visible remains", () => {
+    for (const v of [
+      "\u200b",
+      "\u202e\u200e",
+      "\u3164",
+      "\u2800 \u2800",
+      "\u115f\u1160",
+      "\u2028",
+    ]) {
+      expect(cleanPresence(v)).toBeNull();
+    }
+  });
+  it("keeps invisible characters inside a line that has visible text", () => {
+    expect(cleanPresence("A\u200bB")).toBe("A\u200bB");
+    expect(cleanPresence("\u{1F468}\u200d\u{1F469}")).toBe("\u{1F468}\u200d\u{1F469}");
+  });
   it("gives null for anything that is not a string", () => {
     for (const v of [42, null, undefined, {}, ["x"], true]) expect(cleanPresence(v)).toBeNull();
   });

@@ -464,6 +464,147 @@ describe("startApp", () => {
       expect(text()).toBe("");
     });
 
+    describe("with a poll in flight", () => {
+      const hubB: GuideHub = { ...hubA, hubId: "hB", title: "Beta", gameId: "21" };
+      const hubSameId: GuideHub = {
+        ...hubA,
+        hubId: "hS",
+        title: "Sigma",
+        source: "steam",
+        platformLabel: "Steam",
+      };
+      const treeOf = (id: string): HubTreeResponse =>
+        tree([hubA, hubB, hubSameId, hubZ].find((h) => h.hubId === id) ?? hubA);
+
+      async function start(detected: NowResponse, listed: GuideHub[]) {
+        const api = fakeApi(detected);
+        api.guides = async () => ({ available: true, hubs: listed });
+        api.hubTree = async (id) => treeOf(id);
+        const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+        await app.ready;
+        let release: () => void = () => {};
+        const hold = (): void => {
+          const gate = new Promise<void>((r) => {
+            release = r;
+          });
+          api.now = async () => {
+            await gate;
+            return api.nowValue;
+          };
+        };
+        return { api, app, hold, release: () => release() };
+      }
+      const pickByHand = (index: number): void => {
+        (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+        ($('[data-tab="games"]') as HTMLElement).click();
+        (document.querySelectorAll(".picker-games .picker-item")[index] as HTMLElement).click();
+      };
+
+      it("keeps the old game's line away from the new title while a hand-picked game waits", async () => {
+        const t = await start(withPresence(hubA, "Chapter 2: Sample Caves"), [hubA, hubB]);
+        expect(text()).toBe("Chapter 2: Sample Caves");
+        t.hold();
+        const polling = t.app.tick();
+        await new Promise((r) => setTimeout(r, 0)); // the poll is now waiting on the held request
+        pickByHand(1);
+        expect($(".game-title")?.textContent).toBe("Beta");
+        expect($(".game-note")?.textContent).toBe("Loading…");
+        expect(text()).toBe("");
+        expect(hidden()).toBe(true);
+        t.api.nowValue = withPresence(hubA, "Chapter 3: Sample Keep");
+        t.release();
+        await polling;
+        expect(text()).toBe("");
+        expect(hidden()).toBe(true);
+        await t.app.tick();
+        expect($(".game-title")?.textContent).toBe("Beta");
+        // The detected game is still Alpha, so Beta shows nothing.
+        expect(text()).toBe("");
+        expect(hidden()).toBe(true);
+      });
+
+      it("keeps it hidden while the banner's Switch waits, then applies the rule to the new game", async () => {
+        const t = await start(withPresence(hubA, "Chapter 2: Sample Caves"), [hubA, hubB]);
+        t.api.nowValue = withPresence(hubB, "Area 1: Sample Shore");
+        await t.app.tick();
+        expect($(".switch-banner")?.hidden).toBe(false);
+        expect(hidden()).toBe(true);
+        t.hold();
+        const polling = t.app.tick();
+        await new Promise((r) => setTimeout(r, 0)); // the poll is now waiting on the held request
+        ($(".switch-banner .switch-accept") as HTMLElement).click();
+        expect($(".game-title")?.textContent).toBe("Beta");
+        expect(text()).toBe("");
+        expect(hidden()).toBe(true);
+        // The poll in flight comes back about the old game, with a fresh status line.
+        t.api.nowValue = withPresence(hubA, "Chapter 3: Sample Keep");
+        t.release();
+        await polling;
+        expect($(".game-title")?.textContent).toBe("Beta");
+        expect(text()).toBe("");
+        expect(hidden()).toBe(true);
+        await t.app.tick();
+        // Beta is on screen but the newest answer is about Alpha.
+        expect(text()).toBe("");
+        expect(hidden()).toBe(true);
+        t.api.nowValue = withPresence(hubB, "Area 2: Sample Cliffs");
+        await t.app.tick();
+        expect(text()).toBe("Area 2: Sample Cliffs");
+        expect(hidden()).toBe(false);
+      });
+
+      it("shows the line again once a hand-picked game that is the detected one has loaded", async () => {
+        const t = await start(withPresence(hubB, "Area 1: Sample Shore"), [hubB, hubA]);
+        expect(text()).toBe("Area 1: Sample Shore");
+        pickByHand(1);
+        await t.app.tick();
+        expect($(".game-title")?.textContent).toBe("Alpha");
+        expect(hidden()).toBe(true);
+        pickByHand(0);
+        await t.app.tick();
+        expect($(".game-title")?.textContent).toBe("Beta");
+        expect(text()).toBe("Area 1: Sample Shore");
+      });
+    });
+
+    it("hides it for another RetroAchievements game with a different id", async () => {
+      const hubB: GuideHub = { ...hubA, hubId: "hB", title: "Beta", gameId: "21" };
+      const api = fakeApi(withPresence(hubA, "Chapter 2: Sample Caves"));
+      api.guides = async () => ({ available: true, hubs: [hubA, hubB] });
+      api.hubTree = async (id) => tree(id === "hB" ? hubB : hubA);
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      expect(hidden()).toBe(false);
+      (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+      (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
+      await app.tick();
+      expect($(".game-title")?.textContent).toBe("Beta");
+      expect(hidden()).toBe(true);
+      expect(text()).toBe("");
+    });
+
+    it("hides it for the same game id under the other source", async () => {
+      const sameId: GuideHub = {
+        ...hubA,
+        hubId: "hS",
+        title: "Sigma",
+        source: "steam",
+        platformLabel: "Steam",
+      };
+      const api = fakeApi(withPresence(hubA, "Chapter 2: Sample Caves"));
+      api.guides = async () => ({ available: true, hubs: [hubA, sameId] });
+      api.hubTree = async (id) => tree(id === "hS" ? sameId : hubA);
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      expect(hidden()).toBe(false);
+      (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+      (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
+      await app.tick();
+      expect($(".game-title")?.textContent).toBe("Sigma");
+      expect(hidden()).toBe(true);
+      expect(text()).toBe("");
+    });
+
     it("is cleared when a poll fails and shown again when the next one succeeds", async () => {
       const api = fakeApi(withPresence(hubA, "Chapter 2: Sample Caves"));
       const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });

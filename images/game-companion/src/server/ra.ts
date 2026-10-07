@@ -41,12 +41,15 @@ function rec(v: unknown): Rec {
 
 const PRESENCE_MAX_CODE_POINTS = 120;
 
+/** Nothing a person could see: format characters, separators and the blank letters. */
+const INVISIBLE_ONLY = /^[\p{Cf}\p{Z}\u3164\u2800\u115F\u1160]*$/u;
+
 /** A rich-presence line made safe to show on one line: single spaces, trimmed, at most 120 code points. */
 export function cleanPresence(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const flat = v.replace(/[\p{Cc}\s]+/gu, " ").trim();
   const cut = Array.from(flat).slice(0, PRESENCE_MAX_CODE_POINTS).join("").trim();
-  return cut === "" ? null : cut;
+  return INVISIBLE_ONLY.test(cut) ? null : cut;
 }
 
 /** "YYYY-MM-DD HH:MM:SS" read as UTC to epoch ms; NaN if malformed. */
