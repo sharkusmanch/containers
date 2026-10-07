@@ -8,10 +8,16 @@ documents in an Outline wiki by the `Steam App ID` or `RA Game ID` row in each g
 serves a read-only JSON API together with a static front end. The front end is a thin
 sidebar that frames real Outline pages and shows an achievements panel.
 
+From an achievement, **Find in guide** searches the game's guide pages and opens the page at
+that line. Achievements the guide marks as missable can be shown on their own, and a notice
+appears when an achievement unlocks while the page is open. The page can be added to the home
+screen and then opens full screen; it keeps the screen on and hides Outline's own sidebar and
+top bar inside the guide frames. Both can be switched off under ⋯ › Display.
+
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.1.1
+- **Version**: v0.2.0
 
 ## Usage
 
@@ -22,7 +28,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.1.1
+  ghcr.io/sharkusmanch/containers/game-companion:v0.2.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -61,11 +67,14 @@ The Outline key needs only these scopes:
 | `GET /companion/api/now`                        | The current game and its matching guide                              |
 | `GET /companion/api/guides`                     | Every guide hub with its platform (`?refresh=1` asks for a re-index) |
 | `GET /companion/api/guides/<hubId>`             | One hub's page tree                                                  |
+| `GET /companion/api/guides/<hubId>/find?q=…`    | Lines in the hub's pages that contain the text (2–100 characters)    |
+| `GET /companion/api/guides/<hubId>/marks`       | Names the hub's pages mark as missable                               |
 | `GET /companion/api/achievements/<source>/<id>` | Achievements for a game that has a guide or is being played          |
 
 Achievement requests are limited to games the service knows about, and the number of
 upstream fetches per minute is capped, because the API keys are usually shared with other
-tools.
+tools. Guide page text is read from Outline at most a few times a minute and kept in memory
+for ten minutes.
 
 ## Guide format
 
@@ -76,6 +85,8 @@ The service finds a game's guide by reading the guide documents themselves. It e
 - A table row in each guide naming the game: `| Steam App ID | 1234 |` or
   `| RA Game ID | 5678 |` (the label may be bold; the number may be a link to the store or
   RetroAchievements page). A guide with neither row can still be opened by hand.
+- Optionally, a `⚠` on a checklist line (`- [ ] **Name** ⚠ …`) to mark that achievement as
+  missable. RetroAchievements' own missable flag is used as well.
 - Optionally, a title ending in `(<console> — RetroAchievements)`, which becomes the
   platform label shown next to the guide.
 - Optionally, in the schedule document, a `## Now Playing` section whose bold titles are
