@@ -72,7 +72,7 @@ ARG PROMETHEUS_CLIENT_VERSION=0.26.0
 # renovate: datasource=pypi depName=requests
 ARG REQUESTS_VERSION=2.34.2
 # renovate: datasource=pypi depName=pycryptodomex
-ARG PYCRYPTODOMEX_VERSION=3.23.0
+ARG PYCRYPTODOMEX_VERSION=3.24.0
 
 LABEL org.opencontainers.image.title="kindle-ingest" \
       org.opencontainers.image.description="Kindle -> BookOrbit ingest: decrypt, convert, upload" \
