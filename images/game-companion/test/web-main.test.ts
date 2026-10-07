@@ -369,9 +369,12 @@ describe("startApp", () => {
       presence: text,
     });
     const text = (): string | null | undefined => $(".game-presence")?.textContent;
-    const hidden = (): unknown => $(".game-presence")?.hidden;
+    const hidden = (): unknown => $(".presence-row")?.hidden;
+    const button = (): HTMLElement => $(".game-presence") as HTMLElement;
+    const expanded = (): boolean => button().classList.contains("expanded");
+    const ariaExpanded = (): string | null => button().getAttribute("aria-expanded");
 
-    it("sits in the header between the title and the note, hidden until it has text", async () => {
+    it("sits in its own row between the header and the switch banner, hidden until it has text", async () => {
       const app = startApp({
         doc: document,
         api: fakeApi(playing(hubA)),
@@ -379,13 +382,133 @@ describe("startApp", () => {
         setInterval: noTimers,
       });
       await app.ready;
-      expect([...document.querySelectorAll(".topbar > span")].map((e) => e.className)).toEqual([
+      expect([...document.querySelectorAll(".topbar > *")].map((e) => e.className)).toEqual([
         "game-title",
-        "game-presence",
         "game-note",
       ]);
+      const row = $(".presence-row") as HTMLElement;
+      expect(row.previousElementSibling).toBe($(".topbar"));
+      expect(row.nextElementSibling).toBe($(".switch-banner"));
+      expect([...row.children]).toEqual([button()]);
+      expect(button().tagName).toBe("BUTTON");
+      expect(button().getAttribute("type")).toBe("button");
       expect(hidden()).toBe(true);
       expect(text()).toBe("");
+      expect(ariaExpanded()).toBe("false");
+      expect(expanded()).toBe(false);
+    });
+
+    describe("expanding", () => {
+      const long = "Chapter 2: Sample Caves, a deliberately long line for the sample game";
+      async function started(line: string | null = long) {
+        const api = fakeApi(withPresence(hubA, line));
+        const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+        await app.ready;
+        return { api, app };
+      }
+
+      it("starts collapsed, expands on a click and collapses on a second click", async () => {
+        await started();
+        expect(hidden()).toBe(false);
+        expect(expanded()).toBe(false);
+        expect(ariaExpanded()).toBe("false");
+        button().click();
+        expect(expanded()).toBe(true);
+        expect(ariaExpanded()).toBe("true");
+        expect(text()).toBe(long);
+        button().click();
+        expect(expanded()).toBe(false);
+        expect(ariaExpanded()).toBe("false");
+      });
+
+      it("stays expanded across a poll that brings new text for the same game", async () => {
+        const { api, app } = await started();
+        button().click();
+        api.nowValue = withPresence(hubA, "Chapter 3: Sample Keep");
+        await app.tick();
+        expect(text()).toBe("Chapter 3: Sample Keep");
+        expect(hidden()).toBe(false);
+        expect(expanded()).toBe(true);
+        expect(ariaExpanded()).toBe("true");
+      });
+
+      it("collapses when the line clears, and starts collapsed when it returns", async () => {
+        const { api, app } = await started();
+        button().click();
+        api.nowValue = withPresence(hubA, null);
+        await app.tick();
+        expect(hidden()).toBe(true);
+        expect(expanded()).toBe(false);
+        expect(ariaExpanded()).toBe("false");
+        api.nowValue = withPresence(hubA, long);
+        await app.tick();
+        expect(hidden()).toBe(false);
+        expect(expanded()).toBe(false);
+        expect(ariaExpanded()).toBe("false");
+      });
+
+      it("collapses when the state leaves playing", async () => {
+        const { api, app } = await started();
+        button().click();
+        api.nowValue = { ...withPresence(hubA, long), state: "last-played" };
+        await app.tick();
+        expect(hidden()).toBe(true);
+        expect(expanded()).toBe(false);
+        api.nowValue = withPresence(hubA, long);
+        await app.tick();
+        expect(hidden()).toBe(false);
+        expect(expanded()).toBe(false);
+        expect(ariaExpanded()).toBe("false");
+      });
+
+      it("collapses when a now request fails", async () => {
+        const { api, app } = await started();
+        button().click();
+        api.failNow = true;
+        await app.tick();
+        expect(hidden()).toBe(true);
+        expect(expanded()).toBe(false);
+        api.failNow = false;
+        await app.tick();
+        expect(hidden()).toBe(false);
+        expect(expanded()).toBe(false);
+        expect(ariaExpanded()).toBe("false");
+      });
+
+      it("collapses when another game is picked by hand", async () => {
+        const { app } = await started();
+        button().click();
+        (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+        ($('[data-tab="games"]') as HTMLElement).click();
+        (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
+        await app.tick();
+        expect($(".game-title")?.textContent).toBe("Zeta");
+        expect(hidden()).toBe(true);
+        expect(expanded()).toBe(false);
+        expect(ariaExpanded()).toBe("false");
+      });
+
+      it("does nothing else: no request, no picker, no slot change", async () => {
+        const { api } = await started();
+        const now = vi.spyOn(api, "now");
+        const guides = vi.spyOn(api, "guides");
+        const hubTree = vi.spyOn(api, "hubTree");
+        const before = [api.achCalls.length, api.markCalls.length, api.findCalls.length];
+        const active = (): number[] =>
+          [...document.querySelectorAll(".rail button")].flatMap((b, i) =>
+            b.classList.contains("active") ? [i] : [],
+          );
+        const slots = active();
+        button().click();
+        button().click();
+        await new Promise((r) => setTimeout(r, 0));
+        expect(now).not.toHaveBeenCalled();
+        expect(guides).not.toHaveBeenCalled();
+        expect(hubTree).not.toHaveBeenCalled();
+        expect([api.achCalls.length, api.markCalls.length, api.findCalls.length]).toEqual(before);
+        expect(($(".picker") as HTMLElement).hidden).toBe(true);
+        expect(active()).toEqual(slots);
+      });
     });
 
     it("shows the status line of the detected game that is being played and on screen", async () => {
@@ -523,6 +646,27 @@ describe("startApp", () => {
         expect(hidden()).toBe(true);
       });
 
+      it("collapses while a queued load's title is showing, and starts collapsed afterwards", async () => {
+        const t = await start(withPresence(hubA, "Chapter 2: Sample Caves"), [hubA, hubB]);
+        button().click();
+        expect(expanded()).toBe(true);
+        t.hold();
+        const polling = t.app.tick();
+        await new Promise((r) => setTimeout(r, 0));
+        pickByHand(1);
+        expect($(".game-note")?.textContent).toBe("Loading…");
+        expect(hidden()).toBe(true);
+        expect(expanded()).toBe(false);
+        expect(ariaExpanded()).toBe("false");
+        t.release();
+        await polling;
+        pickByHand(0);
+        t.api.nowValue = withPresence(hubA, "Chapter 3: Sample Keep");
+        await t.app.tick();
+        expect(hidden()).toBe(false);
+        expect(expanded()).toBe(false);
+      });
+
       it("keeps it hidden while the banner's Switch waits, then applies the rule to the new game", async () => {
         const t = await start(withPresence(hubA, "Chapter 2: Sample Caves"), [hubA, hubB]);
         t.api.nowValue = withPresence(hubB, "Area 1: Sample Shore");
@@ -635,7 +779,9 @@ describe("startApp", () => {
       await app.ready;
       expect(text()).toBe("<b>x</b> & <img src=x>");
       expect($(".game-presence")?.children).toHaveLength(0);
-      expect(document.querySelector(".topbar b, .topbar img")).toBeNull();
+      expect(
+        document.querySelector(".topbar b, .topbar img, .presence-row b, .presence-row img"),
+      ).toBeNull();
     });
   });
 

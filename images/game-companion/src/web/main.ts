@@ -124,12 +124,19 @@ export function startApp(opts: AppOptions): App {
 
   // ---- DOM, built once ----
   const title = el("span", "game-title", "Game Companion");
-  const presence = el("span", "game-presence");
-  presence.hidden = true;
+  const presence = buttonEl("game-presence", "");
+  presence.setAttribute("aria-expanded", "false");
+  const presenceRow = doc.createElement("div");
+  presenceRow.classList.add("presence-row");
+  presenceRow.hidden = true;
+  presenceRow.append(presence);
+  presence.addEventListener("click", () => {
+    setPresenceExpanded(!presence.classList.contains("expanded"));
+  });
   const note = el("span", "game-note");
   const topbar = doc.createElement("header");
   topbar.classList.add("topbar");
-  topbar.append(title, presence, note);
+  topbar.append(title, note);
 
   const bannerLabel = el("span", "switch-label");
   const accept = buttonEl("switch-accept", "Switch");
@@ -221,7 +228,7 @@ export function startApp(opts: AppOptions): App {
     },
   });
 
-  root.replaceChildren(rail.element, topbar, banner, stage, picker.element);
+  root.replaceChildren(rail.element, topbar, presenceRow, banner, stage, picker.element);
 
   // ---- state ----
   let current: Current | null = null;
@@ -457,7 +464,14 @@ export function startApp(opts: AppOptions): App {
       game.id === shown.id &&
       game.source === shown.source;
     presence.textContent = show ? text : "";
-    presence.hidden = !show;
+    presenceRow.hidden = !show;
+    // Expanded survives new text for the same game, but never a hidden row.
+    if (!show) setPresenceExpanded(false);
+  }
+
+  function setPresenceExpanded(expanded: boolean): void {
+    presence.classList.toggle("expanded", expanded);
+    presence.setAttribute("aria-expanded", expanded ? "true" : "false");
   }
 
   function render(): void {
