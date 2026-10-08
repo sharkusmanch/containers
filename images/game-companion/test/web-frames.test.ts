@@ -637,142 +637,91 @@ describe("createFrames", () => {
 });
 
 describe("guide text size", () => {
-  const ZOOM90 = "html{zoom:0.9}";
-  const zoomOf = (frame: HTMLIFrameElement | undefined): string | null =>
-    frame?.contentDocument?.getElementById("gc-zoom-style")?.textContent ?? null;
+  const classes = (f: { element: HTMLElement }): string[] =>
+    [...f.element.classList].filter((c) => c.startsWith("zoom-")).sort();
 
-  /** Frames whose repeating timer is driven by the test. */
-  function withTimer() {
-    const ticks: { fn: () => void; ms: number }[] = [];
-    const fake = ((fn: () => void, ms: number) => {
-      ticks.push({ fn, ms });
-      return ticks.length;
-    }) as unknown as typeof setInterval;
+  function make() {
     document.body.innerHTML = "";
-    const f = createFrames(document, 4, { setInterval: fake });
-    document.body.append(f.element);
-    return { f, tick: () => ticks.forEach((t) => t.fn()) };
-  }
-  const frameAt = (f: { element: HTMLElement }, i: number): HTMLIFrameElement =>
-    f.element.querySelectorAll("iframe")[i] as HTMLIFrameElement;
-
-  afterEach(() => {
-    Reflect.deleteProperty(document, "visibilityState");
-  });
-
-  it("applies when a frame loads", () => {
-    const { f } = withTimer();
-    f.setHideChrome(false);
-    f.setZoom(90);
-    f.show(0, "/doc/a");
-    showing(frameAt(f, 0), "<p>Sample page</p>");
-    expect(zoomOf(frameAt(f, 0))).toBeNull();
-    loaded(frameAt(f, 0));
-    expect(zoomOf(frameAt(f, 0))).toBe(ZOOM90);
-  });
-
-  it("applies to every existing frame at once, and 100 removes it from all of them", () => {
-    const { f } = withTimer();
-    f.show(0, "/doc/a");
-    f.show(1, "/doc/b");
-    showing(frameAt(f, 0), "<p>A</p>");
-    showing(frameAt(f, 1), "<p>B</p>");
-    const before = [0, 1].map((i) => frameAt(f, i).contentDocument?.documentElement.outerHTML);
-    f.setZoom(80);
-    expect(zoomOf(frameAt(f, 0))).toBe("html{zoom:0.8}");
-    expect(zoomOf(frameAt(f, 1))).toBe("html{zoom:0.8}");
-    f.setZoom(100);
-    expect(zoomOf(frameAt(f, 0))).toBeNull();
-    expect(zoomOf(frameAt(f, 1))).toBeNull();
-    expect([0, 1].map((i) => frameAt(f, i).contentDocument?.documentElement.outerHTML)).toEqual(
-      before,
-    );
-  });
-
-  it("applies to a frame the moment it becomes active", () => {
-    const { f } = withTimer();
-    f.show(0, "/doc/a");
-    f.show(1, "/doc/b");
-    showing(frameAt(f, 0), "<p>A</p>");
-    showing(frameAt(f, 1), "<p>B</p>");
-    loaded(frameAt(f, 0));
-    loaded(frameAt(f, 1));
-    f.setZoom(90);
-    frameAt(f, 0).contentDocument?.getElementById("gc-zoom-style")?.remove();
-    f.show(0, "/doc/a");
-    expect(zoomOf(frameAt(f, 0))).toBe(ZOOM90);
-  });
-
-  it("re-applies on the sweep to the active frame only, also when hiding the bars is off", () => {
-    const { f, tick } = withTimer();
-    f.setHideChrome(false);
-    f.setZoom(90);
-    f.show(0, "/doc/a");
-    f.show(1, "/doc/b");
-    showing(frameAt(f, 0), "<p>A</p>");
-    showing(frameAt(f, 1), "<p>B</p>");
-    loaded(frameAt(f, 0));
-    loaded(frameAt(f, 1));
-    for (const i of [0, 1])
-      frameAt(f, i).contentDocument?.getElementById("gc-zoom-style")?.remove();
-    tick();
-    expect(zoomOf(frameAt(f, 1))).toBe(ZOOM90);
-    expect(zoomOf(frameAt(f, 0))).toBeNull();
-    // and not the wiki's bars
-    expect(frameAt(f, 1).contentDocument?.getElementById("gc-chrome-style")).toBeNull();
-  });
-
-  it("re-applies on the sweep when hiding the bars is on", () => {
-    const { f, tick } = withTimer();
-    f.setHideChrome(true);
-    f.setZoom(70);
-    f.show(0, "/doc/a");
-    showing(frameAt(f, 0), "<p>A</p>");
-    loaded(frameAt(f, 0));
-    frameAt(f, 0).contentDocument?.getElementById("gc-zoom-style")?.remove();
-    tick();
-    expect(zoomOf(frameAt(f, 0))).toBe("html{zoom:0.7}");
-  });
-
-  it("does no work on the sweep while the companion's own document is hidden", () => {
-    const { f, tick } = withTimer();
-    f.setHideChrome(false);
-    f.setZoom(90);
-    f.show(0, "/doc/a");
-    showing(frameAt(f, 0), "<p>A</p>");
-    loaded(frameAt(f, 0));
-    frameAt(f, 0).contentDocument?.getElementById("gc-zoom-style")?.remove();
-    Object.defineProperty(document, "visibilityState", { get: () => "hidden", configurable: true });
-    tick();
-    expect(zoomOf(frameAt(f, 0))).toBeNull();
-    Reflect.deleteProperty(document, "visibilityState");
-    tick();
-    expect(zoomOf(frameAt(f, 0))).toBe(ZOOM90);
-  });
-
-  it("leaves the companion's own document alone", () => {
-    const { f } = withTimer();
-    f.show(0, "/doc/a");
-    showing(frameAt(f, 0), "<p>A</p>");
-    const own = document.documentElement.outerHTML;
-    f.setZoom(70);
-    expect(document.documentElement.outerHTML).toBe(own);
-    expect(document.getElementById("gc-zoom-style")).toBeNull();
-  });
-
-  it("skips a frame whose document cannot be read, and carries on with the others", () => {
-    const { f, tick } = withTimer();
-    f.show(0, "/doc/a");
-    f.show(1, "/doc/b");
-    Object.defineProperty(frameAt(f, 0), "contentDocument", {
-      get() {
-        throw new Error("Blocked a frame from another origin");
-      },
+    const f = createFrames(document, 4, {
+      setInterval: (() => 1) as unknown as typeof setInterval,
     });
-    showing(frameAt(f, 1), "<p>B</p>");
-    expect(() => f.setZoom(90)).not.toThrow();
-    expect(() => tick()).not.toThrow();
-    expect(zoomOf(frameAt(f, 1))).toBe(ZOOM90);
+    document.body.append(f.element);
+    return f;
+  }
+
+  it("starts with no zoom class and keeps the container class", () => {
+    const f = make();
+    expect(classes(f)).toEqual([]);
+    expect(f.element.classList.contains("frames")).toBe(true);
+  });
+
+  it.each([
+    [90, "zoom-90"],
+    [80, "zoom-80"],
+    [70, "zoom-70"],
+  ] as const)("at %i puts exactly %s on the container", (zoom, name) => {
+    const f = make();
+    f.setZoom(zoom);
+    expect(classes(f)).toEqual([name]);
+    expect(f.element.classList.contains("frames")).toBe(true);
+  });
+
+  it("replaces the class when the size changes, and 100 leaves none", () => {
+    const f = make();
+    f.setZoom(90);
+    f.setZoom(80);
+    expect(classes(f)).toEqual(["zoom-80"]);
+    f.setZoom(70);
+    expect(classes(f)).toEqual(["zoom-70"]);
+    f.setZoom(100);
+    expect(classes(f)).toEqual([]);
+    expect(f.element.classList.contains("frames")).toBe(true);
+  });
+
+  it("changes nothing when called again with the same value", () => {
+    for (const zoom of [100, 90, 80, 70] as const) {
+      const f = make();
+      f.setZoom(zoom);
+      const records: MutationRecord[] = [];
+      const observer = new MutationObserver((r) => records.push(...r));
+      observer.observe(f.element, { subtree: true, childList: true, attributes: true });
+      f.setZoom(zoom);
+      records.push(...observer.takeRecords());
+      observer.disconnect();
+      expect(records).toHaveLength(0);
+    }
+  });
+
+  it("touches no iframe element and writes to no framed document", () => {
+    const f = make();
+    f.show(0, "/doc/a");
+    f.show(1, "/doc/b");
+    const frames = [...f.element.querySelectorAll("iframe")];
+    frames.forEach((frame, i) => showing(frame, `<p>${i}</p>`));
+    const snapshot = (): (string | undefined)[][] =>
+      frames.map((frame) => [frame.outerHTML, frame.contentDocument?.documentElement.outerHTML]);
+    const before = snapshot();
+    for (const zoom of [80, 70, 100] as const) {
+      f.setZoom(zoom);
+      expect(snapshot()).toEqual(before);
+      for (const frame of frames) {
+        expect(frame.contentDocument?.getElementById("gc-zoom-style")).toBeNull();
+      }
+    }
+  });
+
+  it("covers frames created later, because the class is on the container", () => {
+    const f = make();
+    f.setZoom(90);
+    f.show(0, "/doc/a");
+    expect(classes(f)).toEqual(["zoom-90"]);
+    expect(f.element.querySelector("iframe")?.className).toBe("frame");
+    f.sync([null, "/doc/a", null, null]);
+    expect(classes(f)).toEqual(["zoom-90"]);
+    f.reset();
+    expect(classes(f)).toEqual(["zoom-90"]);
+    f.show(2, "/doc/c");
+    expect(classes(f)).toEqual(["zoom-90"]);
   });
 });
 

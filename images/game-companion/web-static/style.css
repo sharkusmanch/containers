@@ -277,6 +277,7 @@ button {
 .frames {
   position: absolute;
   inset: 0;
+  overflow: hidden;
   pointer-events: none;
 }
 
@@ -294,6 +295,38 @@ button {
 .frame.inactive {
   visibility: hidden;
   pointer-events: none;
+}
+
+/*
+ * Guide text size: the wiki sizes its page in viewport units, so zooming the page inside the frame
+ * would only shrink it into a corner. Instead the frame is made larger and scaled back to fill the
+ * stage, which gives the framed page a wider and taller viewport, like browser zoom.
+ */
+.frames.zoom-90 .frame {
+  right: auto;
+  bottom: auto;
+  width: calc(100% / 0.9);
+  height: calc(100% / 0.9);
+  transform: scale(0.9);
+  transform-origin: 0 0;
+}
+
+.frames.zoom-80 .frame {
+  right: auto;
+  bottom: auto;
+  width: calc(100% / 0.8);
+  height: calc(100% / 0.8);
+  transform: scale(0.8);
+  transform-origin: 0 0;
+}
+
+.frames.zoom-70 .frame {
+  right: auto;
+  bottom: auto;
+  width: calc(100% / 0.7);
+  height: calc(100% / 0.7);
+  transform: scale(0.7);
+  transform-origin: 0 0;
 }
 
 .ach {

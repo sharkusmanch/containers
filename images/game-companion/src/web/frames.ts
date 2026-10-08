@@ -1,4 +1,4 @@
-import { applyChrome, applyZoom } from "./chrome.js";
+import { applyChrome } from "./chrome.js";
 import type { GuideZoom } from "./device.js";
 import { locateInFrame, type LocateMode } from "./locate.js";
 import { isSafeDocUrl } from "./state.js";
@@ -15,7 +15,10 @@ export interface Frames {
   reset(): void;
   /** Hides (or restores) the wiki's sidebar and top bar in every frame, now and as they load. */
   setHideChrome(hide: boolean): void;
-  /** Draws the wiki pages smaller (or restores them) in every frame, now and as they load. */
+  /**
+   * Draws the framed pages smaller by a class on the container, for the stylesheet to enlarge and
+   * scale the iframe elements. Touches no frame and writes nothing into a framed document.
+   */
   setZoom(zoom: GuideZoom): void;
   /**
    * Finds `text` (preferably under `heading`) in the page framed in slot `index` and highlights it.
@@ -46,6 +49,14 @@ interface Entry {
   live: AbortController | null;
 }
 
+/** The container class for each size below 100; none at 100. */
+const ZOOM_CLASS: Record<GuideZoom, string | null> = {
+  100: null,
+  90: "zoom-90",
+  80: "zoom-80",
+  70: "zoom-70",
+};
+
 /**
  * One keep-alive iframe per slot. A frame that is not showing stays in the layout and is only
  * made invisible by class: removing it from rendering (hidden, display: none) makes some
@@ -65,13 +76,10 @@ export function createFrames(
   const entries: (Entry | null)[] = Array.from({ length: slotCount }, () => null);
 
   let hideChrome = false;
-  let zoom: GuideZoom = 100;
   const applyTo = (entry: Entry): void => {
     try {
       const framed = entry.frame.contentDocument;
-      if (framed === null) return;
-      applyChrome(framed, hideChrome);
-      applyZoom(framed, zoom);
+      if (framed !== null) applyChrome(framed, hideChrome);
     } catch {
       // The frame is on another origin.
     }
@@ -105,12 +113,9 @@ export function createFrames(
   // The wiki redraws its bars when the reader follows a link inside the frame. Only the frame on
   // screen is swept, and not while the companion itself is in the background.
   (options.setInterval ?? setInterval)(() => {
-    if (doc.visibilityState === "hidden") return;
+    if (!hideChrome || doc.visibilityState === "hidden") return;
     for (const entry of entries) {
-      // A frame that is still navigating is applied by its load handler.
-      if (entry !== null && !entry.loading && !entry.frame.classList.contains("inactive")) {
-        applyTo(entry);
-      }
+      if (entry !== null && !entry.frame.classList.contains("inactive")) applyTo(entry);
     }
   }, 1500);
 
@@ -132,7 +137,7 @@ export function createFrames(
         const created: Entry = { frame, url, loading: true, generation: 1, live: null };
         frame.addEventListener("load", () => {
           created.loading = false;
-          applyTo(created);
+          if (hideChrome) applyTo(created);
           watchClicks(created);
         });
         frame.setAttribute("src", url);
@@ -149,7 +154,7 @@ export function createFrames(
       }
       entry.frame.classList.remove("inactive");
       // A frame that is still navigating is applied by its load handler.
-      if (!entry.loading) applyTo(entry);
+      if (hideChrome && !entry.loading) applyTo(entry);
     },
     hideAll,
     sync(urls) {
@@ -171,9 +176,14 @@ export function createFrames(
       hideChrome = hide;
       for (const entry of entries) if (entry !== null) applyTo(entry);
     },
-    setZoom(next) {
-      zoom = next;
-      for (const entry of entries) if (entry !== null) applyTo(entry);
+    setZoom(zoom) {
+      const wanted = ZOOM_CLASS[zoom];
+      for (const name of Object.values(ZOOM_CLASS)) {
+        if (name !== null && name !== wanted && element.classList.contains(name)) {
+          element.classList.remove(name);
+        }
+      }
+      if (wanted !== null && !element.classList.contains(wanted)) element.classList.add(wanted);
     },
     async locate(index, text, heading, mode = "text", fallback) {
       const entry = Number.isInteger(index) ? (entries[index] ?? null) : null;

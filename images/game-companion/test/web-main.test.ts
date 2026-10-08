@@ -2775,6 +2775,9 @@ describe("display settings", () => {
     });
   });
 
+  const zoomClasses = (): string[] =>
+    [...($(".frames") as HTMLElement).classList].filter((c) => c.startsWith("zoom-"));
+
   it("applies the stored guide text size at start, to a frame that loads", async () => {
     const storage = memory();
     storage.setItem(
@@ -2783,9 +2786,8 @@ describe("display settings", () => {
     );
     await start(storage);
     const frame = showChecklist();
-    expect(frame.contentDocument?.getElementById("gc-zoom-style")?.textContent).toBe(
-      "html{zoom:0.8}",
-    );
+    expect(zoomClasses()).toEqual(["zoom-80"]);
+    expect(frame.contentDocument?.getElementById("gc-zoom-style")).toBeNull();
     openDisplay();
     expect(row("setting-guide-zoom").textContent).toBe("Guide text size: 80%");
     expect(row("setting-guide-zoom").hasAttribute("aria-pressed")).toBe(false);
@@ -2795,29 +2797,27 @@ describe("display settings", () => {
     const storage = memory();
     storage.setItem(KEY, JSON.stringify({ guideZoom: "90" }));
     await start(storage);
-    const frame = showChecklist();
-    expect(frame.contentDocument?.getElementById("gc-zoom-style")).toBeNull();
+    showChecklist();
+    expect(zoomClasses()).toEqual([]);
     openDisplay();
     expect(row("setting-guide-zoom").textContent).toBe("Guide text size: 100%");
   });
 
   it("steps the guide text size 100, 90, 80, 70, 100: saved, applied at once and relabelled", async () => {
     const { storage } = await start();
-    const frame = showChecklist();
-    const doc = frame.contentDocument as Document;
-    const zoom = (): string | null => doc.getElementById("gc-zoom-style")?.textContent ?? null;
+    showChecklist();
     openDisplay();
     expect(row("setting-guide-zoom").textContent).toBe("Guide text size: 100%");
-    expect(zoom()).toBeNull();
-    const steps: [number, string | null][] = [
-      [90, "html{zoom:0.9}"],
-      [80, "html{zoom:0.8}"],
-      [70, "html{zoom:0.7}"],
-      [100, null],
+    expect(zoomClasses()).toEqual([]);
+    const steps: [number, string[]][] = [
+      [90, ["zoom-90"]],
+      [80, ["zoom-80"]],
+      [70, ["zoom-70"]],
+      [100, []],
     ];
-    for (const [percent, text] of steps) {
+    for (const [percent, expected] of steps) {
       row("setting-guide-zoom").click();
-      expect(zoom()).toBe(text);
+      expect(zoomClasses()).toEqual(expected);
       expect(row("setting-guide-zoom").textContent).toBe(`Guide text size: ${percent}%`);
       expect(stored(storage)).toEqual({
         keepAwake: true,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyChrome, applyZoom } from "../src/web/chrome.js";
+import { applyChrome } from "../src/web/chrome.js";
 
 const STICKY = "position:sticky;top:0";
 const RULES =
@@ -341,103 +341,5 @@ describe("applyChrome: bounded search", () => {
       observer.disconnect();
       expect(records).toHaveLength(0);
     }
-  });
-});
-
-describe("applyZoom", () => {
-  const zoomStyles = (doc: Document): NodeListOf<Element> => doc.querySelectorAll("#gc-zoom-style");
-
-  it.each([
-    [90, "html{zoom:0.9}"],
-    [80, "html{zoom:0.8}"],
-    [70, "html{zoom:0.7}"],
-  ] as const)("at %i adds exactly one style element with the fixed text", (zoom, text) => {
-    const doc = makeFrame(PAGE);
-    applyZoom(doc, zoom);
-    expect(zoomStyles(doc)).toHaveLength(1);
-    expect(zoomStyles(doc)[0]?.tagName).toBe("STYLE");
-    expect(zoomStyles(doc)[0]?.parentElement).toBe(doc.head);
-    expect(zoomStyles(doc)[0]?.textContent).toBe(text);
-  });
-
-  it("replaces the text when the size changes and keeps a single element", () => {
-    const doc = makeFrame(PAGE);
-    applyZoom(doc, 90);
-    applyZoom(doc, 80);
-    expect(zoomStyles(doc)).toHaveLength(1);
-    expect(zoomStyles(doc)[0]?.textContent).toBe("html{zoom:0.8}");
-  });
-
-  it("removes the element at 100 and leaves the rest of the markup as it was", () => {
-    const doc = makeFrame(PAGE);
-    const original = doc.documentElement.outerHTML;
-    applyZoom(doc, 70);
-    expect(doc.documentElement.outerHTML).not.toBe(original);
-    applyZoom(doc, 100);
-    expect(zoomStyles(doc)).toHaveLength(0);
-    expect(doc.documentElement.outerHTML).toBe(original);
-  });
-
-  it("writes nothing on a second identical call, at every size", () => {
-    for (const zoom of [100, 90, 80, 70] as const) {
-      const doc = makeFrame(PAGE);
-      applyZoom(doc, zoom);
-      const records: MutationRecord[] = [];
-      const observer = new MutationObserver((r) => records.push(...r));
-      observer.observe(doc, {
-        subtree: true,
-        childList: true,
-        attributes: true,
-        characterData: true,
-      });
-      applyZoom(doc, zoom);
-      records.push(...observer.takeRecords());
-      observer.disconnect();
-      expect(records).toHaveLength(0);
-    }
-  });
-
-  it("restores the text of a zoom style the page has edited", () => {
-    const doc = makeFrame(PAGE);
-    applyZoom(doc, 90);
-    (doc.getElementById("gc-zoom-style") as Element).textContent = "html{zoom:5}";
-    applyZoom(doc, 90);
-    expect(zoomStyles(doc)).toHaveLength(1);
-    expect(zoomStyles(doc)[0]?.textContent).toBe("html{zoom:0.9}");
-  });
-
-  it("never touches the other style elements, and they never touch it", () => {
-    const doc = makeFrame(PAGE);
-    doc.head.insertAdjacentHTML(
-      "beforeend",
-      '<style id="gc-find-style">x{}</style><style id="gc-chrome-style">y{}</style>',
-    );
-    for (const zoom of [90, 80, 100, 70] as const) {
-      applyZoom(doc, zoom);
-      expect(doc.getElementById("gc-find-style")?.textContent).toBe("x{}");
-      expect(doc.getElementById("gc-chrome-style")?.textContent).toBe("y{}");
-    }
-    applyZoom(doc, 90);
-    applyChrome(doc, true);
-    expect(zoomStyles(doc)).toHaveLength(1);
-    expect(zoomStyles(doc)[0]?.textContent).toBe("html{zoom:0.9}");
-    expect(doc.getElementById("gc-chrome-style")?.textContent).toBe(RULES);
-    applyChrome(doc, false);
-    expect(zoomStyles(doc)[0]?.textContent).toBe("html{zoom:0.9}");
-    expect(doc.getElementById("gc-find-style")?.textContent).toBe("x{}");
-  });
-
-  it("does not throw when the document has no head or cannot be read", () => {
-    const doc = makeFrame(PAGE);
-    doc.head.remove();
-    expect(() => applyZoom(doc, 90)).not.toThrow();
-    expect(() => applyZoom(doc, 100)).not.toThrow();
-    const hostile = new Proxy({} as Document, {
-      get() {
-        throw new Error("Blocked a frame from another origin");
-      },
-    });
-    expect(() => applyZoom(hostile, 90)).not.toThrow();
-    expect(() => applyZoom(hostile, 100)).not.toThrow();
   });
 });
