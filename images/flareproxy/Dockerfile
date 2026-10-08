@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=github-tags depName=mimnix/FlareProxy
-ARG FLAREPROXY_VERSION=v1.0.0
+ARG FLAREPROXY_VERSION=v1.0.1
 
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.14
