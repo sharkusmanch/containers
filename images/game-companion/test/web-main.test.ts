@@ -2757,12 +2757,77 @@ describe("display settings", () => {
     expect(doc.getElementById("gc-chrome-style")).toBeNull();
     expect(row("setting-hide-chrome").textContent).toBe("Outline bars: shown");
     expect(row("setting-hide-chrome").getAttribute("aria-pressed")).toBe("false");
-    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: false, guideJump: true });
+    expect(stored(storage)).toEqual({
+      keepAwake: true,
+      hideChrome: false,
+      guideJump: true,
+      guideZoom: 100,
+    });
     expect($(".picker")?.hidden).toBe(false);
     row("setting-hide-chrome").click();
     expect(doc.getElementById("gc-chrome-style")).not.toBeNull();
     expect(row("setting-hide-chrome").textContent).toBe("Outline bars: hidden");
-    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: true, guideJump: true });
+    expect(stored(storage)).toEqual({
+      keepAwake: true,
+      hideChrome: true,
+      guideJump: true,
+      guideZoom: 100,
+    });
+  });
+
+  it("applies the stored guide text size at start, to a frame that loads", async () => {
+    const storage = memory();
+    storage.setItem(
+      KEY,
+      JSON.stringify({ keepAwake: true, hideChrome: true, guideJump: true, guideZoom: 80 }),
+    );
+    await start(storage);
+    const frame = showChecklist();
+    expect(frame.contentDocument?.getElementById("gc-zoom-style")?.textContent).toBe(
+      "html{zoom:0.8}",
+    );
+    openDisplay();
+    expect(row("setting-guide-zoom").textContent).toBe("Guide text size: 80%");
+    expect(row("setting-guide-zoom").hasAttribute("aria-pressed")).toBe(false);
+  });
+
+  it("starts at 100% when the stored guide text size is corrupt", async () => {
+    const storage = memory();
+    storage.setItem(KEY, JSON.stringify({ guideZoom: "90" }));
+    await start(storage);
+    const frame = showChecklist();
+    expect(frame.contentDocument?.getElementById("gc-zoom-style")).toBeNull();
+    openDisplay();
+    expect(row("setting-guide-zoom").textContent).toBe("Guide text size: 100%");
+  });
+
+  it("steps the guide text size 100, 90, 80, 70, 100: saved, applied at once and relabelled", async () => {
+    const { storage } = await start();
+    const frame = showChecklist();
+    const doc = frame.contentDocument as Document;
+    const zoom = (): string | null => doc.getElementById("gc-zoom-style")?.textContent ?? null;
+    openDisplay();
+    expect(row("setting-guide-zoom").textContent).toBe("Guide text size: 100%");
+    expect(zoom()).toBeNull();
+    const steps: [number, string | null][] = [
+      [90, "html{zoom:0.9}"],
+      [80, "html{zoom:0.8}"],
+      [70, "html{zoom:0.7}"],
+      [100, null],
+    ];
+    for (const [percent, text] of steps) {
+      row("setting-guide-zoom").click();
+      expect(zoom()).toBe(text);
+      expect(row("setting-guide-zoom").textContent).toBe(`Guide text size: ${percent}%`);
+      expect(stored(storage)).toEqual({
+        keepAwake: true,
+        hideChrome: true,
+        guideJump: true,
+        guideZoom: percent,
+      });
+      expect($(".picker")?.hidden).toBe(false);
+    }
+    expect(document.getElementById("gc-zoom-style")).toBeNull();
   });
 
   it("flips keep-awake: off releases the lock, on asks again, saved and relabelled", async () => {
@@ -2776,12 +2841,22 @@ describe("display settings", () => {
     expect(lock.sentinels[0]?.release).toHaveBeenCalledTimes(1);
     expect(row("setting-keep-awake").textContent).toBe("Keep screen on: off");
     expect(row("setting-keep-awake").getAttribute("aria-pressed")).toBe("false");
-    expect(stored(storage)).toEqual({ keepAwake: false, hideChrome: true, guideJump: true });
+    expect(stored(storage)).toEqual({
+      keepAwake: false,
+      hideChrome: true,
+      guideJump: true,
+      guideZoom: 100,
+    });
     row("setting-keep-awake").click();
     await flush();
     expect(lock.request).toHaveBeenCalledTimes(2);
     expect(row("setting-keep-awake").textContent).toBe("Keep screen on: on");
-    expect(stored(storage)).toEqual({ keepAwake: true, hideChrome: true, guideJump: true });
+    expect(stored(storage)).toEqual({
+      keepAwake: true,
+      hideChrome: true,
+      guideJump: true,
+      guideZoom: 100,
+    });
   });
 
   it("hides the keep-awake and full-screen rows where the browser has neither", async () => {

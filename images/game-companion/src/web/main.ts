@@ -18,6 +18,7 @@ import {
   fullscreenSupported,
   isFullscreen,
   loadSettings,
+  nextGuideZoom,
   saveSettings,
   toggleFullscreen,
   type WakeLockLike,
@@ -222,7 +223,10 @@ export function startApp(opts: AppOptions): App {
         void toggleFullscreen(doc).then(showSettings);
         return;
       }
-      settings = { ...settings, [name]: !settings[name] };
+      settings =
+        name === "guideZoom"
+          ? { ...settings, guideZoom: nextGuideZoom(settings.guideZoom) }
+          : { ...settings, [name]: !settings[name] };
       saveSettings(storage, settings);
       applySettings();
       showSettings();
@@ -534,6 +538,7 @@ export function startApp(opts: AppOptions): App {
   function applySettings(): void {
     wakeLock.setEnabled(settings.keepAwake);
     frames.setHideChrome(settings.hideChrome);
+    frames.setZoom(settings.guideZoom);
   }
 
   function showSettings(): void {

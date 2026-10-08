@@ -1,4 +1,5 @@
-import { applyChrome } from "./chrome.js";
+import { applyChrome, applyZoom } from "./chrome.js";
+import type { GuideZoom } from "./device.js";
 import { locateInFrame, type LocateMode } from "./locate.js";
 import { isSafeDocUrl } from "./state.js";
 
@@ -14,6 +15,8 @@ export interface Frames {
   reset(): void;
   /** Hides (or restores) the wiki's sidebar and top bar in every frame, now and as they load. */
   setHideChrome(hide: boolean): void;
+  /** Draws the wiki pages smaller (or restores them) in every frame, now and as they load. */
+  setZoom(zoom: GuideZoom): void;
   /**
    * Finds `text` (preferably under `heading`) in the page framed in slot `index` and highlights it.
    * In "heading" mode it looks for the section heading carrying `text` instead (see findTextRange);
@@ -62,10 +65,13 @@ export function createFrames(
   const entries: (Entry | null)[] = Array.from({ length: slotCount }, () => null);
 
   let hideChrome = false;
+  let zoom: GuideZoom = 100;
   const applyTo = (entry: Entry): void => {
     try {
       const framed = entry.frame.contentDocument;
-      if (framed !== null) applyChrome(framed, hideChrome);
+      if (framed === null) return;
+      applyChrome(framed, hideChrome);
+      applyZoom(framed, zoom);
     } catch {
       // The frame is on another origin.
     }
@@ -99,9 +105,12 @@ export function createFrames(
   // The wiki redraws its bars when the reader follows a link inside the frame. Only the frame on
   // screen is swept, and not while the companion itself is in the background.
   (options.setInterval ?? setInterval)(() => {
-    if (!hideChrome || doc.visibilityState === "hidden") return;
+    if (doc.visibilityState === "hidden") return;
     for (const entry of entries) {
-      if (entry !== null && !entry.frame.classList.contains("inactive")) applyTo(entry);
+      // A frame that is still navigating is applied by its load handler.
+      if (entry !== null && !entry.loading && !entry.frame.classList.contains("inactive")) {
+        applyTo(entry);
+      }
     }
   }, 1500);
 
@@ -123,7 +132,7 @@ export function createFrames(
         const created: Entry = { frame, url, loading: true, generation: 1, live: null };
         frame.addEventListener("load", () => {
           created.loading = false;
-          if (hideChrome) applyTo(created);
+          applyTo(created);
           watchClicks(created);
         });
         frame.setAttribute("src", url);
@@ -140,7 +149,7 @@ export function createFrames(
       }
       entry.frame.classList.remove("inactive");
       // A frame that is still navigating is applied by its load handler.
-      if (hideChrome && !entry.loading) applyTo(entry);
+      if (!entry.loading) applyTo(entry);
     },
     hideAll,
     sync(urls) {
@@ -160,6 +169,10 @@ export function createFrames(
     },
     setHideChrome(hide) {
       hideChrome = hide;
+      for (const entry of entries) if (entry !== null) applyTo(entry);
+    },
+    setZoom(next) {
+      zoom = next;
       for (const entry of entries) if (entry !== null) applyTo(entry);
     },
     async locate(index, text, heading, mode = "text", fallback) {

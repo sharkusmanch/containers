@@ -1,9 +1,19 @@
+import type { GuideZoom } from "./device.js";
+
 const STYLE_ID = "gc-chrome-style";
 const ATTRIBUTE = "data-gc-chrome";
 const STYLE_TEXT =
   "#sidebar{display:none!important}" +
   '[role="main"]{margin-inline-start:0!important}' +
   '[data-gc-chrome="header"]{display:none!important}';
+
+const ZOOM_STYLE_ID = "gc-zoom-style";
+/** The only texts the zoom style ever holds, keyed by the validated step. */
+const ZOOM_TEXT: Record<Exclude<GuideZoom, 100>, string> = {
+  90: "html{zoom:0.9}",
+  80: "html{zoom:0.8}",
+  70: "html{zoom:0.7}",
+};
 
 /** The most elements one pass looks at when searching for the top bar. */
 const SEARCH_LIMIT = 300;
@@ -71,6 +81,27 @@ export function applyChrome(frameDoc: Document, hide: boolean): void {
     }
     if (bar !== null && bar.getAttribute(ATTRIBUTE) !== "header")
       bar.setAttribute(ATTRIBUTE, "header");
+  } catch {
+    // The frame navigated to another origin, or has no document yet.
+  }
+}
+
+/** Draws the framed wiki page smaller (90, 80 or 70) or restores it (100). Idempotent. Never throws. */
+export function applyZoom(frameDoc: Document, zoom: GuideZoom): void {
+  try {
+    if (zoom === 100) {
+      frameDoc.getElementById(ZOOM_STYLE_ID)?.remove();
+      return;
+    }
+    const head = frameDoc.head;
+    if (head === null) return;
+    let style = frameDoc.getElementById(ZOOM_STYLE_ID);
+    if (style === null) {
+      style = frameDoc.createElement("style");
+      style.id = ZOOM_STYLE_ID;
+      head.append(style);
+    }
+    if (style.textContent !== ZOOM_TEXT[zoom]) style.textContent = ZOOM_TEXT[zoom];
   } catch {
     // The frame navigated to another origin, or has no document yet.
   }

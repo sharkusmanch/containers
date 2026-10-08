@@ -1,12 +1,28 @@
 import type { StorageLike } from "./state.js";
 
+/** How large the framed wiki pages are drawn, in percent of their normal size. */
+export type GuideZoom = 100 | 90 | 80 | 70;
+export const GUIDE_ZOOM_STEPS: readonly GuideZoom[] = [100, 90, 80, 70];
+
+/** The next smaller step, wrapping from the smallest back to 100. */
+export function nextGuideZoom(z: GuideZoom): GuideZoom {
+  const next = GUIDE_ZOOM_STEPS[GUIDE_ZOOM_STEPS.indexOf(z) + 1];
+  return next ?? 100;
+}
+
 export interface Settings {
   keepAwake: boolean;
   hideChrome: boolean;
   guideJump: boolean;
+  guideZoom: GuideZoom;
 }
 
-export const DEFAULT_SETTINGS: Settings = { keepAwake: true, hideChrome: true, guideJump: true };
+export const DEFAULT_SETTINGS: Settings = {
+  keepAwake: true,
+  hideChrome: true,
+  guideJump: true,
+  guideZoom: 100,
+};
 export const SETTINGS_STORAGE_KEY = "game-companion:v1:settings";
 
 export function loadSettings(storage: StorageLike | null | undefined): Settings {
@@ -19,10 +35,13 @@ export function loadSettings(storage: StorageLike | null | undefined): Settings 
     }
     const flag = (value: unknown, fallback: boolean): boolean =>
       typeof value === "boolean" ? value : fallback;
+    const zoom = (value: unknown): GuideZoom =>
+      GUIDE_ZOOM_STEPS.find((step) => step === value) ?? DEFAULT_SETTINGS.guideZoom;
     return {
       keepAwake: flag(parsed["keepAwake"], DEFAULT_SETTINGS.keepAwake),
       hideChrome: flag(parsed["hideChrome"], DEFAULT_SETTINGS.hideChrome),
       guideJump: flag(parsed["guideJump"], DEFAULT_SETTINGS.guideJump),
+      guideZoom: zoom(parsed["guideZoom"]),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -37,6 +56,7 @@ export function saveSettings(storage: StorageLike | null | undefined, s: Setting
         keepAwake: s.keepAwake,
         hideChrome: s.hideChrome,
         guideJump: s.guideJump,
+        guideZoom: s.guideZoom,
       }),
     );
   } catch {

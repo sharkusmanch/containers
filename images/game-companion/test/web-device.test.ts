@@ -6,8 +6,10 @@ import {
   createWakeLock,
   displayModeFullscreen,
   fullscreenSupported,
+  GUIDE_ZOOM_STEPS,
   isFullscreen,
   loadSettings,
+  nextGuideZoom,
   saveSettings,
   toggleFullscreen,
   type WakeLockLike,
@@ -24,9 +26,19 @@ function memory(initial: Record<string, string> = {}) {
 
 describe("settings", () => {
   it("defaults to keeping the screen on, hiding the wiki bars and offering the guide jump", () => {
-    expect(DEFAULT_SETTINGS).toEqual({ keepAwake: true, hideChrome: true, guideJump: true });
+    expect(DEFAULT_SETTINGS).toEqual({
+      keepAwake: true,
+      hideChrome: true,
+      guideJump: true,
+      guideZoom: 100,
+    });
     expect(SETTINGS_STORAGE_KEY).toBe("game-companion:v1:settings");
-    expect(loadSettings(memory())).toEqual({ keepAwake: true, hideChrome: true, guideJump: true });
+    expect(loadSettings(memory())).toEqual({
+      keepAwake: true,
+      hideChrome: true,
+      guideJump: true,
+      guideZoom: 100,
+    });
   });
 
   it("returns a fresh object every time, never the shared default", () => {
@@ -40,22 +52,38 @@ describe("settings", () => {
 
   it("round-trips through storage", () => {
     const storage = memory();
-    saveSettings(storage, { keepAwake: false, hideChrome: true, guideJump: false });
+    saveSettings(storage, { keepAwake: false, hideChrome: true, guideJump: false, guideZoom: 100 });
     expect(JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string)).toEqual({
       keepAwake: false,
       hideChrome: true,
       guideJump: false,
+      guideZoom: 100,
     });
-    expect(loadSettings(storage)).toEqual({ keepAwake: false, hideChrome: true, guideJump: false });
-    saveSettings(storage, { keepAwake: true, hideChrome: false, guideJump: true });
-    expect(loadSettings(storage)).toEqual({ keepAwake: true, hideChrome: false, guideJump: true });
+    expect(loadSettings(storage)).toEqual({
+      keepAwake: false,
+      hideChrome: true,
+      guideJump: false,
+      guideZoom: 100,
+    });
+    saveSettings(storage, { keepAwake: true, hideChrome: false, guideJump: true, guideZoom: 100 });
+    expect(loadSettings(storage)).toEqual({
+      keepAwake: true,
+      hideChrome: false,
+      guideJump: true,
+      guideZoom: 100,
+    });
   });
 
   it("gives an older stored object without the guide jump key the default", () => {
     const storage = memory({
       [SETTINGS_STORAGE_KEY]: JSON.stringify({ keepAwake: false, hideChrome: false }),
     });
-    expect(loadSettings(storage)).toEqual({ keepAwake: false, hideChrome: false, guideJump: true });
+    expect(loadSettings(storage)).toEqual({
+      keepAwake: false,
+      hideChrome: false,
+      guideJump: true,
+      guideZoom: 100,
+    });
   });
 
   it.each([
@@ -76,17 +104,20 @@ describe("settings", () => {
       keepAwake: false,
       hideChrome: true,
       guideJump: true,
+      guideZoom: 100,
     });
     expect(load({ keepAwake: 0, hideChrome: false })).toEqual({
       keepAwake: true,
       hideChrome: false,
       guideJump: true,
+      guideZoom: 100,
     });
     expect(load({ keepAwake: null, hideChrome: null })).toEqual(DEFAULT_SETTINGS);
     expect(load({ keepAwake: false, hideChrome: false, guideJump: "off" })).toEqual({
       keepAwake: false,
       hideChrome: false,
       guideJump: true,
+      guideZoom: 100,
     });
     expect(load({ guideJump: false })).toEqual({ ...DEFAULT_SETTINGS, guideJump: false });
   });
@@ -104,6 +135,62 @@ describe("settings", () => {
     expect(() => saveSettings(broken, DEFAULT_SETTINGS)).not.toThrow();
     expect(() => saveSettings(undefined, DEFAULT_SETTINGS)).not.toThrow();
     expect(() => saveSettings(null, DEFAULT_SETTINGS)).not.toThrow();
+  });
+});
+
+describe("guide text size", () => {
+  it("offers 100, 90, 80 and 70 and defaults to 100", () => {
+    expect(GUIDE_ZOOM_STEPS).toEqual([100, 90, 80, 70]);
+    expect(DEFAULT_SETTINGS.guideZoom).toBe(100);
+  });
+
+  it.each([100, 90, 80, 70] as const)("round-trips %i through storage", (guideZoom) => {
+    const storage = memory();
+    saveSettings(storage, { ...DEFAULT_SETTINGS, guideZoom });
+    const saved = JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string) as {
+      guideZoom: number;
+    };
+    expect(saved.guideZoom).toBe(guideZoom);
+    expect(loadSettings(storage).guideZoom).toBe(guideZoom);
+  });
+
+  it.each([
+    ["a string", "90"],
+    ["a number that is not a step", 85],
+    ["zero", 0],
+    ["null", null],
+    ["an object", { value: 90 }],
+    ["a boolean", true],
+  ])("falls back to 100 for %s", (_name, value) => {
+    const raw = JSON.stringify({
+      keepAwake: false,
+      hideChrome: false,
+      guideJump: false,
+      guideZoom: value,
+    });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw }))).toEqual({
+      keepAwake: false,
+      hideChrome: false,
+      guideJump: false,
+      guideZoom: 100,
+    });
+  });
+
+  it("gives an older stored object without the key 100 and keeps its other values", () => {
+    const raw = JSON.stringify({ keepAwake: false, hideChrome: true, guideJump: false });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw }))).toEqual({
+      keepAwake: false,
+      hideChrome: true,
+      guideJump: false,
+      guideZoom: 100,
+    });
+  });
+
+  it("steps to the next smaller size and wraps from 70 back to 100", () => {
+    expect(nextGuideZoom(100)).toBe(90);
+    expect(nextGuideZoom(90)).toBe(80);
+    expect(nextGuideZoom(80)).toBe(70);
+    expect(nextGuideZoom(70)).toBe(100);
   });
 });
 

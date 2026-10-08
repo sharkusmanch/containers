@@ -465,6 +465,7 @@ describe("display settings", () => {
     keepAwake: true,
     hideChrome: true,
     guideJump: true,
+    guideZoom: 100 as const,
     fullscreen: false,
     wakeLockSupported: true,
     fullscreenSupported: true,
@@ -498,7 +499,7 @@ describe("display settings", () => {
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
   });
 
-  it("holds four buttons and a hint, the guide jump last before the hint", () => {
+  it("holds five buttons and a hint, the guide text size last before the hint", () => {
     const { picker } = make();
     picker.setSettings(all);
     const list = picker.element.querySelector(".picker-settings") as HTMLElement;
@@ -508,7 +509,9 @@ describe("display settings", () => {
       "setting-hide-chrome",
       "setting-fullscreen",
       "setting-guide-jump",
+      "setting-guide-zoom",
     ]);
+    expect(list.lastElementChild?.className).toBe("setting-hint");
     expect(rows.every((b) => b.getAttribute("type") === "button")).toBe(true);
     const hint = list.querySelector("p.setting-hint");
     expect(hint?.textContent).toBe(
@@ -565,12 +568,37 @@ describe("display settings", () => {
     row(picker, "setting-hide-chrome").click();
     row(picker, "setting-fullscreen").click();
     row(picker, "setting-guide-jump").click();
+    row(picker, "setting-guide-zoom").click();
     expect(handlers.onSetting.mock.calls).toEqual([
       ["keepAwake"],
       ["hideChrome"],
       ["fullscreen"],
       ["guideJump"],
+      ["guideZoom"],
     ]);
+    expect(picker.element.hidden).toBe(false);
+    expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(false);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+  });
+
+  it.each([100, 90, 80, 70] as const)(
+    "labels the guide text size row at %i percent",
+    (guideZoom) => {
+      const { picker } = make();
+      picker.setSettings({ ...all, guideZoom });
+      expect(row(picker, "setting-guide-zoom").textContent).toBe(`Guide text size: ${guideZoom}%`);
+      expect(row(picker, "setting-guide-zoom").hasAttribute("aria-pressed")).toBe(false);
+      expect(row(picker, "setting-guide-zoom").hidden).toBe(false);
+    },
+  );
+
+  it("keeps the picker open when the guide text size row is tapped", () => {
+    const { picker, handlers } = make();
+    picker.setSettings(all);
+    picker.open("pages");
+    tab(picker).click();
+    row(picker, "setting-guide-zoom").click();
+    expect(handlers.onSetting).toHaveBeenCalledWith("guideZoom");
     expect(picker.element.hidden).toBe(false);
     expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(false);
     expect(handlers.onClose).not.toHaveBeenCalled();

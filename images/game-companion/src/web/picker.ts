@@ -1,4 +1,5 @@
 import type { FindMatch, GuideHub, GuidePage } from "../shared/types.js";
+import type { GuideZoom } from "./device.js";
 import type { Layout, Slot } from "./state.js";
 
 export interface PickerHandlers {
@@ -11,12 +12,13 @@ export interface PickerHandlers {
   onSetting(name: SettingName): void;
 }
 
-export type SettingName = "keepAwake" | "hideChrome" | "guideJump" | "fullscreen";
+export type SettingName = "keepAwake" | "hideChrome" | "guideJump" | "guideZoom" | "fullscreen";
 
 export interface SettingsState {
   keepAwake: boolean;
   hideChrome: boolean;
   guideJump: boolean;
+  guideZoom: GuideZoom;
   fullscreen: boolean;
   wakeLockSupported: boolean;
   fullscreenSupported: boolean;
@@ -82,6 +84,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     ["hideChrome", "setting-hide-chrome"],
     ["fullscreen", "setting-fullscreen"],
     ["guideJump", "setting-guide-jump"],
+    ["guideZoom", "setting-guide-zoom"],
   ] as const) {
     const b = doc.createElement("button");
     b.setAttribute("type", "button");
@@ -263,6 +266,8 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
         `Guide jump from status: ${state.guideJump ? "on" : "off"}`,
         state.guideJump,
       );
+      const zoomRow = settingRows.get("guideZoom");
+      if (zoomRow !== undefined) zoomRow.textContent = `Guide text size: ${state.guideZoom}%`;
     },
     showMatches(query, matches, truncated) {
       const title = doc.createElement("h3");
