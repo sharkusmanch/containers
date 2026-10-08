@@ -17,7 +17,9 @@ is also a heading in the guide, a button beside it opens the guide at that secti
 several matching sections it lists them); **Guide jump from status** under ⋯ › Display turns
 this off. The page can be added to the home screen and then opens full screen; it keeps the
 screen on and hides Outline's own sidebar and top bar inside the guide frames. Both can be
-switched off under ⋯ › Display.
+switched off under ⋯ › Display. **Guide text size** there draws the framed guide pages at 90,
+80 or 70 per cent, for a small screen; it enlarges the frame and scales it down, so the guide
+lays out in a wider window as it would under browser zoom.
 
 Each pinned page's sidebar button shows how many of its checkboxes are ticked (`done/total`,
 or a percentage when that is longer than six characters); the count follows a tick made in the
@@ -29,7 +31,7 @@ returns.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.5.0
+- **Version**: v0.6.0
 
 ## Usage
 
@@ -40,7 +42,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.5.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.6.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
