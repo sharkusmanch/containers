@@ -8,6 +8,17 @@ export interface Slot {
   url: string;
 }
 
+/** A web page the person added for a game; the address always passes `isSafeLinkUrl`. */
+export interface GameLink {
+  title: string;
+  url: string;
+}
+
+/** The most links one game can have. */
+export const LINKS_MAX = 12;
+const LINK_URL_MAX = 2000;
+const LINK_TITLE_MAX = 40;
+
 /** `active` is ACHIEVEMENTS or an index 0..SLOT_COUNT-1 of a non-null slot. */
 export interface Layout {
   slots: (Slot | null)[];
@@ -21,6 +32,38 @@ export interface StorageLike {
 
 export function isSafeDocUrl(url: string): boolean {
   return /^\/doc\/[A-Za-z0-9_-]+$/.test(url);
+}
+
+/** An https address with a host and no credentials; the only kind a link frame may show. Never throws. */
+export function isSafeLinkUrl(url: string): boolean {
+  if (typeof url !== "string" || url.length > LINK_URL_MAX) return false;
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname !== "" &&
+      parsed.username === "" &&
+      parsed.password === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isSafeSlotUrl(url: string): boolean {
+  return isSafeDocUrl(url) || isSafeLinkUrl(url);
+}
+
+/** Trims, checks and normalises what the person typed; null when the address is not acceptable. */
+export function normaliseLink(title: string, url: string): GameLink | null {
+  const address = url.trim();
+  if (!isSafeLinkUrl(address)) return null;
+  const parsed = new URL(address);
+  const name = title.trim();
+  return {
+    title: name === "" ? parsed.hostname : Array.from(name).slice(0, LINK_TITLE_MAX).join(""),
+    url: parsed.href,
+  };
 }
 
 export function flattenPages(pages: GuidePage[]): GuidePage[] {
@@ -47,7 +90,7 @@ export function defaultLayout(pages: GuidePage[], titles: string[]): Layout {
 }
 
 export function assignSlot(layout: Layout, page: Slot): Layout {
-  if (!isSafeDocUrl(page.url)) return layout;
+  if (!isSafeSlotUrl(page.url)) return layout;
   const slots = [...layout.slots];
   const existing = slots.findIndex((s) => s?.url === page.url);
   if (existing !== -1) return { slots, active: existing };
@@ -83,12 +126,21 @@ export function docId(url: string): string {
 
 /**
  * Matches pinned slots to the current page tree by `docId`: a slot takes its page's current
- * title and url, a slot whose page is gone is emptied. Then compacts.
+ * title and url, a slot whose page is gone is emptied. A slot holding a link is kept while the
+ * same address is in `links`, taking that link's title. Then compacts.
  */
-export function reconcileLayout(layout: Layout, pages: GuidePage[]): Layout {
+export function reconcileLayout(
+  layout: Layout,
+  pages: GuidePage[],
+  links: GameLink[] = [],
+): Layout {
   const flat = flattenPages(pages).filter((p) => isSafeDocUrl(p.url));
   const slots = layout.slots.map((s) => {
     if (s === null) return null;
+    if (isSafeLinkUrl(s.url)) {
+      const link = links.find((l) => l.url === s.url);
+      return link === undefined ? null : { title: link.title, url: link.url };
+    }
     const id = docId(s.url);
     const found = flat.find((p) => docId(p.url) === id);
     return found === undefined ? null : { title: found.title, url: found.url };
@@ -130,7 +182,7 @@ function parseSlot(value: unknown): Slot | null | undefined {
   if (value === null) return null;
   if (typeof value !== "object") return undefined;
   const { title, url } = value as Record<string, unknown>;
-  if (typeof title !== "string" || typeof url !== "string" || !isSafeDocUrl(url)) return undefined;
+  if (typeof title !== "string" || typeof url !== "string" || !isSafeSlotUrl(url)) return undefined;
   return { title, url };
 }
 
@@ -161,6 +213,49 @@ export function saveLayout(storage: StorageLike, hubId: string, layout: Layout):
   } catch {
     // Storage may be blocked or full; the layout just will not persist.
   }
+}
+
+export function linksKey(scope: string): string {
+  return `game-companion:v1:links:${scope}`;
+}
+
+export function loadLinks(storage: StorageLike, scope: string): GameLink[] {
+  try {
+    const raw = storage.getItem(linksKey(scope));
+    if (raw === null) return [];
+    const data: unknown = JSON.parse(raw);
+    if (!Array.isArray(data)) return [];
+    const links: GameLink[] = [];
+    for (const entry of data as unknown[]) {
+      if (links.length === LINKS_MAX) break;
+      if (typeof entry !== "object" || entry === null) continue;
+      const { title, url } = entry as Record<string, unknown>;
+      if (typeof title !== "string" || typeof url !== "string" || !isSafeLinkUrl(url)) continue;
+      if (links.some((l) => l.url === url)) continue;
+      links.push({ title, url });
+    }
+    return links;
+  } catch {
+    return [];
+  }
+}
+
+export function saveLinks(storage: StorageLike, scope: string, links: GameLink[]): void {
+  try {
+    storage.setItem(linksKey(scope), JSON.stringify(links));
+  } catch {
+    // Storage may be blocked or full; the links just will not persist.
+  }
+}
+
+/** Appends `link`; returns the list itself when the address is already there or the list is full. */
+export function addLink(links: GameLink[], link: GameLink): GameLink[] {
+  if (links.length >= LINKS_MAX || links.some((l) => l.url === link.url)) return links;
+  return [...links, { title: link.title, url: link.url }];
+}
+
+export function removeLink(links: GameLink[], url: string): GameLink[] {
+  return links.filter((l) => l.url !== url);
 }
 
 export function gameKey(game: GameRef | null): string {

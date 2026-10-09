@@ -31,6 +31,7 @@ import {
   ACHIEVEMENTS,
   SLOT_COUNT,
   activate,
+  addLink,
   assignSlot,
   defaultLayout,
   docId,
@@ -38,9 +39,15 @@ import {
   gameKey,
   isSafeDocUrl,
   loadLayout,
+  loadLinks,
+  normaliseLink,
   reconcileLayout,
+  removeLink,
   removeSlot,
   saveLayout,
+  saveLinks,
+  LINKS_MAX,
+  type GameLink,
   type Layout,
   type StorageLike,
 } from "./state.js";
@@ -75,6 +82,9 @@ interface Current {
   layout: Layout;
   key: string;
   persist: boolean;
+  /** What the game's links and layout are stored under; null when nothing identifies the game. */
+  scope: string | null;
+  links: GameLink[];
 }
 
 type Pending =
@@ -99,6 +109,12 @@ function unlockText(names: string[]): string {
   const [first, second] = names;
   if (names.length <= 3) return `Unlocked: ${names.join(", ")}`;
   return `Unlocked: ${first}, ${second} and ${names.length - 2} more`;
+}
+
+/** The guide's hub id when the game has a guide, else the game's own key when it has an id. */
+function scopeFor(game: GameRef | null, hub: GuideHub | null): string | null {
+  if (hub !== null) return hub.hubId;
+  return game !== null && game.id !== null ? `game:${gameKey(game)}` : null;
 }
 
 function achievementsSource(c: Current): { source: Source; id: string } | null {
@@ -186,7 +202,7 @@ export function startApp(opts: AppOptions): App {
       render();
     },
     onMore() {
-      picker.setPages(current?.pages ?? [], current?.layout ?? emptyLayout());
+      refreshPicker();
       picker.open(current?.hub ? "pages" : "games");
       // Pick up guides that appeared since the page started; a pending chooser keeps its list.
       if (choosingFor === null) void refreshGuides();
@@ -238,7 +254,41 @@ export function startApp(opts: AppOptions): App {
       frames.sync(current.layout.slots.map((s) => s?.url ?? null));
       save();
       render();
-      picker.setPages(current.pages, current.layout);
+      refreshPicker();
+    },
+    onAddLink(title, url) {
+      const c = current;
+      const link = normaliseLink(title, url);
+      // The form is only reachable while a game with a scope is on screen.
+      if (c === null || c.scope === null || link === null) {
+        return "Enter an address that starts with https://";
+      }
+      if (c.links.some((l) => l.url === link.url)) return "That link is already in the list";
+      if (c.links.length >= LINKS_MAX) {
+        return `That is the most links a game can have (${LINKS_MAX})`;
+      }
+      c.links = addLink(c.links, link);
+      saveLinks(storage, c.scope, c.links);
+      refreshPicker();
+      return null;
+    },
+    onLink(link) {
+      const c = current;
+      if (c === null || !c.links.some((l) => l.url === link.url)) return;
+      c.layout = assignSlot(c.layout, link);
+      save();
+      render();
+    },
+    onRemoveLink(url) {
+      const c = current;
+      if (c === null || c.scope === null) return;
+      c.links = removeLink(c.links, url);
+      saveLinks(storage, c.scope, c.links);
+      c.layout = removeSlot(c.layout, url);
+      frames.sync(c.layout.slots.map((s) => s?.url ?? null));
+      save();
+      render();
+      refreshPicker();
     },
     onClose() {
       if (choosingFor === null) return;
@@ -508,7 +558,7 @@ export function startApp(opts: AppOptions): App {
     c.layout = assignSlot(c.layout, { title: match.pageTitle, url: match.pageUrl });
     save();
     render();
-    picker.setPages(c.pages, c.layout);
+    refreshPicker();
     const located =
       fallback === undefined
         ? frames.locate(c.layout.active, name, match.heading, mode)
@@ -571,9 +621,21 @@ export function startApp(opts: AppOptions): App {
   }
 
   function save(): void {
-    if (current !== null && current.persist && current.hub !== null) {
-      saveLayout(storage, current.hub.hubId, current.layout);
+    if (current !== null && current.persist && current.scope !== null) {
+      saveLayout(storage, current.scope, current.layout);
     }
+  }
+
+  // The Pages tab: the guide's pages and the game's own links, with what is pinned.
+  function refreshPicker(): void {
+    const layout = current?.layout ?? emptyLayout();
+    picker.setPages(current?.pages ?? [], layout);
+    picker.setLinks(current?.links ?? [], layout, current?.scope != null);
+  }
+
+  // A slot holds a link only while its address is in the game's list; anything else is a document.
+  function isLinkUrl(url: string): boolean {
+    return current?.links.some((l) => l.url === url) ?? false;
   }
 
   function noteText(): string {
@@ -653,7 +715,7 @@ export function startApp(opts: AppOptions): App {
       // A browser may reset the scroll position of an element that is not rendered.
       if (!view.element.hidden) savedScroll = view.element.scrollTop;
       view.element.hidden = true;
-      frames.show(layout.active, slot.url);
+      frames.show(layout.active, slot.url, isLinkUrl(slot.url) ? "link" : "doc");
     }
   }
 
@@ -661,7 +723,9 @@ export function startApp(opts: AppOptions): App {
     rail.render(
       layout,
       unlockedCount,
-      layout.slots.map((slot) => (slot === null ? null : (progress.get(docId(slot.url)) ?? null))),
+      layout.slots.map((slot) =>
+        slot === null || isLinkUrl(slot.url) ? null : (progress.get(docId(slot.url)) ?? null),
+      ),
     );
   }
 
@@ -778,23 +842,49 @@ export function startApp(opts: AppOptions): App {
       picker.setHubs(allHubs, available);
     }
     if (key !== declinedKey) declinedKey = "";
-    current = { game, hub, pages: [], layout: emptyLayout(), key, persist: false };
+    const scope = scopeFor(game, hub);
+    const links = scope === null ? [] : loadLinks(storage, scope);
+    current = {
+      game,
+      hub,
+      pages: [],
+      layout: emptyLayout(),
+      key,
+      persist: false,
+      scope,
+      links,
+    };
     renderPresence();
-    picker.setPages(current.pages, current.layout);
+    refreshPicker();
     render();
 
     if (hub !== null) {
       const stored = loadLayout(storage, hub.hubId);
       try {
         const { pages, defaultPins } = await api.hubTree(hub.hubId);
-        const layout = reconcileLayout(stored ?? defaultLayout(pages, defaultPins), pages);
-        current = { game, hub, pages, layout, key, persist: true };
+        const layout = reconcileLayout(stored ?? defaultLayout(pages, defaultPins), pages, links);
+        current = { game, hub, pages, layout, key, persist: true, scope, links };
         void loadMarks(current);
       } catch {
         // A transient error must never overwrite stored pins, so nothing is persisted.
-        current = { game, hub, pages: [], layout: stored ?? emptyLayout(), key, persist: false };
+        current = {
+          game,
+          hub,
+          pages: [],
+          layout: stored ?? emptyLayout(),
+          key,
+          persist: false,
+          scope,
+          links,
+        };
       }
-      picker.setPages(current.pages, current.layout);
+      refreshPicker();
+      render();
+    } else if (scope !== null) {
+      // A game without a guide keeps a layout of its links only.
+      const layout = reconcileLayout(loadLayout(storage, scope) ?? emptyLayout(), [], links);
+      current = { game, hub, pages: [], layout, key, persist: true, scope, links };
+      refreshPicker();
       render();
     }
     void refreshProgress(current);
@@ -948,11 +1038,11 @@ export function startApp(opts: AppOptions): App {
         ? defaultLayout(pages, defaultPins)
         : c.layout;
     c.pages = pages;
-    c.layout = reconcileLayout(base, pages);
+    c.layout = reconcileLayout(base, pages, c.links);
     c.persist = true;
     void loadMarks(c);
     frames.sync(c.layout.slots.map((s) => s?.url ?? null));
-    picker.setPages(c.pages, c.layout);
+    refreshPicker();
     render();
   }
 

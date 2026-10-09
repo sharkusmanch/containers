@@ -53,7 +53,7 @@ const CSP = [
   "style-src 'self'",
   `img-src 'self' ${IMAGE_HOSTS.join(" ")}`,
   "connect-src 'self'",
-  "frame-src 'self'",
+  "frame-src 'self' https:",
   "manifest-src 'self'",
   "base-uri 'none'",
   "form-action 'none'",

@@ -683,6 +683,87 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
+/* ---- Picker: the game's own links ---- */
+
+.picker-links-title {
+  margin: 0;
+  padding: 10px 12px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-link-open,
+.picker-link-remove {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--text-dim);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-link-open {
+  font-size: 18px;
+}
+
+.picker-link-remove {
+  font-size: 13px;
+}
+
+.picker-link-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px;
+}
+
+.picker-link-name,
+.picker-link-url {
+  flex: 1 1 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  /* 16px or larger keeps mobile browsers from zooming the page on focus */
+  font-size: 16px;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.picker-link-submit {
+  flex: 0 0 auto;
+  min-width: 64px;
+  min-height: 44px;
+  padding: 0 16px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.picker-link-error {
+  flex: 1 1 auto;
+  align-self: center;
+  margin: 0;
+  color: var(--warn);
+}
+
+.picker-link-error:empty {
+  display: none;
+}
+
 /* ---- Find in guide: matches list, toast and the rail's unlock pulse ---- */
 
 .picker-matches-title {

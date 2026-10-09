@@ -1,6 +1,6 @@
 import type { FindMatch, GuideHub, GuidePage } from "../shared/types.js";
 import type { GuideZoom } from "./device.js";
-import type { Layout, Slot } from "./state.js";
+import type { GameLink, Layout, Slot } from "./state.js";
 
 export interface PickerHandlers {
   onPage(page: Slot): void;
@@ -10,6 +10,11 @@ export interface PickerHandlers {
   onMatch(match: FindMatch): void;
   /** A display setting was tapped. The picker stays open. */
   onSetting(name: SettingName): void;
+  /** The add form was submitted. Returns a message to show, or null when the link was added. */
+  onAddLink(title: string, url: string): string | null;
+  onRemoveLink(url: string): void;
+  /** A link row was tapped: pin it and open it. */
+  onLink(link: GameLink): void;
 }
 
 export type SettingName = "keepAwake" | "hideChrome" | "guideJump" | "guideZoom" | "fullscreen";
@@ -29,6 +34,8 @@ export interface Picker {
   open(tab: "pages" | "games"): void;
   close(): void;
   setPages(pages: GuidePage[], layout: Layout): void;
+  /** The game's own links, below its pages; `available` false hides the section (no game to attach them to). */
+  setLinks(links: GameLink[], layout: Layout, available: boolean): void;
   setHubs(hubs: GuideHub[], available: boolean): void;
   /** While a guide choice is pending only the Games tab is offered. */
   setChoosing(choosing: boolean): void;
@@ -162,19 +169,95 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
       const row = doc.createElement("div");
       row.classList.add("picker-row");
       row.append(button);
-      if (isPinned) {
-        const unpin = doc.createElement("button");
-        unpin.setAttribute("type", "button");
-        unpin.classList.add("picker-unpin");
-        unpin.setAttribute("aria-label", `Remove ${page.title} from the sidebar`);
-        unpin.textContent = "✕";
-        unpin.addEventListener("click", () => {
-          handlers.onUnpin({ title: page.title, url: page.url });
-        });
-        row.append(unpin);
-      }
+      if (isPinned) row.append(pinButton(page));
       return [row, ...pageItems(page.children, pinned, depth + 1)];
     });
+
+  const pinButton = (page: Slot): HTMLButtonElement => {
+    const unpin = doc.createElement("button");
+    unpin.setAttribute("type", "button");
+    unpin.classList.add("picker-unpin");
+    unpin.setAttribute("aria-label", `Remove ${page.title} from the sidebar`);
+    unpin.textContent = "✕";
+    unpin.addEventListener("click", () => {
+      handlers.onUnpin({ title: page.title, url: page.url });
+    });
+    return unpin;
+  };
+
+  const linksSection = doc.createElement("section");
+  linksSection.classList.add("picker-links");
+  linksSection.hidden = true;
+  const linksTitle = doc.createElement("h3");
+  linksTitle.classList.add("picker-links-title");
+  linksTitle.textContent = "Your links";
+  const linkRows = doc.createElement("div");
+  linkRows.classList.add("picker-link-rows");
+  const addForm = doc.createElement("form");
+  addForm.classList.add("picker-link-add");
+  addForm.noValidate = true;
+  const nameInput = doc.createElement("input");
+  nameInput.classList.add("picker-link-name");
+  nameInput.setAttribute("type", "text");
+  nameInput.setAttribute("placeholder", "Name");
+  nameInput.setAttribute("maxlength", "40");
+  nameInput.setAttribute("aria-label", "Link name");
+  nameInput.setAttribute("autocomplete", "off");
+  const urlInput = doc.createElement("input");
+  urlInput.classList.add("picker-link-url");
+  urlInput.setAttribute("type", "url");
+  urlInput.setAttribute("inputmode", "url");
+  urlInput.setAttribute("placeholder", "https://…");
+  urlInput.setAttribute("aria-label", "Link address");
+  urlInput.setAttribute("autocapitalize", "off");
+  urlInput.setAttribute("autocomplete", "off");
+  urlInput.setAttribute("spellcheck", "false");
+  const addButton = doc.createElement("button");
+  addButton.setAttribute("type", "submit");
+  addButton.classList.add("picker-link-submit");
+  addButton.textContent = "Add";
+  const linkError = doc.createElement("p");
+  linkError.classList.add("picker-link-error");
+  addForm.append(nameInput, urlInput, addButton, linkError);
+  addForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const message = handlers.onAddLink(nameInput.value, urlInput.value);
+    linkError.textContent = message ?? "";
+    if (message === null) {
+      nameInput.value = "";
+      urlInput.value = "";
+    }
+  });
+  linksSection.append(linksTitle, linkRows, addForm);
+  pagesList.append(linksSection);
+
+  const linkRow = (link: GameLink, isPinned: boolean): HTMLElement => {
+    const { button } = item(link.title);
+    button.classList.toggle("pinned", isPinned);
+    button.addEventListener("click", () => {
+      close();
+      handlers.onLink({ title: link.title, url: link.url });
+    });
+    const row = doc.createElement("div");
+    row.classList.add("picker-row", "picker-link");
+    row.append(button);
+    if (isPinned) row.append(pinButton(link));
+    const open = doc.createElement("a");
+    open.classList.add("picker-link-open");
+    open.setAttribute("href", link.url);
+    open.setAttribute("target", "_blank");
+    open.setAttribute("rel", "noopener noreferrer");
+    open.setAttribute("aria-label", "Open in a new tab");
+    open.textContent = "↗";
+    const remove = doc.createElement("button");
+    remove.setAttribute("type", "button");
+    remove.classList.add("picker-link-remove");
+    remove.setAttribute("aria-label", `Remove ${link.title}`);
+    remove.textContent = "Remove";
+    remove.addEventListener("click", () => handlers.onRemoveLink(link.url));
+    row.append(open, remove);
+    return row;
+  };
 
   const gameItem = (hub: GuideHub): HTMLElement => {
     const { button } = item(hub.title);
@@ -308,7 +391,14 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
         ...(pages.length === 0
           ? [empty("No guide pages for this game")]
           : pageItems(pages, pinned, 0)),
+        linksSection,
       );
+    },
+    setLinks(links, layout, available) {
+      const pinned = new Set<string>();
+      for (const slot of layout.slots) if (slot !== null) pinned.add(slot.url);
+      linkRows.replaceChildren(...links.map((link) => linkRow(link, pinned.has(link.url))));
+      linksSection.hidden = !available;
     },
     setHubs(hubs, available) {
       gamesList.replaceChildren(

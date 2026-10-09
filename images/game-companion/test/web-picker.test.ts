@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 import { createPicker } from "../src/web/picker.js";
-import { defaultLayout } from "../src/web/state.js";
+import { assignSlot, defaultLayout, type GameLink } from "../src/web/state.js";
 import type { FindMatch, GuideHub, GuidePage } from "../src/shared/types.js";
 
 const pages: GuidePage[] = [
@@ -41,6 +41,9 @@ function make() {
     onUnpin: vi.fn(),
     onMatch: vi.fn(),
     onSetting: vi.fn(),
+    onAddLink: vi.fn((): string | null => null),
+    onRemoveLink: vi.fn(),
+    onLink: vi.fn(),
   };
   const picker = createPicker(document, handlers);
   picker.setPages(pages, defaultLayout(pages, ["Achievement Checklist"]));
@@ -163,6 +166,9 @@ describe("game groups", () => {
       onUnpin: vi.fn(),
       onMatch: vi.fn(),
       onSetting: vi.fn(),
+      onAddLink: vi.fn(() => null),
+      onRemoveLink: vi.fn(),
+      onLink: vi.fn(),
     };
     const picker = createPicker(document, handlers);
     picker.setHubs(hubs, available);
@@ -633,5 +639,204 @@ describe("display settings", () => {
     picker.showMatches("x", [], false);
     (picker.element.querySelector(".picker-close") as HTMLElement).click();
     expect(tab(picker).hidden).toBe(false);
+  });
+});
+
+describe("your links", () => {
+  const linkA: GameLink = { title: "Sample Map", url: "https://links.example.test/map" };
+  const linkB: GameLink = {
+    title: "<b>Planner</b>",
+    url: "https://links.example.test/plan?x=1&y=2",
+  };
+  const emptyLayout = () => defaultLayout([], []);
+  const section = (picker: { element: HTMLElement }) =>
+    picker.element.querySelector(".picker-pages .picker-links") as HTMLElement;
+  const rows = (picker: { element: HTMLElement }) => [
+    ...picker.element.querySelectorAll<HTMLElement>(".picker-link"),
+  ];
+  const fill = (picker: { element: HTMLElement }, name: string, url: string) => {
+    (picker.element.querySelector(".picker-link-name") as HTMLInputElement).value = name;
+    (picker.element.querySelector(".picker-link-url") as HTMLInputElement).value = url;
+  };
+  const submit = (picker: { element: HTMLElement }) => {
+    const form = picker.element.querySelector(".picker-link-add") as HTMLFormElement;
+    const event = new Event("submit", { cancelable: true, bubbles: true });
+    form.dispatchEvent(event);
+    return event;
+  };
+
+  it("is hidden until the game has links available, and when it is not", () => {
+    const { picker } = make();
+    expect(section(picker).hidden).toBe(true);
+    picker.setLinks([], emptyLayout(), true);
+    expect(section(picker).hidden).toBe(false);
+    picker.setLinks([linkA], emptyLayout(), false);
+    expect(section(picker).hidden).toBe(true);
+  });
+
+  it("shows the heading and the form even with no links, and no guide pages", () => {
+    const { picker } = make();
+    picker.setPages([], emptyLayout());
+    picker.setLinks([], emptyLayout(), true);
+    picker.open("pages");
+    expect(section(picker).hidden).toBe(false);
+    expect(section(picker).querySelector("h3.picker-links-title")?.textContent).toBe("Your links");
+    expect(rows(picker)).toHaveLength(0);
+    const form = section(picker).querySelector("form.picker-link-add") as HTMLFormElement;
+    const name = form.querySelector("input.picker-link-name") as HTMLInputElement;
+    const url = form.querySelector("input.picker-link-url") as HTMLInputElement;
+    expect(name.getAttribute("type")).toBe("text");
+    expect(name.getAttribute("placeholder")).toBe("Name");
+    expect(name.getAttribute("maxlength")).toBe("40");
+    expect(url.getAttribute("type")).toBe("url");
+    expect(url.getAttribute("inputmode")).toBe("url");
+    expect(url.getAttribute("placeholder")).toBe("https://…");
+    expect(url.getAttribute("autocapitalize")).toBe("off");
+    expect(url.getAttribute("autocomplete")).toBe("off");
+    expect(url.getAttribute("spellcheck")).toBe("false");
+    const button = form.querySelector('button[type="submit"]') as HTMLElement;
+    expect(button.textContent).toBe("Add");
+    expect(form.querySelector(".picker-link-error")?.textContent).toBe("");
+  });
+
+  it("lists the section below the guide's pages", () => {
+    const { picker } = make();
+    picker.setLinks([linkA], emptyLayout(), true);
+    const children = [...(picker.element.querySelector(".picker-pages") as HTMLElement).children];
+    expect(children.at(-1)).toBe(section(picker));
+    expect(children.indexOf(section(picker))).toBeGreaterThan(
+      children.indexOf(picker.element.querySelector(".picker-pages .picker-row") as HTMLElement),
+    );
+    // Redrawing the pages keeps the section last.
+    picker.setPages(pages, emptyLayout());
+    expect(
+      [...(picker.element.querySelector(".picker-pages") as HTMLElement).children].at(-1),
+    ).toBe(section(picker));
+    expect(rows(picker)).toHaveLength(1);
+  });
+
+  it("draws a row per link: title, open anchor and remove button", () => {
+    const { picker } = make();
+    picker.setLinks([linkA, linkB], emptyLayout(), true);
+    expect(rows(picker)).toHaveLength(2);
+    const [first, second] = rows(picker);
+    expect(first?.classList.contains("picker-row")).toBe(true);
+    expect(first?.querySelector(".picker-item .picker-title")?.textContent).toBe("Sample Map");
+    const open = first?.querySelector("a.picker-link-open") as HTMLAnchorElement;
+    expect(open.getAttribute("href")).toBe(linkA.url);
+    expect(open.getAttribute("target")).toBe("_blank");
+    expect(open.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(open.getAttribute("aria-label")).toBe("Open in a new tab");
+    expect(open.textContent).toBe("↗");
+    const remove = first?.querySelector("button.picker-link-remove") as HTMLElement;
+    expect(remove.textContent).toBe("Remove");
+    expect(remove.getAttribute("type")).toBe("button");
+    expect(remove.getAttribute("aria-label")).toBe("Remove Sample Map");
+    expect(second?.querySelector("a.picker-link-open")?.getAttribute("href")).toBe(linkB.url);
+    expect(picker.element.querySelector("button button")).toBeNull();
+  });
+
+  it("shows a title containing markup literally", () => {
+    const { picker } = make();
+    picker.setLinks([linkB], emptyLayout(), true);
+    const row = rows(picker)[0];
+    expect(row?.querySelector(".picker-title")?.textContent).toBe("<b>Planner</b>");
+    expect(row?.querySelector("b")).toBeNull();
+    expect(row?.querySelector(".picker-link-remove")?.getAttribute("aria-label")).toBe(
+      "Remove <b>Planner</b>",
+    );
+  });
+
+  it("marks a pinned link and offers the same unpin button as a page", () => {
+    const { picker, handlers } = make();
+    const layout = assignSlot(emptyLayout(), linkA);
+    picker.setLinks([linkA, linkB], layout, true);
+    const [first, second] = rows(picker);
+    expect(first?.querySelector(".picker-item")?.classList.contains("pinned")).toBe(true);
+    expect(second?.querySelector(".picker-item")?.classList.contains("pinned")).toBe(false);
+    expect(first?.querySelector(".picker-unpin")?.getAttribute("aria-label")).toBe(
+      "Remove Sample Map from the sidebar",
+    );
+    expect(first?.querySelector(".picker-unpin")?.textContent).toBe("✕");
+    expect(second?.querySelector(".picker-unpin")).toBeNull();
+    (first?.querySelector(".picker-unpin") as HTMLElement).click();
+    expect(handlers.onUnpin).toHaveBeenCalledWith(linkA);
+    expect(handlers.onLink).not.toHaveBeenCalled();
+  });
+
+  it("a tap on a link reports it and closes the picker", () => {
+    const { picker, handlers } = make();
+    picker.setLinks([linkA], emptyLayout(), true);
+    picker.open("pages");
+    (rows(picker)[0]?.querySelector(".picker-item") as HTMLElement).click();
+    expect(handlers.onLink).toHaveBeenCalledWith(linkA);
+    expect(handlers.onPage).not.toHaveBeenCalled();
+    expect(picker.element.hidden).toBe(true);
+  });
+
+  it("a tap on Remove reports the address and leaves the picker open", () => {
+    const { picker, handlers } = make();
+    picker.setLinks([linkA], emptyLayout(), true);
+    picker.open("pages");
+    (rows(picker)[0]?.querySelector(".picker-link-remove") as HTMLElement).click();
+    expect(handlers.onRemoveLink).toHaveBeenCalledWith(linkA.url);
+    expect(handlers.onLink).not.toHaveBeenCalled();
+    expect(picker.element.hidden).toBe(false);
+  });
+
+  it("submitting reports both values, clears the inputs on success and never navigates", () => {
+    const { picker, handlers } = make();
+    picker.setLinks([], emptyLayout(), true);
+    fill(picker, "Sample Map", "https://links.example.test/map");
+    const event = submit(picker);
+    expect(event.defaultPrevented).toBe(true);
+    expect(handlers.onAddLink).toHaveBeenCalledWith("Sample Map", "https://links.example.test/map");
+    expect((picker.element.querySelector(".picker-link-name") as HTMLInputElement).value).toBe("");
+    expect((picker.element.querySelector(".picker-link-url") as HTMLInputElement).value).toBe("");
+    expect(picker.element.querySelector(".picker-link-error")?.textContent).toBe("");
+  });
+
+  it("shows the returned error, keeps the inputs, and clears it after a success", () => {
+    const { picker, handlers } = make();
+    picker.setLinks([], emptyLayout(), true);
+    handlers.onAddLink.mockReturnValueOnce("Enter an address that starts with https://");
+    fill(picker, "x", "nonsense");
+    expect(submit(picker).defaultPrevented).toBe(true);
+    expect(picker.element.querySelector(".picker-link-error")?.textContent).toBe(
+      "Enter an address that starts with https://",
+    );
+    expect((picker.element.querySelector(".picker-link-name") as HTMLInputElement).value).toBe("x");
+    expect((picker.element.querySelector(".picker-link-url") as HTMLInputElement).value).toBe(
+      "nonsense",
+    );
+    fill(picker, "x", "https://links.example.test/");
+    submit(picker);
+    expect(picker.element.querySelector(".picker-link-error")?.textContent).toBe("");
+  });
+
+  it("keeps what was typed when the list is redrawn", () => {
+    const { picker } = make();
+    picker.setLinks([], emptyLayout(), true);
+    fill(picker, "Half", "https://links.exa");
+    picker.setLinks([linkA], emptyLayout(), true);
+    expect((picker.element.querySelector(".picker-link-name") as HTMLInputElement).value).toBe(
+      "Half",
+    );
+    expect((picker.element.querySelector(".picker-link-url") as HTMLInputElement).value).toBe(
+      "https://links.exa",
+    );
+  });
+
+  it("is not reachable while a guide chooser or a matches list shows", () => {
+    const { picker } = make();
+    picker.setLinks([linkA], emptyLayout(), true);
+    picker.setChoosing(true);
+    picker.open("pages");
+    expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(true);
+    picker.setChoosing(false);
+    picker.open("pages");
+    expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
+    picker.showMatches("sample", [], false);
+    expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(true);
   });
 });

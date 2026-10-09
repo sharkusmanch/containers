@@ -119,6 +119,22 @@ describe("routes", () => {
     expect(r.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
+  it("lets the page frame an https address and changes no other directive", async () => {
+    const csp = (await fetch(`${base}/companion/`)).headers.get("content-security-policy") ?? "";
+    expect(csp.split("; ")).toEqual([
+      "default-src 'none'",
+      "script-src 'self'",
+      "style-src 'self'",
+      `img-src 'self' ${IMAGE_HOSTS.join(" ")}`,
+      "connect-src 'self'",
+      "frame-src 'self' https:",
+      "manifest-src 'self'",
+      "base-uri 'none'",
+      "form-action 'none'",
+      "frame-ancestors 'none'",
+    ]);
+  });
+
   it("allows the manifest in the content policy, and serves the manifest and icons with their types", async () => {
     const csp = (await fetch(`${base}/companion/`)).headers.get("content-security-policy") ?? "";
     expect(csp.split("; ")).toContain("manifest-src 'self'");

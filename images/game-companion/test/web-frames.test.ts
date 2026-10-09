@@ -850,3 +850,210 @@ describe("onInteract", () => {
     expect(onInteract).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("link frames", () => {
+  const LINK_A = "https://links.example.test/a";
+  const LINK_B = "https://links.example.test/b";
+  const frameAt = (f: ReturnType<typeof createFrames>, i: number): HTMLIFrameElement =>
+    f.element.querySelectorAll("iframe")[i] as HTMLIFrameElement;
+  const unreadable = (frame: HTMLIFrameElement | undefined): void => {
+    Object.defineProperty(frame, "contentDocument", {
+      get() {
+        throw new Error("cross-origin");
+      },
+      configurable: true,
+    });
+  };
+
+  it("creates a sandboxed, referrer-less, titled frame for a link", () => {
+    const f = createFrames(document, 4);
+    f.show(0, LINK_A, "link");
+    const frame = frameAt(f, 0);
+    expect(frame.getAttribute("src")).toBe(LINK_A);
+    expect(frame.getAttribute("sandbox")?.split(" ").sort()).toEqual(
+      [
+        "allow-scripts",
+        "allow-same-origin",
+        "allow-forms",
+        "allow-popups",
+        "allow-popups-to-escape-sandbox",
+        "allow-modals",
+        "allow-downloads",
+      ].sort(),
+    );
+    expect(frame.getAttribute("sandbox")).not.toContain("top-navigation");
+    expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+    expect(frame.getAttribute("title")).toBe("Link");
+    expect(frame.classList.contains("frame")).toBe(true);
+    expect(frame.classList.contains("inactive")).toBe(false);
+  });
+
+  it("gives a wiki page frame none of these", () => {
+    const f = createFrames(document, 4);
+    f.show(0, "/doc/a");
+    f.show(1, "/doc/b", "doc");
+    for (const i of [0, 1]) {
+      expect(frameAt(f, i).hasAttribute("sandbox")).toBe(false);
+      expect(frameAt(f, i).hasAttribute("referrerpolicy")).toBe(false);
+      expect(frameAt(f, i).getAttribute("title")).toBe("Guide page");
+    }
+  });
+
+  it.each([
+    ["an http address", "http://links.example.test/a"],
+    ["a wiki path", "/doc/a"],
+    ["a script address", "javascript:alert(1)"],
+    ["an address with credentials", "https://u:p@links.example.test/a"],
+  ])("refuses %s as a link", (_name, url) => {
+    const f = createFrames(document, 4);
+    f.show(0, url, "link");
+    expect(f.element.querySelectorAll("iframe")).toHaveLength(0);
+  });
+
+  it("refuses an https address as a document", () => {
+    const f = createFrames(document, 4);
+    f.show(0, LINK_A, "doc");
+    f.show(0, LINK_A);
+    expect(f.element.querySelectorAll("iframe")).toHaveLength(0);
+  });
+
+  it("a refused address leaves the frame already there alone", () => {
+    const f = createFrames(document, 4);
+    f.show(0, LINK_A, "link");
+    const first = frameAt(f, 0);
+    f.show(0, "http://links.example.test/a", "link");
+    expect(frameAt(f, 0)).toBe(first);
+    expect(first.getAttribute("src")).toBe(LINK_A);
+  });
+
+  it("makes a new frame when a page is replaced by a link, and removes the old one", () => {
+    const f = createFrames(document, 4);
+    f.show(0, "/doc/a");
+    const old = frameAt(f, 0);
+    f.show(0, LINK_A, "link");
+    expect(f.element.querySelectorAll("iframe")).toHaveLength(1);
+    expect(old.isConnected).toBe(false);
+    const fresh = frameAt(f, 0);
+    expect(fresh).not.toBe(old);
+    expect(fresh.getAttribute("sandbox")).toContain("allow-scripts");
+    expect(fresh.getAttribute("src")).toBe(LINK_A);
+  });
+
+  it("makes a new frame when a link is replaced by a page", () => {
+    const f = createFrames(document, 4);
+    f.show(0, LINK_A, "link");
+    const old = frameAt(f, 0);
+    f.show(0, "/doc/a");
+    expect(old.isConnected).toBe(false);
+    const fresh = frameAt(f, 0);
+    expect(fresh).not.toBe(old);
+    expect(fresh.hasAttribute("sandbox")).toBe(false);
+    expect(fresh.getAttribute("title")).toBe("Guide page");
+    expect(fresh.getAttribute("src")).toBe("/doc/a");
+  });
+
+  it("re-points a frame of the same kind without replacing it", () => {
+    const f = createFrames(document, 4);
+    f.show(0, LINK_A, "link");
+    const link = frameAt(f, 0);
+    f.show(0, LINK_B, "link");
+    expect(frameAt(f, 0)).toBe(link);
+    expect(link.getAttribute("src")).toBe(LINK_B);
+    f.show(1, "/doc/a");
+    const page = frameAt(f, 1);
+    f.show(1, "/doc/b");
+    expect(frameAt(f, 1)).toBe(page);
+  });
+
+  it("keeps a link frame alive when it is shown again", () => {
+    const f = createFrames(document, 4);
+    f.show(0, LINK_A, "link");
+    const first = frameAt(f, 0);
+    f.show(1, "/doc/b");
+    f.show(0, LINK_A, "link");
+    expect(frameAt(f, 0)).toBe(first);
+    expect(first.classList.contains("inactive")).toBe(false);
+  });
+
+  it("sync keeps link frames by address and drops those no longer listed", () => {
+    const f = createFrames(document, 4);
+    f.show(0, "/doc/a");
+    f.show(1, LINK_A, "link");
+    f.show(2, LINK_B, "link");
+    const [, a, b] = [...f.element.querySelectorAll("iframe")];
+    f.sync(["/doc/a", LINK_B, null, null]);
+    expect([...f.element.querySelectorAll("iframe")]).toEqual([frameAt(f, 0), b]);
+    expect(a?.isConnected).toBe(false);
+    f.reset();
+    expect(f.element.querySelectorAll("iframe")).toHaveLength(0);
+  });
+
+  it("a link frame takes the zoom class of the container like any other", () => {
+    const f = createFrames(document, 4);
+    f.show(0, LINK_A, "link");
+    f.setZoom(80);
+    expect(f.element.classList.contains("zoom-80")).toBe(true);
+  });
+
+  it("locate on a link slot is gone and never touches the frame", async () => {
+    const f = createFrames(document, 4);
+    f.show(0, LINK_A, "link");
+    const reads = vi.fn(() => {
+      throw new Error("must not be read");
+    });
+    Object.defineProperty(frameAt(f, 0), "contentDocument", { get: reads, configurable: true });
+    expect(await f.locate(0, "Sample Boss")).toBe("gone");
+    expect(await f.locate(0, "Sample Boss", "Heading", "heading", "fallback")).toBe("gone");
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  describe("silence towards a framed document", () => {
+    it("hiding the bars does nothing to a link frame, readable or not", () => {
+      const ticks: (() => void)[] = [];
+      const fake = ((fn: () => void) => ticks.push(fn)) as unknown as typeof setInterval;
+      document.body.innerHTML = "";
+      const f = createFrames(document, 4, { setInterval: fake });
+      document.body.append(f.element);
+      f.setHideChrome(true);
+      f.show(0, LINK_A, "link");
+      f.show(1, LINK_B, "link");
+      showing(frameAt(f, 0), "<p>readable</p>");
+      unreadable(frameAt(f, 1));
+      expect(() => loaded(frameAt(f, 0))).not.toThrow();
+      expect(() => loaded(frameAt(f, 1))).not.toThrow();
+      expect(() => ticks.forEach((t) => t())).not.toThrow();
+      expect(() => f.setHideChrome(false)).not.toThrow();
+      expect(() => f.setHideChrome(true)).not.toThrow();
+      expect(frameAt(f, 0).contentDocument?.getElementById("gc-chrome-style")).toBeNull();
+    });
+
+    it("the sweep still reaches a page frame beside a link frame", () => {
+      const ticks: (() => void)[] = [];
+      const fake = ((fn: () => void) => ticks.push(fn)) as unknown as typeof setInterval;
+      document.body.innerHTML = "";
+      const f = createFrames(document, 4, { setInterval: fake });
+      document.body.append(f.element);
+      f.setHideChrome(true);
+      f.show(0, LINK_A, "link");
+      f.show(1, "/doc/b");
+      showing(frameAt(f, 1), "<p>page</p>");
+      loaded(frameAt(f, 1));
+      frameAt(f, 1).contentDocument?.getElementById("gc-chrome-style")?.remove();
+      ticks.forEach((t) => t());
+      expect(frameAt(f, 1).contentDocument?.getElementById("gc-chrome-style")).not.toBeNull();
+    });
+
+    it("the click watcher listens to nothing in a link frame and does not throw", () => {
+      const onInteract = vi.fn();
+      const f = createFrames(document, 4, { onInteract });
+      f.show(0, LINK_A, "link");
+      f.show(1, LINK_B, "link");
+      showing(frameAt(f, 0), "<p>readable</p>");
+      unreadable(frameAt(f, 1));
+      expect(() => loaded(frameAt(f, 0))).not.toThrow();
+      expect(() => loaded(frameAt(f, 1))).not.toThrow();
+      frameAt(f, 0).contentDocument?.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(onInteract).not.toHaveBeenCalled();
+    });
+  });
+});

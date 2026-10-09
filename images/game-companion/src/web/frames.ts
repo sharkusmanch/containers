@@ -1,11 +1,15 @@
 import { applyChrome } from "./chrome.js";
 import type { GuideZoom } from "./device.js";
 import { locateInFrame, type LocateMode } from "./locate.js";
-import { isSafeDocUrl } from "./state.js";
+import { isSafeDocUrl, isSafeLinkUrl } from "./state.js";
 
 export interface Frames {
   element: HTMLElement;
-  show(index: number, url: string): void;
+  /**
+   * Shows `url` in slot `index`. A "doc" is a wiki page (`isSafeDocUrl`); a "link" is an address the
+   * person added (`isSafeLinkUrl`) and is framed sandboxed. A slot that changes kind gets a new iframe.
+   */
+  show(index: number, url: string, kind?: FrameKind): void;
   hideAll(): void;
   /**
    * Re-keys the kept iframes so slot i holds the frame showing urls[i]; frames for URLs not
@@ -36,11 +40,15 @@ export interface Frames {
   ): Promise<LocateResult>;
 }
 
+export type FrameKind = "doc" | "link";
+
 export type LocateResult = "found" | "not-found" | "gone";
 
 interface Entry {
   frame: HTMLIFrameElement;
   url: string;
+  /** A link frame shows another origin's page: nothing here ever reaches into its document. */
+  kind: FrameKind;
   /** True from the moment this module starts a navigation until that frame's load event. */
   loading: boolean;
   /** Counts the navigations this module has started in the frame (creating it counts as one). */
@@ -48,6 +56,10 @@ interface Entry {
   /** The search now running in this frame; starting another ends it. */
   live: AbortController | null;
 }
+
+/** What a link frame may do: everything a page needs except navigating the companion's own window. */
+const LINK_SANDBOX =
+  "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
 
 /** The container class for each size below 100; none at 100. */
 const ZOOM_CLASS: Record<GuideZoom, string | null> = {
@@ -77,6 +89,7 @@ export function createFrames(
 
   let hideChrome = false;
   const applyTo = (entry: Entry): void => {
+    if (entry.kind === "link") return;
     try {
       const framed = entry.frame.contentDocument;
       if (framed !== null) applyChrome(framed, hideChrome);
@@ -88,7 +101,7 @@ export function createFrames(
   const listened = new WeakSet<Document>();
   const watchClicks = (entry: Entry): void => {
     const onInteract = options.onInteract;
-    if (onInteract === undefined) return;
+    if (onInteract === undefined || entry.kind === "link") return;
     try {
       const framed = entry.frame.contentDocument;
       if (framed === null || listened.has(framed)) return;
@@ -125,16 +138,29 @@ export function createFrames(
 
   return {
     element,
-    show(index, url) {
+    show(index, url, kind = "doc") {
       if (!Number.isInteger(index) || index < 0 || index >= slotCount) return;
-      if (!isSafeDocUrl(url)) return;
+      if (!(kind === "link" ? isSafeLinkUrl(url) : isSafeDocUrl(url))) return;
       hideAll();
       let entry = entries[index] ?? null;
+      // A sandbox only counts at the next navigation, so a frame never changes kind: it is replaced.
+      if (entry !== null && entry.kind !== kind) {
+        entry.live?.abort();
+        entry.frame.remove();
+        entries[index] = null;
+        entry = null;
+      }
       if (entry === null) {
         const frame = doc.createElement("iframe");
         frame.classList.add("frame");
-        frame.setAttribute("title", "Guide page");
-        const created: Entry = { frame, url, loading: true, generation: 1, live: null };
+        if (kind === "link") {
+          frame.setAttribute("sandbox", LINK_SANDBOX);
+          frame.setAttribute("referrerpolicy", "no-referrer");
+          frame.setAttribute("title", "Link");
+        } else {
+          frame.setAttribute("title", "Guide page");
+        }
+        const created: Entry = { frame, url, kind, loading: true, generation: 1, live: null };
         frame.addEventListener("load", () => {
           created.loading = false;
           if (hideChrome) applyTo(created);
@@ -187,7 +213,7 @@ export function createFrames(
     },
     async locate(index, text, heading, mode = "text", fallback) {
       const entry = Number.isInteger(index) ? (entries[index] ?? null) : null;
-      if (entry === null) return "gone";
+      if (entry === null || entry.kind === "link") return "gone";
       entry.live?.abort();
       const mine = new AbortController();
       entry.live = mine;

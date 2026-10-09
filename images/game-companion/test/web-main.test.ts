@@ -3905,3 +3905,401 @@ describe("refresh on wake", () => {
     expect(gate.max).toBe(1);
   });
 });
+
+describe("your links", () => {
+  const MAP = "https://links.example.test/map";
+  const PLAN = "https://links.example.test/plan";
+  const frameDocs = new Map<string, Document>();
+  const noGuide = (over: Partial<NowResponse> = {}): NowResponse => ({
+    ...playing(hubA),
+    hubs: [],
+    ...over,
+  });
+  const noId: NowResponse = {
+    ...playing(hubA),
+    hubs: [],
+    game: { source: "steam", id: null, title: "Sample Shortcut" },
+  };
+
+  beforeEach(() => {
+    frameDocs.clear();
+    vi.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockImplementation(function (
+      this: HTMLIFrameElement,
+    ) {
+      return frameDocs.get(this.getAttribute("src") ?? "") ?? null;
+    });
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const start = async (
+    now: NowResponse = playing(hubA),
+    storage: ReturnType<typeof memory> = memory(),
+    tweak?: (api: Fake) => void,
+  ) => {
+    const api = fakeApi(now);
+    tweak?.(api);
+    store = storage;
+    const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+    await app.ready;
+    await flush();
+    return { api, app, storage };
+  };
+  const restart = async (now: NowResponse, storage: ReturnType<typeof memory>) => {
+    document.body.innerHTML = '<main id="app"></main>';
+    return start(now, storage);
+  };
+  const more = (): void => railButtons()[5]?.click();
+  const section = (): HTMLElement => $(".picker-links") as HTMLElement;
+  const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(".picker-link")];
+  const titles = (): (string | null | undefined)[] =>
+    rows().map((r) => r.querySelector(".picker-title")?.textContent);
+  const errorText = (): string | null | undefined => $(".picker-link-error")?.textContent;
+  const add = (name: string, url: string): void => {
+    (document.querySelector(".picker-link-name") as HTMLInputElement).value = name;
+    (document.querySelector(".picker-link-url") as HTMLInputElement).value = url;
+    ($(".picker-link-add") as HTMLFormElement).dispatchEvent(
+      new Event("submit", { cancelable: true, bubbles: true }),
+    );
+  };
+  const tap = (index: number): void =>
+    (rows()[index]?.querySelector(".picker-item") as HTMLElement).click();
+  const shown = (): HTMLIFrameElement[] => [
+    ...document.querySelectorAll<HTMLIFrameElement>("iframe:not(.inactive)"),
+  ];
+  let store = memory();
+  const stored = (key: string): unknown => JSON.parse(store.getItem(key) ?? "null");
+
+  it("adds a link under the hub's scope and lists it, without pinning it", async () => {
+    await start();
+    more();
+    expect(section().hidden).toBe(false);
+    expect(rows()).toHaveLength(0);
+    add("Sample Map", MAP);
+    expect(errorText()).toBe("");
+    expect(titles()).toEqual(["Sample Map"]);
+    expect(stored("game-companion:v1:links:hA")).toEqual([{ title: "Sample Map", url: MAP }]);
+    expect(rows()[0]?.querySelector("a")?.getAttribute("href")).toBe(MAP);
+    expect(($(".picker-link-name") as HTMLInputElement).value).toBe("");
+    expect(
+      railButtons()
+        .slice(1, 5)
+        .filter((b) => !b.hidden),
+    ).toHaveLength(1);
+    expect(document.querySelector("iframe")).toBeNull();
+  });
+
+  it("stores the normalised address and a default title", async () => {
+    await start();
+    more();
+    add("  ", "  HTTPS://Links.Example.Test/Plan  ");
+    expect(titles()).toEqual(["links.example.test"]);
+    expect(stored("game-companion:v1:links:hA")).toEqual([
+      { title: "links.example.test", url: "https://links.example.test/Plan" },
+    ]);
+  });
+
+  it("explains each way an addition can fail", async () => {
+    await start();
+    more();
+    for (const bad of ["", "nonsense", "http://links.example.test/x", "javascript:alert(1)"]) {
+      add("x", bad);
+      expect(errorText()).toBe("Enter an address that starts with https://");
+    }
+    expect(rows()).toHaveLength(0);
+    add("Sample Map", MAP);
+    add("Again", MAP);
+    expect(errorText()).toBe("That link is already in the list");
+    expect(rows()).toHaveLength(1);
+    for (let i = 1; i < 12; i++) add(`L${i}`, `https://links.example.test/${i}`);
+    expect(rows()).toHaveLength(12);
+    expect(errorText()).toBe("");
+    add("One more", "https://links.example.test/extra");
+    expect(errorText()).toBe("That is the most links a game can have (12)");
+    expect(rows()).toHaveLength(12);
+    add("Again", MAP);
+    expect(errorText()).toBe("That link is already in the list");
+    expect((stored("game-companion:v1:links:hA") as unknown[]).length).toBe(12);
+  });
+
+  it("pins a tapped link and shows it in a sandboxed link frame", async () => {
+    await start();
+    more();
+    add("Sample Map", MAP);
+    tap(0);
+    expect($(".picker")?.hidden).toBe(true);
+    const frame = shown();
+    expect(frame).toHaveLength(1);
+    expect(frame[0]?.getAttribute("src")).toBe(MAP);
+    expect(frame[0]?.getAttribute("sandbox")).toContain("allow-scripts");
+    expect(frame[0]?.getAttribute("sandbox")).not.toContain("top-navigation");
+    expect(frame[0]?.getAttribute("title")).toBe("Link");
+    expect($(".ach")?.hidden).toBe(true);
+    expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Sample Map");
+    expect(railButtons()[2]?.textContent).toBe("SM");
+    expect(railButtons()[2]?.querySelector(".rail-count")?.textContent).toBe("");
+    expect(railButtons()[2]?.classList.contains("active")).toBe(true);
+    const layout = stored("game-companion:v1:layout:hA") as { slots: ({ url: string } | null)[] };
+    expect(layout.slots.map((s) => s?.url ?? null)).toEqual(["/doc/hA-checklist", MAP, null, null]);
+    // Pages still open as documents beside it.
+    railButtons()[1]?.click();
+    expect(shown().map((f) => f.hasAttribute("sandbox"))).toEqual([false]);
+    more();
+    expect(rows()[0]?.querySelector(".picker-item")?.classList.contains("pinned")).toBe(true);
+  });
+
+  it("keeps the link and its pin when the same game is loaded again", async () => {
+    const first = await start();
+    more();
+    add("Sample Map", MAP);
+    tap(0);
+    await restart(playing(hubA), first.storage);
+    expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Sample Map");
+    expect(shown().map((f) => f.getAttribute("src"))).toEqual([MAP]);
+    expect(shown()[0]?.getAttribute("sandbox")).toContain("allow-scripts");
+    more();
+    expect(titles()).toEqual(["Sample Map"]);
+  });
+
+  it("removing a link unpins it, removes its frame and forgets it", async () => {
+    await start();
+    more();
+    add("Sample Map", MAP);
+    add("Planner", PLAN);
+    tap(0);
+    more();
+    (rows()[0]?.querySelector(".picker-link-remove") as HTMLElement).click();
+    expect(titles()).toEqual(["Planner"]);
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+    expect($(".ach")?.hidden).toBe(false);
+    expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Empty slot");
+    expect(stored("game-companion:v1:links:hA")).toEqual([{ title: "Planner", url: PLAN }]);
+    const layout = stored("game-companion:v1:layout:hA") as { slots: ({ url: string } | null)[] };
+    expect(layout.slots.map((s) => s?.url ?? null)).toEqual([
+      "/doc/hA-checklist",
+      null,
+      null,
+      null,
+    ]);
+    expect($(".picker")?.hidden).toBe(false);
+  });
+
+  it("unpinning a link from the list leaves it listed", async () => {
+    await start();
+    more();
+    add("Sample Map", MAP);
+    tap(0);
+    more();
+    (rows()[0]?.querySelector(".picker-unpin") as HTMLElement).click();
+    expect(titles()).toEqual(["Sample Map"]);
+    expect(rows()[0]?.querySelector(".picker-item")?.classList.contains("pinned")).toBe(false);
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+  });
+
+  it("drops a pinned link that is no longer in the stored list", async () => {
+    const first = await start();
+    more();
+    add("Sample Map", MAP);
+    tap(0);
+    first.storage.setItem("game-companion:v1:links:hA", "[]");
+    await restart(playing(hubA), first.storage);
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+    expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Empty slot");
+  });
+
+  it("keeps links per game", async () => {
+    const api = fakeApi(playing(hubA));
+    const storage = memory();
+    store = storage;
+    const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+    await app.ready;
+    more();
+    add("Sample Map", MAP);
+    tap(0);
+    api.nowValue = playing(hubZ);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    await flush();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+    more();
+    expect(section().hidden).toBe(false);
+    expect(rows()).toHaveLength(0);
+    add("Planner", PLAN);
+    expect(stored("game-companion:v1:links:hZ")).toEqual([{ title: "Planner", url: PLAN }]);
+    api.nowValue = playing(hubA);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    await flush();
+    more();
+    expect(titles()).toEqual(["Sample Map"]);
+    expect(shown().map((f) => f.getAttribute("src"))).toEqual([MAP]);
+  });
+
+  it("clears the previous game's links from the picker at once on a change of game", async () => {
+    const api = fakeApi(playing(hubA));
+    const storage = memory();
+    store = storage;
+    const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+    await app.ready;
+    more();
+    add("Sample Map", MAP);
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    api.hubTree = async (id) => {
+      await gate;
+      return tree(id === "hA" ? hubA : hubZ);
+    };
+    api.nowValue = playing(hubZ);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    const ticking = app.tick();
+    await flush();
+    expect(rows()).toHaveLength(0);
+    release();
+    await ticking;
+  });
+
+  it("gives a game without a guide but with an id its own links, layout and pins", async () => {
+    const first = await start(noGuide());
+    expect($(".game-note")?.textContent).toBe("No guide found");
+    more();
+    (document.querySelector('[data-tab="pages"]') as HTMLElement).click();
+    expect(section().hidden).toBe(false);
+    add("Sample Map", MAP);
+    expect(stored("game-companion:v1:links:game:ra:20")).toEqual([
+      { title: "Sample Map", url: MAP },
+    ]);
+    tap(0);
+    expect(shown().map((f) => f.getAttribute("src"))).toEqual([MAP]);
+    expect(stored("game-companion:v1:layout:game:ra:20")).toEqual({
+      slots: [{ title: "Sample Map", url: MAP }, null, null, null],
+      active: 0,
+    });
+    await restart(noGuide(), first.storage);
+    expect(railButtons()[1]?.getAttribute("aria-label")).toBe("Sample Map");
+    expect(shown().map((f) => f.getAttribute("src"))).toEqual([MAP]);
+    more();
+    (document.querySelector('[data-tab="pages"]') as HTMLElement).click();
+    expect(titles()).toEqual(["Sample Map"]);
+  });
+
+  it("removing a link of a game without a guide empties its slot", async () => {
+    await start(noGuide());
+    more();
+    (document.querySelector('[data-tab="pages"]') as HTMLElement).click();
+    add("Sample Map", MAP);
+    tap(0);
+    more();
+    (document.querySelector('[data-tab="pages"]') as HTMLElement).click();
+    (rows()[0]?.querySelector(".picker-link-remove") as HTMLElement).click();
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+    expect((stored("game-companion:v1:layout:game:ra:20") as { active: number }).active).toBe(-1);
+  });
+
+  it("offers no links for a game that has neither a guide nor an id", async () => {
+    const storage = memory();
+    const write = vi.spyOn(storage, "setItem");
+    await start(noId, storage);
+    expect($(".game-title")?.textContent).toBe("Sample Shortcut");
+    more();
+    (document.querySelector('[data-tab="pages"]') as HTMLElement).click();
+    expect(section().hidden).toBe(true);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("does not offer links until a game is on screen", async () => {
+    await start({
+      game: null,
+      state: "none",
+      stale: false,
+      observedAt: null,
+      presence: null,
+      hubs: [],
+    });
+    expect(section().hidden).toBe(true);
+  });
+
+  it("gives a link no progress count even when a page has the same trailing id", async () => {
+    const lookalike = "https://links.example.test/notes-checklist";
+    await start(playing(hubA), memory(), (api) => {
+      api.progressValue = { pages: [{ url: "/doc/hA-checklist", completed: 3, total: 7 }] };
+    });
+    expect(railButtons()[1]?.querySelector(".rail-count")?.textContent).toBe("3/7");
+    more();
+    add("Notes", lookalike);
+    tap(0);
+    expect(railButtons()[2]?.querySelector(".rail-count")?.textContent).toBe("");
+    expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Notes");
+    expect(railButtons()[1]?.querySelector(".rail-count")?.textContent).toBe("3/7");
+  });
+
+  describe("beside find and the guide jump", () => {
+    const COLL = "/doc/hA-coll";
+    const matchOf = (): FindMatch => ({
+      pageTitle: "Collectibles",
+      pageUrl: COLL,
+      heading: "Chapter One",
+      snippet: "the First Steps are here",
+    });
+
+    it("find opens its page in a new slot and leaves the link frame alone", async () => {
+      frameDocs.set(
+        COLL,
+        new DOMParser().parseFromString("<body><p>first steps</p></body>", "text/html"),
+      );
+      await start(playing(hubA), memory(), (api) => {
+        api.achievements = async () => board([mk("a1", "First Steps")]);
+        api.find = async () => ({ matches: [matchOf()], truncated: false });
+      });
+      more();
+      add("Sample Map", MAP);
+      tap(0);
+      const linkFrame = shown()[0];
+      railButtons()[0]?.click();
+      (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+      (document.querySelector(".ach-find") as HTMLElement).click();
+      await flush();
+      expect(locateCalls.map((c) => c[0])).toEqual([2]);
+      expect(shown().map((f) => f.getAttribute("src"))).toEqual([COLL]);
+      expect(linkFrame?.isConnected).toBe(true);
+      expect(linkFrame?.getAttribute("src")).toBe(MAP);
+      expect(linkFrame?.classList.contains("inactive")).toBe(true);
+    });
+
+    it("the jump opens its page in a new slot and leaves the link frame alone", async () => {
+      frameDocs.set(
+        COLL,
+        new DOMParser().parseFromString(
+          "<body><h2>Chapter Two: Sample Keep</h2></body>",
+          "text/html",
+        ),
+      );
+      await start({ ...playing(hubA), presence: "Chapter Two: Sample Keep" }, memory(), (api) => {
+        api.whereValue = {
+          matches: [
+            {
+              pageTitle: "Collectibles",
+              pageUrl: COLL,
+              heading: "Chapter Two: Sample Keep",
+              phrase: "Sample Keep",
+            },
+          ],
+        };
+      });
+      more();
+      add("Sample Map", MAP);
+      tap(0);
+      const linkFrame = shown()[0];
+      ($(".presence-jump") as HTMLElement).click();
+      await flush();
+      expect(locateCalls.map((c) => c[0])).toEqual([2]);
+      expect(shown().map((f) => f.getAttribute("src"))).toEqual([COLL]);
+      expect(linkFrame?.getAttribute("src")).toBe(MAP);
+    });
+  });
+});

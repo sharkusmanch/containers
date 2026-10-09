@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   ACHIEVEMENTS,
+  LINKS_MAX,
   SLOT_COUNT,
   activate,
+  addLink,
   assignSlot,
   compactLayout,
   defaultLayout,
@@ -10,12 +12,19 @@ import {
   flattenPages,
   gameKey,
   isSafeDocUrl,
+  isSafeLinkUrl,
   layoutKey,
+  linksKey,
   loadLayout,
+  loadLinks,
+  normaliseLink,
   reconcileLayout,
+  removeLink,
   removeSlot,
   saveLayout,
+  saveLinks,
   slotLabel,
+  type GameLink,
   type Layout,
 } from "../src/web/state.js";
 import type { GuidePage } from "../src/shared/types.js";
@@ -171,7 +180,7 @@ describe("assignSlot", () => {
   });
 
   it("ignores an unsafe URL", () => {
-    expect(assignSlot(start, { title: "Evil", url: "https://evil.example/doc/x" })).toEqual(start);
+    expect(assignSlot(start, { title: "Evil", url: "http://evil.example/doc/x" })).toEqual(start);
   });
 
   it("does not mutate its input", () => {
@@ -233,7 +242,8 @@ describe("layout storage", () => {
     "{}",
     '{"slots":[],"active":0}',
     '{"slots":[null,null,null,null],"active":7}',
-    '{"slots":[{"title":"x","url":"https://evil.example"},null,null,null],"active":-1}',
+    '{"slots":[{"title":"x","url":"http://evil.example"},null,null,null],"active":-1}',
+    '{"slots":[{"title":"x","url":"javascript:alert(1)"},null,null,null],"active":-1}',
     '{"slots":[null,null,null,null],"active":2}',
   ])("rejects a corrupt or unsafe stored value: %s", (raw) => {
     const s = memory();
@@ -405,5 +415,242 @@ describe("reconcileLayout", () => {
     const copy = JSON.parse(JSON.stringify(start)) as Layout;
     reconcileLayout(start, tree);
     expect(start).toEqual(copy);
+  });
+});
+
+describe("isSafeLinkUrl", () => {
+  it.each([
+    "https://links.example.test",
+    "https://links.example.test/a/b",
+    "https://links.example.test/a?x=1&y=2#top",
+    "https://links.example.test:8443/a",
+    "https://bücher.example.test/a",
+    "HTTPS://LINKS.EXAMPLE.TEST/a",
+  ])("accepts %s", (url) => expect(isSafeLinkUrl(url)).toBe(true));
+
+  it.each([
+    "http://links.example.test/a",
+    "javascript:alert(1)",
+    "data:text/html,hello",
+    "blob:https://links.example.test/abc",
+    "//links.example.test/x",
+    "/doc/x",
+    "https://user:pass@links.example.test/a",
+    "https://user@links.example.test/a",
+    "https://:pass@links.example.test/a",
+    "https://",
+    "not a url",
+    "",
+    `https://links.example.test/${"a".repeat(1990)}`,
+  ])("rejects %s", (url) => expect(isSafeLinkUrl(url)).toBe(false));
+
+  it("accepts exactly 2000 characters and rejects 2001", () => {
+    const base = "https://links.example.test/";
+    expect(isSafeLinkUrl(base + "a".repeat(2000 - base.length))).toBe(true);
+    expect(isSafeLinkUrl(base + "a".repeat(2001 - base.length))).toBe(false);
+  });
+
+  it("rejects a non-string without throwing", () => {
+    for (const value of [null, undefined, 5, {}, ["https://links.example.test"]]) {
+      expect(isSafeLinkUrl(value as string)).toBe(false);
+    }
+  });
+});
+
+describe("normaliseLink", () => {
+  it("trims both and stores the normalised address", () => {
+    expect(normaliseLink("  Sample Map  ", "  HTTPS://Links.Example.Test  ")).toEqual({
+      title: "Sample Map",
+      url: "https://links.example.test/",
+    });
+  });
+
+  it("uses the hostname when the title is empty", () => {
+    expect(normaliseLink("   ", "https://links.example.test:8443/a")).toEqual({
+      title: "links.example.test",
+      url: "https://links.example.test:8443/a",
+    });
+  });
+
+  it("cuts the title to 40 characters without splitting a surrogate pair", () => {
+    const plain = normaliseLink("x".repeat(60), "https://links.example.test/a");
+    expect(plain?.title).toBe("x".repeat(40));
+    const pairs = normaliseLink("😀".repeat(30), "https://links.example.test/a");
+    expect(pairs?.title).toBe("😀".repeat(30));
+    const edge = normaliseLink(`${"y".repeat(39)}😀tail`, "https://links.example.test/a");
+    expect(edge?.title).toBe(`${"y".repeat(39)}😀`);
+    expect(Array.from(edge?.title ?? "")).toHaveLength(40);
+  });
+
+  it.each([
+    ["http://links.example.test/a"],
+    ["javascript:alert(1)"],
+    ["/doc/x"],
+    ["https://u:p@links.example.test/"],
+    [""],
+    ["nonsense"],
+  ])("returns null for %s", (url) => expect(normaliseLink("T", url)).toBeNull());
+});
+
+describe("link storage", () => {
+  const a: GameLink = { title: "A", url: "https://links.example.test/a" };
+  const b: GameLink = { title: "B", url: "https://links.example.test/b" };
+
+  it("uses a prefixed key and round-trips", () => {
+    const s = memory();
+    expect(linksKey("h1")).toBe("game-companion:v1:links:h1");
+    saveLinks(s, "h1", [a, b]);
+    expect([...s.data.keys()]).toEqual([linksKey("h1")]);
+    expect(loadLinks(s, "h1")).toEqual([a, b]);
+    expect(loadLinks(s, "other")).toEqual([]);
+  });
+
+  it.each(["not json", "{}", "null", '"x"', "5"])("loads nothing from %s", (raw) => {
+    const s = memory();
+    s.setItem(linksKey("h1"), raw);
+    expect(loadLinks(s, "h1")).toEqual([]);
+  });
+
+  it("drops invalid entries and duplicate addresses", () => {
+    const s = memory();
+    s.setItem(
+      linksKey("h1"),
+      JSON.stringify([
+        a,
+        { title: "Bad", url: "javascript:alert(1)" },
+        { title: "Http", url: "http://links.example.test/x" },
+        { title: 5, url: "https://links.example.test/c" },
+        null,
+        "text",
+        { title: "A again", url: a.url },
+        b,
+      ]),
+    );
+    expect(loadLinks(s, "h1")).toEqual([a, b]);
+  });
+
+  it("keeps at most LINKS_MAX", () => {
+    const s = memory();
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      title: `L${i}`,
+      url: `https://links.example.test/${i}`,
+    }));
+    s.setItem(linksKey("h1"), JSON.stringify(many));
+    expect(LINKS_MAX).toBe(12);
+    expect(loadLinks(s, "h1")).toEqual(many.slice(0, 12));
+  });
+
+  it("never throws when storage does", () => {
+    const s = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    expect(loadLinks(s, "h1")).toEqual([]);
+    expect(() => saveLinks(s, "h1", [a])).not.toThrow();
+  });
+});
+
+describe("addLink and removeLink", () => {
+  const a: GameLink = { title: "A", url: "https://links.example.test/a" };
+  const b: GameLink = { title: "B", url: "https://links.example.test/b" };
+
+  it("adds at the end without mutating", () => {
+    const start = [a];
+    const next = addLink(start, b);
+    expect(next).toEqual([a, b]);
+    expect(start).toEqual([a]);
+    expect(next).not.toBe(start);
+  });
+
+  it("returns the list unchanged for a duplicate address", () => {
+    const start = [a];
+    expect(addLink(start, { title: "Other", url: a.url })).toBe(start);
+  });
+
+  it("refuses beyond the limit", () => {
+    const full = Array.from({ length: LINKS_MAX }, (_, i) => ({
+      title: `L${i}`,
+      url: `https://links.example.test/${i}`,
+    }));
+    expect(addLink(full, b)).toBe(full);
+    expect(addLink(full.slice(1), b)).toHaveLength(LINKS_MAX);
+  });
+
+  it("removes by address without mutating", () => {
+    const start = [a, b];
+    expect(removeLink(start, a.url)).toEqual([b]);
+    expect(start).toEqual([a, b]);
+    expect(removeLink(start, "https://links.example.test/none")).toEqual([a, b]);
+  });
+});
+
+describe("links in a layout", () => {
+  const link: GameLink = { title: "Sample Map", url: "https://links.example.test/map" };
+  const slot = (title: string, url: string) => ({ title, url });
+  const docTree: GuidePage[] = [page("Notes", "/doc/notes-BBB")];
+  const empty = (): Layout => defaultLayout([], []);
+
+  it("assignSlot accepts a link and still rejects other addresses", () => {
+    const l = assignSlot(empty(), link);
+    expect(l.slots[0]).toEqual(link);
+    expect(l.active).toBe(0);
+    const before = empty();
+    for (const url of ["http://links.example.test/x", "javascript:alert(1)", "/other", ""]) {
+      expect(assignSlot(before, { title: "x", url })).toBe(before);
+    }
+  });
+
+  it("reconcileLayout keeps a pinned link and takes its current title", () => {
+    const l = reconcileLayout(
+      { slots: [slot("Old", link.url), slot("Notes", "/doc/notes-BBB"), null, null], active: 0 },
+      docTree,
+      [link],
+    );
+    expect(l.slots[0]).toEqual(link);
+    expect(l.slots[1]).toEqual(slot("Notes", "/doc/notes-BBB"));
+    expect(l.active).toBe(0);
+  });
+
+  it("reconcileLayout drops a link that was removed and falls back to achievements", () => {
+    const l = reconcileLayout(
+      {
+        slots: [slot("Notes", "/doc/notes-BBB"), slot("Sample Map", link.url), null, null],
+        active: 1,
+      },
+      docTree,
+      [],
+    );
+    expect(l.slots.map((s) => s?.url ?? null)).toEqual(["/doc/notes-BBB", null, null, null]);
+    expect(l.active).toBe(ACHIEVEMENTS);
+  });
+
+  it("does not let a link match a page by its trailing id", () => {
+    const lookalike = slot("Look", "https://links.example.test/x-BBB");
+    const l = reconcileLayout({ slots: [lookalike, null, null, null], active: 0 }, docTree, []);
+    expect(l.slots[0]).toBeNull();
+    expect(l.active).toBe(ACHIEVEMENTS);
+  });
+
+  it("keeps page behaviour unchanged when no links are given", () => {
+    const l = reconcileLayout(
+      { slots: [slot("Old", "/doc/old-BBB"), null, null, null], active: 0 },
+      docTree,
+    );
+    expect(l.slots[0]).toEqual(slot("Notes", "/doc/notes-BBB"));
+  });
+
+  it("loads a stored layout with a link slot and rejects a javascript: one", () => {
+    const s = memory();
+    saveLayout(s, "h1", assignSlot(empty(), link));
+    expect(loadLayout(s, "h1")).toEqual({ slots: [link, null, null, null], active: 0 });
+    s.setItem(
+      layoutKey("h2"),
+      JSON.stringify({ slots: [slot("x", "javascript:alert(1)"), null, null, null], active: 0 }),
+    );
+    expect(loadLayout(s, "h2")).toBeNull();
   });
 });
