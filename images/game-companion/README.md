@@ -21,6 +21,13 @@ switched off under ⋯ › Display. **Guide text size** there draws the framed g
 80 or 70 per cent, for a small screen; it enlarges the frame and scales it down, so the guide
 lays out in a wider window as it would under browser zoom.
 
+Besides the guide's pages, each game can have **links of your own**: other web pages (a
+planner, a map, a wiki) added under ⋯ › Pages › Your links and pinned to the sidebar like a
+guide page. They are stored in the browser on that device, per game, and the server never sees
+them. A link must be an `https` address; it is shown in a sandboxed frame that cannot take
+over the page, and a site that refuses to be framed can be opened in a new tab from the same
+row. Add only sites you trust: a framed site draws its page under this page's address.
+
 Each pinned page's sidebar button shows how many of its checkboxes are ticked (`done/total`,
 or a percentage when that is longer than six characters); the count follows a tick made in the
 guide page within a few seconds. RetroAchievements achievements on the story path carry a
@@ -31,7 +38,7 @@ returns.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.6.0
+- **Version**: v0.7.0
 
 ## Usage
 
@@ -42,7 +49,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.6.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.7.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -52,7 +59,9 @@ be framed by its own origin, so the guide frames stay blank on any other hostnam
 There is no sign-in. Every endpoint is read-only. Put it only where everyone who can reach it
 may see what is being played, achievement progress, checklist counts and the text of the guide
 pages: the guide search returns headings and matching lines from them, although Outline itself
-requires a sign-in.
+requires a sign-in. The page's Content-Security-Policy allows frames from itself and from any
+`https` address, so that links added on a device can be shown; nothing but an address typed on
+that device is ever framed.
 
 ## Environment Variables
 
