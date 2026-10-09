@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Pre-build test gate (invoked by .github/workflows/build.yml from this directory with
+# `bash .ci-test`; the image is not built yet). Runs the latest-save tests and checks the
+# nginx config.
+#
+# The tests are POSIX sh and are meant for BusyBox (the image's Alpine), so with Docker
+# available they run inside the Alpine image the Dockerfile uses; without it they run with
+# the host's sh. By hand: `sh test/latest-save.test.sh`.
+set -euo pipefail
+
+if command -v docker >/dev/null 2>&1; then
+  ALPINE_VERSION=$(grep -E '^ARG ALPINE_VERSION=' Dockerfile | cut -d= -f2)
+  # Work on a copy inside the container: the checkout is mounted read-only. The image's
+  # own nginx package is installed so `nginx -t` checks the config against the real binary.
+  docker run --rm -v "$PWD":/src:ro "alpine:${ALPINE_VERSION}" sh -ec '
+    apk add --no-cache nginx >/dev/null
+    mkdir /work && cp -r /src/. /work
+    cd /work
+    sh test/latest-save.test.sh
+    nginx -t -e /dev/stderr -c /work/nginx.conf
+    rm -rf /tmp/*
+  '
+else
+  echo "docker not available: running the script tests with the host sh, skipping nginx -t"
+  sh test/latest-save.test.sh
+fi

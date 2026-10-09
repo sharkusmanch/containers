@@ -1,0 +1,129 @@
+#!/bin/sh
+# latest-save: publish the newest DQ8 save from a PS2 memory-card folder tree.
+#
+# SAVE_DIR holds the BASLUS-21207dq8_N directories; each contains one file of the same
+# name (a raw 23,776-byte save). Every pass picks the one with the newest file mtime and
+# copies it to $OUT_DIR/latest.bin when its content differs from what is published.
+# Never writes inside SAVE_DIR.
+#
+#   SAVE_DIR   required, directory that contains the BASLUS-21207dq8_N directories
+#   OUT_DIR    default /run/save
+#   INTERVAL   seconds between passes, default 10
+#   ONCE=1     run a single pass and exit
+#
+# POSIX sh and BusyBox tools only (find has no -printf there; stat -c is used instead).
+
+SIZE=23776
+OUT_DIR=${OUT_DIR:-/run/save}
+INTERVAL=${INTERVAL:-10}
+ONCE=${ONCE:-0}
+LAST_ERR=
+PASS_ERR=0
+LIST_FAILED=0
+
+log() { printf 'latest-save: %s\n' "$*"; }
+
+# An error repeated on every pass is logged once, then again after a clean pass.
+err() {
+  PASS_ERR=1
+  [ "$LAST_ERR" = "$*" ] || log "$*"
+  LAST_ERR=$*
+}
+
+if [ -z "${SAVE_DIR:-}" ]; then
+  log "SAVE_DIR is not set" >&2
+  exit 1
+fi
+if [ ! -d "$SAVE_DIR" ]; then
+  log "SAVE_DIR is not a directory: $SAVE_DIR" >&2
+  exit 1
+fi
+case $INTERVAL in
+  '' | *[!0-9]* | 0)
+    log "INTERVAL must be a positive whole number of seconds" >&2
+    exit 1
+    ;;
+esac
+if ! mkdir -p "$OUT_DIR" 2>/dev/null || [ ! -w "$OUT_DIR" ]; then
+  log "OUT_DIR is not writable: $OUT_DIR" >&2
+  exit 1
+fi
+
+# Leftovers of an interrupted copy (there is only ever one watcher per OUT_DIR).
+rm -f "$OUT_DIR"/.latest.* 2>/dev/null
+
+publish() { # $1 source file, $2 slot name
+  out=$OUT_DIR/latest.bin
+  if [ -f "$out" ] && cmp -s "$1" "$out"; then
+    return
+  fi
+  if ! tmp=$(mktemp "$OUT_DIR/.latest.XXXXXX" 2>/dev/null); then
+    err "cannot create a temporary file in $OUT_DIR"
+    return
+  fi
+  if cp "$1" "$tmp" 2>/dev/null &&
+    [ "$(stat -c %s "$tmp" 2>/dev/null)" = "$SIZE" ] &&
+    chmod 644 "$tmp" 2>/dev/null &&
+    mv -f "$tmp" "$out" 2>/dev/null; then
+    log "published $2"
+  else
+    rm -f "$tmp"
+    err "copy of $2 failed; keeping the previously published save"
+  fi
+}
+
+pass() {
+  PASS_ERR=0
+  if ! names=$(ls -1 "$SAVE_DIR" 2>/dev/null); then
+    err "cannot list $SAVE_DIR; leaving the published save unchanged"
+    LIST_FAILED=1
+  else
+    if [ "$LIST_FAILED" = 1 ]; then
+      log "listing of $SAVE_DIR works again"
+      LIST_FAILED=0
+    fi
+    best=
+    best_mt=
+    best_n=
+    for name in $(printf '%s\n' "$names" | grep -E '^BASLUS-21207dq8_[0-9]+$'); do
+      d=$SAVE_DIR/$name
+      f=$d/$name
+      [ -d "$d" ] && [ ! -L "$d" ] || continue
+      [ -f "$f" ] && [ ! -L "$f" ] || continue
+      info=$(stat -c '%s %Y' "$f" 2>/dev/null) || continue
+      size=${info% *}
+      mt=${info#* }
+      [ "$size" = "$SIZE" ] || continue
+      n=${name#BASLUS-21207dq8_}
+      if [ -z "$best" ] || [ "$mt" -gt "$best_mt" ] ||
+        { [ "$mt" -eq "$best_mt" ] && [ "$n" -gt "$best_n" ]; }; then
+        best=$name
+        best_mt=$mt
+        best_n=$n
+      fi
+    done
+    if [ -n "$best" ]; then
+      publish "$SAVE_DIR/$best/$best" "$best"
+    elif [ -e "$OUT_DIR/latest.bin" ] || [ -L "$OUT_DIR/latest.bin" ]; then
+      if rm -f "$OUT_DIR/latest.bin" 2>/dev/null; then
+        log "no save found; removed the published save"
+      else
+        err "cannot remove the published save"
+      fi
+    fi
+  fi
+  touch "$OUT_DIR/heartbeat" 2>/dev/null || err "cannot update $OUT_DIR/heartbeat"
+  [ "$PASS_ERR" = 1 ] || LAST_ERR=
+}
+
+sleep_pid=
+trap '[ -n "$sleep_pid" ] && kill "$sleep_pid" 2>/dev/null; exit 0' TERM INT
+
+while :; do
+  pass
+  [ "$ONCE" = 1 ] && break
+  sleep "$INTERVAL" &
+  sleep_pid=$!
+  wait "$sleep_pid"
+  sleep_pid=
+done

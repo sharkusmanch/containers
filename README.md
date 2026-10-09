@@ -21,6 +21,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [chdman](./images/chdman/) | MAME chdman + unzip for converting disc images to CHD | [mamedev/mame](https://github.com/mamedev/mame) |
 | [daedalus](./images/daedalus/) | Minimal self-owned SSH dev box (sshd + baked kubectl/helm/Claude/Codex toolchain) | [OpenSSH](https://www.openssh.com/) |
 | [db-backup](./images/db-backup/) | Database dump toolbox (PostgreSQL/MariaDB/MongoDB clients + curl/jq) for backup CronJobs | Original |
+| [dq8-alchemy-planner](./images/dq8-alchemy-planner/) | Dragon Quest VIII alchemy planner, static site on unprivileged nginx, plus a watcher that publishes the newest PS2 save | [sharkusmanch/dq8-alchemy-planner](https://github.com/sharkusmanch/dq8-alchemy-planner) |
 | [envsubst](./images/envsubst/) | Environment variable substitution with defaults | [a8m/envsubst](https://github.com/a8m/envsubst) |
 | [flareproxy](./images/flareproxy/) | HTTP proxy adapter for FlareSolverr | [mimnix/FlareProxy](https://github.com/mimnix/FlareProxy) |
 | [game-companion](./images/game-companion/) | Second-screen page showing the current game's guide pages and achievement progress | Original |
