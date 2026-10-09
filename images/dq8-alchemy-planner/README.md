@@ -109,4 +109,7 @@ Used by the watcher (`latest-save`). The web server needs none.
   tag, unchanged, with `VITE_DEFAULT_SAVE_URL=./save`, and serves it with nginx.
 - Added `nginx.conf` (unprivileged, port 8080, everything written under `/tmp`) and the
   `latest-save` watcher script, neither of which is part of upstream.
+- The runtime is `alpine` plus the `nginx` package, like `images/tachyon`, rather than an
+  `nginx` base image. That keeps a single base image, and the nginx version moves with the
+  Renovate-tracked `ALPINE_VERSION`.
 - The image ships no Node toolchain or source: only the built `dist/`.

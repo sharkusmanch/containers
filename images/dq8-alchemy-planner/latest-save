@@ -85,14 +85,32 @@ pass() {
     best=
     best_mt=
     best_n=
+    unstable=
     for name in $(printf '%s\n' "$names" | grep -E '^BASLUS-21207dq8_[0-9]+$'); do
       d=$SAVE_DIR/$name
       f=$d/$name
-      [ -d "$d" ] && [ ! -L "$d" ] || continue
-      [ -f "$f" ] && [ ! -L "$f" ] || continue
-      info=$(stat -c '%s %Y' "$f" 2>/dev/null) || continue
-      size=${info% *}
-      mt=${info#* }
+      # A check that cannot be answered (stat or a listing fails) is not the same as a
+      # clean "not a candidate": on a flaky filesystem it could drop the newest slot, so
+      # the pass is abandoned below instead of deciding from partial information.
+      dtype=$(stat -c %F "$d" 2>/dev/null) || {
+        unstable=${unstable:-$name}
+        continue
+      }
+      [ "$dtype" = directory ] || continue # symlink, plain file, ...
+      inner=$(ls -1 "$d" 2>/dev/null) || {
+        unstable=${unstable:-$name}
+        continue
+      }
+      printf '%s\n' "$inner" | grep -qxF "$name" || continue # no file of that name
+      finfo=$(stat -c '%F %s %Y' "$f" 2>/dev/null) || {
+        unstable=${unstable:-$name}
+        continue
+      }
+      mt=${finfo##* }
+      rest=${finfo% *}
+      size=${rest##* }
+      ftype=${rest% *}
+      case $ftype in regular*) ;; *) continue ;; esac # symlink, directory, ...
       [ "$size" = "$SIZE" ] || continue
       n=${name#BASLUS-21207dq8_}
       if [ -z "$best" ] || [ "$mt" -gt "$best_mt" ] ||
@@ -102,7 +120,9 @@ pass() {
         best_n=$n
       fi
     done
-    if [ -n "$best" ]; then
+    if [ -n "$unstable" ]; then
+      err "cannot examine slot $unstable; leaving the published save unchanged"
+    elif [ -n "$best" ]; then
       publish "$SAVE_DIR/$best/$best" "$best"
     elif [ -e "$OUT_DIR/latest.bin" ] || [ -L "$OUT_DIR/latest.bin" ]; then
       if rm -f "$OUT_DIR/latest.bin" 2>/dev/null; then

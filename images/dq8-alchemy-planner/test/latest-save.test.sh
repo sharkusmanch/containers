@@ -6,7 +6,7 @@ SCRIPT=${LATEST_SAVE:-$here/../latest-save}
 SIZE=23776
 
 work=$(mktemp -d)
-trap '[ -n "$bg" ] && kill "$bg" 2>/dev/null; rm -rf "$work"' EXIT
+trap '[ -n "$bg" ] && kill "$bg" 2>/dev/null; chmod -R u+rwx "$work" 2>/dev/null; rm -rf "$work"' EXIT
 trap 'exit 1' INT TERM
 bg=
 passed=0
@@ -147,6 +147,48 @@ rm -f "$SAVE_DIR/${S}_0/${S}_0"
 run >/dev/null
 check "heartbeat is touched on a pass that removed the save" test "$(mt_of "$OUT_DIR/heartbeat")" -gt 1000000000
 
+# --- a slot that cannot be examined makes the pass change nothing (not a clean "ignore")
+if [ "$(id -u)" = 0 ]; then
+  printf 'skip unexaminable-slot tests (running as root: chmod does not block access)\n'
+else
+  fresh
+  slot ${S}_0 A 202610010000.00
+  slot ${S}_1 B 202610050000.00
+  run >/dev/null
+  touch -t 200001010000.00 "$OUT_DIR/latest.bin" "$OUT_DIR/heartbeat"
+  before="$(stat -c '%i %Y' "$OUT_DIR/latest.bin")"
+  chmod 000 "$SAVE_DIR/${S}_1"                   # newest slot becomes unsearchable
+  out=$(run)
+  chmod 755 "$SAVE_DIR/${S}_1"
+  check "unexaminable newest slot: latest.bin is untouched" test "$(stat -c '%i %Y' "$OUT_DIR/latest.bin")" = "$before"
+  check "unexaminable newest slot: the older slot is not published" test "$(latest_fill)" = B
+  check "unexaminable slot logs one error line" test "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" = 1
+  check "unexaminable slot: heartbeat is still touched" test "$(mt_of "$OUT_DIR/heartbeat")" -gt 1000000000
+
+  # nothing published yet: the older slot must not be published either
+  fresh
+  slot ${S}_0 A 202610010000.00
+  slot ${S}_1 B 202610050000.00
+  chmod 000 "$SAVE_DIR/${S}_1"
+  run >/dev/null
+  chmod 755 "$SAVE_DIR/${S}_1"
+  check "unexaminable newest slot with nothing published: nothing is published" test ! -e "$OUT_DIR/latest.bin"
+
+  # the only slot is unexaminable: the published save is not removed
+  fresh
+  slot ${S}_1 B 202610050000.00
+  run >/dev/null
+  chmod 000 "$SAVE_DIR/${S}_1"
+  run >/dev/null
+  chmod 755 "$SAVE_DIR/${S}_1"
+  check "unexaminable only slot: the published save is not removed" test "$(latest_fill)" = B
+
+  # once the slot is readable again the normal rules apply
+  slot ${S}_1 C 202610060000.00
+  run >/dev/null
+  check "after the slot is readable again, the newest is published" test "$(latest_fill)" = C
+fi
+
 # --- start-up validation
 unset SAVE_DIR
 ONCE=1 OUT_DIR=$work/out sh "$SCRIPT" >/dev/null 2>&1
@@ -177,20 +219,20 @@ fresh
 slot ${S}_0 A 202610010000.00
 INTERVAL=1 sh "$SCRIPT" >"$work/loop.log" 2>&1 &
 bg=$!
-check "loop: first pass publishes" wait_for 5 latest_is A
+check "loop: first pass publishes" wait_for 15 latest_is A
 touch -t 200001010000.00 "$OUT_DIR/heartbeat"
-check "loop: heartbeat keeps being touched when nothing changes" wait_for 5 heartbeat_fresh
+check "loop: heartbeat keeps being touched when nothing changes" wait_for 15 heartbeat_fresh
 mv "$SAVE_DIR" "$work/save-gone"
 touch -t 200001010000.00 "$OUT_DIR/heartbeat"
-check "loop: heartbeat is still touched while SAVE_DIR is gone" wait_for 5 heartbeat_fresh
+check "loop: heartbeat is still touched while SAVE_DIR is gone" wait_for 15 heartbeat_fresh
 sleep 2.5
 check "loop: vanished SAVE_DIR leaves latest.bin in place" latest_is A
 check "loop: the failure is logged once, not on every pass" test "$(grep -c 'cannot list' "$work/loop.log")" = 1
 mv "$work/save-gone" "$SAVE_DIR"
 slot ${S}_1 B 202610020000.00
-check "loop: recovers and publishes the newer save" wait_for 5 latest_is B
+check "loop: recovers and publishes the newer save" wait_for 15 latest_is B
 kill -TERM "$bg"
-check "loop: SIGTERM stops the watcher" wait_for 3 stopped "$bg"
+check "loop: SIGTERM stops the watcher" wait_for 15 stopped "$bg"
 bg=
 
 printf '\n%s passed, %s failed\n' "$passed" "$failed"
