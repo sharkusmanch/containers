@@ -7,7 +7,7 @@ ARG PASEO_VERSION=0.10.3
 ARG ALPINE_VERSION=3.24
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_VERSION=2.1.293
+ARG CLAUDE_VERSION=2.1.295
 
 # renovate: datasource=npm depName=@openai/codex
 ARG CODEX_VERSION=0.160.1
