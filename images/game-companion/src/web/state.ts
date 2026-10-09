@@ -34,12 +34,16 @@ export function isSafeDocUrl(url: string): boolean {
   return /^\/doc\/[A-Za-z0-9_-]+$/.test(url);
 }
 
-/** An https address with a host and no credentials; the only kind a link frame may show. Never throws. */
+/**
+ * An https address in canonical form (what `new URL` would write back), with a host and no
+ * credentials; the only kind a link frame may show. Never throws.
+ */
 export function isSafeLinkUrl(url: string): boolean {
   if (typeof url !== "string" || url.length > LINK_URL_MAX) return false;
   try {
     const parsed = new URL(url);
     return (
+      parsed.href === url &&
       parsed.protocol === "https:" &&
       parsed.hostname !== "" &&
       parsed.username === "" &&
@@ -56,12 +60,19 @@ function isSafeSlotUrl(url: string): boolean {
 
 /** Trims, checks and normalises what the person typed; null when the address is not acceptable. */
 export function normaliseLink(title: string, url: string): GameLink | null {
-  const address = url.trim();
-  if (!isSafeLinkUrl(address)) return null;
-  const parsed = new URL(address);
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim());
+  } catch {
+    return null;
+  }
+  // What is stored must pass the same check as what is loaded and shown.
+  if (!isSafeLinkUrl(parsed.href)) return null;
   const name = title.trim();
   return {
-    title: name === "" ? parsed.hostname : Array.from(name).slice(0, LINK_TITLE_MAX).join(""),
+    title: Array.from(name === "" ? parsed.hostname : name)
+      .slice(0, LINK_TITLE_MAX)
+      .join(""),
     url: parsed.href,
   };
 }
@@ -240,11 +251,13 @@ export function loadLinks(storage: StorageLike, scope: string): GameLink[] {
   }
 }
 
-export function saveLinks(storage: StorageLike, scope: string, links: GameLink[]): void {
+/** True when the list was stored; false when storage is blocked or full. Never throws. */
+export function saveLinks(storage: StorageLike, scope: string, links: GameLink[]): boolean {
   try {
     storage.setItem(linksKey(scope), JSON.stringify(links));
+    return true;
   } catch {
-    // Storage may be blocked or full; the links just will not persist.
+    return false;
   }
 }
 

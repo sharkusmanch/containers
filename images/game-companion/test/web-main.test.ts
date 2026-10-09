@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { startApp } from "../src/web/main.js";
 import type { Api } from "../src/web/api.js";
+import type { Layout } from "../src/web/state.js";
 import type {
   Achievement,
   AchievementsResponse,
@@ -30,6 +31,21 @@ vi.mock("../src/web/frames.js", async (importOriginal) => {
         return locate(...a);
       };
       return frames;
+    },
+  };
+});
+
+// Lets one test hand the app a layout that no real path produces, to reach its last-line checks.
+const reconcileHook = vi.hoisted(() => ({
+  fn: null as ((layout: Layout) => Layout) | null,
+}));
+vi.mock("../src/web/state.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/web/state.js")>();
+  return {
+    ...real,
+    reconcileLayout: (...args: Parameters<typeof real.reconcileLayout>) => {
+      const out = real.reconcileLayout(...args);
+      return reconcileHook.fn === null ? out : reconcileHook.fn(out);
     },
   };
 });
@@ -146,6 +162,7 @@ const $ = (sel: string): HTMLElement | null => document.querySelector(sel);
 beforeEach(() => {
   document.body.innerHTML = '<main id="app"></main>';
   locateCalls.length = 0;
+  reconcileHook.fn = null;
 });
 
 describe("startApp", () => {
@@ -3980,7 +3997,9 @@ describe("your links", () => {
     add("Sample Map", MAP);
     expect(errorText()).toBe("");
     expect(titles()).toEqual(["Sample Map"]);
-    expect(stored("game-companion:v1:links:hA")).toEqual([{ title: "Sample Map", url: MAP }]);
+    expect(stored("game-companion:v1:links:game:ra:20")).toEqual([
+      { title: "Sample Map", url: MAP },
+    ]);
     expect(rows()[0]?.querySelector("a")?.getAttribute("href")).toBe(MAP);
     expect(($(".picker-link-name") as HTMLInputElement).value).toBe("");
     expect(
@@ -3996,7 +4015,7 @@ describe("your links", () => {
     more();
     add("  ", "  HTTPS://Links.Example.Test/Plan  ");
     expect(titles()).toEqual(["links.example.test"]);
-    expect(stored("game-companion:v1:links:hA")).toEqual([
+    expect(stored("game-companion:v1:links:game:ra:20")).toEqual([
       { title: "links.example.test", url: "https://links.example.test/Plan" },
     ]);
   });
@@ -4021,7 +4040,7 @@ describe("your links", () => {
     expect(rows()).toHaveLength(12);
     add("Again", MAP);
     expect(errorText()).toBe("That link is already in the list");
-    expect((stored("game-companion:v1:links:hA") as unknown[]).length).toBe(12);
+    expect((stored("game-companion:v1:links:game:ra:20") as unknown[]).length).toBe(12);
   });
 
   it("pins a tapped link and shows it in a sandboxed link frame", async () => {
@@ -4075,7 +4094,7 @@ describe("your links", () => {
     expect(document.querySelectorAll("iframe")).toHaveLength(0);
     expect($(".ach")?.hidden).toBe(false);
     expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Empty slot");
-    expect(stored("game-companion:v1:links:hA")).toEqual([{ title: "Planner", url: PLAN }]);
+    expect(stored("game-companion:v1:links:game:ra:20")).toEqual([{ title: "Planner", url: PLAN }]);
     const layout = stored("game-companion:v1:layout:hA") as { slots: ({ url: string } | null)[] };
     expect(layout.slots.map((s) => s?.url ?? null)).toEqual([
       "/doc/hA-checklist",
@@ -4103,7 +4122,7 @@ describe("your links", () => {
     more();
     add("Sample Map", MAP);
     tap(0);
-    first.storage.setItem("game-companion:v1:links:hA", "[]");
+    first.storage.setItem("game-companion:v1:links:game:ra:20", "[]");
     await restart(playing(hubA), first.storage);
     expect(document.querySelectorAll("iframe")).toHaveLength(0);
     expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Empty slot");
@@ -4129,7 +4148,9 @@ describe("your links", () => {
     expect(section().hidden).toBe(false);
     expect(rows()).toHaveLength(0);
     add("Planner", PLAN);
-    expect(stored("game-companion:v1:links:hZ")).toEqual([{ title: "Planner", url: PLAN }]);
+    expect(stored("game-companion:v1:links:game:steam:10")).toEqual([
+      { title: "Planner", url: PLAN },
+    ]);
     api.nowValue = playing(hubA);
     await app.tick();
     ($(".switch-banner .switch-accept") as HTMLElement).click();
@@ -4236,6 +4257,313 @@ describe("your links", () => {
     expect(railButtons()[2]?.querySelector(".rail-count")?.textContent).toBe("");
     expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Notes");
     expect(railButtons()[1]?.querySelector(".rail-count")?.textContent).toBe("3/7");
+  });
+
+  describe("edits made while the guide's page tree loads", () => {
+    const STORED_LINKS = "game-companion:v1:links:game:ra:20";
+    const LAYOUT = "game-companion:v1:layout:hA";
+    const gated = async (storage: ReturnType<typeof memory>) => {
+      const api = fakeApi(playing(hubA));
+      const gate = deferred<void>();
+      api.hubTree = async (id) => {
+        await gate.promise;
+        return tree(id === "hA" ? hubA : hubZ);
+      };
+      store = storage;
+      const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+      await flush();
+      await flush();
+      const release = async (): Promise<void> => {
+        gate.resolve();
+        await app.ready;
+        await flush();
+      };
+      return { api, app, release };
+    };
+
+    it("keeps a link added during the wait, and a second one beside it", async () => {
+      const { release } = await gated(memory());
+      more();
+      add("Sample Map", MAP);
+      expect(titles()).toEqual(["Sample Map"]);
+      await release();
+      expect(titles()).toEqual(["Sample Map"]);
+      expect(stored(STORED_LINKS)).toEqual([{ title: "Sample Map", url: MAP }]);
+      add("Planner", PLAN);
+      expect(titles()).toEqual(["Sample Map", "Planner"]);
+      expect(stored(STORED_LINKS)).toEqual([
+        { title: "Sample Map", url: MAP },
+        { title: "Planner", url: PLAN },
+      ]);
+    });
+
+    it("keeps a link removed during the wait removed, with its pin", async () => {
+      const storage = memory();
+      await start(playing(hubA), storage);
+      more();
+      add("Sample Map", MAP);
+      add("Planner", PLAN);
+      tap(0);
+      document.body.innerHTML = '<main id="app"></main>';
+      const { release } = await gated(storage);
+      more();
+      (rows()[0]?.querySelector(".picker-link-remove") as HTMLElement).click();
+      expect(titles()).toEqual(["Planner"]);
+      await release();
+      expect(titles()).toEqual(["Planner"]);
+      expect(stored(STORED_LINKS)).toEqual([{ title: "Planner", url: PLAN }]);
+      expect(document.querySelectorAll("iframe")).toHaveLength(0);
+      expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Empty slot");
+      // Nothing of it comes back on the next load either.
+      await restart(playing(hubA), storage);
+      more();
+      expect(titles()).toEqual(["Planner"]);
+      expect(document.querySelectorAll("iframe")).toHaveLength(0);
+    });
+
+    it("keeps a link pinned during the wait pinned, with exactly one frame for it", async () => {
+      const { release } = await gated(memory());
+      more();
+      add("Sample Map", MAP);
+      tap(0);
+      expect(document.querySelectorAll("iframe")).toHaveLength(1);
+      await release();
+      expect(document.querySelectorAll("iframe")).toHaveLength(1);
+      expect(shown().map((f) => f.getAttribute("src"))).toEqual([MAP]);
+      expect(shown()[0]?.getAttribute("sandbox")).toContain("allow-scripts");
+      const labels = railButtons()
+        .slice(1, 5)
+        .map((b) => b.getAttribute("aria-label"));
+      expect(labels).toEqual(["Achievement Checklist", "Sample Map", "Empty slot", "Empty slot"]);
+      expect(railButtons()[2]?.classList.contains("active")).toBe(true);
+      // Once the tree is there the layout is saved with both pins.
+      railButtons()[1]?.click();
+      const layout = stored(LAYOUT) as { slots: ({ url: string } | null)[] };
+      expect(layout.slots.map((x) => x?.url ?? null)).toEqual([
+        "/doc/hA-checklist",
+        MAP,
+        null,
+        null,
+      ]);
+    });
+
+    it("keeps a link added while a failed tree is retried", async () => {
+      const api = fakeApi(playing(hubA));
+      let fail = true;
+      const gate = deferred<void>();
+      api.hubTree = async (id) => {
+        if (fail) throw new Error("down");
+        await gate.promise;
+        return tree(id === "hA" ? hubA : hubZ);
+      };
+      const storage = memory();
+      store = storage;
+      const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+      await app.ready;
+      await flush();
+      fail = false;
+      const ticking = app.tick();
+      await flush();
+      more();
+      add("Sample Map", MAP);
+      gate.resolve();
+      await ticking;
+      await flush();
+      expect(titles()).toEqual(["Sample Map"]);
+      expect(stored(STORED_LINKS)).toEqual([{ title: "Sample Map", url: MAP }]);
+    });
+  });
+
+  describe("an address in a slot that is not in the links list", () => {
+    const STRAY = "https://links.example.test/x";
+    const LAYOUT = "game-companion:v1:layout:hA";
+    const strayLayout = JSON.stringify({
+      slots: [{ title: "Stray", url: STRAY }, null, null, null],
+      active: 0,
+    });
+
+    it("is not framed, shown or saved over when the page tree fails to load", async () => {
+      const storage = memory();
+      storage.setItem(LAYOUT, strayLayout);
+      const write = vi.spyOn(storage, "setItem");
+      await start(playing(hubA), storage, (api) => {
+        api.hubTree = async () => {
+          throw new Error("down");
+        };
+      });
+      expect(document.querySelectorAll("iframe")).toHaveLength(0);
+      expect(railButtons()[1]?.getAttribute("aria-label")).toBe("Empty slot");
+      expect($(".ach")?.hidden).toBe(false);
+      expect(write).not.toHaveBeenCalled();
+      expect(storage.getItem(LAYOUT)).toBe(strayLayout);
+    });
+
+    it("keeps a document pin beside it on that path", async () => {
+      const storage = memory();
+      storage.setItem(
+        LAYOUT,
+        JSON.stringify({
+          slots: [
+            { title: "Stray", url: STRAY },
+            { title: "Collectibles", url: "/doc/hA-coll" },
+            null,
+            null,
+          ],
+          active: 1,
+        }),
+      );
+      await start(playing(hubA), storage, (api) => {
+        api.hubTree = async () => {
+          throw new Error("down");
+        };
+      });
+      expect(shown().map((f) => f.getAttribute("src"))).toEqual(["/doc/hA-coll"]);
+      expect(railButtons()[1]?.getAttribute("aria-label")).toBe("Collectibles");
+      expect(railButtons()[1]?.classList.contains("active")).toBe(true);
+    });
+
+    it("is dropped when the page tree loads", async () => {
+      const storage = memory();
+      storage.setItem(LAYOUT, strayLayout);
+      await start(playing(hubA), storage);
+      expect(document.querySelectorAll("iframe")).toHaveLength(0);
+      expect(railButtons()[1]?.getAttribute("aria-label")).not.toBe("Stray");
+    });
+
+    it("is never framed as a link merely because it is an https address", async () => {
+      const storage = memory();
+      storage.setItem(
+        "game-companion:v1:links:game:ra:20",
+        JSON.stringify([{ title: "Sample Map", url: MAP }]),
+      );
+      reconcileHook.fn = () => ({
+        slots: [{ title: "Stray", url: STRAY }, null, null, null],
+        active: 0,
+      });
+      await start(playing(hubA), storage);
+      expect(document.querySelectorAll("iframe")).toHaveLength(0);
+      // The stage shows the achievements rather than an empty frame area.
+      expect($(".ach")?.hidden).toBe(false);
+    });
+
+    it("is not framed when a link in the list is a different one", async () => {
+      const storage = memory();
+      storage.setItem(
+        "game-companion:v1:links:game:ra:20",
+        JSON.stringify([{ title: "Sample Map", url: MAP }]),
+      );
+      storage.setItem(
+        LAYOUT,
+        JSON.stringify({
+          slots: [{ title: "Sample Map", url: MAP }, { title: "Stray", url: STRAY }, null, null],
+          active: 1,
+        }),
+      );
+      await start(playing(hubA), storage, (api) => {
+        api.hubTree = async () => {
+          throw new Error("down");
+        };
+      });
+      expect(document.querySelectorAll("iframe")).toHaveLength(0);
+      expect(railButtons()[1]?.getAttribute("aria-label")).toBe("Sample Map");
+      expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Empty slot");
+      expect($(".ach")?.hidden).toBe(false);
+    });
+  });
+
+  it("tells the person when the link cannot be saved on this device, and does not add it", async () => {
+    const storage = memory();
+    const real = storage.setItem;
+    storage.setItem = (k: string, v: string) => {
+      if (k.startsWith("game-companion:v1:links:")) throw new Error("full");
+      real(k, v);
+    };
+    await start(playing(hubA), storage);
+    more();
+    add("Sample Map", MAP);
+    expect(errorText()).toBe("Could not save the link on this device");
+    expect(rows()).toHaveLength(0);
+    // Not added for the session either: the same address can be tried again.
+    add("Sample Map", MAP);
+    expect(errorText()).toBe("Could not save the link on this device");
+  });
+
+  it("refuses an address that is too long once canonical, with the usual message", async () => {
+    await start();
+    more();
+    add("Long", `https://links.example.test/${"漢".repeat(400)}`);
+    expect(errorText()).toBe("Enter an address that starts with https://");
+    expect(rows()).toHaveLength(0);
+  });
+
+  it("does nothing for a tap on a page whose address is not a document address", async () => {
+    await start(playing(hubA), memory(), (api) => {
+      api.hubTree = async () => ({
+        hub: hubA,
+        pages: [{ title: "Odd", url: "https://links.example.test/x", children: [] }],
+        defaultPins: [],
+      });
+    });
+    more();
+    (document.querySelector(".picker-pages .picker-page-rows .picker-item") as HTMLElement).click();
+    expect(document.querySelectorAll("iframe")).toHaveLength(0);
+    expect(
+      railButtons()
+        .slice(1, 5)
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["Empty slot", "Empty slot", "Empty slot", "Empty slot"]);
+    expect($(".ach")?.hidden).toBe(false);
+  });
+
+  describe("a stable scope", () => {
+    it("shows the same links for a game whether or not its guide is known", async () => {
+      const storage = memory();
+      await start(playing(hubA), storage);
+      more();
+      add("Sample Map", MAP);
+      await restart({ ...playing(hubA), hubs: [] }, storage);
+      expect($(".game-note")?.textContent).toBe("No guide found");
+      more();
+      (document.querySelector('[data-tab="pages"]') as HTMLElement).click();
+      expect(titles()).toEqual(["Sample Map"]);
+      await restart(playing(hubA), storage);
+      more();
+      expect(titles()).toEqual(["Sample Map"]);
+    });
+
+    it("gives a hand-picked guide that has no ID row its own list under its hub id", async () => {
+      const hubQ: GuideHub = {
+        hubId: "hQ",
+        title: "Quiet",
+        url: "/doc/quiet",
+        source: null,
+        gameId: null,
+        platformLabel: "Other",
+        nowPlaying: false,
+      };
+      const storage = memory();
+      store = storage;
+      const api = fakeApi({
+        game: null,
+        state: "none",
+        stale: false,
+        observedAt: null,
+        presence: null,
+        hubs: [],
+      });
+      api.guides = async () => ({ available: true, hubs: [hubQ] });
+      api.hubTree = async () => tree(hubQ);
+      const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+      await app.ready;
+      (document.querySelector(".picker-games .picker-item") as HTMLElement).click();
+      await app.tick();
+      await flush();
+      expect($(".game-title")?.textContent).toBe("Quiet");
+      more();
+      expect(section().hidden).toBe(false);
+      add("Sample Map", MAP);
+      expect(stored("game-companion:v1:links:hQ")).toEqual([{ title: "Sample Map", url: MAP }]);
+    });
   });
 
   describe("beside find and the guide jump", () => {

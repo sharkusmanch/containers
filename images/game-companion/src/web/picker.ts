@@ -229,7 +229,11 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     }
   });
   linksSection.append(linksTitle, linkRows, addForm);
-  pagesList.append(linksSection);
+  // The pages are redrawn into their own container, so the links section, with the add form, is
+  // never detached and keeps focus and typed text.
+  const pageRows = doc.createElement("div");
+  pageRows.classList.add("picker-page-rows");
+  pagesList.append(pageRows, linksSection);
 
   const linkRow = (link: GameLink, isPinned: boolean): HTMLElement => {
     const { button } = item(link.title);
@@ -387,11 +391,10 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     setPages(pages, layout) {
       const pinned = new Set<string>();
       for (const slot of layout.slots) if (slot !== null) pinned.add(slot.url);
-      pagesList.replaceChildren(
+      pageRows.replaceChildren(
         ...(pages.length === 0
           ? [empty("No guide pages for this game")]
           : pageItems(pages, pinned, 0)),
-        linksSection,
       );
     },
     setLinks(links, layout, available) {

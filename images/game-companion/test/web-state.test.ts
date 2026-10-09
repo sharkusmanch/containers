@@ -420,15 +420,22 @@ describe("reconcileLayout", () => {
 
 describe("isSafeLinkUrl", () => {
   it.each([
-    "https://links.example.test",
+    "https://links.example.test/",
     "https://links.example.test/a/b",
     "https://links.example.test/a?x=1&y=2#top",
     "https://links.example.test:8443/a",
-    "https://bücher.example.test/a",
-    "HTTPS://LINKS.EXAMPLE.TEST/a",
-  ])("accepts %s", (url) => expect(isSafeLinkUrl(url)).toBe(true));
+    "https://xn--bcher-kva.example.test/a",
+  ])("accepts the canonical address %s", (url) => expect(isSafeLinkUrl(url)).toBe(true));
 
   it.each([
+    "https://links.example.test",
+    "https://bücher.example.test/a",
+    "HTTPS://LINKS.EXAMPLE.TEST/a",
+    "https:/doc/abc",
+    " https://links.example.test/a",
+    "https://links.example.test/a ",
+    "https://links.example.test/\ta",
+    "https://links.example.test/a\n",
     "http://links.example.test/a",
     "javascript:alert(1)",
     "data:text/html,hello",
@@ -472,6 +479,28 @@ describe("normaliseLink", () => {
     });
   });
 
+  it("cuts a default title (the hostname) to 40 characters too", () => {
+    const host = `${"a".repeat(30)}.${"b".repeat(30)}.example.test`;
+    const link = normaliseLink("", `https://${host}/x`);
+    expect(link?.title).toBe(host.slice(0, 40));
+    expect(link?.url).toBe(`https://${host}/x`);
+  });
+
+  it("refuses an address that is longer once canonical, though the typed text was short", () => {
+    const typed = `https://links.example.test/${"漢".repeat(400)}`;
+    expect(typed.length).toBeLessThan(2000);
+    expect(new URL(typed).href.length).toBeGreaterThan(2000);
+    expect(normaliseLink("T", typed)).toBeNull();
+  });
+
+  it("canonicalises sloppy typed input, and what it returns passes its own check", () => {
+    const link = normaliseLink("T", "  HTTPS://Links.Example.Test  ");
+    expect(link?.url).toBe("https://links.example.test/");
+    expect(isSafeLinkUrl(link?.url ?? "")).toBe(true);
+    const idn = normaliseLink("T", "https://bücher.example.test/a");
+    expect(isSafeLinkUrl(idn?.url ?? "")).toBe(true);
+  });
+
   it("cuts the title to 40 characters without splitting a surrogate pair", () => {
     const plain = normaliseLink("x".repeat(60), "https://links.example.test/a");
     expect(plain?.title).toBe("x".repeat(40));
@@ -509,6 +538,29 @@ describe("link storage", () => {
     const s = memory();
     s.setItem(linksKey("h1"), raw);
     expect(loadLinks(s, "h1")).toEqual([]);
+  });
+
+  it.each([
+    ["a malformed scheme separator", "https:/doc/abc"],
+    ["a leading space", " https://links.example.test/a"],
+    ["an embedded tab", "https://links.example.test/\ta"],
+    ["a non-canonical host", "HTTPS://Links.Example.Test/a"],
+  ])("drops a stored address with %s", (_name, url) => {
+    const s = memory();
+    s.setItem(linksKey("h1"), JSON.stringify([{ title: "Bad", url }, a]));
+    expect(loadLinks(s, "h1")).toEqual([a]);
+  });
+
+  it("saveLinks says whether it stored, and never throws", () => {
+    const s = memory();
+    expect(saveLinks(s, "h1", [a])).toBe(true);
+    const blocked = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("full");
+      },
+    };
+    expect(saveLinks(blocked, "h1", [a])).toBe(false);
   });
 
   it("drops invalid entries and duplicate addresses", () => {
@@ -652,5 +704,13 @@ describe("links in a layout", () => {
       JSON.stringify({ slots: [slot("x", "javascript:alert(1)"), null, null, null], active: 0 }),
     );
     expect(loadLayout(s, "h2")).toBeNull();
+    s.setItem(
+      layoutKey("h3"),
+      JSON.stringify({
+        slots: [slot("x", " https://links.example.test/a"), null, null, null],
+        active: 0,
+      }),
+    );
+    expect(loadLayout(s, "h3")).toBeNull();
   });
 });

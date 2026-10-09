@@ -698,6 +698,13 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
+/* a long title or hostname wraps instead of running under the buttons */
+.picker-link .picker-item,
+.picker-link .picker-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .picker-link-open,
 .picker-link-remove {
   flex: none;

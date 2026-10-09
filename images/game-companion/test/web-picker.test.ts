@@ -704,9 +704,9 @@ describe("your links", () => {
     picker.setLinks([linkA], emptyLayout(), true);
     const children = [...(picker.element.querySelector(".picker-pages") as HTMLElement).children];
     expect(children.at(-1)).toBe(section(picker));
-    expect(children.indexOf(section(picker))).toBeGreaterThan(
-      children.indexOf(picker.element.querySelector(".picker-pages .picker-row") as HTMLElement),
-    );
+    const pageRows = picker.element.querySelector(".picker-page-rows") as HTMLElement;
+    expect(pageRows.querySelector(".picker-row")).not.toBeNull();
+    expect(children.indexOf(pageRows)).toBe(children.indexOf(section(picker)) - 1);
     // Redrawing the pages keeps the section last.
     picker.setPages(pages, emptyLayout());
     expect(
@@ -812,6 +812,26 @@ describe("your links", () => {
     fill(picker, "x", "https://links.example.test/");
     submit(picker);
     expect(picker.element.querySelector(".picker-link-error")?.textContent).toBe("");
+  });
+
+  it("keeps the form element, its focus and its text across redraws of pages and links", () => {
+    const { picker } = make();
+    document.body.append(picker.element);
+    picker.setLinks([], emptyLayout(), true);
+    picker.open("pages");
+    const form = picker.element.querySelector(".picker-link-add");
+    const input = picker.element.querySelector(".picker-link-url") as HTMLInputElement;
+    input.focus();
+    input.value = "https://links.exa";
+    expect(document.activeElement).toBe(input);
+    picker.setPages(pages, emptyLayout());
+    picker.setLinks([linkA], emptyLayout(), true);
+    picker.setPages([], emptyLayout());
+    expect(picker.element.querySelector(".picker-link-add")).toBe(form);
+    expect(picker.element.querySelector(".picker-link-url")).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(input.value).toBe("https://links.exa");
+    picker.element.remove();
   });
 
   it("keeps what was typed when the list is redrawn", () => {
