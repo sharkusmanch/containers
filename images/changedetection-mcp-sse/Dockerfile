@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=github-commits depName=rusty4444/changedetection-mcp branch=main
-ARG CHANGEDETECTION_MCP_COMMIT=f708f3784c62cb3bee6ef4c53347a4fd460a3702
+ARG CHANGEDETECTION_MCP_COMMIT=418621862beef008a403bdab7aa3c902af945fee
 
 # renovate: datasource=github-releases depName=sparfenyuk/mcp-proxy
 ARG MCP_PROXY_VERSION=v0.12.0
