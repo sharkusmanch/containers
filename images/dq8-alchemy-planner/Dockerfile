@@ -8,7 +8,7 @@
 # upstream version must stay first.
 
 # renovate: datasource=github-releases depName=sharkusmanch/dq8-alchemy-planner
-ARG DQ8_ALCHEMY_PLANNER_VERSION=v1.1.1
+ARG DQ8_ALCHEMY_PLANNER_VERSION=v1.1.2
 
 # renovate: datasource=docker depName=node
 ARG NODE_VERSION=24.21.0

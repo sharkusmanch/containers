@@ -14,7 +14,7 @@ mounting the same writable volume at `/run/save`.
 ## Upstream
 
 - **Repository**: [sharkusmanch/dq8-alchemy-planner](https://github.com/sharkusmanch/dq8-alchemy-planner)
-- **Version**: v1.1.1
+- **Version**: v1.1.2
 
 ## Usage
 
@@ -25,13 +25,13 @@ docker volume create dq8-save
 # Web server (default command), port 8080
 docker run -d --name dq8-web --read-only --tmpfs /tmp \
   -v dq8-save:/run/save:ro -p 8080:8080 \
-  ghcr.io/sharkusmanch/containers/dq8-alchemy-planner:v1.1.1
+  ghcr.io/sharkusmanch/containers/dq8-alchemy-planner:v1.1.2
 
 # Watcher: the same image with a different command. SAVE_DIR holds the
 # BASLUS-21207dq8_N directories and is mounted read-only.
 docker run -d --name dq8-watch --read-only \
   -v dq8-save:/run/save -v /path/to/memcard:/saves:ro -e SAVE_DIR=/saves \
-  ghcr.io/sharkusmanch/containers/dq8-alchemy-planner:v1.1.1 latest-save
+  ghcr.io/sharkusmanch/containers/dq8-alchemy-planner:v1.1.2 latest-save
 ```
 
 Do not allocate a TTY (`-t`) for the web server: nginx writes its logs to `/dev/stdout` and
