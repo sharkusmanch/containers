@@ -6,8 +6,8 @@
 
 # The release tarball and its checksum are bumped together by Renovate.
 # renovate: datasource=github-release-attachments depName=kimusan/Tachyon
-ARG TACHYON_VERSION=v4.3.1
-ARG TACHYON_SHA256=a5ab6628a998da90b997184038d0e502493ea99d9ab0e85411905aa15bc16024
+ARG TACHYON_VERSION=v4.4.2
+ARG TACHYON_SHA256=ce9fcb38347930a860ad47a7527929a55f17bab720cbfb2ae14b6cf716ea1e48
 
 # The release signing key (Tachyon Repository <kim@schulz.dk>, ed25519,
 # expires 2028-09-04), pinned by fingerprint. The keyring file ships on the
