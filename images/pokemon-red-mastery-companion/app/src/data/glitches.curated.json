@@ -1,0 +1,1007 @@
+[
+  {
+    "id": "candidate-57639",
+    "ruleId": 57639,
+    "title": "Celadon Hotel hidden PC",
+    "attemptPolicy": {
+      "allowedKinds": [
+        "canonical"
+      ],
+      "placement": "canonical",
+      "protectedRunRequired": false
+    },
+    "prerequisites": [
+      {
+        "kind": "attempt-kind",
+        "allowed": [
+          "canonical"
+        ]
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:celadon-access",
+        "expected": true
+      }
+    ],
+    "instructions": [
+      "Enter Celadon Hotel, stand at zero-based map (13,4), face north toward (13,3), and press A. Open the invisible PC menu and exit normally; record the action and confirm hardcore."
+    ],
+    "requiredMoves": [],
+    "requiredItems": [],
+    "measuredSpecial": [],
+    "consumedTrainerFlags": [],
+    "branches": [],
+    "evidence": [
+      {
+        "kind": "hardcore",
+        "description": "Confirm a valid hardcore unlock timestamp from the appropriate account feed."
+      },
+      {
+        "kind": "manual",
+        "description": "Observed hidden hotel PC opening at (13,3), facing north; presence in Celadon is insufficient.",
+        "key": "rule:57639:completed"
+      }
+    ],
+    "recoveryBoundary": "Exit the PC normally; normal Celadon progression candidate. Runtime award remains pending.",
+    "sourceUrls": [
+      "https://retroachievements.org/achievement/57639",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/CeladonHotel.asm",
+      "https://retroachievements.org/forums/topic/6082",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/data/events/hidden_events.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/events/hidden_events/pokecenter_pc.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/overworld/hidden_events.asm"
+    ],
+    "auditStatus": "sourced",
+    "warnings": [
+      "Candidate procedure; target emulator/core and hardcore behavior have not been validated."
+    ],
+    "transport": "none",
+    "validationBlockers": [
+      "Target ROM hash, frontend/core/version, exact procedure, observed event and legitimate RA hardcore result have not been validated."
+    ]
+  },
+  {
+    "id": "candidate-57640",
+    "ruleId": 57640,
+    "title": "Actual crash candidate",
+    "attemptPolicy": {
+      "allowedKinds": [
+        "glitch"
+      ],
+      "placement": "separate",
+      "protectedRunRequired": false
+    },
+    "prerequisites": [
+      {
+        "kind": "attempt-kind",
+        "allowed": [
+          "glitch"
+        ]
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:physically-isolated",
+        "expected": true
+      }
+    ],
+    "instructions": [
+      "Use a separate expendable attempt for the invalid glitch-item crash candidate described by the achievement author. Exact item ID, slot, party, map and reproducible final action are still unknown; keep execution blocked until audited. Require an actual game crash and hardcore award, rather than an unresponsive freeze."
+    ],
+    "requiredMoves": [],
+    "requiredItems": [],
+    "measuredSpecial": [],
+    "consumedTrainerFlags": [],
+    "branches": [],
+    "evidence": [
+      {
+        "kind": "hardcore",
+        "description": "Confirm a valid hardcore unlock timestamp from the appropriate account feed."
+      },
+      {
+        "kind": "manual",
+        "description": "Actual crash diagnostics/core observations, not mere freeze or unresponsiveness.",
+        "key": "rule:57640:completed"
+      }
+    ],
+    "recoveryBoundary": "Expendable named attempt only. Exact reproducible crash and recovery boundary remain unknown; execution is blocked.",
+    "sourceUrls": [
+      "https://retroachievements.org/achievement/57640",
+      "https://retroachievements.org/forums/topic/6082"
+    ],
+    "auditStatus": "sourced",
+    "warnings": [
+      "Candidate procedure; target emulator/core and hardcore behavior have not been validated."
+    ],
+    "transport": "pending",
+    "validationBlockers": [
+      "Target ROM hash, frontend/core/version, exact procedure, observed event and legitimate RA hardcore result have not been validated.",
+      "Exact reproducible invalid item ID, slot, map, party and crash diagnostics remain unresolved; a freeze or displayed j name is insufficient."
+    ]
+  },
+  {
+    "id": "candidate-57641",
+    "ruleId": 57641,
+    "title": "Fresh RED/JOHN SRAM-corruption Any%",
+    "attemptPolicy": {
+      "allowedKinds": [
+        "speedrun"
+      ],
+      "placement": "fresh",
+      "protectedRunRequired": false
+    },
+    "prerequisites": [
+      {
+        "kind": "attempt-kind",
+        "allowed": [
+          "speedrun"
+        ]
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:physically-isolated",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:fresh-start",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:rival-name",
+        "expected": "JOHN"
+      }
+    ],
+    "instructions": [
+      "In physically separate emulator SRAM, start cleared with player RED, rival JOHN and TID 0x64C2 (25794). Verify the linked manual TID setup and target-core timing before any execution. Never clear the canonical save.",
+      "The sourced route initiates save and resets within its four-frame corruption window: Gambatte/GBP reset then A; GBI A then reset. Timing on any other core remains unknown.",
+      "Take one step down. Swap party positions 11\u219412 and 13\u219410. In Items swap slot 1 Gold Teeth with slot 5 j.x[38], then slot 3 Gold Teeth with slot 13 j.x[1] below Great Ball. Swap party 17\u219422 and 23\u219418. Close the menu to reach Hall of Fame.",
+      "Record the actual Hall-of-Fame transition and clock at most one minute; a snapshot or synthetic timer is insufficient. Confirm the hardcore timestamp separately. Do not automate achievement-earning inputs."
+    ],
+    "requiredMoves": [],
+    "requiredItems": [],
+    "measuredSpecial": [],
+    "consumedTrainerFlags": [],
+    "branches": [],
+    "evidence": [
+      {
+        "kind": "hardcore",
+        "description": "Confirm a valid hardcore unlock timestamp from the appropriate account feed."
+      },
+      {
+        "kind": "manual",
+        "description": "Fresh Hall-of-Fame transition and in-game clock at most one minute.",
+        "key": "rule:57641:completed"
+      }
+    ],
+    "recoveryBoundary": "Use only the named attempt. Preserve original imported bytes; the companion never modifies or restores saves. Require an audited in-game recovery boundary before supported execution.",
+    "sourceUrls": [
+      "https://retroachievements.org/achievement/57641",
+      "https://github.com/pokemon-speedrunning/speedrun-routes/blob/main/docs/gen-1/red-blue/main-any/README.md",
+      "https://retroachievements.org/forums/topic/6082"
+    ],
+    "auditStatus": "sourced",
+    "warnings": [
+      "Candidate procedure; target emulator/core and hardcore behavior have not been validated."
+    ],
+    "transport": "save-corruption",
+    "validationBlockers": [
+      "Target ROM hash, frontend/core/version, exact procedure, observed event and legitimate RA hardcore result have not been validated.",
+      "Manual TID setup, four-frame target-core reset timing, exact corrupted menu contents and RA timer behavior remain pending."
+    ]
+  },
+  {
+    "id": "candidate-57642",
+    "ruleId": 57642,
+    "title": "Special 21 level-one Mew EXP jump",
+    "attemptPolicy": {
+      "allowedKinds": [
+        "canonical",
+        "glitch"
+      ],
+      "placement": "postgame",
+      "protectedRunRequired": true
+    },
+    "prerequisites": [
+      {
+        "kind": "attempt-kind",
+        "allowed": [
+          "canonical",
+          "glitch"
+        ]
+      },
+      {
+        "kind": "move",
+        "moveId": 45
+      },
+      {
+        "kind": "manual",
+        "key": "protected-main-oak-complete",
+        "expected": true
+      },
+      {
+        "kind": "special",
+        "value": 21,
+        "observed": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:physically-isolated",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:ditto-access",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:transform-confirmed",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:neutral-attack-stage",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:no-intervening-encounter",
+        "expected": true
+      },
+      {
+        "kind": "party-size",
+        "minimum": 1,
+        "maximum": 5
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:balls-and-finisher",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:mew-own-untouched",
+        "expected": true
+      },
+      {
+        "kind": "not",
+        "predicate": {
+          "kind": "item",
+          "rawItemId": 75,
+          "minimum": 1
+        }
+      }
+    ],
+    "instructions": [
+      "After protected completion, use a validated transport with a measured Special-21 donor. Let Ditto Transform, apply six successful Growls, escape and trigger a level-one Mew without another encounter. Catch it into a free party slot.",
+      "Put that Mew first, deposit Exp. All, and fight a wild level-2/3 Route 1 Pidgey or Rattata. Switch once to a healthy finisher; both participants survive. Record a 1\u201353 EXP award and level 1\u2192100 during that one battle. At 54 EXP the route fails."
+    ],
+    "requiredMoves": [
+      45
+    ],
+    "requiredItems": [],
+    "measuredSpecial": [
+      21
+    ],
+    "consumedTrainerFlags": [],
+    "branches": [],
+    "evidence": [
+      {
+        "kind": "hardcore",
+        "description": "Confirm a valid hardcore unlock timestamp from the appropriate account feed."
+      },
+      {
+        "kind": "manual",
+        "description": "Own Mew in first slot: level 1\u2192100 during one battle and exact 1\u201353 EXP award.",
+        "key": "rule:57642:completed"
+      }
+    ],
+    "recoveryBoundary": "Use only the named attempt. Preserve original imported bytes; the companion never modifies or restores saves. Require an audited in-game recovery boundary before supported execution.",
+    "sourceUrls": [
+      "https://retroachievements.org/achievement/57642",
+      "https://gamefaqs.gamespot.com/gameboy/367023-pokemon-red-version/faqs/64175/experience-underflow-glitch",
+      "https://retroachievements.org/forums/topic/6082",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/constants/pokemon_constants.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/core.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/ram/wram.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/move_effects/transform.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/items/inventory.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/Route24.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/data/growth_rates.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/pokemon/experience.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/experience.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/data/pokemon/base_stats/mew.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/data/pokemon/base_stats/pidgey.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/data/pokemon/base_stats/rattata.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/data/wild/maps/Route1.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/effects.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/data/battle/stat_modifiers.asm"
+    ],
+    "auditStatus": "sourced",
+    "warnings": [
+      "Candidate procedure; target emulator/core and hardcore behavior have not been validated."
+    ],
+    "transport": "pc-underflow",
+    "successfulGrowls": 6,
+    "experienceAward": {
+      "minimum": 1,
+      "maximum": 53
+    },
+    "validationBlockers": [
+      "Target ROM hash, frontend/core/version, exact procedure, observed event and legitimate RA hardcore result have not been validated.",
+      "PC-underflow transport boundaries, absolute slot 100, repeated-use safety, bag/PC/key items, trainer flags and ordinary postgame operation remain unvalidated; defer canonical execution or use separate SRAM."
+    ],
+    "experienceRoute": {
+      "minimum": 1,
+      "maximum": 53,
+      "initialExperience": 16777162,
+      "participants": 2,
+      "awards": [
+        {
+          "species": "Pidgey",
+          "level": 2,
+          "exp": 7
+        },
+        {
+          "species": "Pidgey",
+          "level": 3,
+          "exp": 11
+        },
+        {
+          "species": "Rattata",
+          "level": 2,
+          "exp": 8
+        },
+        {
+          "species": "Rattata",
+          "level": 3,
+          "exp": 12
+        }
+      ]
+    }
+  },
+  {
+    "id": "candidate-57643",
+    "ruleId": 57643,
+    "title": "Rare Candy in physical bag slot six",
+    "attemptPolicy": {
+      "allowedKinds": [
+        "canonical",
+        "glitch"
+      ],
+      "placement": "postgame",
+      "protectedRunRequired": true
+    },
+    "prerequisites": [
+      {
+        "kind": "attempt-kind",
+        "allowed": [
+          "canonical",
+          "glitch"
+        ]
+      },
+      {
+        "kind": "item",
+        "rawItemId": 40,
+        "minimum": 1,
+        "position": 6,
+        "exactQuantity": 1
+      },
+      {
+        "kind": "manual",
+        "key": "protected-main-oak-complete",
+        "expected": true
+      },
+      {
+        "kind": "move",
+        "moveId": 19
+      },
+      {
+        "kind": "move",
+        "moveId": 57
+      },
+      {
+        "kind": "badge",
+        "mask": 20,
+        "obtained": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:old-man-compatible",
+        "expected": true
+      }
+    ],
+    "instructions": [
+      "After protected completion, place Rare Candy \u00d71 in physical bag slot six. With a verified suitable name-derived MissingNo encounter, watch Viridian old man\u2019s demonstration, Fly to Cinnabar and Surf its east shore. Escape the glitch encounter, inspect 129, toss two to leave 127, repeat the encounter and inspect 255. Keep the candy in slot six throughout.",
+      "The seen-bit mechanism ORs quantity with 128: 1|128=129, then 127|128=255. It does not always add 128. Normalize a different starting count to one through ordinary handling and recheck position. Do not catch the glitch species, spend candies, or replace physical order with a sorted bag summary."
+    ],
+    "requiredMoves": [
+      19,
+      57
+    ],
+    "requiredItems": [
+      {
+        "rawItemId": 40,
+        "quantity": 1,
+        "position": 6
+      }
+    ],
+    "measuredSpecial": [],
+    "consumedTrainerFlags": [],
+    "branches": [],
+    "evidence": [
+      {
+        "kind": "hardcore",
+        "description": "Confirm a valid hardcore unlock timestamp from the appropriate account feed."
+      },
+      {
+        "kind": "manual",
+        "description": "Actual slot-six Rare Candy quantity 1\u2192129\u2192127\u2192255, with position unchanged.",
+        "key": "rule:57643:completed"
+      }
+    ],
+    "recoveryBoundary": "Use only the named attempt. Preserve original imported bytes; the companion never modifies or restores saves. Require an audited in-game recovery boundary before supported execution.",
+    "sourceUrls": [
+      "https://retroachievements.org/achievement/57643",
+      "https://pastebin.com/SPYqSQSL",
+      "https://retroachievements.org/forums/topic/6082",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/constants/pokemon_constants.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/core.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/flag_action.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/ram/wram.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/overworld/wild_mons.asm"
+    ],
+    "auditStatus": "sourced",
+    "warnings": [
+      "Candidate procedure; target emulator/core and hardcore behavior have not been validated."
+    ],
+    "transport": "old-man",
+    "validationBlockers": [
+      "Target ROM hash, frontend/core/version, exact procedure, observed event and legitimate RA hardcore result have not been validated.",
+      "Player-name encoded encounter compatibility, suitable MissingNo/'M availability, physical slot arithmetic and hardcore trigger need runtime validation."
+    ]
+  },
+  {
+    "id": "candidate-57644",
+    "ruleId": 57644,
+    "title": "Safari exit into Route 20 Glitch City",
+    "attemptPolicy": {
+      "allowedKinds": [
+        "glitch"
+      ],
+      "placement": "postgame",
+      "protectedRunRequired": true
+    },
+    "prerequisites": [
+      {
+        "kind": "attempt-kind",
+        "allowed": [
+          "glitch"
+        ]
+      },
+      {
+        "kind": "manual",
+        "key": "protected-main-oak-complete",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:physically-isolated",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "protected-safari-complete",
+        "expected": true
+      },
+      {
+        "kind": "move",
+        "moveId": 19
+      },
+      {
+        "kind": "move",
+        "moveId": 57
+      },
+      {
+        "kind": "badge",
+        "mask": 20,
+        "obtained": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:safari-entry-fee",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:cinnabar-access",
+        "expected": true
+      }
+    ],
+    "instructions": [
+      "After protected Safari objectives, use a named glitch attempt with Fly/Surf. Enter Safari, attempt early exit, decline departure and let the game return you inside. Save normally, reset and Continue; return to the gate, decline the new welcome offer and leave south.",
+      "Fly to Cinnabar, Surf east onto Route 20 and exhaust the remaining Safari steps. After the PA returns you to the gate, leave south into malformed Route 20. Record Glitch City entry and Fly away; avoid saving in malformed geometry. Accepted RA map scope remains pending.",
+      "Require \u00a5500 entry funding and usable Fly exit. Consume the remaining Safari counter, not an asserted new 500 after leaving. Decline the new Safari game after Continue. Do not wander off-map or save in malformed geometry; normal save/reset is not backup-file restoration."
+    ],
+    "requiredMoves": [
+      19,
+      57
+    ],
+    "requiredItems": [],
+    "measuredSpecial": [],
+    "consumedTrainerFlags": [],
+    "branches": [],
+    "evidence": [
+      {
+        "kind": "hardcore",
+        "description": "Confirm a valid hardcore unlock timestamp from the appropriate account feed."
+      },
+      {
+        "kind": "manual",
+        "description": "Observed entry into malformed Route 20 and safe Fly exit after protected Safari history.",
+        "key": "rule:57644:completed"
+      }
+    ],
+    "recoveryBoundary": "Retain a usable Fly carrier, Fly out after recording entry, and never save in malformed geometry. Validate this boundary before canonical execution.",
+    "sourceUrls": [
+      "https://retroachievements.org/achievement/57644",
+      "https://nintyconservation.github.io/glitchcity.wiki/glitchcity.wiki/Safari_Zone_exit_glitch.html",
+      "https://retroachievements.org/forums/topic/6082",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/SafariZoneGate.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/events/hidden_events/safari_game.asm"
+    ],
+    "auditStatus": "sourced",
+    "warnings": [
+      "Candidate procedure; target emulator/core and hardcore behavior have not been validated."
+    ],
+    "transport": "safari-exit",
+    "validationBlockers": [
+      "Target ROM hash, frontend/core/version, exact procedure, observed event and legitimate RA hardcore result have not been validated.",
+      "Current RA accepted map/coordinates and safe Route 20 entry/Fly exit remain unknown."
+    ]
+  },
+  {
+    "id": "candidate-57645",
+    "ruleId": 57645,
+    "title": "Special 226 Oak with the unchosen starter",
+    "attemptPolicy": {
+      "allowedKinds": [
+        "canonical",
+        "glitch"
+      ],
+      "placement": "postgame",
+      "protectedRunRequired": true
+    },
+    "prerequisites": [
+      {
+        "kind": "attempt-kind",
+        "allowed": [
+          "canonical",
+          "glitch"
+        ]
+      },
+      {
+        "kind": "move",
+        "moveId": 45
+      },
+      {
+        "kind": "special",
+        "value": 226,
+        "observed": true
+      },
+      {
+        "kind": "manual",
+        "key": "protected-main-oak-complete",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:physically-isolated",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:ditto-access",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:transform-confirmed",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:neutral-attack-stage",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:no-intervening-encounter",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:oak-battle-supplies",
+        "expected": true
+      }
+    ],
+    "instructions": [
+      "After protected completion, require an observed Special of 226 and validated encounter transport. Ditto copies the donor; apply successful Growls by player starter: Bulbasaur six (Oak Blastoise), Charmander five (Oak Venusaur), Squirtle four (Oak Charizard). Escape without another encounter, trigger Oak and defeat the correctly observed team. If trainers were cleared, the sourced PC-underflow fallback still needs runtime validation.",
+      "Oak teams are Tauros L66, Exeggutor L67, Arcanine L68, the correct unchosen evolved starter L69, and Gyarados L70. Observe this roster and win; a different starter victory is insufficient. Keep Growl until both the level jump and correct-roster Oak work are complete."
+    ],
+    "requiredMoves": [
+      45
+    ],
+    "requiredItems": [],
+    "measuredSpecial": [
+      226
+    ],
+    "consumedTrainerFlags": [],
+    "branches": [
+      {
+        "id": "starter-line",
+        "choiceKey": "starter",
+        "options": [
+          {
+            "value": "bulbasaur",
+            "dexNumbers": [
+              1,
+              2,
+              3
+            ]
+          },
+          {
+            "value": "charmander",
+            "dexNumbers": [
+              4,
+              5,
+              6
+            ]
+          },
+          {
+            "value": "squirtle",
+            "dexNumbers": [
+              7,
+              8,
+              9
+            ]
+          }
+        ]
+      }
+    ],
+    "evidence": [
+      {
+        "kind": "hardcore",
+        "description": "Confirm a valid hardcore unlock timestamp from the appropriate account feed."
+      },
+      {
+        "kind": "manual",
+        "description": "Observed branch-correct full Oak roster and victory.",
+        "key": "rule:57645:completed"
+      }
+    ],
+    "recoveryBoundary": "Use only the named attempt. Preserve original imported bytes; the companion never modifies or restores saves. Require an audited in-game recovery boundary before supported execution.",
+    "sourceUrls": [
+      "https://retroachievements.org/achievement/57645",
+      "https://pastebin.com/SPYqSQSL",
+      "https://retroachievements.org/forums/topic/6082",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/constants/pokemon_constants.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/core.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/ram/wram.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/move_effects/transform.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/items/inventory.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/Route24.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/constants/trainer_constants.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/data/trainers/parties.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/effects.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/data/battle/stat_modifiers.asm"
+    ],
+    "auditStatus": "sourced",
+    "warnings": [
+      "Candidate procedure; target emulator/core and hardcore behavior have not been validated."
+    ],
+    "transport": "pc-underflow",
+    "successfulGrowls": {
+      "bulbasaur": 6,
+      "charmander": 5,
+      "squirtle": 4
+    },
+    "validationBlockers": [
+      "Target ROM hash, frontend/core/version, exact procedure, observed event and legitimate RA hardcore result have not been validated.",
+      "PC-underflow transport boundaries, absolute slot 100, repeated-use safety, bag/PC/key items, trainer flags and ordinary postgame operation remain unvalidated; defer canonical execution or use separate SRAM."
+    ],
+    "oakRosters": {
+      "bulbasaur": {
+        "teamNumber": 1,
+        "successfulGrowls": 6,
+        "starter": "Blastoise",
+        "members": [
+          {
+            "species": "Tauros",
+            "level": 66
+          },
+          {
+            "species": "Exeggutor",
+            "level": 67
+          },
+          {
+            "species": "Arcanine",
+            "level": 68
+          },
+          {
+            "species": "Blastoise",
+            "level": 69
+          },
+          {
+            "species": "Gyarados",
+            "level": 70
+          }
+        ]
+      },
+      "charmander": {
+        "teamNumber": 2,
+        "successfulGrowls": 5,
+        "starter": "Venusaur",
+        "members": [
+          {
+            "species": "Tauros",
+            "level": 66
+          },
+          {
+            "species": "Exeggutor",
+            "level": 67
+          },
+          {
+            "species": "Arcanine",
+            "level": 68
+          },
+          {
+            "species": "Venusaur",
+            "level": 69
+          },
+          {
+            "species": "Gyarados",
+            "level": 70
+          }
+        ]
+      },
+      "squirtle": {
+        "teamNumber": 3,
+        "successfulGrowls": 4,
+        "starter": "Charizard",
+        "members": [
+          {
+            "species": "Tauros",
+            "level": 66
+          },
+          {
+            "species": "Exeggutor",
+            "level": 67
+          },
+          {
+            "species": "Arcanine",
+            "level": 68
+          },
+          {
+            "species": "Charizard",
+            "level": 69
+          },
+          {
+            "species": "Gyarados",
+            "level": 70
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "candidate-57655",
+    "ruleId": 57655,
+    "title": "Extend own collection to 151",
+    "attemptPolicy": {
+      "allowedKinds": [
+        "canonical",
+        "glitch"
+      ],
+      "placement": "postgame",
+      "protectedRunRequired": true
+    },
+    "prerequisites": [
+      {
+        "kind": "attempt-kind",
+        "allowed": [
+          "canonical",
+          "glitch"
+        ]
+      },
+      {
+        "kind": "manual",
+        "key": "protected-main-oak-complete",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:physically-isolated",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:ditto-access",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:transform-confirmed",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:neutral-attack-stage",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:no-intervening-encounter",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:own-collection",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:collection-start-below151",
+        "expected": true
+      },
+      {
+        "kind": "manual",
+        "key": "glitch:balls-and-storage",
+        "expected": true
+      }
+    ],
+    "instructions": [
+      "Extend the player\u2019s own completed collection toward 151 using legitimate national Dex registrations. For missing species, measure the matching internal species ID as donor Special, use a validated repeatable encounter transport, catch the species and evolve its family normally. Source constants supply each exact target value. Keep unknown glitch species outside the legitimate count and observe the final acquisition before confirming hardcore.",
+      "Use level seven (zero Growls) for ordinary missing-species catches. Measure each exact Special after training/candies/vitamins and change donors if a value is skipped; one donor is not promised to reach every value.",
+      "Use owned legitimate national Dex IDs 1\u2013151, excluding padding/glitch species. Start below 151 and observe the final legitimate acquisition in the correct hardcore subset. Public fixture saves are test inputs, never player collection provenance. No file editing, injected flags, backup restoration or accidental achievement-code loopholes."
+    ],
+    "requiredMoves": [],
+    "requiredItems": [],
+    "measuredSpecial": [],
+    "consumedTrainerFlags": [],
+    "branches": [],
+    "evidence": [
+      {
+        "kind": "hardcore",
+        "description": "Confirm a valid hardcore unlock timestamp from the appropriate account feed."
+      },
+      {
+        "kind": "manual",
+        "description": "Own legitimate collection begun below151 and observed final acquisition to151.",
+        "key": "rule:57655:completed"
+      }
+    ],
+    "recoveryBoundary": "Use only the named attempt. Preserve original imported bytes; the companion never modifies or restores saves. Require an audited in-game recovery boundary before supported execution.",
+    "sourceUrls": [
+      "https://retroachievements.org/achievement/57655",
+      "https://pastebin.com/SPYqSQSL",
+      "https://retroachievements.org/forums/topic/6082",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/constants/pokemon_constants.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/core.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/ram/wram.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/battle/move_effects/transform.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/items/inventory.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/Route24.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/pokemon/add_mon.asm",
+      "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/engine/pokemon/evos_moves.asm"
+    ],
+    "auditStatus": "sourced",
+    "warnings": [
+      "Candidate procedure; target emulator/core and hardcore behavior have not been validated."
+    ],
+    "transport": "pc-underflow",
+    "validationBlockers": [
+      "Target ROM hash, frontend/core/version, exact procedure, observed event and legitimate RA hardcore result have not been validated.",
+      "PC-underflow transport boundaries, absolute slot 100, repeated-use safety, bag/PC/key items, trainer flags and ordinary postgame operation remain unvalidated; defer canonical execution or use separate SRAM.",
+      "Repeatable encounters, own-collection provenance and the observed final legitimate below151\u2192151 transition need runtime/RA evidence."
+    ],
+    "collectionTargets": [
+      {
+        "dexNumber": 151,
+        "special": 21,
+        "followUp": "Catch Mew; may also serve the level jump."
+      },
+      {
+        "dexNumber": 94,
+        "special": 14,
+        "followUp": "Direct catch replaces trade evolution."
+      },
+      {
+        "dexNumber": 76,
+        "special": 49,
+        "followUp": "Direct catch replaces trade evolution."
+      },
+      {
+        "dexNumber": 68,
+        "special": 126,
+        "followUp": "Direct catch replaces trade evolution."
+      },
+      {
+        "dexNumber": 65,
+        "special": 149,
+        "followUp": "Direct catch replaces trade evolution."
+      },
+      {
+        "dexNumber": 1,
+        "special": 153,
+        "followUp": "Catch only unowned starter family; evolve normally."
+      },
+      {
+        "dexNumber": 4,
+        "special": 176,
+        "followUp": "Catch only unowned starter family; evolve normally."
+      },
+      {
+        "dexNumber": 7,
+        "special": 177,
+        "followUp": "Catch only unowned starter family; evolve normally."
+      },
+      {
+        "dexNumber": 27,
+        "special": 96,
+        "followUp": "Evolve normally."
+      },
+      {
+        "dexNumber": 37,
+        "special": 82,
+        "followUp": "Evolve normally."
+      },
+      {
+        "dexNumber": 52,
+        "special": 77,
+        "followUp": "Evolve normally."
+      },
+      {
+        "dexNumber": 69,
+        "special": 188,
+        "followUp": "Evolve normally."
+      },
+      {
+        "dexNumber": 126,
+        "special": 51,
+        "followUp": "Direct catch."
+      },
+      {
+        "dexNumber": 127,
+        "special": 29,
+        "followUp": "Direct catch."
+      },
+      {
+        "dexNumber": 140,
+        "special": 90,
+        "followUp": "Opposite fossil family only; evolve."
+      },
+      {
+        "dexNumber": 138,
+        "special": 98,
+        "followUp": "Opposite fossil family only; evolve."
+      },
+      {
+        "dexNumber": 106,
+        "special": 43,
+        "followUp": "Unchosen dojo reward."
+      },
+      {
+        "dexNumber": 107,
+        "special": 44,
+        "followUp": "Unchosen dojo reward."
+      },
+      {
+        "dexNumber": 133,
+        "special": 102,
+        "followUp": "Additional individuals for missing stone evolutions."
+      }
+    ]
+  }
+]

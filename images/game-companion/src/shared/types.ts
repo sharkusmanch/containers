@@ -74,6 +74,10 @@ export interface Achievement {
 }
 
 export interface AchievementsResponse {
+  /** RA account whose hardcore progress is reported; absent for Steam. */
+  accountIdentity?: string;
+  /** RA last successful upstream fetch time; unchanged by retries/stale cache reads. */
+  fetchedAt?: string;
   source: Source;
   id: string;
   title: string;

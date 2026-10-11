@@ -12,6 +12,22 @@ const base = {
 };
 
 describe("loadConfig", () => {
+  it("defaults to a closed additional RA allowlist", () => {
+    expect(loadConfig(base).additionalRaGameIds).toEqual([]);
+  });
+  it("reads the three explicitly configured Red game IDs", () => {
+    expect(
+      loadConfig({ ...base, RA_ADDITIONAL_GAME_IDS: "724,16084,11632,724" }).additionalRaGameIds,
+    ).toEqual(["724", "16084", "11632"]);
+  });
+  it.each(["0", "-1", "01", "abc", "724,,16084", "724;16084", "9007199254740992"])(
+    "rejects malformed RA allowlist %s",
+    (raw) => {
+      expect(() => loadConfig({ ...base, RA_ADDITIONAL_GAME_IDS: raw })).toThrow(
+        /RA_ADDITIONAL_GAME_IDS/,
+      );
+    },
+  );
   it("applies defaults", () => {
     const c = loadConfig(base);
     expect(c.port).toBe(8080);

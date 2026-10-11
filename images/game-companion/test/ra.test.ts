@@ -6,6 +6,18 @@ import { fakeFetch, fixture } from "./helpers.js";
 const opts = { apiKey: "KEY", username: "tester" };
 
 describe("parseRaDate", () => {
+  it.each([
+    "2026-02-30 00:00:00",
+    "2026-13-01 00:00:00",
+    "2026-01-01 24:00:00",
+    "2026-01-01 00:60:00",
+    "2026-01-01 00:00:60",
+  ])("rejects invalid raw components %s", (raw) => {
+    expect(parseRaDate(raw)).toBeNaN();
+  });
+  it("accepts a real leap day", () => {
+    expect(parseRaDate("2024-02-29 12:34:56")).toBe(Date.UTC(2024, 1, 29, 12, 34, 56));
+  });
   it("reads the timestamp as UTC", () => {
     expect(parseRaDate("2026-01-03 04:05:06")).toBe(Date.UTC(2026, 0, 3, 4, 5, 6));
   });
@@ -124,6 +136,7 @@ describe("RaClient", () => {
     ]);
     const g = await new RaClient({ ...opts, fetchFn: f.fn }).gameProgress("30002");
     expect(g?.title).toBe("Test Quest");
+    expect(g?.accountIdentity).toBe("tester");
     expect(g?.distinctPlayers).toBe(1000);
     expect(g?.achievements.map((a) => a.ID)).toEqual([1, 2, 3, 4]);
     expect(f.calls[0]?.url).toContain("g=30002");

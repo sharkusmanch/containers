@@ -1,0 +1,693 @@
+{
+  "auditedAt": "2026-10-11",
+  "oracle": "Independent fixed-offset decoder; no companion imports. Assertions use independentFacts only; earlier parser-smoke outputs intentionally excluded.",
+  "referenceDisassemblyCommit": "af519899719f0754965776faac0e836a3b906e6d",
+  "runtimeGateEvidence": false,
+  "redistribution": "Metadata only. No explicit binary redistribution licence established; original bytes remain ignored and unchanged.",
+  "fixtures": [
+    {
+      "file": "digiex-yoshira.sav",
+      "sha256": "d2e0eaeead454cae289511a2ce739ae19be224ceed4f080067c787cd6cbd3635",
+      "sizeBytes": 32768,
+      "source": {
+        "sourceUrl": "https://digiex.net/threads/pokemon-gen1-yoshira-mew-red-distribution-cart-save-download.15327/",
+        "sourceTitle": "Pokemon GEN1 YOSHIRA Mew Red Distribution Cart Save Download",
+        "downloadUrl": "https://digiex.net/attachments/pokemon-gen-1-yoshira-mew-red-distribution-cart-save-zip.16147/",
+        "containerFile": "digiex-yoshira.zip",
+        "originalFilename": "YOSHIRA.sav",
+        "author": "Deoxyz; Digiex post by Professor Oak; original cartridge holder credited by source",
+        "claimedGame": "Pokemon Red original retail distribution cartridge",
+        "claimedRegion": "USA 1999 event; source reports ordinary retail Red ROM",
+        "format": "raw 32768-byte battery SRAM",
+        "classification": "source-attributed cartridge dump, distribution/edit-derived unusual state; archived integrity negative fixture",
+        "captureCore": null,
+        "noEditGuarantee": false,
+        "notes": "Source explicitly admits moving some party Mews back into boxes. This is not an unmodified original dump. Main checksum valid; both archived aggregate checksums and several individual checksums fail. Source has a cartridge-dump narrative but our audit did not observe dumping.",
+        "redistributionLicense": "No explicit binary redistribution license established; keep download local, do not vendor.",
+        "containerSha256": "c23a60e04e1d92548565da91872cf3903e00fc84ba138011b0533691fc8227f7"
+      },
+      "independentFacts": {
+        "badgeMask": 0,
+        "battleStyle": "shift",
+        "mapId": 41,
+        "playtimeRaw": [
+          2,
+          0,
+          10,
+          30,
+          16
+        ],
+        "hallOfFameCount": 0,
+        "daycareOccupancy": 0,
+        "currentBoxIndex": 9,
+        "archivesInitialized": true,
+        "partyCount": 5,
+        "ownedDexCount": 27,
+        "seenDexCount": 27,
+        "liveBoxCount": 18,
+        "mainChecksumValid": true,
+        "party": [
+          {
+            "rawSpecies": 21,
+            "dexNumber": 151,
+            "level": 5,
+            "actualSpecial": 15
+          },
+          {
+            "rawSpecies": 21,
+            "dexNumber": 151,
+            "level": 5,
+            "actualSpecial": 15
+          },
+          {
+            "rawSpecies": 21,
+            "dexNumber": 151,
+            "level": 5,
+            "actualSpecial": 15
+          },
+          {
+            "rawSpecies": 21,
+            "dexNumber": 151,
+            "level": 5,
+            "actualSpecial": 15
+          },
+          {
+            "rawSpecies": 21,
+            "dexNumber": 151,
+            "level": 5,
+            "actualSpecial": 15
+          }
+        ],
+        "archiveBoxes": [
+          {
+            "index": 0,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": false
+          },
+          {
+            "index": 1,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 2,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 3,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 4,
+            "activeArchive": false,
+            "count": 19,
+            "checksumValid": false
+          },
+          {
+            "index": 5,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 6,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 7,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 8,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": false
+          },
+          {
+            "index": 9,
+            "activeArchive": true,
+            "count": 18,
+            "checksumValid": false
+          },
+          {
+            "index": 10,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": false
+          },
+          {
+            "index": 11,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": false
+          }
+        ],
+        "selectedEvents": {
+          "EVENT_GOT_STARTER": true,
+          "EVENT_GOT_POKEDEX": true,
+          "EVENT_BEAT_BROCK": false,
+          "EVENT_BEAT_KOGA": false,
+          "EVENT_GAVE_GOLD_TEETH": false,
+          "EVENT_IN_SAFARI_ZONE": false,
+          "EVENT_BEAT_SILPH_CO_RIVAL": false,
+          "EVENT_GOT_MASTER_BALL": false,
+          "EVENT_BEAT_SILPH_CO_GIOVANNI": false,
+          "EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI": false
+        },
+        "pcItemCountValid": true
+      }
+    },
+    {
+      "file": "extrabytez-red.dat",
+      "sha256": "2c808715c8e0e73948685d3dd97eecf5f160f83c95f411196ca89ec05400d0cf",
+      "sizeBytes": 32768,
+      "source": {
+        "sourceUrl": "https://github.com/ExtraBytez/Pokemon/tree/298f67c114aaafbdb0f4d99a5361fcfb20db27e7",
+        "sourceTitle": "My Pokemon Save Files \u2014 Red/sav.dat",
+        "downloadUrl": "https://raw.githubusercontent.com/ExtraBytez/Pokemon/298f67c114aaafbdb0f4d99a5361fcfb20db27e7/Red/sav.dat",
+        "originalFilename": "Red/sav.dat",
+        "author": "ExtraBytez",
+        "claimedGame": "Pokemon Red by directory name",
+        "claimedRegion": "not specified",
+        "format": "32768-byte sav.dat, Western SRAM-compatible; probable VC naming",
+        "classification": "auxiliary public .dat compatibility fixture, unverified platform/edit provenance",
+        "captureCore": null,
+        "noEditGuarantee": false,
+        "notes": "CurrentBox bit7 clear: archived banks unavailable regardless of valid aggregate checksum. Individual archive failures are non-applicable. No starter/Brock/daycare gate coverage. Original dat extension preserved; no conversion.",
+        "redistributionLicense": "No explicit binary redistribution license established; keep download local, do not vendor."
+      },
+      "independentFacts": {
+        "badgeMask": 255,
+        "battleStyle": "shift",
+        "mapId": 118,
+        "playtimeRaw": [
+          6,
+          0,
+          47,
+          12,
+          29
+        ],
+        "hallOfFameCount": 1,
+        "daycareOccupancy": 0,
+        "currentBoxIndex": 0,
+        "archivesInitialized": false,
+        "partyCount": 6,
+        "ownedDexCount": 18,
+        "seenDexCount": 110,
+        "liveBoxCount": 2,
+        "mainChecksumValid": true,
+        "party": [
+          {
+            "rawSpecies": 85,
+            "dexNumber": 26,
+            "level": 60,
+            "actualSpecial": 133
+          },
+          {
+            "rawSpecies": 180,
+            "dexNumber": 6,
+            "level": 60,
+            "actualSpecial": 125
+          },
+          {
+            "rawSpecies": 22,
+            "dexNumber": 130,
+            "level": 61,
+            "actualSpecial": 140
+          },
+          {
+            "rawSpecies": 151,
+            "dexNumber": 18,
+            "level": 60,
+            "actualSpecial": 111
+          },
+          {
+            "rawSpecies": 125,
+            "dexNumber": 12,
+            "level": 60,
+            "actualSpecial": 108
+          },
+          {
+            "rawSpecies": 126,
+            "dexNumber": 68,
+            "level": 60,
+            "actualSpecial": 102
+          }
+        ],
+        "archiveBoxes": [
+          {
+            "index": 0,
+            "activeArchive": true,
+            "count": 2,
+            "checksumValid": false
+          },
+          {
+            "index": 1,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 2,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 3,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 4,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 5,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": false
+          },
+          {
+            "index": 6,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 7,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 8,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 9,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 10,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 11,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": false
+          }
+        ],
+        "selectedEvents": {
+          "EVENT_GOT_STARTER": true,
+          "EVENT_GOT_POKEDEX": true,
+          "EVENT_BEAT_BROCK": true,
+          "EVENT_BEAT_KOGA": true,
+          "EVENT_GAVE_GOLD_TEETH": false,
+          "EVENT_IN_SAFARI_ZONE": false,
+          "EVENT_BEAT_SILPH_CO_RIVAL": false,
+          "EVENT_GOT_MASTER_BALL": true,
+          "EVENT_BEAT_SILPH_CO_GIOVANNI": true,
+          "EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI": true
+        },
+        "pcItemCountValid": true
+      }
+    },
+    {
+      "file": "roc-red.dat",
+      "sha256": "45b9a9cceaa631b3ea5db9304c9afc37b705de81f729ae6fdb6bdb9d64b30839",
+      "sizeBytes": 32768,
+      "source": {
+        "sourceUrl": "https://github.com/ReignOfComputer/RoCs-PC/tree/49ea65771b8777fc4f4098c36c125bf1af039d4f/01%20-%20Gen%20I%20-%20RBY%20Collection",
+        "sourceTitle": "RoC's PC \u2014 Gen I Red 01710 VC save",
+        "downloadUrl": "https://raw.githubusercontent.com/ReignOfComputer/RoCs-PC/49ea65771b8777fc4f4098c36c125bf1af039d4f/01%20-%20Gen%20I%20-%20RBY%20Collection/Save%20Data/20160424003402%20-%20Red%2001710/00001710/sav.dat",
+        "originalFilename": "20160424003402 - Red 01710/00001710/sav.dat",
+        "author": "ReignOfComputer",
+        "claimedGame": "Pokemon Red English VC (01710; source forum collection labels ENG)",
+        "claimedRegion": "English VC, exact retail region unestablished",
+        "format": "raw 32768-byte sav.dat battery image",
+        "classification": "auxiliary VC full-Dex/postgame collection fixture, edits/legitimacy not assured",
+        "captureCore": "Nintendo 3DS Virtual Console source claim, exact build unknown",
+        "noEditGuarantee": false,
+        "notes": "Source README disclaims universal legitimacy. Forum discussion admits shortcuts in some games; not proof of particular edits here. Never claim a pristine runtime capture. Recursive repository tree was truncated; this known exact path was verified and downloaded, no completeness claim.",
+        "redistributionLicense": "No explicit binary redistribution license established; keep download local, do not vendor."
+      },
+      "independentFacts": {
+        "badgeMask": 255,
+        "battleStyle": "set",
+        "mapId": 130,
+        "playtimeRaw": [
+          3,
+          0,
+          53,
+          18,
+          26
+        ],
+        "hallOfFameCount": 1,
+        "daycareOccupancy": 0,
+        "currentBoxIndex": 11,
+        "archivesInitialized": true,
+        "partyCount": 6,
+        "ownedDexCount": 151,
+        "seenDexCount": 151,
+        "liveBoxCount": 0,
+        "mainChecksumValid": true,
+        "party": [
+          {
+            "rawSpecies": 180,
+            "dexNumber": 6,
+            "level": 100,
+            "actualSpecial": 250
+          },
+          {
+            "rawSpecies": 7,
+            "dexNumber": 34,
+            "level": 100,
+            "actualSpecial": 242
+          },
+          {
+            "rawSpecies": 84,
+            "dexNumber": 25,
+            "level": 100,
+            "actualSpecial": 196
+          },
+          {
+            "rawSpecies": 97,
+            "dexNumber": 28,
+            "level": 100,
+            "actualSpecial": 204
+          },
+          {
+            "rawSpecies": 28,
+            "dexNumber": 9,
+            "level": 100,
+            "actualSpecial": 238
+          },
+          {
+            "rawSpecies": 154,
+            "dexNumber": 3,
+            "level": 100,
+            "actualSpecial": 280
+          }
+        ],
+        "archiveBoxes": [
+          {
+            "index": 0,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 1,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 2,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 3,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 4,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 5,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 6,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 7,
+            "activeArchive": false,
+            "count": 11,
+            "checksumValid": true
+          },
+          {
+            "index": 8,
+            "activeArchive": false,
+            "count": 9,
+            "checksumValid": true
+          },
+          {
+            "index": 9,
+            "activeArchive": false,
+            "count": 1,
+            "checksumValid": true
+          },
+          {
+            "index": 10,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 11,
+            "activeArchive": true,
+            "count": 0,
+            "checksumValid": true
+          }
+        ],
+        "selectedEvents": {
+          "EVENT_GOT_STARTER": true,
+          "EVENT_GOT_POKEDEX": true,
+          "EVENT_BEAT_BROCK": true,
+          "EVENT_BEAT_KOGA": true,
+          "EVENT_GAVE_GOLD_TEETH": false,
+          "EVENT_IN_SAFARI_ZONE": false,
+          "EVENT_BEAT_SILPH_CO_RIVAL": true,
+          "EVENT_GOT_MASTER_BALL": true,
+          "EVENT_BEAT_SILPH_CO_GIOVANNI": true,
+          "EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI": true
+        },
+        "pcItemCountValid": false
+      }
+    },
+    {
+      "file": "zophar-rey.sav",
+      "sha256": "193a4e8ac5b13297c616dc0c03c38091b23f4f9ef19f7490c052757a69e03d30",
+      "sizeBytes": 31315,
+      "source": {
+        "sourceUrl": "https://www.zophar.net/savestates/gameboy/pokemon-red-version.html",
+        "sourceTitle": "Pokemon: Red Version Savestates \u2014 At Indigo Plateu With 151 Pokemons",
+        "downloadUrl": "https://www.zophar.net/download_file/5719",
+        "containerFile": "zophar-rey.zip",
+        "originalFilename": "pokered.sav",
+        "author": "Rey",
+        "claimedGame": "Pokemon Red Version",
+        "claimedRegion": "not specified",
+        "format": "31315-byte .sav plus .frm companion",
+        "classification": "rejected size/format negative fixture",
+        "captureCore": null,
+        "noEditGuarantee": false,
+        "notes": "Possibly emulator-specific; exact format unestablished. Never pad, convert, or claim standard battery-save compatibility.",
+        "redistributionLicense": "No explicit binary redistribution license established; keep download local, do not vendor.",
+        "containerSha256": "a4af31cbdbafc777eb258a2e6f026e1006fe4a0d80ac1464bd07251aef71b3c2"
+      }
+    },
+    {
+      "file": "zophar-rog.sav",
+      "sha256": "9f3e7089075a50ff280e286e96de9fef08ffde98cd034b77dfca6a25107ff7a1",
+      "sizeBytes": 32768,
+      "source": {
+        "sourceUrl": "https://www.zophar.net/savestates/gameboy/pokemon-red-version.html",
+        "sourceTitle": "Pokemon: Red Version Savestates \u2014 All 151 pokemon caught and in PC. Elite four defeated.",
+        "downloadUrl": "https://www.zophar.net/download_file/22661",
+        "containerFile": "zophar-rog.zip",
+        "originalFilename": "Pokemon Red.sav",
+        "author": "ROG",
+        "claimedGame": "Pokemon Red Version",
+        "claimedRegion": "not specified",
+        "format": "raw 32768-byte battery SRAM",
+        "classification": "full-Dex/postgame external fixture; edit and emulator provenance unverified",
+        "captureCore": null,
+        "noEditGuarantee": false,
+        "notes": "Level-100 party and 4h54m save clock do not prove editing or ordinary in-game provenance. Several story flags are unset despite full badges/Dex/HoF. Do not present as a clean gameplay progression oracle.",
+        "redistributionLicense": "No explicit binary redistribution license established; keep download local, do not vendor.",
+        "containerSha256": "e6358787023f3a120c010bb34b1dd29d707b581f8985ad20c80eb8d8b8e696c6"
+      },
+      "independentFacts": {
+        "badgeMask": 255,
+        "battleStyle": "shift",
+        "mapId": 9,
+        "playtimeRaw": [
+          4,
+          0,
+          54,
+          12,
+          0
+        ],
+        "hallOfFameCount": 1,
+        "daycareOccupancy": 0,
+        "currentBoxIndex": 7,
+        "archivesInitialized": true,
+        "partyCount": 6,
+        "ownedDexCount": 151,
+        "seenDexCount": 151,
+        "liveBoxCount": 5,
+        "mainChecksumValid": true,
+        "party": [
+          {
+            "rawSpecies": 73,
+            "dexNumber": 146,
+            "level": 100,
+            "actualSpecial": 260
+          },
+          {
+            "rawSpecies": 88,
+            "dexNumber": 147,
+            "level": 100,
+            "actualSpecial": 113
+          },
+          {
+            "rawSpecies": 89,
+            "dexNumber": 148,
+            "level": 100,
+            "actualSpecial": 149
+          },
+          {
+            "rawSpecies": 66,
+            "dexNumber": 149,
+            "level": 100,
+            "actualSpecial": 206
+          },
+          {
+            "rawSpecies": 131,
+            "dexNumber": 150,
+            "level": 100,
+            "actualSpecial": 325
+          },
+          {
+            "rawSpecies": 21,
+            "dexNumber": 151,
+            "level": 100,
+            "actualSpecial": 203
+          }
+        ],
+        "archiveBoxes": [
+          {
+            "index": 0,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 1,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 2,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 3,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 4,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 5,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 6,
+            "activeArchive": false,
+            "count": 20,
+            "checksumValid": true
+          },
+          {
+            "index": 7,
+            "activeArchive": true,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 8,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 9,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 10,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          },
+          {
+            "index": 11,
+            "activeArchive": false,
+            "count": 0,
+            "checksumValid": true
+          }
+        ],
+        "selectedEvents": {
+          "EVENT_GOT_STARTER": true,
+          "EVENT_GOT_POKEDEX": true,
+          "EVENT_BEAT_BROCK": true,
+          "EVENT_BEAT_KOGA": true,
+          "EVENT_GAVE_GOLD_TEETH": false,
+          "EVENT_IN_SAFARI_ZONE": false,
+          "EVENT_BEAT_SILPH_CO_RIVAL": false,
+          "EVENT_GOT_MASTER_BALL": false,
+          "EVENT_BEAT_SILPH_CO_GIOVANNI": false,
+          "EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI": true
+        },
+        "pcItemCountValid": true
+      }
+    }
+  ]
+}

@@ -16,6 +16,7 @@ function parts(over: Record<string, unknown> = {}) {
   return {
     staticDir: "x",
     defaultPins: [] as string[],
+    additionalRaGameIds: [] as string[],
     detector: {
       current: () => ({
         game: { source: "steam" as const, id: "10", title: "Zeta" },
@@ -394,6 +395,28 @@ describe("guide where and progress", () => {
 });
 
 describe("achievements allowlist", () => {
+  it("allows only explicitly configured RA IDs without detector or guide history", async () => {
+    const calls: [string, string, unknown][] = [];
+    const d = buildDeps(
+      parts({
+        additionalRaGameIds: ["724", "16084", "11632"],
+        detector: {
+          current: () => ({ game: null, state: "none" as const, observedAt: null, stale: false }),
+        },
+        index: { ...parts().index, lookup: () => [] },
+        achievements: {
+          get: async (source: "steam" | "ra", id: string, opts: unknown) => {
+            calls.push([source, id, opts]);
+            return null;
+          },
+        },
+      }),
+    );
+    for (const id of ["724", "16084", "11632"]) await d.achievements("ra", id);
+    await d.achievements("ra", "999");
+    await d.achievements("steam", "724");
+    expect(calls).toEqual(["724", "16084", "11632"].map((id) => ["ra", id, { priority: false }]));
+  });
   function gated(over: Record<string, unknown> = {}) {
     const asked: string[] = [];
     const achievements = {

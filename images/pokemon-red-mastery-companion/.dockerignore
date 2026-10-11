@@ -1,0 +1,7 @@
+.git
+**/node_modules
+**/dist
+**/private
+**/__pycache__
+**/*.sav
+**/*.srm

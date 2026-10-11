@@ -1,0 +1,2390 @@
+[
+  {
+    "id": "pallet",
+    "order": 0,
+    "area": "Pallet and Viridian",
+    "title": "Pallet and Viridian",
+    "instructions": [
+      "Collect the initial gifts before registering another species.",
+      "Accept Route 1 Potion with bag room, deliver Oak’s Parcel, receive Pokédex and Town Map; win Route 22 Rival, then receive Oak’s five balls before catching/evolving."
+    ],
+    "ruleIds": [
+      108020,
+      108021,
+      108022,
+      108023
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": []
+  },
+  {
+    "id": "brock",
+    "order": 1,
+    "area": "Pewter and Viridian Forest",
+    "title": "Pewter and Viridian Forest",
+    "instructions": [
+      "Register the chosen starter line and all first-phase species; box grinders before Brock.",
+      "Before gym music, check the exact 21-species branch collection, box every party member above level 14, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
+      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader.",
+      "Catch and evolve the first Oak group only after Parting Gift. Finish the Forest’s three Bug Catchers and five pickups; its encounter-free traversal is a separate repeatable session."
+    ],
+    "ruleIds": [
+      4401,
+      4409,
+      108024,
+      108026,
+      108042,
+      108058,
+      108370,
+      165606,
+      165607,
+      165608,
+      165609,
+      165610,
+      165611,
+      165612,
+      165613,
+      165614,
+      165615,
+      165616,
+      165617,
+      165618,
+      165619,
+      165620,
+      165621,
+      165622,
+      165623,
+      165624,
+      165625,
+      165626,
+      165627
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "pallet"
+    ],
+    "checkpoint": {
+      "leader": "Brock",
+      "badgeMask": 1,
+      "ownedCount": 21,
+      "requiredDex": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        25,
+        29,
+        30,
+        32,
+        33
+      ],
+      "branchGroups": [
+        {
+          "id": "starter-line",
+          "choiceKey": "starter",
+          "options": [
+            {
+              "value": "bulbasaur",
+              "dexNumbers": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": "charmander",
+              "dexNumbers": [
+                4,
+                5,
+                6
+              ]
+            },
+            {
+              "value": "squirtle",
+              "dexNumbers": [
+                7,
+                8,
+                9
+              ]
+            }
+          ]
+        }
+      ],
+      "levelCap": 14,
+      "ruleIds": [
+        165627,
+        4401,
+        108058
+      ]
+    }
+  },
+  {
+    "id": "moon",
+    "order": 2,
+    "area": "Mt. Moon",
+    "title": "Mt. Moon",
+    "instructions": [
+      "Choose a fossil, obtain two Moon Stones and the seller’s Magikarp.",
+      "Route 3 and Mt. Moon follow Brock. Buy the level-5 Magikarp from Mt. Moon Pokémon Center for the six-gift history. Register a chosen fossil branch and preserve it for Cinnabar."
+    ],
+    "ruleIds": [
+      4414,
+      108025
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "brock"
+    ]
+  },
+  {
+    "id": "misty-prep",
+    "order": 3,
+    "area": "Cerulean to Vermilion",
+    "title": "Cerulean to Vermilion",
+    "instructions": [
+      "Explore south before Misty for trades, Diglett’s Cave and the collection.",
+      "Visit Routes 24/25, rescue Bill for the S.S. Ticket, travel south through Routes 5/6 to Vermilion; obtain Old Rod, Bike Voucher/Bicycle, Itemfinder and Flash via Diglett’s Cave. Trade Spearow for Farfetch’d and Abra for Mr. Mime. Use exactly two distinct Mt. Moon stone evolutions before Misty."
+    ],
+    "ruleIds": [
+      108049,
+      165628,
+      165629,
+      165630,
+      165631,
+      165632,
+      165633,
+      165634,
+      165635,
+      165636,
+      165637,
+      165638,
+      165639,
+      165640,
+      165641,
+      165642,
+      165643,
+      165644,
+      165645,
+      165646,
+      165647,
+      165648,
+      165649,
+      165650,
+      165651,
+      165652,
+      165653,
+      108028
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "moon"
+    ]
+  },
+  {
+    "id": "anne",
+    "order": 4,
+    "area": "S.S. Anne",
+    "title": "S.S. Anne",
+    "instructions": [
+      "Finish sleeping-Pokémon conversation, 16 trainers and eight optional pickups before captain/Cut/departure.",
+      "Talk to the 2F sleeping-Pokémon passenger and finish all 16 optional trainers/eight items, then Rival/captain/Cut. Exit after Cut causes departure."
+    ],
+    "ruleIds": [
+      108027,
+      108029,
+      108030,
+      108138
+    ],
+    "prerequisites": [],
+    "preserves": [
+      {
+        "id": "reserve-108029",
+        "resource": "session",
+        "description": "Finish ship obligations before captain/Cut/departure.",
+        "consumingRuleId": 108030,
+        "releaseAfterRuleId": 108030
+      }
+    ],
+    "afterStepIds": [
+      "misty-prep"
+    ]
+  },
+  {
+    "id": "misty",
+    "order": 5,
+    "area": "Cerulean Gym",
+    "title": "Cerulean Gym",
+    "instructions": [
+      "Check 47 exact entries including two distinct Moon Stone evolutions before entering.",
+      "Before gym music, check the exact 47-species branch collection, box every party member above level 21, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
+      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+    ],
+    "ruleIds": [
+      4402,
+      108059,
+      165654
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "anne"
+    ],
+    "checkpoint": {
+      "leader": "Misty",
+      "badgeMask": 2,
+      "ownedCount": 47,
+      "requiredDex": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        29,
+        30,
+        32,
+        33,
+        35,
+        39,
+        41,
+        42,
+        43,
+        44,
+        46,
+        47,
+        50,
+        51,
+        56,
+        57,
+        63,
+        64,
+        74,
+        75,
+        83,
+        96,
+        97,
+        122,
+        129,
+        130
+      ],
+      "branchGroups": [
+        {
+          "id": "starter-line",
+          "choiceKey": "starter",
+          "options": [
+            {
+              "value": "bulbasaur",
+              "dexNumbers": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": "charmander",
+              "dexNumbers": [
+                4,
+                5,
+                6
+              ]
+            },
+            {
+              "value": "squirtle",
+              "dexNumbers": [
+                7,
+                8,
+                9
+              ]
+            }
+          ]
+        },
+        {
+          "id": "moon-stones",
+          "options": [
+            {
+              "value": "31",
+              "dexNumbers": [
+                31
+              ]
+            },
+            {
+              "value": "34",
+              "dexNumbers": [
+                34
+              ]
+            },
+            {
+              "value": "36",
+              "dexNumbers": [
+                36
+              ]
+            },
+            {
+              "value": "40",
+              "dexNumbers": [
+                40
+              ]
+            }
+          ],
+          "minimumDistinct": 2
+        }
+      ],
+      "levelCap": 21,
+      "ruleIds": [
+        165654,
+        4402,
+        108059
+      ]
+    }
+  },
+  {
+    "id": "celadon",
+    "order": 6,
+    "area": "Celadon and Rocket Hideout",
+    "title": "Celadon and Rocket Hideout",
+    "instructions": [
+      "Collect Eevee, stones, Fly and coins; obtain Scope but store it before the ghost.",
+      "Travel Route 9/10 and Rock Tunnel with Flash, then Route 8 to Celadon. Complete the eleven pre-Scope Hideout Rockets and 15 pickups before Giovanni; collect Scope afterwards, buy Poké Doll and box Scope. Preserve remaining Moon Stones and buy the needed evolution stones."
+    ],
+    "ruleIds": [
+      108035,
+      108036,
+      108037,
+      108038,
+      108039,
+      108179,
+      108180,
+      108182,
+      57639
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "misty"
+    ]
+  },
+  {
+    "id": "tower",
+    "order": 7,
+    "area": "Lavender Tower",
+    "title": "Lavender Tower",
+    "instructions": [
+      "Use Poké Doll without Scope in bag, then complete Tower and flute."
+    ],
+    "ruleIds": [
+      4418,
+      108040,
+      108041
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "celadon"
+    ]
+  },
+  {
+    "id": "safari-prep",
+    "order": 8,
+    "area": "Fuchsia, Safari, Dojo and fishing",
+    "title": "Fuchsia, Safari, Dojo and fishing",
+    "instructions": [
+      "Catch pre-Surf species; take HM03 and Gold Teeth only, deferring eleven optional Safari objects.",
+      "Before Koga obtain all three rods, Safari catches, HM03/Gold Teeth, Dojo prize, Eevee evolution, remaining Moon Stone evolutions, Game Corner prizes, NPC trades and the 105-entry collection. Lapras requires the ordered Silph visit next. Keep every optional Safari pickup untouched."
+    ],
+    "ruleIds": [
+      4416,
+      4419,
+      108043,
+      108044,
+      108046,
+      108047,
+      108048,
+      108139,
+      108173,
+      108183,
+      618978,
+      618979,
+      618980,
+      618981,
+      165655,
+      165656,
+      165657,
+      165658,
+      165659,
+      165660,
+      165661,
+      165662,
+      165663,
+      165664,
+      165665,
+      165666,
+      165667,
+      165668,
+      165669,
+      165670,
+      165671,
+      165672,
+      165673,
+      165674,
+      165675,
+      165676,
+      165677,
+      165678,
+      165679,
+      165680,
+      165681,
+      165682,
+      165683,
+      165684,
+      165685,
+      165686,
+      165687,
+      165688,
+      165689,
+      165690,
+      165691,
+      165692,
+      165693,
+      165694,
+      165695,
+      165696,
+      165697,
+      165698,
+      165699,
+      165700,
+      165701,
+      165702,
+      165703,
+      165704,
+      165705,
+      165706,
+      165707,
+      165708,
+      165709,
+      165710,
+      165711,
+      165712
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "tower"
+    ]
+  },
+  {
+    "id": "silph-rival",
+    "order": 9,
+    "area": "Silph Co. Rival",
+    "title": "Silph Co. Rival",
+    "instructions": [
+      "Reach Rival with at most one trainer defeated.",
+      "Follow the 5F lower-guard/Card Key route and record Rival arrival with at most one ordinary trainer defeated. No general Silph trainer sweep yet."
+    ],
+    "ruleIds": [
+      108069
+    ],
+    "prerequisites": [],
+    "preserves": [
+      {
+        "id": "reserve-108069",
+        "resource": "trainer",
+        "description": "Defer every Silph trainer except the single required guard until Rival access.",
+        "consumingRuleId": 108069,
+        "releaseAfterRuleId": 108069
+      }
+    ],
+    "afterStepIds": [
+      "safari-prep"
+    ]
+  },
+  {
+    "id": "silph-clear",
+    "order": 10,
+    "area": "Silph Co. clearance",
+    "title": "Silph Co. clearance",
+    "instructions": [
+      "Clear remaining trainers/items/doors before Giovanni, and receive Lapras.",
+      "After recorded Rival arrival, finish all 30 trainers, 16 physical pickups, 20 doors and extra TM36 gift before Giovanni. Receive Lapras for Oak105. NPC disappearance alone cannot prove trainer victories."
+    ],
+    "ruleIds": [
+      108050,
+      108051
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "silph-rival"
+    ]
+  },
+  {
+    "id": "koga",
+    "order": 11,
+    "area": "Fuchsia Gym",
+    "title": "Fuchsia Gym",
+    "instructions": [
+      "Check all 105 species and a legal team, then earn Surf access.",
+      "Before gym music, check the exact 105-species branch collection, box every party member above level 43, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
+      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+    ],
+    "ruleIds": [
+      4405,
+      108057,
+      108062,
+      165713
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "silph-clear"
+    ],
+    "checkpoint": {
+      "leader": "Koga",
+      "badgeMask": 16,
+      "ownedCount": 105,
+      "requiredDex": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        29,
+        30,
+        32,
+        33,
+        35,
+        39,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        66,
+        67,
+        72,
+        73,
+        74,
+        75,
+        79,
+        80,
+        83,
+        84,
+        85,
+        90,
+        91,
+        92,
+        93,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        108,
+        111,
+        112,
+        113,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        137,
+        143,
+        147,
+        148,
+        149
+      ],
+      "branchGroups": [
+        {
+          "id": "starter-line",
+          "choiceKey": "starter",
+          "options": [
+            {
+              "value": "bulbasaur",
+              "dexNumbers": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": "charmander",
+              "dexNumbers": [
+                4,
+                5,
+                6
+              ]
+            },
+            {
+              "value": "squirtle",
+              "dexNumbers": [
+                7,
+                8,
+                9
+              ]
+            }
+          ]
+        },
+        {
+          "id": "moon-stones",
+          "options": [
+            {
+              "value": "31",
+              "dexNumbers": [
+                31
+              ]
+            },
+            {
+              "value": "34",
+              "dexNumbers": [
+                34
+              ]
+            },
+            {
+              "value": "36",
+              "dexNumbers": [
+                36
+              ]
+            },
+            {
+              "value": "40",
+              "dexNumbers": [
+                40
+              ]
+            }
+          ],
+          "minimumDistinct": 4
+        },
+        {
+          "id": "eevee-line",
+          "choiceKey": "eevee",
+          "options": [
+            {
+              "value": "vaporeon",
+              "dexNumbers": [
+                134
+              ]
+            },
+            {
+              "value": "jolteon",
+              "dexNumbers": [
+                135
+              ]
+            },
+            {
+              "value": "flareon",
+              "dexNumbers": [
+                136
+              ]
+            }
+          ]
+        },
+        {
+          "id": "dojo",
+          "choiceKey": "dojo",
+          "options": [
+            {
+              "value": "hitmonlee",
+              "dexNumbers": [
+                106
+              ]
+            },
+            {
+              "value": "hitmonchan",
+              "dexNumbers": [
+                107
+              ]
+            }
+          ]
+        }
+      ],
+      "levelCap": 43,
+      "ruleIds": [
+        165713,
+        4405,
+        108062
+      ]
+    }
+  },
+  {
+    "id": "surf-cleanup",
+    "order": 12,
+    "area": "Cinnabar, Power Plant and Safari",
+    "title": "Cinnabar, Power Plant and Safari",
+    "instructions": [
+      "Use Surf for the next species phase and uninterrupted optional Safari sweep. Defer Articuno until field Strength is enabled.",
+      "Koga enables Surf for Cinnabar, fossil revival and Power Plant. Register Zapdos, Aerodactyl, selected revived fossil line and remaining pre-Erika species for 121. Complete the protected 11-item Safari hunt with Surf and space; defer Articuno until Erika enables Strength."
+    ],
+    "ruleIds": [
+      108045,
+      165714,
+      165715,
+      165716,
+      165717,
+      165718,
+      165719,
+      165720,
+      165721,
+      165722,
+      165723,
+      165724,
+      165725,
+      165726,
+      165727,
+      165728,
+      165729
+    ],
+    "prerequisites": [],
+    "preserves": [
+      {
+        "id": "reserve-108045",
+        "resource": "pickup",
+        "description": "Leave all eleven optional Safari objects until the uninterrupted Surf sweep.",
+        "consumingRuleId": 108045,
+        "releaseAfterRuleId": 108045
+      }
+    ],
+    "afterStepIds": [
+      "koga"
+    ]
+  },
+  {
+    "id": "erika",
+    "order": 13,
+    "area": "Celadon Gym",
+    "title": "Celadon Gym",
+    "instructions": [
+      "At 121 entries defeat Erika to enable field Strength.",
+      "Before gym music, check the exact 121-species branch collection, box every party member above level 29, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
+      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+    ],
+    "ruleIds": [
+      4404,
+      108061,
+      165730
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "surf-cleanup"
+    ],
+    "checkpoint": {
+      "leader": "Erika",
+      "badgeMask": 8,
+      "ownedCount": 121,
+      "requiredDex": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        29,
+        30,
+        32,
+        33,
+        35,
+        39,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        66,
+        67,
+        72,
+        73,
+        74,
+        75,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        137,
+        142,
+        143,
+        145,
+        147,
+        148,
+        149
+      ],
+      "branchGroups": [
+        {
+          "id": "starter-line",
+          "choiceKey": "starter",
+          "options": [
+            {
+              "value": "bulbasaur",
+              "dexNumbers": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": "charmander",
+              "dexNumbers": [
+                4,
+                5,
+                6
+              ]
+            },
+            {
+              "value": "squirtle",
+              "dexNumbers": [
+                7,
+                8,
+                9
+              ]
+            }
+          ]
+        },
+        {
+          "id": "moon-stones",
+          "options": [
+            {
+              "value": "31",
+              "dexNumbers": [
+                31
+              ]
+            },
+            {
+              "value": "34",
+              "dexNumbers": [
+                34
+              ]
+            },
+            {
+              "value": "36",
+              "dexNumbers": [
+                36
+              ]
+            },
+            {
+              "value": "40",
+              "dexNumbers": [
+                40
+              ]
+            }
+          ],
+          "minimumDistinct": 4
+        },
+        {
+          "id": "eevee-line",
+          "choiceKey": "eevee",
+          "options": [
+            {
+              "value": "vaporeon",
+              "dexNumbers": [
+                134
+              ]
+            },
+            {
+              "value": "jolteon",
+              "dexNumbers": [
+                135
+              ]
+            },
+            {
+              "value": "flareon",
+              "dexNumbers": [
+                136
+              ]
+            }
+          ]
+        },
+        {
+          "id": "dojo",
+          "choiceKey": "dojo",
+          "options": [
+            {
+              "value": "hitmonlee",
+              "dexNumbers": [
+                106
+              ]
+            },
+            {
+              "value": "hitmonchan",
+              "dexNumbers": [
+                107
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fossil-line",
+          "choiceKey": "fossil",
+          "options": [
+            {
+              "value": "helix",
+              "dexNumbers": [
+                138,
+                139
+              ]
+            },
+            {
+              "value": "dome",
+              "dexNumbers": [
+                140,
+                141
+              ]
+            }
+          ]
+        }
+      ],
+      "levelCap": 29,
+      "ruleIds": [
+        165730,
+        4404,
+        108061
+      ]
+    }
+  },
+  {
+    "id": "articuno",
+    "order": 14,
+    "area": "Seafoam Islands",
+    "title": "Seafoam Islands",
+    "instructions": [
+      "Use Strength to solve boulders and catch Articuno for entry 122.",
+      "With Erika’s badge, HM04 and a Strength carrier, solve Seafoam’s boulders and catch Articuno for entry 122. Do not KO the bird."
+    ],
+    "ruleIds": [
+      165731
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "erika"
+    ]
+  },
+  {
+    "id": "surge",
+    "order": 15,
+    "area": "Vermilion Gym",
+    "title": "Vermilion Gym",
+    "instructions": [
+      "At 122 entries return to Surge with a legal level-24 party.",
+      "Before gym music, check the exact 122-species branch collection, box every party member above level 24, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
+      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+    ],
+    "ruleIds": [
+      4403,
+      108060,
+      165732
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "articuno"
+    ],
+    "checkpoint": {
+      "leader": "Lt. Surge",
+      "badgeMask": 4,
+      "ownedCount": 122,
+      "requiredDex": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        29,
+        30,
+        32,
+        33,
+        35,
+        39,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        66,
+        67,
+        72,
+        73,
+        74,
+        75,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        137,
+        142,
+        143,
+        144,
+        145,
+        147,
+        148,
+        149
+      ],
+      "branchGroups": [
+        {
+          "id": "starter-line",
+          "choiceKey": "starter",
+          "options": [
+            {
+              "value": "bulbasaur",
+              "dexNumbers": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": "charmander",
+              "dexNumbers": [
+                4,
+                5,
+                6
+              ]
+            },
+            {
+              "value": "squirtle",
+              "dexNumbers": [
+                7,
+                8,
+                9
+              ]
+            }
+          ]
+        },
+        {
+          "id": "moon-stones",
+          "options": [
+            {
+              "value": "31",
+              "dexNumbers": [
+                31
+              ]
+            },
+            {
+              "value": "34",
+              "dexNumbers": [
+                34
+              ]
+            },
+            {
+              "value": "36",
+              "dexNumbers": [
+                36
+              ]
+            },
+            {
+              "value": "40",
+              "dexNumbers": [
+                40
+              ]
+            }
+          ],
+          "minimumDistinct": 4
+        },
+        {
+          "id": "eevee-line",
+          "choiceKey": "eevee",
+          "options": [
+            {
+              "value": "vaporeon",
+              "dexNumbers": [
+                134
+              ]
+            },
+            {
+              "value": "jolteon",
+              "dexNumbers": [
+                135
+              ]
+            },
+            {
+              "value": "flareon",
+              "dexNumbers": [
+                136
+              ]
+            }
+          ]
+        },
+        {
+          "id": "dojo",
+          "choiceKey": "dojo",
+          "options": [
+            {
+              "value": "hitmonlee",
+              "dexNumbers": [
+                106
+              ]
+            },
+            {
+              "value": "hitmonchan",
+              "dexNumbers": [
+                107
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fossil-line",
+          "choiceKey": "fossil",
+          "options": [
+            {
+              "value": "helix",
+              "dexNumbers": [
+                138,
+                139
+              ]
+            },
+            {
+              "value": "dome",
+              "dexNumbers": [
+                140,
+                141
+              ]
+            }
+          ]
+        }
+      ],
+      "levelCap": 24,
+      "ruleIds": [
+        165732,
+        4403,
+        108060
+      ]
+    }
+  },
+  {
+    "id": "sabrina",
+    "order": 16,
+    "area": "Saffron Gym",
+    "title": "Saffron Gym",
+    "instructions": [
+      "Keep the 122-entry collection; use four warps and a legal team.",
+      "Before gym music, check the exact 122-species branch collection, box every party member above level 43, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
+      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+    ],
+    "ruleIds": [
+      4406,
+      108063,
+      108064,
+      165733
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "surge"
+    ],
+    "checkpoint": {
+      "leader": "Sabrina",
+      "badgeMask": 32,
+      "ownedCount": 122,
+      "requiredDex": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        29,
+        30,
+        32,
+        33,
+        35,
+        39,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        66,
+        67,
+        72,
+        73,
+        74,
+        75,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        137,
+        142,
+        143,
+        144,
+        145,
+        147,
+        148,
+        149
+      ],
+      "branchGroups": [
+        {
+          "id": "starter-line",
+          "choiceKey": "starter",
+          "options": [
+            {
+              "value": "bulbasaur",
+              "dexNumbers": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": "charmander",
+              "dexNumbers": [
+                4,
+                5,
+                6
+              ]
+            },
+            {
+              "value": "squirtle",
+              "dexNumbers": [
+                7,
+                8,
+                9
+              ]
+            }
+          ]
+        },
+        {
+          "id": "moon-stones",
+          "options": [
+            {
+              "value": "31",
+              "dexNumbers": [
+                31
+              ]
+            },
+            {
+              "value": "34",
+              "dexNumbers": [
+                34
+              ]
+            },
+            {
+              "value": "36",
+              "dexNumbers": [
+                36
+              ]
+            },
+            {
+              "value": "40",
+              "dexNumbers": [
+                40
+              ]
+            }
+          ],
+          "minimumDistinct": 4
+        },
+        {
+          "id": "eevee-line",
+          "choiceKey": "eevee",
+          "options": [
+            {
+              "value": "vaporeon",
+              "dexNumbers": [
+                134
+              ]
+            },
+            {
+              "value": "jolteon",
+              "dexNumbers": [
+                135
+              ]
+            },
+            {
+              "value": "flareon",
+              "dexNumbers": [
+                136
+              ]
+            }
+          ]
+        },
+        {
+          "id": "dojo",
+          "choiceKey": "dojo",
+          "options": [
+            {
+              "value": "hitmonlee",
+              "dexNumbers": [
+                106
+              ]
+            },
+            {
+              "value": "hitmonchan",
+              "dexNumbers": [
+                107
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fossil-line",
+          "choiceKey": "fossil",
+          "options": [
+            {
+              "value": "helix",
+              "dexNumbers": [
+                138,
+                139
+              ]
+            },
+            {
+              "value": "dome",
+              "dexNumbers": [
+                140,
+                141
+              ]
+            }
+          ]
+        }
+      ],
+      "levelCap": 43,
+      "ruleIds": [
+        165733,
+        4406,
+        108063
+      ]
+    }
+  },
+  {
+    "id": "cinnabar",
+    "order": 17,
+    "area": "Cinnabar Mansion and Gym",
+    "title": "Cinnabar Mansion and Gym",
+    "instructions": [
+      "Before Cinnabar gym music, box every party member above level 47 and select Set. Review Blaine’s exact 122-species checkpoint below before entering for the quizzes; use no items in the later leader battle.",
+      "Read all four journals in one stay; answer all quizzes before any trainers.",
+      "Mansion journals are a separate one-stay checklist. Before Cinnabar gym trainers, complete all six quizzes without exit/reset."
+    ],
+    "ruleIds": [
+      108054,
+      108056
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "sabrina"
+    ]
+  },
+  {
+    "id": "blaine",
+    "order": 18,
+    "area": "Cinnabar Gym leader",
+    "title": "Cinnabar Gym leader",
+    "instructions": [
+      "At 122 entries defeat Blaine with a legal level-47 party.",
+      "Before gym music, check the exact 122-species branch collection, box every party member above level 47, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
+      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+    ],
+    "ruleIds": [
+      4407,
+      108065,
+      165734
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "cinnabar"
+    ],
+    "checkpoint": {
+      "leader": "Blaine",
+      "badgeMask": 64,
+      "ownedCount": 122,
+      "requiredDex": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        29,
+        30,
+        32,
+        33,
+        35,
+        39,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        66,
+        67,
+        72,
+        73,
+        74,
+        75,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        137,
+        142,
+        143,
+        144,
+        145,
+        147,
+        148,
+        149
+      ],
+      "branchGroups": [
+        {
+          "id": "starter-line",
+          "choiceKey": "starter",
+          "options": [
+            {
+              "value": "bulbasaur",
+              "dexNumbers": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": "charmander",
+              "dexNumbers": [
+                4,
+                5,
+                6
+              ]
+            },
+            {
+              "value": "squirtle",
+              "dexNumbers": [
+                7,
+                8,
+                9
+              ]
+            }
+          ]
+        },
+        {
+          "id": "moon-stones",
+          "options": [
+            {
+              "value": "31",
+              "dexNumbers": [
+                31
+              ]
+            },
+            {
+              "value": "34",
+              "dexNumbers": [
+                34
+              ]
+            },
+            {
+              "value": "36",
+              "dexNumbers": [
+                36
+              ]
+            },
+            {
+              "value": "40",
+              "dexNumbers": [
+                40
+              ]
+            }
+          ],
+          "minimumDistinct": 4
+        },
+        {
+          "id": "eevee-line",
+          "choiceKey": "eevee",
+          "options": [
+            {
+              "value": "vaporeon",
+              "dexNumbers": [
+                134
+              ]
+            },
+            {
+              "value": "jolteon",
+              "dexNumbers": [
+                135
+              ]
+            },
+            {
+              "value": "flareon",
+              "dexNumbers": [
+                136
+              ]
+            }
+          ]
+        },
+        {
+          "id": "dojo",
+          "choiceKey": "dojo",
+          "options": [
+            {
+              "value": "hitmonlee",
+              "dexNumbers": [
+                106
+              ]
+            },
+            {
+              "value": "hitmonchan",
+              "dexNumbers": [
+                107
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fossil-line",
+          "choiceKey": "fossil",
+          "options": [
+            {
+              "value": "helix",
+              "dexNumbers": [
+                138,
+                139
+              ]
+            },
+            {
+              "value": "dome",
+              "dexNumbers": [
+                140,
+                141
+              ]
+            }
+          ]
+        }
+      ],
+      "levelCap": 47,
+      "ruleIds": [
+        165734,
+        4407,
+        108065
+      ]
+    }
+  },
+  {
+    "id": "giovanni",
+    "order": 19,
+    "area": "Viridian Gym",
+    "title": "Viridian Gym",
+    "instructions": [
+      "At 122 entries avoid spin tiles, collect Revive and defeat Giovanni.",
+      "Before gym music, check the exact 122-species branch collection, box every party member above level 50, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
+      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+    ],
+    "ruleIds": [
+      4408,
+      108066,
+      108067,
+      108068,
+      165735
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "blaine"
+    ],
+    "checkpoint": {
+      "leader": "Giovanni",
+      "badgeMask": 128,
+      "ownedCount": 122,
+      "requiredDex": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        29,
+        30,
+        32,
+        33,
+        35,
+        39,
+        41,
+        42,
+        43,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        50,
+        51,
+        54,
+        55,
+        56,
+        57,
+        58,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64,
+        66,
+        67,
+        72,
+        73,
+        74,
+        75,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+        83,
+        84,
+        85,
+        86,
+        87,
+        88,
+        89,
+        90,
+        91,
+        92,
+        93,
+        95,
+        96,
+        97,
+        98,
+        99,
+        100,
+        101,
+        102,
+        103,
+        104,
+        105,
+        108,
+        109,
+        110,
+        111,
+        112,
+        113,
+        114,
+        115,
+        116,
+        117,
+        118,
+        119,
+        120,
+        121,
+        122,
+        123,
+        124,
+        125,
+        128,
+        129,
+        130,
+        131,
+        132,
+        133,
+        137,
+        142,
+        143,
+        144,
+        145,
+        147,
+        148,
+        149
+      ],
+      "branchGroups": [
+        {
+          "id": "starter-line",
+          "choiceKey": "starter",
+          "options": [
+            {
+              "value": "bulbasaur",
+              "dexNumbers": [
+                1,
+                2,
+                3
+              ]
+            },
+            {
+              "value": "charmander",
+              "dexNumbers": [
+                4,
+                5,
+                6
+              ]
+            },
+            {
+              "value": "squirtle",
+              "dexNumbers": [
+                7,
+                8,
+                9
+              ]
+            }
+          ]
+        },
+        {
+          "id": "moon-stones",
+          "options": [
+            {
+              "value": "31",
+              "dexNumbers": [
+                31
+              ]
+            },
+            {
+              "value": "34",
+              "dexNumbers": [
+                34
+              ]
+            },
+            {
+              "value": "36",
+              "dexNumbers": [
+                36
+              ]
+            },
+            {
+              "value": "40",
+              "dexNumbers": [
+                40
+              ]
+            }
+          ],
+          "minimumDistinct": 4
+        },
+        {
+          "id": "eevee-line",
+          "choiceKey": "eevee",
+          "options": [
+            {
+              "value": "vaporeon",
+              "dexNumbers": [
+                134
+              ]
+            },
+            {
+              "value": "jolteon",
+              "dexNumbers": [
+                135
+              ]
+            },
+            {
+              "value": "flareon",
+              "dexNumbers": [
+                136
+              ]
+            }
+          ]
+        },
+        {
+          "id": "dojo",
+          "choiceKey": "dojo",
+          "options": [
+            {
+              "value": "hitmonlee",
+              "dexNumbers": [
+                106
+              ]
+            },
+            {
+              "value": "hitmonchan",
+              "dexNumbers": [
+                107
+              ]
+            }
+          ]
+        },
+        {
+          "id": "fossil-line",
+          "choiceKey": "fossil",
+          "options": [
+            {
+              "value": "helix",
+              "dexNumbers": [
+                138,
+                139
+              ]
+            },
+            {
+              "value": "dome",
+              "dexNumbers": [
+                140,
+                141
+              ]
+            }
+          ]
+        }
+      ],
+      "levelCap": 50,
+      "ruleIds": [
+        165735,
+        4408,
+        108068
+      ]
+    }
+  },
+  {
+    "id": "victory",
+    "order": 20,
+    "area": "Victory Road",
+    "title": "Victory Road",
+    "instructions": [
+      "Catch Moltres for entry 123 and clear trainers/items.",
+      "Use Surf/Strength with eight badges. Register Moltres for entry 123 and finish 11 ordinary Victory Road trainers plus ten items; the bird is a separate static capture."
+    ],
+    "ruleIds": [
+      4420,
+      108140,
+      165736
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "giovanni"
+    ]
+  },
+  {
+    "id": "league50",
+    "order": 21,
+    "area": "League level-50 clear",
+    "title": "League level-50 clear",
+    "instructions": [
+      "Check entire party at entry, Set mode and no battle items; complete one continuous session.",
+      "Clear with canonical123, legal level-50 party at entry, Set and no battle items. Preserve this team until entry; execute other incompatible party clears separately."
+    ],
+    "ruleIds": [
+      4410,
+      108171,
+      165737
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "victory"
+    ]
+  },
+  {
+    "id": "league-solo",
+    "order": 22,
+    "area": "League solo clear",
+    "title": "League solo clear",
+    "instructions": [
+      "Prepare exactly one eligible Pokémon; combine the no-faint level-60 objective only when all its conditions are met.",
+      "Exactly one member, excluding Mew and Mewtwo, in one uninterrupted League clear. Prof. Perfect can share only if that member begins at level60 or below and never faints."
+    ],
+    "ruleIds": [
+      4422,
+      108170
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "league50"
+    ]
+  },
+  {
+    "id": "league-red",
+    "order": 23,
+    "area": "League Red-exclusive clear",
+    "title": "League Red-exclusive clear",
+    "instructions": [
+      "Prepare six Red-exclusive members and complete another continuous League session.",
+      "Separate uninterrupted clear with six members from the eleven-species Red-exclusive pool; duplicates permitted and no stated level cap."
+    ],
+    "ruleIds": [
+      108169
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "league-solo"
+    ]
+  },
+  {
+    "id": "postgame",
+    "order": 24,
+    "area": "Cerulean Cave and regional cleanup",
+    "title": "Cerulean Cave and regional cleanup",
+    "instructions": [
+      "Catch Mewtwo without Master Ball after 123 species; finish acquisition/session/global objectives.",
+      "After canonical123 and Champion, prepare an empty box and supplies for the 15 ordinary Cave catches in one stay, then catch Mewtwo without Master Ball for entry124. Finish all nine actual NPC trades, six gifts, field disks, static resolutions, battle feats and regional pickups/trainers."
+    ],
+    "ruleIds": [
+      4411,
+      4412,
+      4421,
+      4425,
+      108033,
+      108034,
+      108052,
+      108053,
+      108141,
+      108172,
+      108174,
+      108175,
+      108176,
+      108364,
+      108365,
+      108366,
+      108367,
+      108368,
+      165738
+    ],
+    "prerequisites": [],
+    "preserves": [
+      {
+        "id": "reserve-108053",
+        "resource": "pokemon",
+        "description": "Retain each registered trade donor until its particular NPC exchange.",
+        "consumingRuleId": 108053,
+        "releaseAfterRuleId": 108053
+      }
+    ],
+    "afterStepIds": [
+      "league-red"
+    ]
+  },
+  {
+    "id": "glitch-postgame",
+    "order": 25,
+    "area": "Postgame glitch preparation",
+    "title": "Postgame glitch preparation",
+    "instructions": [
+      "Protect completed main/Oak history, preserve resources, and review sourced methods before any glitch.",
+      "Keep a Rare Candy and obtainable Growl carrier; review the separate glitch planner. Ordinary Trainer-Fly also needs escape/restoration trainers. A wild Ditto alone is not a trainer-free method, and item-underflow transport remains runtime-unvalidated."
+    ],
+    "ruleIds": [
+      57642,
+      57643,
+      57644,
+      57645,
+      57655
+    ],
+    "prerequisites": [],
+    "preserves": [
+      {
+        "id": "reserve-57642",
+        "resource": "pokemon",
+        "description": "Keep an obtainable Growl carrier until the validated level-jump method is complete.",
+        "consumingRuleId": 57642,
+        "releaseAfterRuleId": 57642
+      },
+      {
+        "id": "reserve-57643",
+        "resource": "item",
+        "description": "Keep at least one Rare Candy until the sixth-slot duplication attempt is complete.",
+        "consumingRuleId": 57643,
+        "releaseAfterRuleId": 57643
+      }
+    ],
+    "afterStepIds": []
+  },
+  {
+    "id": "glitch-expendable",
+    "order": 26,
+    "area": "Separate expendable glitch attempt",
+    "title": "Separate expendable glitch attempt",
+    "instructions": [
+      "Use a named expendable attempt for a crash candidate; require target-core evidence."
+    ],
+    "ruleIds": [
+      57640
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": []
+  },
+  {
+    "id": "glitch-fresh",
+    "order": 27,
+    "area": "Separate fresh speedrun attempt",
+    "title": "Separate fresh speedrun attempt",
+    "instructions": [
+      "Use a new named attempt and validated fresh-save route for the one-minute objective."
+    ],
+    "ruleIds": [
+      57641
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": []
+  }
+]

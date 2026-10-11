@@ -21,6 +21,8 @@ export interface RaAchievementRaw {
   DateEarnedHardcore?: string | null;
 }
 export interface RaGameProgress {
+  /** Configured account used by this server to request this progress. */
+  accountIdentity?: string;
   title: string;
   consoleName: string;
   distinctPlayers: number;
@@ -73,7 +75,20 @@ export function parseRaDate(s: string): number {
     number,
     number,
   ];
-  return Date.UTC(year, month - 1, day, hour, minute, second);
+  // setUTCFullYear avoids Date.UTC's special handling of years 00–99.
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, 0);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day ||
+    date.getUTCHours() !== hour ||
+    date.getUTCMinutes() !== minute ||
+    date.getUTCSeconds() !== second
+  )
+    return NaN;
+  return date.getTime();
 }
 
 function parseAchievement(v: unknown): RaAchievementRaw {
@@ -159,6 +174,7 @@ export class RaClient {
       .map(parseAchievement)
       .sort((a, b) => a.DisplayOrder - b.DisplayOrder || a.ID - b.ID);
     return {
+      accountIdentity: this.username,
       title: body.Title,
       consoleName: body.ConsoleName,
       distinctPlayers: body.NumDistinctPlayers,

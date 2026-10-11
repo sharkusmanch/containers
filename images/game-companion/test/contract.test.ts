@@ -66,6 +66,14 @@ beforeAll(async () => {
     },
     achievements: async (_source, id) => {
       if (id === "10") return ach;
+      if (_source === "ra" && id === "724")
+        return {
+          ...ach,
+          source: "ra",
+          id,
+          accountIdentity: "tester",
+          fetchedAt: "2026-10-11T00:00:00.000Z",
+        };
       if (id === "13") throw new Error("upstream down");
       return null;
     },
@@ -275,4 +283,101 @@ describe("image hosts", () => {
     expect(safeIcon("https://evil.example/icon.png")).toBeNull();
     expect(safeIcon("https://steamstatic.com.evil.example/icon.png")).toBeNull();
   });
+});
+
+it("passes additive RA identity/time metadata through the existing consumer", async () => {
+  expect(await api.achievements("ra", "724")).toMatchObject({
+    source: "ra",
+    id: "724",
+    accountIdentity: "tester",
+    fetchedAt: "2026-10-11T00:00:00.000Z",
+  });
+  expect(await api.achievements("steam", "10")).toEqual(ach);
+});
+
+it("serves all configured Red private routes through the RA client, normalizer and cache", async () => {
+  const { buildDeps } = await import("../src/server/app.js");
+  const { AchievementService } = await import("../src/server/achievements.js");
+  const { RaClient } = await import("../src/server/ra.js");
+  const ids = ["724", "16084", "11632"];
+  const ra = new RaClient({
+    apiKey: "TEST-ONLY",
+    username: "tester",
+    fetchFn: async (url) => {
+      const id = new URL(url).searchParams.get("g");
+      return new Response(
+        JSON.stringify({
+          Title: `Red ${id}`,
+          ConsoleName: "Game Boy",
+          NumDistinctPlayers: 1,
+          Achievements: {
+            "1": {
+              ID: 1,
+              Title: "First",
+              Description: "Test",
+              BadgeName: "1",
+              NumAwardedHardcore: 1,
+              DisplayOrder: 1,
+              DateEarnedHardcore: "2024-02-29 12:34:56",
+            },
+          },
+        }),
+      );
+    },
+  });
+  const deps = buildDeps({
+    staticDir: "/nonexistent",
+    defaultPins: [],
+    additionalRaGameIds: ids,
+    pages: {
+      find: async () => null,
+      marks: async () => null,
+      where: async () => null,
+      progress: async () => null,
+    },
+    detector: {
+      current: () => ({
+        game: null,
+        state: "none",
+        observedAt: null,
+        presence: null,
+        stale: false,
+      }),
+    },
+    index: {
+      available: () => false,
+      hubs: () => [],
+      lookup: () => [],
+      tree: () => null,
+      requestRefresh: () => {},
+    },
+    achievements: new AchievementService({
+      steam: { gameData: async () => null },
+      ra,
+      now: () => Date.UTC(2026, 9, 11),
+    }),
+  });
+  const local = createServer((req, res) => void createHandler(deps)(req, res));
+  await new Promise<void>((resolve) => local.listen(0, "127.0.0.1", resolve));
+  try {
+    const origin = `http://127.0.0.1:${(local.address() as AddressInfo).port}/companion/api/achievements/ra/`;
+    for (const id of ids) {
+      const response = await fetch(origin + id);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
+        id,
+        source: "ra",
+        title: `Red ${id}`,
+        accountIdentity: "tester",
+        fetchedAt: "2026-10-11T00:00:00.000Z",
+        unlocked: 1,
+        achievements: [{ unlocked: true, unlockedAt: "2024-02-29T12:34:56.000Z" }],
+      });
+    }
+    expect((await fetch(origin + "999")).status).toBe(404);
+  } finally {
+    await new Promise<void>((resolve, reject) =>
+      local.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });

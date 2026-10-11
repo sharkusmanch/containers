@@ -5,6 +5,8 @@ export interface Config {
   steamId: string;
   raApiKey: string;
   raUsername: string;
+  /** Explicit additional games eligible for anonymous RA lookups; closed by default. */
+  additionalRaGameIds: string[];
   outlineBaseUrl: string;
   /** Null until the read-only key is provisioned; the guide index then reports unavailable. */
   outlineApiKey: string | null;
@@ -38,6 +40,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     steamId: need("STEAM_ID"),
     raApiKey: need("RA_API_KEY"),
     raUsername: need("RA_USERNAME"),
+    additionalRaGameIds: parseRaIds(env.RA_ADDITIONAL_GAME_IDS),
     outlineBaseUrl: need("OUTLINE_BASE_URL").replace(/\/+$/, ""),
     outlineApiKey: env.OUTLINE_API_KEY || null,
     outlineCollectionId: need("OUTLINE_COLLECTION_ID"),
@@ -51,4 +54,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 function parseTitles(raw: string | undefined): string[] {
   const titles = (raw ?? "").split(",").map((t) => t.trim());
   return [...new Set(titles.filter((t) => t !== ""))];
+}
+
+function parseRaIds(raw: string | undefined): string[] {
+  if (raw === undefined || raw.trim() === "") return [];
+  const ids = raw.split(",").map((id) => id.trim());
+  if (ids.some((id) => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) {
+    throw new Error("RA_ADDITIONAL_GAME_IDS must be comma-separated positive integer game IDs");
+  }
+  return [...new Set(ids)];
 }

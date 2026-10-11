@@ -586,3 +586,62 @@ describe("AchievementService", () => {
     });
   });
 });
+
+describe("trustworthy RA metadata", () => {
+  it.each([
+    "2026-02-30 00:00:00",
+    "2026-13-01 00:00:00",
+    "2026-01-01 24:00:00",
+    "2026-01-01 00:60:00",
+    "2026-01-01 00:00:60",
+  ])("never normalizes invalid raw date %s into an unlock", (raw) => {
+    const result = normaliseRa("724", {
+      ...raData,
+      achievements: [{ ...raData.achievements[0]!, DateEarnedHardcore: raw }],
+    });
+    expect(result.unlocked).toBe(0);
+    expect(result.achievements[0]?.unlockedAt).toBeNull();
+  });
+  it("keeps last successful upstream time across a failed refresh and retry cache", async () => {
+    let time = Date.UTC(2026, 9, 11),
+      failed = false;
+    const service = new AchievementService({
+      now: () => time,
+      ttlMs: 10,
+      staleRetryMs: 10,
+      steam: { gameData: async () => steamData },
+      ra: {
+        gameProgress: async () => {
+          if (failed) throw new Error("down");
+          return { ...raData, accountIdentity: "tester" };
+        },
+      },
+    });
+    const initial = await service.get("ra", "724");
+    expect(initial).toMatchObject({
+      accountIdentity: "tester",
+      fetchedAt: "2026-10-11T00:00:00.000Z",
+      stale: false,
+    });
+    time += 11;
+    failed = true;
+    expect(await service.get("ra", "724")).toMatchObject({
+      fetchedAt: initial?.fetchedAt,
+      stale: true,
+    });
+    time += 1;
+    expect(await service.get("ra", "724")).toMatchObject({
+      fetchedAt: initial?.fetchedAt,
+      stale: true,
+    });
+    time += 11;
+    failed = false;
+    expect(await service.get("ra", "724")).toMatchObject({
+      fetchedAt: new Date(time).toISOString(),
+      stale: false,
+    });
+    const steam = await service.get("steam", "10");
+    expect(steam).not.toHaveProperty("fetchedAt");
+    expect(steam).not.toHaveProperty("accountIdentity");
+  });
+});

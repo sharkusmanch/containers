@@ -75,6 +75,7 @@ export function normaliseRa(gameId: string, data: RaGameProgress): AchievementsR
     };
   });
   return {
+    ...(data.accountIdentity ? { accountIdentity: data.accountIdentity } : {}),
     source: "ra",
     id: gameId,
     title: data.title,
@@ -180,7 +181,11 @@ export class AchievementService {
       throw new Error("upstream fetch limit reached");
     }
     try {
-      const value = await this.fetch(source, id);
+      const fetched = await this.fetch(source, id);
+      const value =
+        source === "ra" && fetched
+          ? { ...fetched, fetchedAt: new Date(this.now()).toISOString() }
+          : fetched;
       this.failures.delete(key);
       this.store(this.cache, key, { value, at: this.now(), stale: false });
       return value;

@@ -11,6 +11,8 @@ export interface AppParts {
   staticDir: string;
   /** Page titles the web client pins by default; sent with every hub tree. */
   defaultPins: string[];
+  /** Explicit RA lookup allowlist; these games use the general fetch budget. */
+  additionalRaGameIds: string[];
   detector: Pick<Detector, "current">;
   index: Pick<GuideIndex, "available" | "hubs" | "lookup" | "tree" | "requestRefresh">;
   achievements: Pick<AchievementService, "get">;
@@ -24,8 +26,9 @@ export interface AppParts {
 export function buildDeps(parts: AppParts): RouteDeps {
   const { detector, index, achievements, pages } = parts;
 
-  // Games the detector has reported since start, oldest first. Together with the guide index
-  // this is the whole set an anonymous caller may ask the achievement service about.
+  // Games the detector has reported since start, oldest first. Along with the guide index
+  // and explicit RA allowlist, these bound anonymous achievement lookups.
+  const additionalRaIds = new Set(parts.additionalRaGameIds);
   const detected = new Set<string>();
   const snapshot = (): DetectorSnapshot => {
     const snap = detector.current();
@@ -69,7 +72,12 @@ export function buildDeps(parts: AppParts): RouteDeps {
       // Priority is for the one game /api/now reports. A caller can request any game in the
       // detected history, so that history only makes a request allowed, never prioritised.
       const priority = game !== null && game.id !== null && `${game.source}:${game.id}` === key;
-      if (!detected.has(key) && index.lookup(source, id).length === 0) return null;
+      if (
+        !detected.has(key) &&
+        index.lookup(source, id).length === 0 &&
+        !(source === "ra" && additionalRaIds.has(id))
+      )
+        return null;
       return achievements.get(source, id, { priority });
     },
     find: (hubId, query) => pages.find(hubId, query),

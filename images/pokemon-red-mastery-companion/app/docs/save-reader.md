@@ -1,0 +1,30 @@
+# English Red save reader
+
+`parseRedSave(bytes: Uint8Array): ParseResult` synchronously reads an exact 32,768-byte English Pokémon Red USA/Europe battery-save profile. It never changes input bytes. It supports neither savestates nor headers, trailers, other languages, or arbitrary save layouts. Size and checksums validate the declared layout; a battery image alone cannot authenticate a ROM/core/version identity.
+
+Offsets/checksums follow pret/pokered commit `af519899719f0754965776faac0e836a3b906e6d`, especially `ram/sram.asm`, `ram/wram.asm`, `macros/ram.asm`, `engine/menus/save.asm`, and `constants/charmap.asm`. PKHeX commit `66ef5983a5d349efa2dd615f2926a1b1ee97306e` (`SAV1.cs`, `SAV1Offsets.cs`, `PK1.cs`) independently corroborates main checksum and Pokémon fields. The input reader audit independently assembled SRAM symbols; it is retained in the local task inputs.
+
+- Main checksum covers `[0x2598,0x3523)`, stored at `0x3523`. The algorithm complements the byte sum. A failure produces `rejected` without a snapshot.
+- Current box byte `0x284C` uses low seven bits as index 0–11, and bit seven for initialized archives. Live box `0x30C0` always supersedes its archived record. Uninitialized archives are unavailable even if stale records/checksums appear valid.
+- Initialized archives require both aggregate and all individual checksums in banks 2/3, including the superseded active record. Any applicable checksum failure rejects the whole import. A bad inactive list count/terminator instead leaves archived observations unknown and retains other valid sections. No shorter list is presented as complete.
+- Fixed-capacity counts and terminators bound party (6), boxes (20), bag (20), and PC items (50). Raw counts remain available even when lists cannot be interpreted. Raw item IDs, unsigned quantities including 255, duplicate slots, and bag order are retained.
+- `PokemonObservation.internalSpeciesId` is the record byte; `listedSpeciesId` additionally preserves its party/box species-array byte. Unmapped species retain `dexNumber: null`. Disagreement retains both IDs but makes mapped identity and dependent stats unavailable. The reader never synthesizes owned/seen flags from held Pokémon.
+- Party uses its actual party-level byte, measured big-endian Special, and stored PP/PP Ups. Boxes use their stored current level. Boxes and daycare have no measured Special, so their `special` facts remain unknown. Daycare `level` also remains unknown: its `+3` byte is the deposited/start level, while walking changes only experience (`engine/overworld/daycare_exp.asm`). The game calculates current level from experience when interacting and can restore the deposited byte when leaving the Pokémon there (`scripts/Daycare.asm`). No growth calculation is implemented here. Daycare occupancy accepts only 0/1, ignoring stale record bytes when empty.
+- Trainer ID is big endian. Display names use a conservative supported Gen1 character subset and maximum seven encoded bytes. Unsupported/control bytes or missing terminators leave the trainer unknown, with no private identity in diagnostics. No ASCII fallback is used.
+- Battle options bit six means **Set** when set and **Shift** when clear. Playtime uses a one-byte hour field plus validated maxed/minute/second/frame bytes; `playTimeRaw` preserves all five bytes. It cannot establish session history.
+
+`readable` means the interpreted observations have no diagnostics; it does not mean every possible fact is available. Uninitialized archives, daycare current level, and unmeasured boxed/daycare Special are ordinarily unknown. `partial` means an accepted main save has diagnostic sections or unusual species. Both statuses may contain unknown facts. A rejected result never supplies a replacement snapshot.
+
+## Raw world namespaces
+
+`events` contains only named `EVENT_*` symbols from the pinned dataset. `objectFlags` contains named `TOGGLE_*` bits; true means toggled off, and does not intrinsically mean an item was collected. `hiddenItemFlags` (0–111), `hiddenCoinFlags` (0–15), and `tradeFlags` (0–15) have independent zero-based indices. `statusFlags` uses keys such as `wStatusFlags1:0`, for byte number 1–7 and bit 0–7. `mapScriptStates` is a 200-byte array in WRAM declaration order, not event bits. A planner must audit the specific symbol/index and its script semantics before claiming an action is completed.
+
+`rawCounts` preserves party/live box/bag/PC/occupancy/Hall of Fame count bytes, the whole current-box selector byte, and (when initialized) twelve archive count bytes in box order, including the superseded active archive. These are literal byte observations, not claims of valid list sizes or storage availability. An empty archive-count array indicates unavailable, uninitialized archives, not zero held Pokémon. Use the corresponding `Fact` to establish availability.
+
+Hall of Fame bank zero has no defined checksum. `hallOfFame` is false only when the main-saved count is zero, irrespective of stale bank-zero records. With a positive count it remains unknown, with a diagnostic and raw count retained. The reader does not promote unchecked records into verified team evidence, clear history, timings, or achievements, and does not reconstruct a full historical sequence. Later planning must use audited game event predicates/manual history/RA where applicable.
+
+## Fingerprint and evidence boundary
+
+`hash` is `fnv1a64:` followed by a padded hexadecimal FNV-1a-64 fingerprint over every original SRAM byte, including unchecked and unused banks. It is deterministic and synchronous, for unchanged-file detection only; it is not cryptographic authentication, a trainer identity, or proof of source continuity. `importedAt` is parser execution time. Source and attempt attribution belong to the import guard, not this reader.
+
+The parser checks no achievement transitions and makes no ROM/core validation claims. See [fixture provenance and remaining gates](../test/fixtures/README.md). Storage/daycare/postgame and genuine glitch states on target Gambatte remain release gates; defensive synthetic SRAM tests cannot satisfy them.

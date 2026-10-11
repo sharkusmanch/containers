@@ -38,7 +38,7 @@ returns.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.7.0
+- **Version**: v0.8.0
 
 ## Usage
 
@@ -49,7 +49,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.7.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.8.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -65,20 +65,21 @@ that device is ever framed.
 
 ## Environment Variables
 
-| Variable                   | Required | Description                                                               |
-| -------------------------- | -------- | ------------------------------------------------------------------------- |
-| `STEAM_API_KEY`            | Yes      | Steam Web API key                                                         |
-| `STEAM_ID`                 | Yes      | SteamID64 of the account to watch                                         |
-| `RA_API_KEY`               | Yes      | RetroAchievements Web API key                                             |
-| `RA_USERNAME`              | Yes      | RetroAchievements user to watch                                           |
-| `OUTLINE_BASE_URL`         | Yes      | Base URL of the Outline instance, without a trailing slash                |
-| `OUTLINE_COLLECTION_ID`    | Yes      | ID of the Outline collection that holds the guides                        |
-| `OUTLINE_GUIDES_PARENT_ID` | Yes      | ID of the document whose children are the guide hubs                      |
-| `OUTLINE_API_KEY`          | No       | Read-only Outline API key. Without it the guide index is disabled         |
-| `OUTLINE_SCHEDULE_DOC_ID`  | No       | ID of a document whose `## Now Playing` section lists games to show first |
-| `DEFAULT_PINNED_PAGES`     | No       | Comma-separated guide page titles to pin the first time a game is opened  |
-| `PORT`                     | No       | Listening port (default `8080`)                                           |
-| `STATIC_DIR`               | No       | Directory of the built front end (default `/app/dist/web`)                |
+| Variable                   | Required | Description                                                                                                                                                            |
+| -------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STEAM_API_KEY`            | Yes      | Steam Web API key                                                                                                                                                      |
+| `STEAM_ID`                 | Yes      | SteamID64 of the account to watch                                                                                                                                      |
+| `RA_API_KEY`               | Yes      | RetroAchievements Web API key                                                                                                                                          |
+| `RA_ADDITIONAL_GAME_IDS`   | No       | Comma-separated positive integer RA game IDs allowed without a guide or detector history; empty by default. For Red: `724,16084,11632`. Uses the general fetch budget. |
+| `RA_USERNAME`              | Yes      | RetroAchievements user to watch                                                                                                                                        |
+| `OUTLINE_BASE_URL`         | Yes      | Base URL of the Outline instance, without a trailing slash                                                                                                             |
+| `OUTLINE_COLLECTION_ID`    | Yes      | ID of the Outline collection that holds the guides                                                                                                                     |
+| `OUTLINE_GUIDES_PARENT_ID` | Yes      | ID of the document whose children are the guide hubs                                                                                                                   |
+| `OUTLINE_API_KEY`          | No       | Read-only Outline API key. Without it the guide index is disabled                                                                                                      |
+| `OUTLINE_SCHEDULE_DOC_ID`  | No       | ID of a document whose `## Now Playing` section lists games to show first                                                                                              |
+| `DEFAULT_PINNED_PAGES`     | No       | Comma-separated guide page titles to pin the first time a game is opened                                                                                               |
+| `PORT`                     | No       | Listening port (default `8080`)                                                                                                                                        |
+| `STATIC_DIR`               | No       | Directory of the built front end (default `/app/dist/web`)                                                                                                             |
 
 The Outline key needs only these scopes:
 `/api/documents.list /api/documents.info /api/collections.documents`.
@@ -98,7 +99,14 @@ The Outline key needs only these scopes:
 | `GET /companion/api/guides/<hubId>/progress`    | Ticked and total checkboxes per page (`?refresh=1` re-reads the wiki) |
 | `GET /companion/api/achievements/<source>/<id>` | Achievements for a game that has a guide or is being played           |
 
-Achievement requests are limited to games the service knows about, and the number of
+RA responses include the configured `accountIdentity` and the last successful upstream
+`fetchedAt` timestamp. Stale cache reads and failed retries preserve that timestamp;
+`stale` describes the individual game feed. Each Red set is fetched and cached separately.
+Malformed or impossible hardcore earned dates remain locked with no unlock timestamp.
+These fields are additive; Steam responses keep their existing shape.
+
+Achievement requests are limited to games the service knows about or explicitly allowlisted
+RA IDs, and the number of
 upstream fetches per minute is capped, because the API keys are usually shared with other
 tools. Guide page text is read from Outline at most a few times a minute and kept in memory. Search
 and missable marks use a copy up to ten minutes old; while a page is open, the guide being

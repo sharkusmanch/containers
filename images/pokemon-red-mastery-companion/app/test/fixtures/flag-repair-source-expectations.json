@@ -1,0 +1,278 @@
+{
+  "sourceCommit": "af519899719f0754965776faac0e836a3b906e6d",
+  "provenance": "Independent research_area_flags source audit, 2026-10-11; expected values copied from source audit, not extractor output.",
+  "events": [
+    {
+      "symbol": "EVENT_POKEMON_TOWER_RIVAL_ON_LEFT",
+      "index": 238
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMON_TOWER_RIVAL",
+      "index": 239
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_3_TRAINER_0",
+      "index": 241
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_3_TRAINER_1",
+      "index": 242
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_3_TRAINER_2",
+      "index": 243
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_4_TRAINER_0",
+      "index": 249
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_4_TRAINER_1",
+      "index": 250
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_4_TRAINER_2",
+      "index": 251
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_5_TRAINER_0",
+      "index": 258
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_5_TRAINER_1",
+      "index": 259
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_5_TRAINER_2",
+      "index": 260
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_5_TRAINER_3",
+      "index": 261
+    },
+    {
+      "symbol": "EVENT_IN_PURIFIED_ZONE",
+      "index": 263
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_6_TRAINER_0",
+      "index": 265
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_6_TRAINER_1",
+      "index": 266
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_6_TRAINER_2",
+      "index": 267
+    },
+    {
+      "symbol": "EVENT_BEAT_GHOST_MAROWAK",
+      "index": 271
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_7_TRAINER_0",
+      "index": 273
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_7_TRAINER_1",
+      "index": 274
+    },
+    {
+      "symbol": "EVENT_BEAT_POKEMONTOWER_7_TRAINER_2",
+      "index": 275
+    },
+    {
+      "symbol": "EVENT_RESCUED_MR_FUJI_2",
+      "index": 279
+    },
+    {
+      "symbol": "EVENT_GOT_POKE_FLUTE",
+      "index": 296
+    }
+  ],
+  "pickups": [
+    {
+      "area": "CERULEAN_CAVE_2F",
+      "x": 29,
+      "y": 9,
+      "flag": "TOGGLE_CERULEAN_CAVE_2F_ITEM_1",
+      "index": 206
+    },
+    {
+      "area": "CERULEAN_CAVE_2F",
+      "x": 4,
+      "y": 15,
+      "flag": "TOGGLE_CERULEAN_CAVE_2F_ITEM_2",
+      "index": 207
+    },
+    {
+      "area": "CERULEAN_CAVE_2F",
+      "x": 13,
+      "y": 6,
+      "flag": "TOGGLE_CERULEAN_CAVE_2F_ITEM_3",
+      "index": 208
+    },
+    {
+      "area": "CERULEAN_CAVE_B1F",
+      "x": 16,
+      "y": 9,
+      "flag": "TOGGLE_CERULEAN_CAVE_B1F_ITEM_1",
+      "index": 210
+    },
+    {
+      "area": "CERULEAN_CAVE_B1F",
+      "x": 18,
+      "y": 1,
+      "flag": "TOGGLE_CERULEAN_CAVE_B1F_ITEM_2",
+      "index": 211
+    },
+    {
+      "area": "POKEMON_MANSION_2F",
+      "x": 28,
+      "y": 7,
+      "flag": "TOGGLE_POKEMON_MANSION_2F_ITEM",
+      "index": 187
+    },
+    {
+      "area": "POKEMON_MANSION_3F",
+      "x": 1,
+      "y": 16,
+      "flag": "TOGGLE_POKEMON_MANSION_3F_ITEM_1",
+      "index": 188
+    },
+    {
+      "area": "POKEMON_MANSION_3F",
+      "x": 25,
+      "y": 5,
+      "flag": "TOGGLE_POKEMON_MANSION_3F_ITEM_2",
+      "index": 189
+    },
+    {
+      "area": "POKEMON_MANSION_B1F",
+      "x": 10,
+      "y": 2,
+      "flag": "TOGGLE_POKEMON_MANSION_B1F_ITEM_1",
+      "index": 190
+    },
+    {
+      "area": "POKEMON_MANSION_B1F",
+      "x": 1,
+      "y": 22,
+      "flag": "TOGGLE_POKEMON_MANSION_B1F_ITEM_2",
+      "index": 191
+    },
+    {
+      "area": "POKEMON_MANSION_B1F",
+      "x": 19,
+      "y": 25,
+      "flag": "TOGGLE_POKEMON_MANSION_B1F_ITEM_3",
+      "index": 192
+    },
+    {
+      "area": "POKEMON_MANSION_B1F",
+      "x": 5,
+      "y": 4,
+      "flag": "TOGGLE_POKEMON_MANSION_B1F_ITEM_4",
+      "index": 193
+    },
+    {
+      "area": "POKEMON_MANSION_B1F",
+      "x": 5,
+      "y": 13,
+      "flag": "TOGGLE_POKEMON_MANSION_B1F_ITEM_5",
+      "index": 194
+    },
+    {
+      "area": "SAFARI_ZONE_CENTER",
+      "x": 14,
+      "y": 10,
+      "flag": "TOGGLE_SAFARI_ZONE_CENTER_ITEM",
+      "index": 205
+    },
+    {
+      "area": "SAFARI_ZONE_EAST",
+      "x": 21,
+      "y": 10,
+      "flag": "TOGGLE_SAFARI_ZONE_EAST_ITEM_1",
+      "index": 195
+    },
+    {
+      "area": "SAFARI_ZONE_EAST",
+      "x": 3,
+      "y": 7,
+      "flag": "TOGGLE_SAFARI_ZONE_EAST_ITEM_2",
+      "index": 196
+    },
+    {
+      "area": "SAFARI_ZONE_EAST",
+      "x": 20,
+      "y": 13,
+      "flag": "TOGGLE_SAFARI_ZONE_EAST_ITEM_3",
+      "index": 197
+    },
+    {
+      "area": "SAFARI_ZONE_EAST",
+      "x": 15,
+      "y": 12,
+      "flag": "TOGGLE_SAFARI_ZONE_EAST_ITEM_4",
+      "index": 198
+    },
+    {
+      "area": "SAFARI_ZONE_NORTH",
+      "x": 25,
+      "y": 1,
+      "flag": "TOGGLE_SAFARI_ZONE_NORTH_ITEM_1",
+      "index": 199
+    },
+    {
+      "area": "SAFARI_ZONE_NORTH",
+      "x": 19,
+      "y": 7,
+      "flag": "TOGGLE_SAFARI_ZONE_NORTH_ITEM_2",
+      "index": 200
+    },
+    {
+      "area": "SAFARI_ZONE_WEST",
+      "x": 8,
+      "y": 20,
+      "flag": "TOGGLE_SAFARI_ZONE_WEST_ITEM_1",
+      "index": 201
+    },
+    {
+      "area": "SAFARI_ZONE_WEST",
+      "x": 9,
+      "y": 7,
+      "flag": "TOGGLE_SAFARI_ZONE_WEST_ITEM_2",
+      "index": 202
+    },
+    {
+      "area": "SAFARI_ZONE_WEST",
+      "x": 18,
+      "y": 18,
+      "flag": "TOGGLE_SAFARI_ZONE_WEST_ITEM_3",
+      "index": 203
+    },
+    {
+      "area": "SAFARI_ZONE_WEST",
+      "x": 19,
+      "y": 7,
+      "flag": "TOGGLE_SAFARI_ZONE_WEST_ITEM_4",
+      "index": 204
+    },
+    {
+      "area": "VICTORY_ROAD_1F",
+      "x": 11,
+      "y": 0,
+      "flag": "TOGGLE_VICTORY_ROAD_1F_ITEM_1",
+      "index": 212
+    },
+    {
+      "area": "VICTORY_ROAD_1F",
+      "x": 9,
+      "y": 2,
+      "flag": "TOGGLE_VICTORY_ROAD_1F_ITEM_2",
+      "index": 213
+    }
+  ]
+}
