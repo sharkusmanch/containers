@@ -7,6 +7,7 @@ trap 'docker image rm "$image" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 python3 test/provenance.py
 # A pristine source copy exposes skipped private/source-dependent tests honestly.
 docker run --rm -v "$PWD/app":/src:ro -v "$work":/output -w /work \
+  -e OUTPUT_UID="$(id -u)" -e OUTPUT_GID="$(id -g)" \
   "node:${NODE_VERSION}-alpine" sh -ec '
     cp -r /src/. /work
     npm ci --no-audit --no-fund
@@ -15,6 +16,8 @@ docker run --rm -v "$PWD/app":/src:ro -v "$work":/output -w /work \
     npm run build
     cp -r dist /output/
     chmod -R a+rX /output
+    # Return bind-mounted output to the runner so its EXIT trap can remove it.
+    chown -R "$OUTPUT_UID:$OUTPUT_GID" /output
   '
 # Build only the actual runtime stage. The workflow builds the final multiarch image.
 docker build --target runtime-base -t "$image" .
