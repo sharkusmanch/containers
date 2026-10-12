@@ -79,7 +79,10 @@ beforeAll(async () => {
     staticDir: dir,
     now: () => nowValue,
     guides: () => ({ available: true, hubs: [hub] }),
-    hubTree: (id) => (id === "h1" ? { hub, pages: [], defaultPins: ["Guide"] } : null),
+    hubTree: (id) =>
+      id === "h1"
+        ? { hub, pages: [], defaultPins: ["Guide"], editablePages: ["Sample Notes"] }
+        : null,
     refreshGuides: () => {
       refreshCalls += 1;
     },
@@ -178,6 +181,7 @@ describe("routes", () => {
       hub,
       pages: [],
       defaultPins: ["Guide"],
+      editablePages: ["Sample Notes"],
     });
   });
 

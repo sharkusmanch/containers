@@ -472,6 +472,7 @@ describe("display settings", () => {
     hideChrome: true,
     guideJump: true,
     guideZoom: 100 as const,
+    readerMode: true,
     fullscreen: false,
     wakeLockSupported: true,
     fullscreenSupported: true,
@@ -505,7 +506,7 @@ describe("display settings", () => {
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
   });
 
-  it("holds five buttons and a hint, the guide text size last before the hint", () => {
+  it("holds six buttons and a hint, reader mode last before the hint", () => {
     const { picker } = make();
     picker.setSettings(all);
     const list = picker.element.querySelector(".picker-settings") as HTMLElement;
@@ -516,6 +517,7 @@ describe("display settings", () => {
       "setting-fullscreen",
       "setting-guide-jump",
       "setting-guide-zoom",
+      "setting-reader-mode",
     ]);
     expect(list.lastElementChild?.className).toBe("setting-hint");
     expect(rows.every((b) => b.getAttribute("type") === "button")).toBe(true);
@@ -552,6 +554,30 @@ describe("display settings", () => {
     expect(row(picker, "setting-fullscreen").getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("labels the reader mode row for both states, with aria-pressed, and never hides it", () => {
+    const { picker } = make();
+    picker.setSettings(all);
+    expect(row(picker, "setting-reader-mode").textContent).toBe("Reader mode: on");
+    expect(row(picker, "setting-reader-mode").getAttribute("aria-pressed")).toBe("true");
+    picker.setSettings({ ...all, readerMode: false });
+    expect(row(picker, "setting-reader-mode").textContent).toBe("Reader mode: off");
+    expect(row(picker, "setting-reader-mode").getAttribute("aria-pressed")).toBe("false");
+    picker.setSettings({ ...all, wakeLockSupported: false, fullscreenSupported: false });
+    expect(row(picker, "setting-reader-mode").hidden).toBe(false);
+  });
+
+  it("keeps the picker open when the reader mode row is tapped", () => {
+    const { picker, handlers } = make();
+    picker.setSettings(all);
+    picker.open("pages");
+    tab(picker).click();
+    row(picker, "setting-reader-mode").click();
+    expect(handlers.onSetting).toHaveBeenCalledWith("readerMode");
+    expect(picker.element.hidden).toBe(false);
+    expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(false);
+    expect(handlers.onClose).not.toHaveBeenCalled();
+  });
+
   it("hides the rows the browser cannot support, and shows them again", () => {
     const { picker } = make();
     picker.setSettings({ ...all, wakeLockSupported: false, fullscreenSupported: false });
@@ -575,12 +601,14 @@ describe("display settings", () => {
     row(picker, "setting-fullscreen").click();
     row(picker, "setting-guide-jump").click();
     row(picker, "setting-guide-zoom").click();
+    row(picker, "setting-reader-mode").click();
     expect(handlers.onSetting.mock.calls).toEqual([
       ["keepAwake"],
       ["hideChrome"],
       ["fullscreen"],
       ["guideJump"],
       ["guideZoom"],
+      ["readerMode"],
     ]);
     expect(picker.element.hidden).toBe(false);
     expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(false);

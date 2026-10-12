@@ -1,4 +1,4 @@
-import { applyChrome } from "./chrome.js";
+import { applyChrome, applyReader } from "./chrome.js";
 import type { GuideZoom } from "./device.js";
 import { locateInFrame, type LocateMode } from "./locate.js";
 import { isSafeDocUrl, isSafeLinkUrl } from "./state.js";
@@ -24,6 +24,13 @@ export interface Frames {
    * scale the iframe elements. Touches no frame and writes nothing into a framed document.
    */
   setZoom(zoom: GuideZoom): void;
+  /**
+   * Reader mode: while `on`, the editable elements of every wiki-page frame whose address
+   * `isEditable` does not accept get no on-screen keyboard (see applyReader). Otherwise it is taken
+   * off that frame. Applied now, on each frame's load, when a frame becomes active and on the sweep.
+   * Never touches a link frame.
+   */
+  setReader(on: boolean, isEditable: (url: string) => boolean): void;
   /**
    * Finds `text` (preferably under `heading`) in the page framed in slot `index` and highlights it.
    * In "heading" mode it looks for the section heading carrying `text` instead (see findTextRange);
@@ -88,11 +95,15 @@ export function createFrames(
   const entries: (Entry | null)[] = Array.from({ length: slotCount }, () => null);
 
   let hideChrome = false;
+  let reader = false;
+  let isEditable: (url: string) => boolean = () => false;
   const applyTo = (entry: Entry): void => {
     if (entry.kind === "link") return;
     try {
       const framed = entry.frame.contentDocument;
-      if (framed !== null) applyChrome(framed, hideChrome);
+      if (framed === null) return;
+      applyChrome(framed, hideChrome);
+      applyReader(framed, reader && !isEditable(entry.url));
     } catch {
       // The frame is on another origin.
     }
@@ -123,10 +134,11 @@ export function createFrames(
       // The frame is on another origin.
     }
   };
-  // The wiki redraws its bars when the reader follows a link inside the frame. Only the frame on
-  // screen is swept, and not while the companion itself is in the background.
+  // The wiki redraws its bars, and rebuilds its editor, when the reader follows a link inside the
+  // frame. Only the frame on screen is swept, and not while the companion itself is in the
+  // background.
   (options.setInterval ?? setInterval)(() => {
-    if (!hideChrome || doc.visibilityState === "hidden") return;
+    if (!(hideChrome || reader) || doc.visibilityState === "hidden") return;
     for (const entry of entries) {
       if (entry !== null && !entry.frame.classList.contains("inactive")) applyTo(entry);
     }
@@ -163,7 +175,7 @@ export function createFrames(
         const created: Entry = { frame, url, kind, loading: true, generation: 1, live: null };
         frame.addEventListener("load", () => {
           created.loading = false;
-          if (hideChrome) applyTo(created);
+          if (hideChrome || reader) applyTo(created);
           watchClicks(created);
         });
         frame.setAttribute("src", url);
@@ -180,7 +192,7 @@ export function createFrames(
       }
       entry.frame.classList.remove("inactive");
       // A frame that is still navigating is applied by its load handler.
-      if (hideChrome && !entry.loading) applyTo(entry);
+      if ((hideChrome || reader) && !entry.loading) applyTo(entry);
     },
     hideAll,
     sync(urls) {
@@ -200,6 +212,11 @@ export function createFrames(
     },
     setHideChrome(hide) {
       hideChrome = hide;
+      for (const entry of entries) if (entry !== null) applyTo(entry);
+    },
+    setReader(on, editable) {
+      reader = on;
+      isEditable = editable;
       for (const entry of entries) if (entry !== null) applyTo(entry);
     },
     setZoom(zoom) {

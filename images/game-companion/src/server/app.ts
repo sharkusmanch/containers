@@ -11,6 +11,8 @@ export interface AppParts {
   staticDir: string;
   /** Page titles the web client pins by default; sent with every hub tree. */
   defaultPins: string[];
+  /** Titles of pages for typing in; sent with every hub tree. */
+  editablePages: string[];
   /** Explicit RA lookup allowlist; these games use the general fetch budget. */
   additionalRaGameIds: string[];
   detector: Pick<Detector, "current">;
@@ -63,7 +65,9 @@ export function buildDeps(parts: AppParts): RouteDeps {
     guides: () => ({ available: index.available(), hubs: index.hubs() }),
     hubTree: (hubId) => {
       const tree = index.tree(hubId);
-      return tree === null ? null : { ...tree, defaultPins: parts.defaultPins };
+      return tree === null
+        ? null
+        : { ...tree, defaultPins: parts.defaultPins, editablePages: parts.editablePages };
     },
     refreshGuides: () => index.requestRefresh(),
     achievements: async (source, id) => {

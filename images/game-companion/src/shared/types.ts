@@ -53,6 +53,11 @@ export interface HubTreeResponse {
   pages: GuidePage[];
   /** Page titles to pin by default, in order, from the server configuration. */
   defaultPins: string[];
+  /**
+   * Titles of pages that are for typing in, from the server configuration. Reader mode is never
+   * applied on them.
+   */
+  editablePages: string[];
 }
 
 export interface Achievement {

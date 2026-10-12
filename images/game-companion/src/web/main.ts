@@ -351,6 +351,8 @@ export function startApp(opts: AppOptions): App {
   let seenUnlocked: Set<string> | null = null;
   let findEnabled = false;
   let settings = loadSettings(storage);
+  // Titles of the open guide's pages that are for typing in; empty without a page tree.
+  let editableTitles: readonly string[] = [];
   const wakeLock = createWakeLock(opts.nav ?? {}, doc);
   // The search (or status line) a list of matches in the picker belongs to, and the text to look
   // for on the page of the one picked.
@@ -597,6 +599,21 @@ export function startApp(opts: AppOptions): App {
     wakeLock.setEnabled(settings.keepAwake);
     frames.setHideChrome(settings.hideChrome);
     frames.setZoom(settings.guideZoom);
+    applyReader();
+  }
+
+  // Whether the page framed at `url` is one of the open guide's pages meant for typing in; matched
+  // by document id, so a retitled address still counts. With no page tree nothing is editable.
+  function isEditable(url: string): boolean {
+    if (current === null || editableTitles.length === 0) return false;
+    const id = docId(url);
+    return flattenPages(current.pages).some(
+      (page) => docId(page.url) === id && editableTitles.includes(page.title),
+    );
+  }
+
+  function applyReader(): void {
+    frames.setReader(settings.readerMode, isEditable);
   }
 
   function showSettings(): void {
@@ -886,6 +903,8 @@ export function startApp(opts: AppOptions): App {
       links: scope === null ? [] : loadLinks(storage, scope),
     };
     current = waiting;
+    editableTitles = [];
+    applyReader();
     renderPresence();
     refreshPicker();
     render();
@@ -893,13 +912,14 @@ export function startApp(opts: AppOptions): App {
     if (hub !== null) {
       const stored = loadLayout(storage, hub.hubId);
       try {
-        const { pages, defaultPins } = await api.hubTree(hub.hubId);
+        const { pages, defaultPins, editablePages } = await api.hubTree(hub.hubId);
         // The links, and any link pinned, added or removed while the tree loaded, are on `waiting`.
         const layout = withPinsFrom(
           reconcileLayout(stored ?? defaultLayout(pages, defaultPins), pages, waiting.links),
           waiting,
         );
         current = { ...waiting, pages, layout, persist: true };
+        editableTitles = editablePages;
         void loadMarks(current);
       } catch {
         // A transient error must never overwrite stored pins, so nothing is persisted.
@@ -909,6 +929,7 @@ export function startApp(opts: AppOptions): App {
         };
       }
       frames.sync(current.layout.slots.map((s) => s?.url ?? null));
+      applyReader();
       refreshPicker();
       render();
     } else if (scope !== null) {
@@ -1062,8 +1083,9 @@ export function startApp(opts: AppOptions): App {
     if (c === null || c.hub === null || c.persist) return;
     let pages: GuidePage[];
     let defaultPins: string[];
+    let editablePages: string[];
     try {
-      ({ pages, defaultPins } = await api.hubTree(c.hub.hubId));
+      ({ pages, defaultPins, editablePages } = await api.hubTree(c.hub.hubId));
     } catch {
       return;
     }
@@ -1077,8 +1099,10 @@ export function startApp(opts: AppOptions): App {
     c.pages = pages;
     c.layout = reconcileLayout(base, pages, c.links);
     c.persist = true;
+    editableTitles = editablePages;
     void loadMarks(c);
     frames.sync(c.layout.slots.map((s) => s?.url ?? null));
+    applyReader();
     refreshPicker();
     render();
   }

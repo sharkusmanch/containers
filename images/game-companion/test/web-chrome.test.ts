@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyChrome } from "../src/web/chrome.js";
+import { applyChrome, applyReader } from "../src/web/chrome.js";
 
 const STICKY = "position:sticky;top:0";
 const RULES =
@@ -341,5 +341,146 @@ describe("applyChrome: bounded search", () => {
       observer.disconnect();
       expect(records).toHaveLength(0);
     }
+  });
+});
+
+const READER_PAGE =
+  '<div id="a" contenteditable="true">First note</div>' +
+  '<div id="b" contenteditable="">Second note</div>' +
+  '<div id="off" contenteditable="false">Not editable</div>' +
+  '<input id="field" type="text" value="sample">' +
+  '<div id="kept" contenteditable="true" inputmode="numeric">Numbers</div>';
+
+const readerMarked = (doc: Document): string[] =>
+  [...doc.querySelectorAll("[data-gc-reader]")].map((e) => e.id);
+
+/** Collects every change made to the document while `fn` runs. */
+function recordChanges(doc: Document, fn: () => void): MutationRecord[] {
+  const records: MutationRecord[] = [];
+  const observer = new MutationObserver((r) => records.push(...r));
+  observer.observe(doc, { subtree: true, childList: true, attributes: true, characterData: true });
+  fn();
+  records.push(...observer.takeRecords());
+  observer.disconnect();
+  return records;
+}
+
+describe("applyReader", () => {
+  it("sets inputmode none and the marker on the editable elements and nothing else", () => {
+    const doc = makeFrame(READER_PAGE);
+    applyReader(doc, true);
+    expect(readerMarked(doc)).toEqual(["a", "b"]);
+    for (const id of ["a", "b"]) {
+      expect(doc.getElementById(id)?.getAttribute("inputmode")).toBe("none");
+      expect(doc.getElementById(id)?.getAttribute("data-gc-reader")).toBe("1");
+    }
+    expect(doc.getElementById("off")?.hasAttribute("inputmode")).toBe(false);
+    expect(doc.getElementById("field")?.hasAttribute("inputmode")).toBe(false);
+    expect(doc.getElementById("kept")?.getAttribute("inputmode")).toBe("numeric");
+    expect(doc.getElementById("kept")?.hasAttribute("data-gc-reader")).toBe(false);
+  });
+
+  it("changes nothing when applied a second time", () => {
+    const doc = makeFrame(READER_PAGE);
+    applyReader(doc, true);
+    const once = doc.documentElement.outerHTML;
+    const records = recordChanges(doc, () => applyReader(doc, true));
+    expect(records).toHaveLength(0);
+    expect(doc.documentElement.outerHTML).toBe(once);
+  });
+
+  it("takes both attributes off exactly those elements, leaving the rest byte-identical", () => {
+    const doc = makeFrame(READER_PAGE);
+    const original = doc.documentElement.outerHTML;
+    applyReader(doc, true);
+    applyReader(doc, false);
+    expect(readerMarked(doc)).toEqual([]);
+    expect(doc.getElementById("a")?.hasAttribute("inputmode")).toBe(false);
+    expect(doc.getElementById("b")?.hasAttribute("inputmode")).toBe(false);
+    expect(doc.documentElement.outerHTML).toBe(original);
+  });
+
+  it("switching off a page that was never switched on changes nothing", () => {
+    const doc = makeFrame(READER_PAGE);
+    const original = doc.documentElement.outerHTML;
+    const records = recordChanges(doc, () => applyReader(doc, false));
+    expect(records).toHaveLength(0);
+    expect(doc.documentElement.outerHTML).toBe(original);
+  });
+
+  it("picks up an editable element added later on the next call", () => {
+    const doc = makeFrame(READER_PAGE);
+    applyReader(doc, true);
+    const late = doc.createElement("div");
+    late.id = "late";
+    late.setAttribute("contenteditable", "true");
+    doc.body.append(late);
+    applyReader(doc, true);
+    expect(readerMarked(doc)).toEqual(["a", "b", "late"]);
+    expect(late.getAttribute("inputmode")).toBe("none");
+  });
+
+  it("examines at most 50 editable elements", () => {
+    const doc = makeFrame(
+      Array.from({ length: 60 }, (_, i) => `<div id="e${i}" contenteditable="true">x</div>`).join(
+        "",
+      ),
+    );
+    applyReader(doc, true);
+    expect(readerMarked(doc)).toHaveLength(50);
+    expect(doc.getElementById("e49")?.hasAttribute("data-gc-reader")).toBe(true);
+    expect(doc.getElementById("e50")?.hasAttribute("data-gc-reader")).toBe(false);
+  });
+
+  it("keeps a value the page set meanwhile when switching off, removing only the marker", () => {
+    const doc = makeFrame(READER_PAGE);
+    applyReader(doc, true);
+    doc.getElementById("a")?.setAttribute("inputmode", "text");
+    applyReader(doc, true);
+    expect(doc.getElementById("a")?.getAttribute("inputmode")).toBe("text");
+    applyReader(doc, false);
+    expect(doc.getElementById("a")?.getAttribute("inputmode")).toBe("text");
+    expect(doc.getElementById("a")?.hasAttribute("data-gc-reader")).toBe(false);
+    expect(doc.getElementById("b")?.hasAttribute("inputmode")).toBe(false);
+  });
+
+  it("does not touch focus, selection or style", () => {
+    const doc = makeFrame(READER_PAGE);
+    const a = doc.getElementById("a") as HTMLElement;
+    a.focus();
+    const focus = vi.spyOn(a, "focus");
+    const blur = vi.spyOn(a, "blur");
+    applyReader(doc, true);
+    applyReader(doc, false);
+    expect(focus).not.toHaveBeenCalled();
+    expect(blur).not.toHaveBeenCalled();
+    expect(doc.activeElement).toBe(a);
+    expect(doc.querySelectorAll("style, [style]")).toHaveLength(0);
+  });
+
+  it("does not throw when reading the document fails", () => {
+    const hostile = new Proxy({} as Document, {
+      get() {
+        throw new Error("Blocked a frame from another origin");
+      },
+    });
+    expect(() => applyReader(hostile, true)).not.toThrow();
+    expect(() => applyReader(hostile, false)).not.toThrow();
+  });
+
+  it("does not disturb applyChrome's attributes, nor they it", () => {
+    const doc = makeFrame(PAGE + READER_PAGE);
+    applyChrome(doc, true);
+    applyReader(doc, true);
+    expect(tagged(doc)).toEqual(["topbar"]);
+    expect(styles(doc)).toHaveLength(1);
+    expect(readerMarked(doc)).toEqual(["a", "b"]);
+    applyChrome(doc, false);
+    expect(readerMarked(doc)).toEqual(["a", "b"]);
+    applyChrome(doc, true);
+    applyReader(doc, false);
+    expect(tagged(doc)).toEqual(["topbar"]);
+    expect(styles(doc)).toHaveLength(1);
+    expect(readerMarked(doc)).toEqual([]);
   });
 });

@@ -636,6 +636,254 @@ describe("createFrames", () => {
   });
 });
 
+describe("reader mode", () => {
+  const BODY = '<div id="note" contenteditable="true">Sample note</div>';
+  const mark = (frame: HTMLIFrameElement | undefined): string | null =>
+    frame?.contentDocument?.getElementById("note")?.getAttribute("inputmode") ?? null;
+  const chromeStyle = (frame: HTMLIFrameElement | undefined): Element | null =>
+    frame?.contentDocument?.getElementById("gc-chrome-style") ?? null;
+  const frameAt = (f: { element: HTMLElement }, i: number): HTMLIFrameElement =>
+    f.element.querySelectorAll("iframe")[i] as HTMLIFrameElement;
+  const never = (): boolean => false;
+  const always = (): boolean => true;
+
+  afterEach(() => {
+    Reflect.deleteProperty(document, "visibilityState");
+  });
+
+  function withTimer() {
+    const ticks: (() => void)[] = [];
+    const fake = ((fn: () => void) => ticks.push(fn)) as unknown as typeof setInterval;
+    document.body.innerHTML = "";
+    const f = createFrames(document, 4, { setInterval: fake });
+    document.body.append(f.element);
+    return { f, tick: () => ticks.forEach((t) => t()) };
+  }
+
+  /** A loaded page in slot `i`, with one editable element. */
+  function page(f: ReturnType<typeof createFrames>, i: number, url = `/doc/p${i}`): void {
+    f.show(i, url);
+    showing(frameAt(f, i), BODY);
+    loaded(frameAt(f, i));
+  }
+
+  it("applies to a frame when it loads", () => {
+    const { f } = withTimer();
+    f.setReader(true, never);
+    f.show(0, "/doc/a");
+    showing(frameAt(f, 0), BODY);
+    expect(mark(frameAt(f, 0))).toBeNull();
+    loaded(frameAt(f, 0));
+    expect(mark(frameAt(f, 0))).toBe("none");
+  });
+
+  it("applies at once to every existing frame when called", () => {
+    const { f } = withTimer();
+    f.show(0, "/doc/a");
+    f.show(1, "/doc/b");
+    showing(frameAt(f, 0), BODY);
+    showing(frameAt(f, 1), BODY);
+    f.setReader(true, never);
+    expect(mark(frameAt(f, 0))).toBe("none");
+    expect(mark(frameAt(f, 1))).toBe("none");
+  });
+
+  it("takes it off every frame at once when switched off", () => {
+    const { f } = withTimer();
+    f.show(0, "/doc/a");
+    showing(frameAt(f, 0), BODY);
+    const before = frameAt(f, 0).contentDocument?.documentElement.outerHTML;
+    f.setReader(true, never);
+    f.setReader(false, never);
+    expect(mark(frameAt(f, 0))).toBeNull();
+    expect(frameAt(f, 0).contentDocument?.documentElement.outerHTML).toBe(before);
+  });
+
+  it("applies when a frame becomes active, without waiting for a tick", () => {
+    const { f } = withTimer();
+    f.setReader(true, never);
+    page(f, 0);
+    page(f, 1);
+    frameAt(f, 0).contentDocument?.getElementById("note")?.removeAttribute("inputmode");
+    f.show(0, "/doc/p0");
+    expect(mark(frameAt(f, 0))).toBe("none");
+  });
+
+  it("leaves a frame that is still navigating to its load handler", () => {
+    const { f } = withTimer();
+    f.setReader(true, never);
+    page(f, 0);
+    f.show(0, "/doc/other");
+    showing(frameAt(f, 0), BODY);
+    expect(mark(frameAt(f, 0))).toBeNull();
+    loaded(frameAt(f, 0));
+    expect(mark(frameAt(f, 0))).toBe("none");
+  });
+
+  it("re-applies on the sweep to the frame on screen only, with the bars not hidden", () => {
+    const { f, tick } = withTimer();
+    f.setReader(true, never);
+    page(f, 0);
+    page(f, 1);
+    for (const i of [0, 1]) {
+      frameAt(f, i).contentDocument?.getElementById("note")?.removeAttribute("inputmode");
+    }
+    tick();
+    expect(mark(frameAt(f, 1))).toBe("none");
+    expect(mark(frameAt(f, 0))).toBeNull();
+    expect(chromeStyle(frameAt(f, 1))).toBeNull();
+  });
+
+  it("sweeps for the bars alone while reader mode is off, and leaves nothing of reader mode", () => {
+    const { f, tick } = withTimer();
+    f.setHideChrome(true);
+    page(f, 0);
+    chromeStyle(frameAt(f, 0))?.remove();
+    frameAt(f, 0).contentDocument?.getElementById("note")?.setAttribute("inputmode", "none");
+    frameAt(f, 0).contentDocument?.getElementById("note")?.setAttribute("data-gc-reader", "1");
+    tick();
+    expect(chromeStyle(frameAt(f, 0))).not.toBeNull();
+    expect(mark(frameAt(f, 0))).toBeNull();
+  });
+
+  it("sweeps for reader mode alone while the bars are not hidden, leaving no bar rules", () => {
+    const { f, tick } = withTimer();
+    f.setReader(true, never);
+    page(f, 0);
+    const doc = frameAt(f, 0).contentDocument as Document;
+    doc.head.insertAdjacentHTML("beforeend", '<style id="gc-chrome-style">x{}</style>');
+    tick();
+    expect(chromeStyle(frameAt(f, 0))).toBeNull();
+    expect(mark(frameAt(f, 0))).toBe("none");
+  });
+
+  it("applies both at once when both are on", () => {
+    const { f, tick } = withTimer();
+    f.setHideChrome(true);
+    f.setReader(true, never);
+    page(f, 0);
+    chromeStyle(frameAt(f, 0))?.remove();
+    frameAt(f, 0).contentDocument?.getElementById("note")?.removeAttribute("inputmode");
+    tick();
+    expect(chromeStyle(frameAt(f, 0))).not.toBeNull();
+    expect(mark(frameAt(f, 0))).toBe("none");
+  });
+
+  it("does not read any frame on a tick while both are off", () => {
+    const { f, tick } = withTimer();
+    page(f, 0);
+    f.setReader(true, never);
+    f.setReader(false, never);
+    const reads = vi.fn(() => null);
+    Object.defineProperty(frameAt(f, 0), "contentDocument", { get: reads, configurable: true });
+    tick();
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("gives a frame whose address is editable the off form, on load, show and sweep", () => {
+    const { f, tick } = withTimer();
+    f.setReader(true, (url) => url === "/doc/p0");
+    page(f, 0);
+    page(f, 1);
+    expect(mark(frameAt(f, 0))).toBeNull();
+    expect(mark(frameAt(f, 1))).toBe("none");
+    f.show(0, "/doc/p0");
+    tick();
+    expect(mark(frameAt(f, 0))).toBeNull();
+  });
+
+  it("removes what it set from a frame whose page turns out to be editable", () => {
+    const { f } = withTimer();
+    f.setReader(true, never);
+    page(f, 0);
+    expect(mark(frameAt(f, 0))).toBe("none");
+    f.setReader(true, always);
+    expect(mark(frameAt(f, 0))).toBeNull();
+  });
+
+  it("re-applies when the answer to isEditable changes", () => {
+    const { f } = withTimer();
+    f.setReader(true, always);
+    page(f, 0);
+    expect(mark(frameAt(f, 0))).toBeNull();
+    f.setReader(true, never);
+    expect(mark(frameAt(f, 0))).toBe("none");
+  });
+
+  it("asks isEditable with the address the frame shows", () => {
+    const { f } = withTimer();
+    const asked: string[] = [];
+    f.setReader(true, (url) => {
+      asked.push(url);
+      return false;
+    });
+    page(f, 0, "/doc/sample-page");
+    expect(asked).toContain("/doc/sample-page");
+    f.show(0, "/doc/other-page");
+    showing(frameAt(f, 0), BODY);
+    loaded(frameAt(f, 0));
+    expect(asked.at(-1)).toBe("/doc/other-page");
+  });
+
+  it("never reads a link frame", () => {
+    const { f, tick } = withTimer();
+    f.setReader(true, never);
+    f.show(0, "https://links.example.test/a", "link");
+    const reads = vi.fn(() => {
+      throw new Error("cross-origin");
+    });
+    Object.defineProperty(frameAt(f, 0), "contentDocument", { get: reads, configurable: true });
+    expect(() => loaded(frameAt(f, 0))).not.toThrow();
+    expect(() => f.setReader(true, never)).not.toThrow();
+    expect(() => f.setReader(false, never)).not.toThrow();
+    f.show(0, "https://links.example.test/a", "link");
+    expect(() => tick()).not.toThrow();
+    expect(reads).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on a tick while the companion's own document is hidden", () => {
+    const { f, tick } = withTimer();
+    f.setReader(true, never);
+    page(f, 0);
+    frameAt(f, 0).contentDocument?.getElementById("note")?.removeAttribute("inputmode");
+    Object.defineProperty(document, "visibilityState", {
+      get: () => "hidden",
+      configurable: true,
+    });
+    tick();
+    expect(mark(frameAt(f, 0))).toBeNull();
+    Reflect.deleteProperty(document, "visibilityState");
+    tick();
+    expect(mark(frameAt(f, 0))).toBe("none");
+  });
+
+  it("skips a frame whose document cannot be read, and carries on with the others", () => {
+    const { f, tick } = withTimer();
+    f.show(0, "/doc/a");
+    f.show(1, "/doc/b");
+    Object.defineProperty(frameAt(f, 0), "contentDocument", {
+      get() {
+        throw new Error("Blocked a frame from another origin");
+      },
+    });
+    showing(frameAt(f, 1), BODY);
+    expect(() => f.setReader(true, never)).not.toThrow();
+    expect(() => tick()).not.toThrow();
+    expect(mark(frameAt(f, 1))).toBe("none");
+  });
+
+  it("survives an isEditable that throws", () => {
+    const { f } = withTimer();
+    f.show(0, "/doc/a");
+    showing(frameAt(f, 0), BODY);
+    expect(() =>
+      f.setReader(true, () => {
+        throw new Error("sample failure");
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe("guide text size", () => {
   const classes = (f: { element: HTMLElement }): string[] =>
     [...f.element.classList].filter((c) => c.startsWith("zoom-")).sort();

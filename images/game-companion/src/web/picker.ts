@@ -17,13 +17,15 @@ export interface PickerHandlers {
   onLink(link: GameLink): void;
 }
 
-export type SettingName = "keepAwake" | "hideChrome" | "guideJump" | "guideZoom" | "fullscreen";
+export type SettingName =
+  "keepAwake" | "hideChrome" | "guideJump" | "guideZoom" | "readerMode" | "fullscreen";
 
 export interface SettingsState {
   keepAwake: boolean;
   hideChrome: boolean;
   guideJump: boolean;
   guideZoom: GuideZoom;
+  readerMode: boolean;
   fullscreen: boolean;
   wakeLockSupported: boolean;
   fullscreenSupported: boolean;
@@ -92,6 +94,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     ["fullscreen", "setting-fullscreen"],
     ["guideJump", "setting-guide-jump"],
     ["guideZoom", "setting-guide-zoom"],
+    ["readerMode", "setting-reader-mode"],
   ] as const) {
     const b = doc.createElement("button");
     b.setAttribute("type", "button");
@@ -353,6 +356,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
         `Guide jump from status: ${state.guideJump ? "on" : "off"}`,
         state.guideJump,
       );
+      label("readerMode", `Reader mode: ${state.readerMode ? "on" : "off"}`, state.readerMode);
       const zoomRow = settingRows.get("guideZoom");
       if (zoomRow !== undefined) zoomRow.textContent = `Guide text size: ${state.guideZoom}%`;
     },

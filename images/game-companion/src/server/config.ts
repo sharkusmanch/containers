@@ -15,6 +15,8 @@ export interface Config {
   outlineScheduleDocId: string | null;
   /** Titles of the guide pages pinned by default, in order; empty when none are configured. */
   defaultPinnedPages: string[];
+  /** Titles of pages that are for typing in; the web client never applies reader mode to them. */
+  editablePages: string[];
 }
 
 const REQUIRED = [
@@ -47,6 +49,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     outlineGuidesParentId: need("OUTLINE_GUIDES_PARENT_ID"),
     outlineScheduleDocId: env.OUTLINE_SCHEDULE_DOC_ID || null,
     defaultPinnedPages: parseTitles(env.DEFAULT_PINNED_PAGES),
+    editablePages: parseTitles(env.EDITABLE_PAGES),
   };
 }
 

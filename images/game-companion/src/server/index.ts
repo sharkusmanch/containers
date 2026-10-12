@@ -51,6 +51,7 @@ const handler = createHandler(
   buildDeps({
     staticDir: config.staticDir,
     defaultPins: config.defaultPinnedPages,
+    editablePages: config.editablePages,
     additionalRaGameIds: config.additionalRaGameIds,
     detector,
     index,

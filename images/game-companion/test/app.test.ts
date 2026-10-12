@@ -16,6 +16,7 @@ function parts(over: Record<string, unknown> = {}) {
   return {
     staticDir: "x",
     defaultPins: [] as string[],
+    editablePages: [] as string[],
     additionalRaGameIds: [] as string[],
     detector: {
       current: () => ({
@@ -53,7 +54,22 @@ describe("buildDeps", () => {
         index: { ...parts().index, tree },
       }),
     );
-    expect(d.hubTree("h1")).toEqual({ hub, pages: [], defaultPins: ["Alpha Page", "Beta Page"] });
+    expect(d.hubTree("h1")).toEqual({
+      hub,
+      pages: [],
+      defaultPins: ["Alpha Page", "Beta Page"],
+      editablePages: [],
+    });
+  });
+
+  it("adds the configured editable pages to every hub tree, or an empty list", () => {
+    const tree = () => ({ hub, pages: [] });
+    const withList = buildDeps(
+      parts({ editablePages: ["Sample Notes"], index: { ...parts().index, tree } }),
+    );
+    expect(withList.hubTree("h1")?.editablePages).toEqual(["Sample Notes"]);
+    const without = buildDeps(parts({ index: { ...parts().index, tree } }));
+    expect(without.hubTree("h1")?.editablePages).toEqual([]);
   });
 
   it("reports an empty default pin list when none is configured", () => {
@@ -185,7 +201,7 @@ describe("buildDeps", () => {
     const d = buildDeps(parts({ index, achievements: new Service(), detector: new Detector() }));
     expect(d.now()).toMatchObject({ game: { id: "10", title: "Zeta" }, hubs: [hub] });
     expect(d.guides()).toEqual({ available: true, hubs: [hub] });
-    expect(d.hubTree("h1")).toEqual({ hub, pages: [], defaultPins: [] });
+    expect(d.hubTree("h1")).toEqual({ hub, pages: [], defaultPins: [], editablePages: [] });
     expect(d.hubTree("nope")).toBeNull();
     d.refreshGuides();
     expect(index.refreshed).toBe(1);

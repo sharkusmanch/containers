@@ -15,6 +15,8 @@ export interface Settings {
   hideChrome: boolean;
   guideJump: boolean;
   guideZoom: GuideZoom;
+  /** Stops the on-screen keyboard coming up for the framed wiki pages that are for reading. */
+  readerMode: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -22,6 +24,7 @@ export const DEFAULT_SETTINGS: Settings = {
   hideChrome: true,
   guideJump: true,
   guideZoom: 100,
+  readerMode: true,
 };
 export const SETTINGS_STORAGE_KEY = "game-companion:v1:settings";
 
@@ -42,6 +45,7 @@ export function loadSettings(storage: StorageLike | null | undefined): Settings 
       hideChrome: flag(parsed["hideChrome"], DEFAULT_SETTINGS.hideChrome),
       guideJump: flag(parsed["guideJump"], DEFAULT_SETTINGS.guideJump),
       guideZoom: zoom(parsed["guideZoom"]),
+      readerMode: flag(parsed["readerMode"], DEFAULT_SETTINGS.readerMode),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -57,6 +61,7 @@ export function saveSettings(storage: StorageLike | null | undefined, s: Setting
         hideChrome: s.hideChrome,
         guideJump: s.guideJump,
         guideZoom: s.guideZoom,
+        readerMode: s.readerMode,
       }),
     );
   } catch {

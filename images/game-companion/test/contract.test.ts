@@ -60,7 +60,10 @@ beforeAll(async () => {
     staticDir: "/nonexistent",
     now: () => nowValue,
     guides: () => ({ available: true, hubs: [hub] }),
-    hubTree: (id) => (id === "h1" ? { hub, pages: [], defaultPins: ["Guide"] } : null),
+    hubTree: (id) =>
+      id === "h1"
+        ? { hub, pages: [], defaultPins: ["Guide"], editablePages: ["Sample Notes"] }
+        : null,
     refreshGuides: () => {
       refreshCalls += 1;
     },
@@ -143,7 +146,12 @@ describe("browser client against the real request handler", () => {
   });
 
   it("reads a known hub tree and rejects an unknown one with a 404", async () => {
-    expect(await api.hubTree("h1")).toEqual({ hub, pages: [], defaultPins: ["Guide"] });
+    expect(await api.hubTree("h1")).toEqual({
+      hub,
+      pages: [],
+      defaultPins: ["Guide"],
+      editablePages: ["Sample Notes"],
+    });
     const err = await api.hubTree("nope").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(404);
@@ -328,6 +336,7 @@ it("serves all configured Red private routes through the RA client, normalizer a
   const deps = buildDeps({
     staticDir: "/nonexistent",
     defaultPins: [],
+    editablePages: [],
     additionalRaGameIds: ids,
     pages: {
       find: async () => null,

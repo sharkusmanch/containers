@@ -60,6 +60,17 @@ describe("loadConfig", () => {
     ]);
   });
 
+  it("has no editable pages unless configured", () => {
+    expect(loadConfig(base).editablePages).toEqual([]);
+    expect(loadConfig({ ...base, EDITABLE_PAGES: "" }).editablePages).toEqual([]);
+  });
+
+  it("reads editable pages: trimmed, without empty entries or duplicates", () => {
+    expect(loadConfig({ ...base, EDITABLE_PAGES: "Notes, Scratch ,,Notes" }).editablePages).toEqual(
+      ["Notes", "Scratch"],
+    );
+  });
+
   it("names every missing required variable", () => {
     expect(() => loadConfig({})).toThrow(/STEAM_API_KEY.*STEAM_ID.*RA_API_KEY.*RA_USERNAME/s);
   });

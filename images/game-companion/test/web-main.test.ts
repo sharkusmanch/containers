@@ -19,6 +19,8 @@ import type {
 
 // Records every call to frames.locate (and still runs it), so tests can pin the exact arguments.
 const locateCalls = vi.hoisted(() => [] as unknown[][]);
+// Records every call to frames.setReader (and still runs it).
+const readerCalls = vi.hoisted(() => [] as { on: boolean; isEditable: (url: string) => boolean }[]);
 vi.mock("../src/web/frames.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../src/web/frames.js")>();
   return {
@@ -29,6 +31,11 @@ vi.mock("../src/web/frames.js", async (importOriginal) => {
       frames.locate = (...a) => {
         locateCalls.push(a);
         return locate(...a);
+      };
+      const setReader = frames.setReader.bind(frames);
+      frames.setReader = (on, isEditable) => {
+        readerCalls.push({ on, isEditable });
+        setReader(on, isEditable);
       };
       return frames;
     },
@@ -75,6 +82,7 @@ const tree = (hub: GuideHub): HubTreeResponse => ({
     { title: "Collectibles", url: `/doc/${hub.hubId}-coll`, children: [] },
   ],
   defaultPins: ["Achievement Checklist"],
+  editablePages: [],
 });
 const ach = (id: string, unlocked: number): AchievementsResponse => ({
   source: "ra",
@@ -162,6 +170,7 @@ const $ = (sel: string): HTMLElement | null => document.querySelector(sel);
 beforeEach(() => {
   document.body.innerHTML = '<main id="app"></main>';
   locateCalls.length = 0;
+  readerCalls.length = 0;
   reconcileHook.fn = null;
 });
 
@@ -944,6 +953,7 @@ describe("startApp", () => {
             hub: hubZ,
             pages: [{ title: "Zeta Walkthrough", url: "/doc/z-walk", children: [] }],
             defaultPins: [],
+            editablePages: [],
           };
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
     await app.ready;
@@ -1351,6 +1361,7 @@ describe("startApp", () => {
         { title: "Achievement Checklist", url: "/doc/achievement-checklist-ID1", children: [] },
       ],
       defaultPins: ["Achievement Checklist"],
+      editablePages: [],
     });
     const app = startApp({ doc: document, api, storage, setInterval: noTimers });
     await app.ready;
@@ -1719,7 +1730,7 @@ describe("find in guide: enabling", () => {
 
   it("does not offer it when the guide has no pages", async () => {
     const api = fakeApi(playing(hubA));
-    api.hubTree = async () => ({ hub: hubA, pages: [], defaultPins: [] });
+    api.hubTree = async () => ({ hub: hubA, pages: [], defaultPins: [], editablePages: [] });
     await start(api);
     expandFirst();
     expect(document.querySelector(".ach-find")).toBeNull();
@@ -1980,6 +1991,7 @@ describe("find in guide", () => {
       hub: hubA,
       pages: [{ title: "Odd", url: "https://evil.example/doc/odd", children: [] }],
       defaultPins: [],
+      editablePages: [],
     });
     api.find = async () => ({
       matches: [match("https://evil.example/doc/odd")],
@@ -2059,6 +2071,7 @@ describe("find in guide", () => {
       hub: hubA,
       pages,
       defaultPins: ["One", "Two", "Three", "Four"],
+      editablePages: [],
     });
     const answers = [pages[4] as (typeof pages)[number], pages[5] as (typeof pages)[number]];
     api.find = async () => ({
@@ -2779,6 +2792,7 @@ describe("display settings", () => {
       hideChrome: false,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
     expect($(".picker")?.hidden).toBe(false);
     row("setting-hide-chrome").click();
@@ -2789,6 +2803,173 @@ describe("display settings", () => {
       hideChrome: true,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
+    });
+  });
+
+  describe("reader mode", () => {
+    const withEditor = (url: string): Document => {
+      const doc = framed(url);
+      doc.body.insertAdjacentHTML("beforeend", '<div id="note" contenteditable="true">x</div>');
+      return doc;
+    };
+    const lastReader = () => readerCalls.at(-1) as (typeof readerCalls)[number];
+    const treeWith = (hub: GuideHub, editablePages: string[]): HubTreeResponse => ({
+      ...tree(hub),
+      editablePages,
+    });
+    const withApi = (api: Fake) => start(memory(), { api });
+
+    it("is on by default: handed to the frames at start, and applied to a page that loads", async () => {
+      await start();
+      expect(lastReader().on).toBe(true);
+      const doc = withEditor("/doc/hA-checklist");
+      railButtons()[1]?.click();
+      ($("iframe") as HTMLIFrameElement).dispatchEvent(new Event("load"));
+      expect(doc.getElementById("note")?.getAttribute("inputmode")).toBe("none");
+      openDisplay();
+      expect(row("setting-reader-mode").textContent).toBe("Reader mode: on");
+      expect(row("setting-reader-mode").getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("applies the stored value at start", async () => {
+      const storage = memory();
+      storage.setItem(KEY, JSON.stringify({ readerMode: false }));
+      await start(storage);
+      expect(lastReader().on).toBe(false);
+      const doc = withEditor("/doc/hA-checklist");
+      railButtons()[1]?.click();
+      ($("iframe") as HTMLIFrameElement).dispatchEvent(new Event("load"));
+      expect(doc.getElementById("note")?.hasAttribute("inputmode")).toBe(false);
+      openDisplay();
+      expect(row("setting-reader-mode").textContent).toBe("Reader mode: off");
+      expect(row("setting-reader-mode").getAttribute("aria-pressed")).toBe("false");
+    });
+
+    it("flips on a tap: saves, applies at once, relabels and leaves the picker open", async () => {
+      const { storage } = await start();
+      const doc = withEditor("/doc/hA-checklist");
+      railButtons()[1]?.click();
+      ($("iframe") as HTMLIFrameElement).dispatchEvent(new Event("load"));
+      expect(doc.getElementById("note")?.getAttribute("inputmode")).toBe("none");
+      openDisplay();
+      row("setting-reader-mode").click();
+      expect(lastReader().on).toBe(false);
+      expect(doc.getElementById("note")?.hasAttribute("inputmode")).toBe(false);
+      expect(doc.getElementById("note")?.hasAttribute("data-gc-reader")).toBe(false);
+      expect(row("setting-reader-mode").textContent).toBe("Reader mode: off");
+      expect(row("setting-reader-mode").getAttribute("aria-pressed")).toBe("false");
+      expect(stored(storage)).toEqual({
+        keepAwake: true,
+        hideChrome: true,
+        guideJump: true,
+        guideZoom: 100,
+        readerMode: false,
+      });
+      expect($(".picker")?.hidden).toBe(false);
+      row("setting-reader-mode").click();
+      expect(lastReader().on).toBe(true);
+      expect(doc.getElementById("note")?.getAttribute("inputmode")).toBe("none");
+      expect(row("setting-reader-mode").textContent).toBe("Reader mode: on");
+      expect((stored(storage) as { readerMode: boolean }).readerMode).toBe(true);
+    });
+
+    it("reports a page editable when its title is in the list, matching by document id", async () => {
+      const api = fakeApi(playing(hubA));
+      api.hubTree = async () => treeWith(hubA, ["Collectibles", "Missing Page"]);
+      await withApi(api);
+      const { isEditable } = lastReader();
+      expect(isEditable("/doc/hA-coll")).toBe(true);
+      expect(isEditable("/doc/hA-checklist")).toBe(false);
+      // The address slug differs from the tree's, the document id matches.
+      expect(isEditable("/doc/older-slug-coll")).toBe(true);
+      expect(isEditable("/doc/older-slug-checklist")).toBe(false);
+      expect(isEditable("/doc/hA-unknown")).toBe(false);
+    });
+
+    it("follows the list of the newest tree and applies it to the frames when the tree arrives", async () => {
+      const api = fakeApi(playing(hubA));
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      api.hubTree = async () => {
+        await gate;
+        return treeWith(hubA, ["Collectibles"]);
+      };
+      const app = startApp({
+        doc: document,
+        api,
+        storage: memory(),
+        setInterval: noTimers,
+      });
+      await flush();
+      const before = readerCalls.length;
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(false);
+      release();
+      await app.ready;
+      expect(readerCalls.length).toBeGreaterThan(before);
+      expect(lastReader().on).toBe(true);
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(true);
+    });
+
+    it("treats nothing as editable after a game change, until the new tree arrives", async () => {
+      const api = fakeApi(playing(hubA));
+      api.hubTree = async (id) =>
+        treeWith(id === "hA" ? hubA : hubZ, id === "hA" ? ["Collectibles"] : []);
+      const { app } = await withApi(api);
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(true);
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      api.hubTree = async (id) => {
+        await gate;
+        return treeWith(id === "hA" ? hubA : hubZ, []);
+      };
+      api.nowValue = playing(hubZ);
+      await app.tick();
+      ($(".switch-banner .switch-accept") as HTMLElement).click();
+      const pendingTick = app.tick();
+      await flush();
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(false);
+      expect(lastReader().isEditable("/doc/hZ-coll")).toBe(false);
+      release();
+      await pendingTick;
+      await flush();
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(false);
+      expect(lastReader().isEditable("/doc/hZ-coll")).toBe(false);
+    });
+
+    it("treats nothing as editable when there is no guide", async () => {
+      const api = fakeApi({ ...playing(hubA), hubs: [] });
+      await withApi(api);
+      expect(lastReader().on).toBe(true);
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(false);
+    });
+
+    it("treats nothing as editable while the tree failed, and gets the list back on the retry", async () => {
+      const api = fakeApi(playing(hubA));
+      let fail = true;
+      api.hubTree = async () => {
+        if (fail) throw new Error("down");
+        return treeWith(hubA, ["Collectibles"]);
+      };
+      const { app } = await withApi(api);
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(false);
+      fail = false;
+      const before = readerCalls.length;
+      await app.tick();
+      await flush();
+      expect(readerCalls.length).toBeGreaterThan(before);
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(true);
+      expect(lastReader().isEditable("/doc/hA-checklist")).toBe(false);
+    });
+
+    it("keeps the list when the setting is flipped", async () => {
+      const api = fakeApi(playing(hubA));
+      api.hubTree = async () => treeWith(hubA, ["Collectibles"]);
+      await withApi(api);
+      openDisplay();
+      row("setting-reader-mode").click();
+      expect(lastReader().on).toBe(false);
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(true);
     });
   });
 
@@ -2841,6 +3022,7 @@ describe("display settings", () => {
         hideChrome: true,
         guideJump: true,
         guideZoom: percent,
+        readerMode: true,
       });
       expect($(".picker")?.hidden).toBe(false);
     }
@@ -2863,6 +3045,7 @@ describe("display settings", () => {
       hideChrome: true,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
     row("setting-keep-awake").click();
     await flush();
@@ -2873,6 +3056,7 @@ describe("display settings", () => {
       hideChrome: true,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
   });
 
@@ -4502,6 +4686,7 @@ describe("your links", () => {
         hub: hubA,
         pages: [{ title: "Odd", url: "https://links.example.test/x", children: [] }],
         defaultPins: [],
+        editablePages: [],
       });
     });
     more();

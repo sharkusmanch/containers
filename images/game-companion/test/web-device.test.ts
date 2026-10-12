@@ -31,6 +31,7 @@ describe("settings", () => {
       hideChrome: true,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
     expect(SETTINGS_STORAGE_KEY).toBe("game-companion:v1:settings");
     expect(loadSettings(memory())).toEqual({
@@ -38,6 +39,7 @@ describe("settings", () => {
       hideChrome: true,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
   });
 
@@ -52,25 +54,40 @@ describe("settings", () => {
 
   it("round-trips through storage", () => {
     const storage = memory();
-    saveSettings(storage, { keepAwake: false, hideChrome: true, guideJump: false, guideZoom: 100 });
+    saveSettings(storage, {
+      keepAwake: false,
+      hideChrome: true,
+      guideJump: false,
+      guideZoom: 100,
+      readerMode: true,
+    });
     expect(JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string)).toEqual({
       keepAwake: false,
       hideChrome: true,
       guideJump: false,
       guideZoom: 100,
+      readerMode: true,
     });
     expect(loadSettings(storage)).toEqual({
       keepAwake: false,
       hideChrome: true,
       guideJump: false,
       guideZoom: 100,
+      readerMode: true,
     });
-    saveSettings(storage, { keepAwake: true, hideChrome: false, guideJump: true, guideZoom: 100 });
+    saveSettings(storage, {
+      keepAwake: true,
+      hideChrome: false,
+      guideJump: true,
+      guideZoom: 100,
+      readerMode: true,
+    });
     expect(loadSettings(storage)).toEqual({
       keepAwake: true,
       hideChrome: false,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
   });
 
@@ -83,6 +100,7 @@ describe("settings", () => {
       hideChrome: false,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
   });
 
@@ -105,12 +123,14 @@ describe("settings", () => {
       hideChrome: true,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
     expect(load({ keepAwake: 0, hideChrome: false })).toEqual({
       keepAwake: true,
       hideChrome: false,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
     expect(load({ keepAwake: null, hideChrome: null })).toEqual(DEFAULT_SETTINGS);
     expect(load({ keepAwake: false, hideChrome: false, guideJump: "off" })).toEqual({
@@ -118,6 +138,7 @@ describe("settings", () => {
       hideChrome: false,
       guideJump: true,
       guideZoom: 100,
+      readerMode: true,
     });
     expect(load({ guideJump: false })).toEqual({ ...DEFAULT_SETTINGS, guideJump: false });
   });
@@ -173,6 +194,7 @@ describe("guide text size", () => {
       hideChrome: false,
       guideJump: false,
       guideZoom: 100,
+      readerMode: true,
     });
   });
 
@@ -183,6 +205,7 @@ describe("guide text size", () => {
       hideChrome: true,
       guideJump: false,
       guideZoom: 100,
+      readerMode: true,
     });
   });
 
@@ -191,6 +214,54 @@ describe("guide text size", () => {
     expect(nextGuideZoom(90)).toBe(80);
     expect(nextGuideZoom(80)).toBe(70);
     expect(nextGuideZoom(70)).toBe(100);
+  });
+});
+
+describe("reader mode setting", () => {
+  it("is on by default", () => {
+    expect(DEFAULT_SETTINGS.readerMode).toBe(true);
+    expect(loadSettings(memory()).readerMode).toBe(true);
+  });
+
+  it.each([true, false])("round-trips %s through storage", (readerMode) => {
+    const storage = memory();
+    saveSettings(storage, { ...DEFAULT_SETTINGS, readerMode });
+    const saved = JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string) as {
+      readerMode: boolean;
+    };
+    expect(saved.readerMode).toBe(readerMode);
+    expect(loadSettings(storage).readerMode).toBe(readerMode);
+  });
+
+  it.each([
+    ["a string", "off"],
+    ["a number", 0],
+    ["null", null],
+    ["an object", {}],
+  ])("falls back to on for %s and keeps the other values", (_name, value) => {
+    const raw = JSON.stringify({ keepAwake: false, guideJump: false, readerMode: value });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw }))).toEqual({
+      ...DEFAULT_SETTINGS,
+      keepAwake: false,
+      guideJump: false,
+      readerMode: true,
+    });
+  });
+
+  it("gives an older stored object without the key on and keeps its other values", () => {
+    const raw = JSON.stringify({
+      keepAwake: false,
+      hideChrome: false,
+      guideJump: false,
+      guideZoom: 80,
+    });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw }))).toEqual({
+      keepAwake: false,
+      hideChrome: false,
+      guideJump: false,
+      guideZoom: 80,
+      readerMode: true,
+    });
   });
 });
 

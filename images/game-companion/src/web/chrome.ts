@@ -75,3 +75,35 @@ export function applyChrome(frameDoc: Document, hide: boolean): void {
     // The frame navigated to another origin, or has no document yet.
   }
 }
+
+const READER_MARKER = "data-gc-reader";
+/** The most editable elements one pass looks at. */
+const READER_LIMIT = 50;
+
+/**
+ * Reader mode for a framed wiki page. On: editable elements without an `inputmode` of their own get
+ * `inputmode="none"` (they still take focus and taps, but the browser raises no on-screen keyboard)
+ * plus a marker. Off: removes exactly what was set. Sets nothing else; an element carrying its own
+ * `inputmode` is left alone. Idempotent, writes nothing when nothing changes. Never throws.
+ */
+export function applyReader(frameDoc: Document, on: boolean): void {
+  try {
+    if (!on) {
+      for (const e of frameDoc.querySelectorAll(`[${READER_MARKER}]`)) {
+        if (e.getAttribute("inputmode") === "none") e.removeAttribute("inputmode");
+        e.removeAttribute(READER_MARKER);
+      }
+      return;
+    }
+    const editable = frameDoc.querySelectorAll('[contenteditable="true"], [contenteditable=""]');
+    const count = Math.min(editable.length, READER_LIMIT);
+    for (let i = 0; i < count; i++) {
+      const e = editable[i] as Element;
+      if (e.hasAttribute("inputmode")) continue;
+      e.setAttribute("inputmode", "none");
+      e.setAttribute(READER_MARKER, "1");
+    }
+  } catch {
+    // The frame navigated to another origin, or has no document yet.
+  }
+}
