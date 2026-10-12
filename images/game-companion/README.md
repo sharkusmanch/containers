@@ -21,6 +21,11 @@ switched off under ⋯ › Display. **Guide text size** there draws the framed g
 80 or 70 per cent, for a small screen; it enlarges the frame and scales it down, so the guide
 lays out in a wider window as it would under browser zoom.
 
+**Reader mode** (⋯ › Display, on by default) lets you read a guide page and tick its
+checkboxes on a touch screen without the on-screen keyboard coming up: the framed page's
+editable areas are marked so the browser shows no keyboard for them. Pages meant for typing
+are exempt by title, set with `EDITABLE_PAGES`.
+
 Besides the guide's pages, each game can have **links of your own**: other web pages (a
 planner, a map, a wiki) added under ⋯ › Pages › Your links and pinned to the sidebar like a
 guide page. They are stored in the browser on that device, per game, and the server never sees
@@ -38,7 +43,7 @@ returns.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.8.0
+- **Version**: v0.9.0
 
 ## Usage
 
@@ -49,7 +54,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.8.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.9.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -78,6 +83,7 @@ that device is ever framed.
 | `OUTLINE_API_KEY`          | No       | Read-only Outline API key. Without it the guide index is disabled                                                                                                      |
 | `OUTLINE_SCHEDULE_DOC_ID`  | No       | ID of a document whose `## Now Playing` section lists games to show first                                                                                              |
 | `DEFAULT_PINNED_PAGES`     | No       | Comma-separated guide page titles to pin the first time a game is opened                                                                                               |
+| `EDITABLE_PAGES`           | No       | Comma-separated guide page titles that stay typeable in reader mode (for example a notes page)                                                                         |
 | `PORT`                     | No       | Listening port (default `8080`)                                                                                                                                        |
 | `STATIC_DIR`               | No       | Directory of the built front end (default `/app/dist/web`)                                                                                                             |
 
