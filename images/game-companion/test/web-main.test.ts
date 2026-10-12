@@ -2962,6 +2962,72 @@ describe("display settings", () => {
       expect(lastReader().isEditable("/doc/hA-checklist")).toBe(false);
     });
 
+    it("reports a typeable page nested under another page", async () => {
+      const api = fakeApi(playing(hubA));
+      api.hubTree = async () => ({
+        ...treeWith(hubA, ["Sample Notes"]),
+        pages: [
+          {
+            title: "Parent",
+            url: "/doc/hA-parent",
+            children: [
+              {
+                title: "Child",
+                url: "/doc/hA-child",
+                children: [{ title: "Sample Notes", url: "/doc/hA-deep", children: [] }],
+              },
+            ],
+          },
+        ],
+      });
+      await withApi(api);
+      const { isEditable } = lastReader();
+      expect(isEditable("/doc/hA-deep")).toBe(true);
+      expect(isEditable("/doc/hA-child")).toBe(false);
+      expect(isEditable("/doc/hA-parent")).toBe(false);
+    });
+
+    it.each([
+      ["missing", undefined],
+      ["not a list", "Collectibles"],
+      ["null", null],
+    ])("treats an answer whose editablePages is %s as an empty list", async (_name, value) => {
+      const api = fakeApi(playing(hubA));
+      api.hubTree = async () =>
+        ({ ...tree(hubA), editablePages: value }) as unknown as HubTreeResponse;
+      await withApi(api);
+      expect(lastReader().on).toBe(true);
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(false);
+      expect(lastReader().isEditable("/doc/hA-checklist")).toBe(false);
+    });
+
+    it("ignores entries of the list that are not strings", async () => {
+      const api = fakeApi(playing(hubA));
+      api.hubTree = async () =>
+        ({
+          ...tree(hubA),
+          editablePages: [7, null, "Collectibles", {}],
+        }) as unknown as HubTreeResponse;
+      await withApi(api);
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(true);
+      expect(lastReader().isEditable("/doc/hA-checklist")).toBe(false);
+    });
+
+    it("treats a missing list on the retry of a failed tree as an empty list", async () => {
+      const api = fakeApi(playing(hubA));
+      let fail = true;
+      api.hubTree = async () => {
+        if (fail) throw new Error("down");
+        return { ...tree(hubA), editablePages: undefined } as unknown as HubTreeResponse;
+      };
+      const { app } = await withApi(api);
+      fail = false;
+      await expect(app.tick()).resolves.toBeUndefined();
+      await flush();
+      expect(lastReader().isEditable("/doc/hA-coll")).toBe(false);
+      expect($(".picker-pages .picker-item")).not.toBeNull();
+    });
+
     it("keeps the list when the setting is flipped", async () => {
       const api = fakeApi(playing(hubA));
       api.hubTree = async () => treeWith(hubA, ["Collectibles"]);

@@ -68,6 +68,9 @@ interface Entry {
 const LINK_SANDBOX =
   "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
 
+/** The part of a wiki path that names a document; a suffix such as /edit does not count. */
+const DOC_PATH = /^\/doc\/[A-Za-z0-9_-]+/;
+
 /** The container class for each size below 100; none at 100. */
 const ZOOM_CLASS: Record<GuideZoom, string | null> = {
   100: null,
@@ -94,6 +97,17 @@ export function createFrames(
   element.classList.add("frames");
   const entries: (Entry | null)[] = Array.from({ length: slotCount }, () => null);
 
+  // The wiki navigates inside a frame without a load event, so the page shown is read from the
+  // frame's own window; the slot's address is the fallback.
+  const shownPath = (entry: Entry): string => {
+    try {
+      const path = entry.frame.contentWindow?.location.pathname;
+      return (typeof path === "string" ? DOC_PATH.exec(path)?.[0] : undefined) ?? entry.url;
+    } catch {
+      return entry.url;
+    }
+  };
+
   let hideChrome = false;
   let reader = false;
   let isEditable: (url: string) => boolean = () => false;
@@ -103,7 +117,7 @@ export function createFrames(
       const framed = entry.frame.contentDocument;
       if (framed === null) return;
       applyChrome(framed, hideChrome);
-      applyReader(framed, reader && !isEditable(entry.url));
+      applyReader(framed, reader && !isEditable(shownPath(entry)));
     } catch {
       // The frame is on another origin.
     }

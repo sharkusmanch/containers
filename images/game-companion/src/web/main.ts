@@ -612,6 +612,10 @@ export function startApp(opts: AppOptions): App {
     );
   }
 
+  // The strings of a list from the server; an older server sends none.
+  const titlesIn = (list: unknown): string[] =>
+    Array.isArray(list) ? list.filter((t): t is string => typeof t === "string") : [];
+
   function applyReader(): void {
     frames.setReader(settings.readerMode, isEditable);
   }
@@ -919,7 +923,7 @@ export function startApp(opts: AppOptions): App {
           waiting,
         );
         current = { ...waiting, pages, layout, persist: true };
-        editableTitles = editablePages;
+        editableTitles = titlesIn(editablePages);
         void loadMarks(current);
       } catch {
         // A transient error must never overwrite stored pins, so nothing is persisted.
@@ -1083,7 +1087,7 @@ export function startApp(opts: AppOptions): App {
     if (c === null || c.hub === null || c.persist) return;
     let pages: GuidePage[];
     let defaultPins: string[];
-    let editablePages: string[];
+    let editablePages: unknown;
     try {
       ({ pages, defaultPins, editablePages } = await api.hubTree(c.hub.hubId));
     } catch {
@@ -1099,7 +1103,7 @@ export function startApp(opts: AppOptions): App {
     c.pages = pages;
     c.layout = reconcileLayout(base, pages, c.links);
     c.persist = true;
-    editableTitles = editablePages;
+    editableTitles = titlesIn(editablePages);
     void loadMarks(c);
     frames.sync(c.layout.slots.map((s) => s?.url ?? null));
     applyReader();

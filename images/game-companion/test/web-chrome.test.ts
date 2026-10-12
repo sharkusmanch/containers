@@ -349,7 +349,8 @@ const READER_PAGE =
   '<div id="b" contenteditable="">Second note</div>' +
   '<div id="off" contenteditable="false">Not editable</div>' +
   '<input id="field" type="text" value="sample">' +
-  '<div id="kept" contenteditable="true" inputmode="numeric">Numbers</div>';
+  '<div id="kept" contenteditable="true" inputmode="numeric">Numbers</div>' +
+  '<div id="own" contenteditable="true" inputmode="none">Own</div>';
 
 const readerMarked = (doc: Document): string[] =>
   [...doc.querySelectorAll("[data-gc-reader]")].map((e) => e.id);
@@ -378,6 +379,16 @@ describe("applyReader", () => {
     expect(doc.getElementById("field")?.hasAttribute("inputmode")).toBe(false);
     expect(doc.getElementById("kept")?.getAttribute("inputmode")).toBe("numeric");
     expect(doc.getElementById("kept")?.hasAttribute("data-gc-reader")).toBe(false);
+    expect(doc.getElementById("own")?.getAttribute("inputmode")).toBe("none");
+    expect(doc.getElementById("own")?.hasAttribute("data-gc-reader")).toBe(false);
+  });
+
+  it("keeps an inputmode none that the page set itself when switched off", () => {
+    const doc = makeFrame(READER_PAGE);
+    applyReader(doc, true);
+    applyReader(doc, false);
+    expect(doc.getElementById("own")?.getAttribute("inputmode")).toBe("none");
+    expect(doc.getElementById("own")?.hasAttribute("data-gc-reader")).toBe(false);
   });
 
   it("changes nothing when applied a second time", () => {

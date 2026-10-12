@@ -825,6 +825,104 @@ describe("reader mode", () => {
     expect(asked.at(-1)).toBe("/doc/other-page");
   });
 
+  describe("the page a frame shows now", () => {
+    /** The frame's window reports that it now shows `path` (the wiki navigates without a load). */
+    const navigated = (frame: HTMLIFrameElement | undefined, path: string): void => {
+      Object.defineProperty(frame, "contentWindow", {
+        value: { location: { pathname: path } },
+        configurable: true,
+      });
+    };
+    const typeable = (url: string): boolean => url === "/doc/sample-notes";
+
+    it("gives the off form to a slot opened on a reading page that now shows a typeable one", () => {
+      const { f, tick } = withTimer();
+      f.setReader(true, typeable);
+      page(f, 0, "/doc/sample-list");
+      expect(mark(frameAt(f, 0))).toBe("none");
+      navigated(frameAt(f, 0), "/doc/sample-notes");
+      tick();
+      expect(mark(frameAt(f, 0))).toBeNull();
+    });
+
+    it("applies reader mode to a slot opened on a typeable page that now shows a reading one", () => {
+      const { f, tick } = withTimer();
+      f.setReader(true, typeable);
+      page(f, 0, "/doc/sample-notes");
+      expect(mark(frameAt(f, 0))).toBeNull();
+      navigated(frameAt(f, 0), "/doc/sample-list");
+      tick();
+      expect(mark(frameAt(f, 0))).toBe("none");
+    });
+
+    it("judges a path with a suffix after the document id by the document part", () => {
+      const { f, tick } = withTimer();
+      const asked: string[] = [];
+      f.setReader(true, (url) => {
+        asked.push(url);
+        return typeable(url);
+      });
+      page(f, 0, "/doc/sample-list");
+      navigated(frameAt(f, 0), "/doc/sample-notes/edit");
+      tick();
+      expect(asked.at(-1)).toBe("/doc/sample-notes");
+      expect(mark(frameAt(f, 0))).toBeNull();
+      navigated(frameAt(f, 0), "/doc/sample-list/history");
+      tick();
+      expect(asked.at(-1)).toBe("/doc/sample-list");
+      expect(mark(frameAt(f, 0))).toBe("none");
+    });
+
+    it.each(["/collection/sample", "/", "", "/docs/sample-notes", "/doc/"])(
+      "falls back to the slot's address for the path %j",
+      (path) => {
+        const { f, tick } = withTimer();
+        const asked: string[] = [];
+        f.setReader(true, (url) => {
+          asked.push(url);
+          return typeable(url);
+        });
+        page(f, 0, "/doc/sample-notes");
+        navigated(frameAt(f, 0), path);
+        tick();
+        expect(asked.at(-1)).toBe("/doc/sample-notes");
+        expect(mark(frameAt(f, 0))).toBeNull();
+      },
+    );
+
+    it("falls back to the slot's address, without throwing, when the location cannot be read", () => {
+      const { f, tick } = withTimer();
+      const asked: string[] = [];
+      f.setReader(true, (url) => {
+        asked.push(url);
+        return false;
+      });
+      page(f, 0, "/doc/sample-list");
+      Object.defineProperty(frameAt(f, 0), "contentWindow", {
+        get() {
+          return {
+            get location(): never {
+              throw new Error("cross-origin");
+            },
+          };
+        },
+        configurable: true,
+      });
+      expect(() => tick()).not.toThrow();
+      expect(asked.at(-1)).toBe("/doc/sample-list");
+      expect(mark(frameAt(f, 0))).toBe("none");
+    });
+
+    it("falls back to the slot's address when the frame has no window", () => {
+      const { f, tick } = withTimer();
+      f.setReader(true, typeable);
+      page(f, 0, "/doc/sample-notes");
+      Object.defineProperty(frameAt(f, 0), "contentWindow", { value: null, configurable: true });
+      expect(() => tick()).not.toThrow();
+      expect(mark(frameAt(f, 0))).toBeNull();
+    });
+  });
+
   it("never reads a link frame", () => {
     const { f, tick } = withTimer();
     f.setReader(true, never);
