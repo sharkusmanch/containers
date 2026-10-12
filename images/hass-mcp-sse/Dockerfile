@@ -4,7 +4,7 @@
 ARG HASS_MCP_VERSION=v0.6.0
 
 # renovate: datasource=github-releases depName=sparfenyuk/mcp-proxy
-ARG MCP_PROXY_VERSION=v0.12.0
+ARG MCP_PROXY_VERSION=v0.13.0
 
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.13
