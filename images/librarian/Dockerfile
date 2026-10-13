@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=docker depName=python versioning=docker
-ARG PYTHON_VERSION=3.14-slim
+ARG PYTHON_VERSION=3.15-slim
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_VERSION=2.1.296
