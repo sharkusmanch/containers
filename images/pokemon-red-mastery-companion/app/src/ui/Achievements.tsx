@@ -1,8 +1,9 @@
 import { useState } from 'preact/hooks'
-import type { GlitchPlan, PlanInput, RunPlan, SetKey } from '../model'
+import type { AchievementRule, CounterProgress, GlitchPlan, PlanInput, RunPlan, SetKey } from '../model'
 import type { Controller } from './controller'
 import { Badge, History, ManualInput, Reasons, Sources } from './shared'
 import { GlitchDetails } from './GlitchDetails'
+import { counterProgress } from '../planner/areas'
 const labels = { main: 'Main', oak: 'Professor Oak', glitch: 'Glitch Showcase' }
 export function Achievements({
   input,
@@ -140,6 +141,7 @@ export function Achievements({
               </span>
             </summary>
             <p class="objective">{r.objective}</p>
+            <CounterLine progress={counterProgress(r, plan.areas ?? [])} rule={r} />
             <p>
               {(g?.auditStatus ?? r.auditStatus) === 'validated'
                 ? 'Method checked against the game’s source code (not tested in-game)' : 'Method from published guides (not tested in-game)'}{' '}
@@ -184,5 +186,21 @@ export function Achievements({
         </p>
       )}
     </>
+  )
+}
+
+/** Checklist progress only: save flags and the player's marks. The in-game RA counter is the authority. */
+export function CounterLine({ progress, rule }: { progress: CounterProgress | null; rule: AchievementRule }) {
+  if (!progress || !rule.counter) return null
+  return (
+    <p class="counter">
+      Checklist: {progress.done} of {progress.total} {rule.counter.unit} done in
+      this attempt (save flags and your marks)
+      {progress.unknown ? ` · ${progress.unknown} can’t tell yet` : ''}
+      {progress.uncounted
+        ? ` · ${progress.uncounted} more listed to do anyway (not counted)`
+        : ''}
+      . {rule.counter.note}
+    </p>
   )
 }

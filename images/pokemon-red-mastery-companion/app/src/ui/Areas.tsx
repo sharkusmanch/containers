@@ -2,6 +2,8 @@ import { useState } from 'preact/hooks'
 import type { PlanInput, RunPlan } from '../model'
 import type { Controller } from './controller'
 import { FactText, History, ManualInput, Reasons, Sources } from './shared'
+import { counterProgress } from '../planner/areas'
+import { CounterLine } from './Achievements'
 export function Areas({
   input,
   plan,
@@ -14,13 +16,21 @@ export function Areas({
   const [area, setArea] = useState(plan.areas?.[0]?.id ?? ''),
     [query, setQuery] = useState(''),
     [kind, setKind] = useState('all'),
-    [status, setStatus] = useState('all')
+    [status, setStatus] = useState('all'),
+    [counts, setCounts] = useState('all')
+  const counterRules = input.dataset.rules.filter((r) => r.counter)
+  const counterRule = counterRules.find((r) => String(r.id) === counts)
+  const titleOf = (id: number) =>
+    input.dataset.rules.find((r) => r.id === id)?.title ?? `#${id}`
   const entries = (plan.areas ?? [])
     .filter((a) => area === 'all' || a.id === area)
     .flatMap((a) => a.entries)
     .filter(
       (a) =>
         (kind === 'all' || a.entry.kind === kind) &&
+        (!counterRule ||
+          a.entry.ruleIds.includes(counterRule.id) ||
+          !!a.entry.uncountedFor?.includes(counterRule.id)) &&
         `${a.entry.title} ${a.entry.area} ${a.entry.instructions.join(' ')}`
           .toLowerCase()
           .includes(query.toLowerCase()),
@@ -95,7 +105,29 @@ export function Areas({
             <option value="recorded">Done</option>
           </select>
         </label>
+        {counterRules.length > 0 && (
+          <label>
+            Counts toward
+            <select
+              value={counts}
+              onChange={(e) => setCounts(e.currentTarget.value)}
+            >
+              <option value="all">Any achievement</option>
+              {counterRules.map((r) => (
+                <option key={r.id} value={String(r.id)}>
+                  {r.title} (/{r.counter!.total})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
       </div>
+      {counterRule && (
+        <CounterLine
+          progress={counterProgress(counterRule, plan.areas ?? [])}
+          rule={counterRule}
+        />
+      )}
       <p>{entries.length} shown</p>
       {entries.map((a) => (
         <details class="card" key={a.entry.id}>
@@ -121,6 +153,22 @@ export function Areas({
           <p>
             Save flag: <FactText fact={a.observed} yes="set" no="not set" />
           </p>
+          {a.entry.ruleIds.some((id) => counterRules.some((r) => r.id === id)) && (
+            <p>
+              Counts toward:{' '}
+              {a.entry.ruleIds
+                .filter((id) => counterRules.some((r) => r.id === id))
+                .map(titleOf)
+                .join(', ')}
+            </p>
+          )}
+          {a.entry.uncountedFor?.length ? (
+            <p class="muted">
+              Not counted toward {a.entry.uncountedFor.map(titleOf).join(', ')}{' '}
+              (the guide’s sources say it does not move that counter); do it
+              anyway if it serves another goal.
+            </p>
+          ) : null}
           {a.entry.deadline && (
             <p class="notice">Deadline: {a.entry.deadline}</p>
           )}

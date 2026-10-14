@@ -11,8 +11,6 @@ const labels: Record<string, string> = {
     'Safari funding, remaining steps, balls and storage are ready',
   'safari:prior-pickup':
     'An optional Safari pickup was taken outside this protected hunt',
-  'hideout:clear-before-giovanni':
-    'Hideout clearance was completed before Giovanni',
   'cave:supplies-ready': 'Cave catch session supplies and storage are ready',
   'protected-main-oak-complete':
     'Protected main and Oak work is complete in its original history',
@@ -22,7 +20,6 @@ const labels: Record<string, string> = {
     'I configured physically separate emulator save storage for this attempt',
   'glitch:celadon-access': 'Celadon Hotel is accessible',
   'glitch:fresh-start': 'This is a fresh, separate speedrun',
-  'glitch:rival-name': 'Rival name is JOHN',
   'glitch:ditto-access': 'Ditto is accessible for this setup',
   'glitch:balls-and-finisher':
     'Capture supplies and a healthy finisher are ready',
@@ -30,7 +27,8 @@ const labels: Record<string, string> = {
   'glitch:old-man-compatible':
     'The encoded player-name encounter has been observed compatible',
   'glitch:safari-entry-fee': 'Safari entry fee of ¥500 is available',
-  'glitch:cinnabar-access': 'Cinnabar is accessible',
+  'glitch:subset-opted-in-after-mastery':
+    'Main and Oak are mastered and the Glitch Showcase is opted in only for this save copy',
   'glitch:oak-battle-supplies':
     'Supplies for the exact Professor Oak roster are ready',
   'glitch:own-collection': 'This is my own legitimate collection',

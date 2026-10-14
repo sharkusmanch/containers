@@ -13,6 +13,8 @@ function input(kind: AttemptKind = 'glitch'): PlanInput {
  attempt.snapshot.party=known([{...pokemon(151),special:known(21),moves:known([{id:45,pp:10,ppUps:0},{id:19,pp:10,ppUps:0},{id:57,pp:10,ppUps:0}])}])
  attempt.snapshot.bag=known(Array.from({length:6},(_,i)=>({position:i+1,rawItemId:i===5?40:4+i,quantity:1})))
  attempt.snapshot.events=known({EVENT_BEAT_ROUTE_8_TRAINER_1:false,EVENT_BEAT_ROUTE_25_TRAINER_1:false})
+ // The Glitch Showcase subset is opted in only on the save copy, after mastery.
+ attempt.manualEvidence.push({id:crypto.randomUUID(),attemptId:attempt.id,continuityRevision:0,status:'active',key:'glitch:subset-opted-in-after-mastery',value:true,recordedAt:'2026-10-11T10:00:00Z'})
  return {project,attempt,dataset}
 }
 function history(i:PlanInput,key:string,value:boolean|number|string=true) {
@@ -27,7 +29,9 @@ describe('complete sourced glitch planning',()=>{
   const i=input('canonical'),p=planGlitches(i)
   expect(p.methods.map(m=>m.ruleId)).toEqual([57639,57640,57641,57642,57643,57644,57645,57655])
   for(const m of p.methods){expect(m.readiness).not.toBe('ready');expect(m.auditStatus).toBe('sourced');expect(m.validationBlockers.length).toBeGreaterThan(0);expect(m.evidence.length).toBeGreaterThan(0);expect(m.sourceUrls.length).toBeGreaterThan(0)}
-  expect(method(i,57639).placement).toBe('canonical')
+  expect(method(i,57639).placement).toBe('postgame')
+  expect(method(i,57639).requiredAttemptKind).toBe('glitch')
+  for(const id of [57642,57643,57645,57655])expect(method(i,id).requiredAttemptKind).toBe('glitch')
   expect(method(i,57641).requiredAttemptKind).toBe('speedrun')
   expect(method(i,57640).requiredAttemptKind).toBe('glitch')
   expect(method(i,57642).requiredAttemptKind).toBe('glitch')
@@ -51,16 +55,35 @@ describe('complete sourced glitch planning',()=>{
   expect(method(i,57655).reasons.join(' ')).toMatch(/151.*transition|transition.*151/i)
  })
  it('excludes flagged, foreign and old-revision transition records while keeping history visible',()=>{
-  const i=input();history(i,'rule:57642:completed');i.attempt.manualEvidence[0]!.status='needs-review'
+  const i=input();i.attempt.manualEvidence=[];history(i,'rule:57642:completed');i.attempt.manualEvidence[0]!.status='needs-review'
   expect(method(i,57642).transitionEvidence.known).toBe(false);expect(method(i,57642).manualEvidence).toHaveLength(1)
   i.attempt.manualEvidence[0]!.status='active';i.attempt.manualEvidence[0]!.attemptId='other';expect(method(i,57642).transitionEvidence.known).toBe(false)
   i.attempt.manualEvidence[0]!.attemptId=i.attempt.id;i.attempt.continuityRevision=1;expect(method(i,57642).transitionEvidence.known).toBe(false)
  })
  it('protects Safari history before malformed-map execution',()=>{
-  const i=input();history(i,'protected-main-oak-complete');history(i,'glitch:safari-entry-fee');history(i,'glitch:cinnabar-access')
+  const i=input();history(i,'protected-main-oak-complete');history(i,'glitch:safari-entry-fee')
   expect(method(i,57644).prerequisites.readiness).toBe('unknown')
   expect(method(i,57644).reasons.join(' ')).toMatch(/safari/i)
   history(i,'protected-safari-complete',false);expect(method(i,57644).prerequisites.readiness).toBe('blocked')
+ })
+ it('uses the Pallet Town Glitch City with Fly only (no Surf, no Cinnabar)',()=>{
+  const m=dataset.glitches.find(g=>g.ruleId===57644)!,r=dataset.rules.find(r=>r.id===57644)!
+  for(const x of [m,r]){
+   expect(x.instructions.join(' ')).toMatch(/Pallet Town/)
+   expect(x.instructions.join(' ')).not.toMatch(/Route 20|Cinnabar/)
+   expect(x.prerequisites).not.toContainEqual({kind:'move',moveId:57})
+   expect(x.prerequisites).toContainEqual({kind:'badge',mask:4,obtained:true})
+   expect(JSON.stringify(x.prerequisites)).not.toMatch(/cinnabar-access/)
+  }
+  expect(m.requiredMoves).toEqual([19])
+ })
+ it('keeps every Glitch Showcase method off the main save and behind the post-mastery opt-in',()=>{
+  for(const m of dataset.glitches){
+   expect(m.attemptPolicy.allowedKinds).not.toContain('canonical')
+   expect(m.prerequisites).toContainEqual({kind:'manual',key:'glitch:subset-opted-in-after-mastery',expected:true})
+  }
+  const i=input();i.attempt.manualEvidence=[]
+  expect(method(i,57639).prerequisites.readiness).not.toBe('ready')
  })
  it('requires actual physical isolation even for a correctly named destructive attempt',()=>{
   const i=input('speedrun');expect(method(i,57641).prerequisites.reasons.join(' ')).toMatch(/physically-isolated/)

@@ -6,7 +6,7 @@ const milestonePhase: Record<AcquisitionMilestone, CanonicalPhase> = {
   'moon-stone': 'misty', 'celadon-stones': 'koga',
 }
 export function canonicalPhaseForStep(stepId: string): CanonicalPhase | null {
-  const mapping: Record<string, CanonicalPhase> = { brock: 'brock', 'misty-prep': 'misty', misty: 'misty', 'safari-prep': 'koga', koga: 'koga', 'surf-cleanup': 'erika', erika: 'erika', articuno: 'surge', surge: 'surge', sabrina: 'surge', blaine: 'surge', giovanni: 'surge', victory: 'league', league50: 'league', postgame: 'postgame' }
+  const mapping: Record<string, CanonicalPhase> = { brock: 'brock', moon: 'misty', 'misty-prep': 'misty', misty: 'misty', 'cut-cleanup': 'koga', celadon: 'koga', tower: 'koga', 'safari-prep': 'koga', 'silph-clear': 'koga', koga: 'koga', 'surf-cleanup': 'erika', erika: 'erika', articuno: 'surge', surge: 'surge', sabrina: 'surge', blaine: 'surge', giovanni: 'surge', victory: 'league', league50: 'league', postgame: 'postgame' }
   return mapping[stepId] ?? null
 }
 const normalizeArea = (area: string) => area.toLowerCase().replace(/[ _]/g, '')
@@ -62,7 +62,16 @@ export function canonicalAcquisitionIsEligible(path: CanonicalAcquisition, phase
   if (canonicalAcquisitionMilestones(path).some(m => !available(milestonePhase[m], phase))) return false
   return path.dependencies.every(dependency => canonicalAcquisitionIsEligible(dependency, phase))
 }
-const preferredArea: Record<number, string> = { 29: 'Route22', 54: 'CERULEAN_CITY', 72: 'ROUTE_12', 79: 'CELADON_CITY', 90: 'VERMILION_CITY', 116: 'ROUTE_19', 120: 'ROUTE_19' }
+// Guide-preferred spots (2026-10-14 alignment): best rate or easiest source within the phase.
+const preferredArea: Record<number, string> = { 13: 'ViridianForest', 29: 'Route22', 35: 'MtMoonB2F', 46: 'MtMoonB2F', 54: 'CERULEAN_CITY', 72: 'ROUTE_12', 74: 'MtMoonB2F', 79: 'CELADON_CITY', 90: 'VERMILION_CITY', 113: 'SafariZoneNorth', 116: 'ROUTE_19', 120: 'ROUTE_19', 147: 'Celadon Game Corner' }
+/** A dependency (evolution source or trade donor) uses its earliest executable phase. */
+function earliestDependency(game: GameData, dex: number, phase: CanonicalPhase, visiting: number[]): CanonicalAcquisition | null {
+  for (const candidate of phases.slice(0, phases.indexOf(phase) + 1)) {
+    const found = selectCanonicalAcquisition(game, dex, candidate, visiting)
+    if (found) return found
+  }
+  return null
+}
 /** Choose only executable canonical paths. Historical gifts outrank equivalent Dex-only methods. */
 export function selectCanonicalAcquisition(game: GameData, targetDex: number, phase: CanonicalPhase, visiting: number[] = []): CanonicalAcquisition | null {
   if (visiting.includes(targetDex)) return null
@@ -77,13 +86,13 @@ export function selectCanonicalAcquisition(game: GameData, targetDex: number, ph
   }
   for (const source of game.species) for (const evolution of source.evolutions) {
     if (evolution.targetDex !== targetDex || evolution.method === 'trade') continue
-    const dependency = selectCanonicalAcquisition(game, source.dexNumber, phase, ancestors)
+    const dependency = earliestDependency(game, source.dexNumber, phase, ancestors)
     if (!dependency) continue
     const p = path({ method: evolution.method, level: evolution.level, rawItemId: evolution.rawItemId, sourceDex: source.dexNumber, sourceUrl: source.sourceUrls.find(s => s.endsWith('evos_moves.asm'))!, dependencies: [dependency], requiredMilestones: methodMilestones(evolution.method, evolution.rawItemId) })
     if (canonicalAcquisitionIsEligible(p)) return p
   }
   for (const trade of game.trades.filter(t => t.receiveDex === targetDex)) {
-    const dependency = selectCanonicalAcquisition(game, trade.giveDex, phase, ancestors)
+    const dependency = earliestDependency(game, trade.giveDex, phase, ancestors)
     if (!dependency) continue
     const p = path({ method: 'trade', area: trade.area, sourceDex: trade.giveDex, sourceUrl: trade.sourceUrl, dependencies: [dependency], historyRuleIds: [108053] })
     if (canonicalAcquisitionIsEligible(p)) return p

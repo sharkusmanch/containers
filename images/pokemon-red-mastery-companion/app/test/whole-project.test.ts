@@ -81,6 +81,11 @@ describe('whole-project sourced mastery scenario (synthetic, no runtime claim)',
     expect(action(project, 108051).readiness).not.toBe('ready')
     project = record(project, 'rule:108069:completed')
     project = record(project, 'rule:108051:completed') // Synthetic witnessed-clear history, not inferred from boss flags.
+    // The Master Ball needs Silph Giovanni beaten, not Hostage Situation history (guide: talk to the President afterwards).
+    expect(action(project, 108050).readiness).toBe('blocked')
+    const afterSilph = structuredClone(silph)
+    afterSilph.events = known({ ...silph.events.value, EVENT_BEAT_SILPH_CO_GIOVANNI: true })
+    project = importObservation(project, afterSilph, 4)
     expect(action(project, 108050).readiness).toBe('ready')
 
     const safari = prepared(preKoga, 3, 43)
@@ -177,9 +182,9 @@ describe('whole-project sourced mastery scenario (synthetic, no runtime claim)',
       expect(index(before)).toBeLessThan(index(after))
     }
     expect(plan.actions.map(a => a.routeStepId).filter((id, n, all) => all.indexOf(id) === n)).toEqual([
-      'pallet', 'brock', 'moon', 'misty-prep', 'anne', 'misty', 'celadon', 'tower', 'safari-prep',
+      'pallet', 'brock', 'moon', 'misty-prep', 'anne', 'misty', 'cut-cleanup', 'celadon', 'tower', 'safari-prep',
       'silph-rival', 'silph-clear', 'koga', 'surf-cleanup', 'erika', 'articuno', 'surge', 'sabrina',
-      'cinnabar', 'blaine', 'giovanni', 'victory', 'league50', 'league-solo', 'league-red', 'postgame',
+      'cinnabar', 'blaine', 'giovanni', 'victory', 'league50', 'league-solo', 'league-red', 'league-target', 'postgame',
       'glitch-postgame', 'glitch-expendable', 'glitch-fresh',
     ])
     expect(action(project, 108023).readiness).toBe('unknown')

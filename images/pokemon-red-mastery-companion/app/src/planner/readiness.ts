@@ -1,5 +1,22 @@
 import type { BranchChoices, CheckpointAssessment, Dataset, Readiness, SaveSnapshot } from '../model'
 
+export const oakBadgeOrder = 'Follow the Oak badge order: Brock → Misty → Koga → Erika → (catch Articuno) → Lt. Surge, Sabrina and Blaine in any order → Giovanni last.'
+/**
+ * Badges that must already be held before a checkpoint (every earlier checkpoint outside its
+ * order group) and badges that may be held (other members of the same order group).
+ */
+export function checkpointOrderMasks(dataset: Dataset, stepId: string): { required: number; optional: number } {
+  const steps = dataset.route.filter(s => s.checkpoint)
+  const step = steps.find(s => s.id === stepId)
+  if (!step) return { required: 0, optional: 0 }
+  const group = step.checkpoint!.orderGroup
+  const peer = (s: typeof step) => !!group && s.id !== step.id && s.checkpoint!.orderGroup === group
+  // A group is entered only after every checkpoint ordered before its first member.
+  const start = group ? Math.min(...steps.filter(s => s.checkpoint!.orderGroup === group).map(s => s.order)) : step.order
+  const required = steps.filter(s => !peer(s) && s.id !== step.id && s.order < start).reduce((mask, s) => mask | s.checkpoint!.badgeMask, 0)
+  const optional = steps.filter(peer).reduce((mask, s) => mask | s.checkpoint!.badgeMask, 0)
+  return { required, optional }
+}
 /** Current preparation only. A defeated leader cannot establish historical checkpoint compliance. */
 export function evaluateOakCheckpoint(snapshot: SaveSnapshot | null, checkpointId: string, choices: BranchChoices, dataset: Dataset): CheckpointAssessment {
   const step = dataset.route.find(s => s.id === checkpointId && s.checkpoint)
@@ -48,9 +65,11 @@ export function evaluateOakCheckpoint(snapshot: SaveSnapshot | null, checkpointI
   if (!snapshot.badgeMask.known) require('unknown', snapshot.badgeMask.reason)
   else {
     defeated = (snapshot.badgeMask.value & checkpoint.badgeMask) !== 0
-    const earlier = dataset.route.filter(s => s.checkpoint && s.order < step.order).reduce((mask,s) => mask | s.checkpoint!.badgeMask, 0)
+    const { required: earlier, optional: peers } = checkpointOrderMasks(dataset, step.id)
+    const badges = snapshot.badgeMask.value
     if (defeated) result.reasons.push(`${checkpoint.leader} is already defeated. This save cannot prove the earlier Oak checkpoint or battle restrictions.`)
-    else if (snapshot.badgeMask.value !== earlier) require('blocked', 'Follow the canonical badge order Brock → Misty → Koga → Erika → Lt. Surge → Sabrina → Blaine → Giovanni.')
+    else if ((badges & earlier) !== earlier || (badges & ~(earlier | peers)) !== 0) require('blocked', oakBadgeOrder)
+    else if (checkpoint.orderGroup) result.reasons.push('Lt. Surge, Sabrina and Blaine may be beaten in any order after Erika and Articuno; Lt. Surge first is recommended because his badge enables Fly.')
   }
   if (!snapshot.party.known) require('unknown', snapshot.party.reason)
   else {
@@ -58,6 +77,8 @@ export function evaluateOakCheckpoint(snapshot: SaveSnapshot | null, checkpointI
     for (const p of snapshot.party.value) {
       if (!p.level.known) require('unknown', `Party slot ${p.location.kind === 'party' ? p.location.slot : '?'} level: ${p.level.reason}`)
       else if (p.level.value > checkpoint.levelCap) require('blocked', `Box the level-${p.level.value} grinder before entering; entire-party cap is ${checkpoint.levelCap}.`)
+      // Advice only: players have failed at the cap itself from Misty on, so the guide keeps one level of margin.
+      else if (checkpoint.marginAdvice !== undefined && p.level.value > checkpoint.marginAdvice) result.reasons.push(`A level-${p.level.value} party member is at the cap; the guide advises ${checkpoint.marginAdvice} or lower for safety.`)
       if (p.dexNumber === null) require('unknown', 'A party species is unreadable; inspect the party before entry.')
     }
   }

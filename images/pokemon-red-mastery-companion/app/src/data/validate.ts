@@ -94,6 +94,18 @@ export function validateDataset(dataset: Dataset, mode: 'development' | 'release
       if (!entry.manualKey || !entry.title) add({code:'missing-guidance',reference:entry.id,message:'Checklist needs a label and explicit manual evidence key.'})
     }
   }
+  // Counter rules: the checklist must list exactly the in-game counter's members.
+  const allEntries = (dataset.areas ?? []).flatMap(a => a.entries)
+  for (const rule of dataset.rules) {
+    if (rule.counter) {
+      const listed = allEntries.filter(e => e.ruleIds.includes(rule.id)).length
+      if (listed !== rule.counter.total) add({ code: 'counter-mismatch', ruleId: rule.id, message: `${rule.title} counts ${rule.counter.total} but the checklist lists ${listed}.` })
+    }
+  }
+  for (const entry of allEntries) for (const id of entry.uncountedFor ?? []) {
+    if (entry.ruleIds.includes(id)) add({ code: 'counter-mismatch', ruleId: id, reference: entry.id, message: 'An entry cannot both count and be uncounted for the same rule.' })
+    if (!dataset.rules.find(r => r.id === id)?.counter) add({ code: 'unresolved-reference', ruleId: id, reference: entry.id, message: 'uncountedFor must name a counter rule.' })
+  }
   const seenMethods = new Set<string>()
   for (const method of dataset.glitches) {
     const affected = { methodId: method.id }

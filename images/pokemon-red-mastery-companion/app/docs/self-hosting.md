@@ -80,7 +80,7 @@ Prerequisites in the separately managed existing companion service:
 
 Without a declared `companionUrl`, progress refresh is manual only; it never runs merely from entering a mount or opening the app. With a declared `companionUrl` it refreshes automatically only after the player has confirmed an account. Blank mount/identity means no request. Each feed has its own ten-second deadline covering the request and body parsing, so a stalled set cannot discard completed sets. Cancellation settles even if the transport ignores abort. A failed, malformed, denied, stale or drifted feed preserves that set’s prior successful data/time independently. A feed with no successful fetch is unknown, never confirmed zero. Manual observations and save registration do not change account unlocks.
 
-No deployment or authenticated final-route acceptance has been performed by Task8. Runtime target-core and achievement-trigger acceptance remains a separate release gate documented in the dataset and source notes.
+The public app performs no deployment or authenticated final-route acceptance. Runtime target-core and achievement-trigger acceptance remains a separate release gate documented in the dataset and source notes.
 
 ## Backup and build behavior
 

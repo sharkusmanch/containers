@@ -5,6 +5,7 @@ import { History, Panel, Reasons, Sources } from './shared'
 import { saveStatus } from './status'
 import { sourceAvailable } from '../sources/deployment'
 import type { IdentityDiscovery } from '../sources/ra'
+import { retiredMarks } from '../state/key-migrations'
 export function More({
   input,
   plan,
@@ -312,6 +313,23 @@ export function More({
           <a href={config.guideUrl} target="_blank" rel="noreferrer">
             Open the full written guide ↗
           </a>
+        </Panel>
+      )}
+      {retiredMarks(attempt).length > 0 && (
+        <Panel title="Marks no longer used">
+          <p>
+            The guide data changed, so these marks no longer count toward
+            anything. They are kept for your records; archive them when you no
+            longer need them.
+          </p>
+          <Reasons
+            items={[...new Set(retiredMarks(attempt).map((m) => m.reason))]}
+          />
+          <History
+            records={retiredMarks(attempt).map((m) => m.record)}
+            attempt={attempt}
+            controller={controller}
+          />
         </Panel>
       )}
       <details class="panel advanced">

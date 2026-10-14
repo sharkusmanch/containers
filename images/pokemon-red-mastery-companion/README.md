@@ -7,8 +7,8 @@ and requests the three progress feeds through a restricted same-origin proxy.
 ## Upstream
 
 - **Repository**: [sharkusmanch/pokemon-red-mastery-companion](https://github.com/sharkusmanch/pokemon-red-mastery-companion),
-  vendored under `app/` from public `main` commit `77547748a9efbf2bc5b1747624128d80035fc4ce`.
-- **Version**: v0.2.0
+  vendored under `app/` from public `main` commit `548bdf71455a5c8c40216b648cc65597232946aa`.
+- **Version**: v0.3.0
 - **Provenance**: `source-provenance.json` records SHA256 for every unchanged vendored
   source, build, public test and attribution file. `test/provenance.py` checks it.
 - **License and data**: [MIT license](app/LICENSE), [data sources](app/docs/data-sources.md).
@@ -23,7 +23,7 @@ docker run --rm -p 8080:8080 --read-only \
   -v /path/to/synced-saves:/saves:ro \
   -e 'SAVE_FILE=/saves/Pokemon Red (USA, Europe).srm' \
   -e COMPANION_UPSTREAM=game-companion:8080 \
-  ghcr.io/sharkusmanch/containers/pokemon-red-mastery-companion:v0.2.0
+  ghcr.io/sharkusmanch/containers/pokemon-red-mastery-companion:v0.3.0
 ```
 
 Connect the two containers to a shared Docker network when using the example hostname.

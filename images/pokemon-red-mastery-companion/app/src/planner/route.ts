@@ -6,7 +6,8 @@ import { evaluateOakCheckpoint } from './readiness'
 import { assessAreas } from './areas'
 import { assess, combine, evaluatePredicate, flagFact, manualFact } from './predicates'
 const check=(readiness:PredicateAssessment['readiness'],reason:string):PredicateAssessment=>({readiness,reasons:[reason]})
-const storyEvents:Record<number,string>={108021:'EVENT_GOT_TOWN_MAP',108022:'EVENT_GOT_POKEDEX',108023:'EVENT_GOT_POKEBALLS_FROM_OAK',108027:'EVENT_GOT_ITEMFINDER',108028:'EVENT_GOT_HM05',108030:'EVENT_GOT_HM01',108036:'EVENT_GOT_HM02',4418:'EVENT_GOT_POKE_FLUTE',108044:'EVENT_GOT_EXP_ALL',108046:'EVENT_GOT_HM03',108048:'EVENT_GOT_HM04',108049:'EVENT_GOT_BICYCLE',108050:'EVENT_GOT_MASTER_BALL'}
+// Badge achievements are not missable: the leader's defeat event records them (guide placement 4401–4408).
+const storyEvents:Record<number,string>={4401:'EVENT_BEAT_BROCK',4402:'EVENT_BEAT_MISTY',4403:'EVENT_BEAT_LT_SURGE',4404:'EVENT_BEAT_ERIKA',4405:'EVENT_BEAT_KOGA',4406:'EVENT_BEAT_SABRINA',4407:'EVENT_BEAT_BLAINE',4408:'EVENT_BEAT_VIRIDIAN_GYM_GIOVANNI',108021:'EVENT_GOT_TOWN_MAP',108022:'EVENT_GOT_POKEDEX',108023:'EVENT_GOT_POKEBALLS_FROM_OAK',108027:'EVENT_GOT_ITEMFINDER',108028:'EVENT_GOT_HM05',108030:'EVENT_GOT_HM01',108036:'EVENT_GOT_HM02',4418:'EVENT_GOT_POKE_FLUTE',108044:'EVENT_GOT_EXP_ALL',108046:'EVENT_GOT_HM03',108048:'EVENT_GOT_HM04',108049:'EVENT_GOT_BICYCLE',108050:'EVENT_GOT_MASTER_BALL'}
 const historyKey=(id:number)=>`rule:${id}:completed`
 function confirmed(input:PlanInput,key:string){const f=manualFact(input,key);return f.known&&f.value===true}
 function reviewedHistory(input:PlanInput,id:number){return input.attempt.manualEvidence.some(e=>e.key===historyKey(id)&&!manualEvidenceIsEligible(e,input.attempt))}
@@ -17,7 +18,8 @@ function ruleTargets(rule:AchievementRule,input:PlanInput):number[]{
  if(branch?.choiceKey){const selected=branch.options.find(o=>o.value===input.attempt.branches[branch.choiceKey!]);if(!selected)return [];return (rule.acquisitions??[]).filter(a=>selected.dexNumbers.includes(a.targetDex)).map(a=>a.targetDex)}
  // Misty's choice is explicit or observed; avoid allocating all four stones before the two-entry checkpoint.
  const moon=rule.branches.find(g=>g.id==='moon-stones')
- if(moon?.minimumDistinct===2){const chosen=input.attempt.branches.moonstones;if(chosen)return chosen;const dex=input.attempt.snapshot?.ownedDex;return moon.options.flatMap(o=>o.dexNumbers).filter(n=>dex?.known&&dex.value.includes(n))}
+ // Moonstone I/II (one or two stone species by Misty) use the recorded or observed choice; III/IV plan all four.
+ if(moon?.minimumDistinct!==undefined&&moon.minimumDistinct<=2){const chosen=input.attempt.branches.moonstones;if(chosen)return chosen;const dex=input.attempt.snapshot?.ownedDex;return moon.options.flatMap(o=>o.dexNumbers).filter(n=>dex?.known&&dex.value.includes(n))}
  return (rule.acquisitions??[]).map(a=>a.targetDex)
 }
 /** Canonical plan: immutable observations, explicit unknowns, and all retained source stages. */
@@ -86,11 +88,8 @@ export function planRun(input: PlanInput): RunPlan {
     checks.push(checklist(areaEntries('anne').filter(e=>e.entry.kind==='trainer'||e.entry.kind==='pickup')),manual(historyKey(108138)))
     break
    case 108039:
-    checks.push(checklist(areaEntries('hideout').filter(e=>e.entry.ruleIds.includes(108039))))
-    if(isEvent('EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI'))custom=check('unknown','Giovanni is defeated; current pickup flags cannot establish the pre-Giovanni clearance ordering.')
-    break
-   case 108038:
-    checks.push(manual('hideout:clear-before-giovanni'))
+    // Raiding the Vault /28 includes Giovanni and the Scope he leaves; it is not missable.
+    checks.push(checklist(ruleEntries(108039)))
     break
    case 108040:
     checks.push(predicate({kind:'event',flag:'EVENT_BEAT_GHOST_MAROWAK',value:false}),predicate({kind:'item',rawItemId:51,minimum:1}),predicate({kind:'not',predicate:{kind:'item',rawItemId:72,minimum:1}}))
@@ -111,7 +110,8 @@ export function planRun(input: PlanInput): RunPlan {
     const trainers=areaEntries('silph','trainer');const n=trainers.filter(e=>e.observed.known&&e.observed.value).length
     if(isEvent('EVENT_BEAT_SILPH_CO_RIVAL'))custom=check('unknown','Rival defeated; current trainer flags cannot reconstruct the count at arrival. Confirm arrival with at most one other victory.')
     else if(n>1)custom=event('EVENT_BEAT_SILPH_CO_RIVAL').known?historyAfter(rule.id,`${n} Silph trainers already defeated before unrecorded Rival arrival; maximum is one.`):check('unknown','Rival state unavailable; current excess trainer victories cannot establish the historical arrival count.')
-    else checks.push(trainers.some(e=>!e.observed.known)?check('unknown','Observe all 30 trainer events before Rival arrival.'):check('ready',`${n} ordinary Silph trainers defeated; leave every trainer except the 5F lower guard untouched.`),predicate({kind:'item',rawItemId:48,minimum:1}))
+    // The Card Key is picked up on 5F during the attempt, so it is not a precondition.
+    else checks.push(trainers.some(e=>!e.observed.known)?check('unknown','Observe all 30 trainer events before Rival arrival.'):check('ready',`${n} ordinary Silph trainers defeated; leave every trainer except the 5F lower guard untouched.`))
     break
    }
    case 108051:{
@@ -120,7 +120,7 @@ export function planRun(input: PlanInput): RunPlan {
     else if(isEvent('EVENT_BEAT_SILPH_CO_GIOVANNI'))checks.push(check('unknown','Review the complete pre-Giovanni clearance history; late state cannot prove its order.'))
     break
    }
-   case 108050:checks.push(manual(historyKey(108051)));break
+   case 108050:checks.push(predicate({kind:'event',flag:'EVENT_BEAT_SILPH_CO_GIOVANNI',value:true}));break
    case 108056:{
     const trainers=areaEntries('gyms','trainer').filter(e=>e.entry.area==='CinnabarGym')
     if(trainers.some(e=>e.observed.known&&e.observed.value)||isEvent('EVENT_BEAT_BLAINE'))custom=combine([...preparation,check('unknown','Cinnabar trainer/leader flags are already set; they do not establish whether the quiz session succeeded beforehand.')])
@@ -138,6 +138,12 @@ export function planRun(input: PlanInput): RunPlan {
    case 4421:case 108176:case 165738:{
     const champion=dataset.rules.find(r=>r.id===165737)!
     checks.push(...champion.prerequisites.map(p=>predicate(p,champion)),predicate({kind:'badge',mask:255,obtained:true}))
+    // Was It Worth It?: exactly 123 owned before Mewtwo (123 + Mewtwo = 124); exactness is the guide's lean, not proven.
+    if(rule.id===165738&&s?.ownedDex.known&&!s.ownedDex.value.includes(150)){
+     const owned=new Set(s.ownedDex.value).size
+     if(owned<123)checks.push(check('blocked',`Register all 123 pre-Mewtwo species first (${owned} owned).`))
+     else if(owned>123)checks.push(check('unknown','More than 123 species are owned before Mewtwo; the guide leans towards an exact 123, so an extra species may stop the pop (unproven).'))
+    }
     const target=acquisitions.targets.find(t=>t.dexNumber===150)
     if(target)checks.push(...target.paths.map(p=>({readiness:p.readiness,reasons:p.reasons})))
     if(isEvent('EVENT_BEAT_MEWTWO'))custom=check('unknown','Mewtwo encounter resolved; confirm actual capture and non-Master-Ball method. Resolution alone cannot prove them.')
@@ -153,22 +159,24 @@ export function planRun(input: PlanInput): RunPlan {
     checks.push(assess(flagFact(input,'objectFlags','TOGGLE_CERULEAN_CAVE_GUY'),'Cerulean Cave access observed.','Become Champion for Cave access.'),manual('cave:supplies-ready'))
     checks.push(s?.currentBox.known?check(s.currentBox.value.pokemon.length===0?'ready':'blocked','Select an empty active box before the fifteen-species Cave session.'):check('unknown','Observe empty active box before Cave session.'));break
    case 108365:case 108367:case 108368:
-    checks.push(checklist(ruleEntries(rule.id)),check('unknown','Physical source checklist is available; final guide/trigger inclusion and historical exclusions require verification. This is not a decoded RA completion predicate.'));break
+    checks.push(checklist(ruleEntries(rule.id)),check('unknown','Checklist membership follows the guide’s verified list; RA’s trigger is not decoded, so the in-game counter is the authority.'));break
    }
    if(!checks.length&&!custom)checks.push(manual(`rule:${rule.id}:prepared`))
   }
   let result=custom??combine(checks,'unknown')
-  if(!done)for(const cutoff of rule.cutoffs){
+  const feed=project.accountProgress.find(p=>p.setKey===rule.setKey&&p.accountIdentity!==null&&p.accountIdentity===project.accountIdentity&&p.apiGameId===dataset.sets.find(t=>t.key===rule.setKey)?.apiGameId)
+  const unlock=feed?.unlocks.find(u=>u.achievementId===rule.id)
+  // A hardcore award settles a missable; otherwise a passed phase only makes the history unknown.
+  if(!done&&!unlock)for(const cutoff of rule.cutoffs){
    if(predicate(cutoff.when,rule).readiness==='ready'){
-    if(cutoff.when.kind==='badge')result=check('unknown','Leader defeated; current state cannot prove historical Oak collection or restricted battle compliance.')
+    if(cutoff.id.startsWith('phase-'))result=check('unknown',cutoff.message)
+    else if(cutoff.when.kind==='badge')result=check('unknown','Leader defeated; current state cannot prove historical Oak collection or restricted battle compliance.')
     else if(cutoff.id==='ss-anne-departed')result=check('unknown','Departure is recorded; confirm the obligation history rather than inferring failure from departure alone.')
     else result=historyAfter(rule.id,cutoff.message)
    }
   }
   if(!rule.attemptPolicy.allowedKinds.includes(attempt.kind)&&rule.setKey!=='glitch')result=combine([result,check('blocked','Keep main/Oak work in the protected canonical attempt.')])
   if(!s&&!done)result=check('unknown','Import a supported save or record eligible attempt-specific history; all source instructions remain available.')
-  const feed=project.accountProgress.find(p=>p.setKey===rule.setKey&&p.accountIdentity!==null&&p.accountIdentity===project.accountIdentity&&p.apiGameId===dataset.sets.find(t=>t.key===rule.setKey)?.apiGameId)
-  const unlock=feed?.unlocks.find(u=>u.achievementId===rule.id)
   assessments.push({ruleId:rule.id,manualControls:controls,...result,hardcoreEarned:!!unlock,...(unlock?{earnedAt:unlock.earnedAt}:{}),manualEvidence:attempt.manualEvidence.filter(e=>e.ruleId===rule.id||e.key.startsWith(`rule:${rule.id}:`))})
   byId.set(rule.id,result)
  }

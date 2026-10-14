@@ -575,7 +575,6 @@
         "title": "Tm12",
         "ruleIds": [
           108025,
-          108367,
           108365
         ],
         "rawItemId": 212,
@@ -589,9 +588,14 @@
           "key": "TOGGLE_MT_MOON_1F_ITEM_6",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_MT_MOON_1F_ITEM_6",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_MT_MOON_B2F_ITEM_1",
@@ -626,7 +630,6 @@
         "title": "Tm01",
         "ruleIds": [
           108025,
-          108367,
           108365
         ],
         "rawItemId": 201,
@@ -640,9 +643,14 @@
           "key": "TOGGLE_MT_MOON_B2F_ITEM_2",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_MT_MOON_B2F_ITEM_2",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "hidden-2",
@@ -701,7 +709,8 @@
         "kind": "trainer",
         "title": "Defeat the fossil Super Nerd",
         "ruleIds": [
-          108025
+          108025,
+          108368
         ],
         "sourceUrls": [
           "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/MtMoonB2F.asm"
@@ -722,8 +731,7 @@
         "kind": "gift",
         "title": "Choose and receive one fossil; record Helix or Dome",
         "ruleIds": [
-          4414,
-          108025
+          4414
         ],
         "instructions": [
           "Both fossil objects are hidden after choosing, so object OFF cannot identify the chosen gift."
@@ -1300,7 +1308,7 @@
         "title": "Receive HM CUT",
         "ruleIds": [
           108365,
-          108367
+          108030
         ],
         "rawItemId": 196,
         "proof": "manual",
@@ -2007,7 +2015,6 @@
         "title": "Tm07",
         "ruleIds": [
           108039,
-          108367,
           108365
         ],
         "rawItemId": 207,
@@ -2021,9 +2028,14 @@
           "key": "TOGGLE_ROCKET_HIDEOUT_B2F_ITEM_3",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROCKET_HIDEOUT_B2F_ITEM_3",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_ROCKET_HIDEOUT_B2F_ITEM_4",
@@ -2058,7 +2070,6 @@
         "title": "Tm10",
         "ruleIds": [
           108039,
-          108367,
           108365
         ],
         "rawItemId": 210,
@@ -2072,9 +2083,14 @@
           "key": "TOGGLE_ROCKET_HIDEOUT_B3F_ITEM_1",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROCKET_HIDEOUT_B3F_ITEM_1",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_ROCKET_HIDEOUT_B3F_ITEM_2",
@@ -2134,7 +2150,6 @@
         "title": "Tm02",
         "ruleIds": [
           108039,
-          108367,
           108365
         ],
         "rawItemId": 202,
@@ -2148,9 +2163,14 @@
           "key": "TOGGLE_ROCKET_HIDEOUT_B4F_ITEM_2",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROCKET_HIDEOUT_B4F_ITEM_2",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_ROCKET_HIDEOUT_B4F_ITEM_3",
@@ -2185,7 +2205,7 @@
         "title": "Silph Scope",
         "ruleIds": [
           108038,
-          108367
+          108039
         ],
         "rawItemId": 72,
         "x": 25,
@@ -2200,8 +2220,13 @@
         },
         "proof": "spawned",
         "spawnEvent": "EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI",
-        "instructions": [],
-        "manualKey": "area:pickup-TOGGLE_ROCKET_HIDEOUT_B4F_ITEM_4"
+        "instructions": [
+          "A key item: pick it up to progress; it is outside the Living Itemfinder /109 counter."
+        ],
+        "manualKey": "area:pickup-TOGGLE_ROCKET_HIDEOUT_B4F_ITEM_4",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_ROCKET_HIDEOUT_B4F_ITEM_5",
@@ -2210,8 +2235,7 @@
         "kind": "pickup",
         "title": "Lift Key",
         "ruleIds": [
-          108039,
-          108367
+          108039
         ],
         "rawItemId": 74,
         "x": 10,
@@ -2226,8 +2250,13 @@
         },
         "proof": "spawned",
         "spawnEvent": "EVENT_ROCKET_DROPPED_LIFT_KEY",
-        "instructions": [],
-        "manualKey": "area:pickup-TOGGLE_ROCKET_HIDEOUT_B4F_ITEM_5"
+        "instructions": [
+          "A key item: pick it up to progress; it is outside the Living Itemfinder /109 counter."
+        ],
+        "manualKey": "area:pickup-TOGGLE_ROCKET_HIDEOUT_B4F_ITEM_5",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "hidden-9",
@@ -2309,9 +2338,10 @@
         "area": "RocketHideoutB4F",
         "routeStepId": "celadon",
         "kind": "session",
-        "title": "Defeat Hideout Giovanni after the 15 pre-Scope pickups",
+        "title": "Defeat Hideout Giovanni (Raiding the Vault counts him)",
         "ruleIds": [
-          108038
+          108038,
+          108039
         ],
         "sourceUrls": [
           "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/RocketHideoutB4F.asm"
@@ -2925,7 +2955,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Pokémon Tower 6F stairs ghost: use a Poké Doll with the Silph Scope deposited (Dearly Beloved). The Doll resolves it; never run."
         ],
         "manualKey": "area:static-EVENT_BEAT_GHOST_MAROWAK"
       }
@@ -3603,7 +3633,6 @@
         "title": "Tm26",
         "ruleIds": [
           108051,
-          108367,
           108365
         ],
         "rawItemId": 226,
@@ -3617,9 +3646,14 @@
           "key": "TOGGLE_SILPH_CO_10F_ITEM_1",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_SILPH_CO_10F_ITEM_1",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SILPH_CO_10F_ITEM_2",
@@ -3779,7 +3813,6 @@
         "title": "Tm09",
         "ruleIds": [
           108051,
-          108367,
           108365
         ],
         "rawItemId": 209,
@@ -3793,9 +3826,14 @@
           "key": "TOGGLE_SILPH_CO_5F_ITEM_1",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_SILPH_CO_5F_ITEM_1",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SILPH_CO_5F_ITEM_2",
@@ -3829,8 +3867,7 @@
         "kind": "pickup",
         "title": "Card Key",
         "ruleIds": [
-          108051,
-          108367
+          108051
         ],
         "rawItemId": 48,
         "x": 21,
@@ -3843,9 +3880,14 @@
           "key": "TOGGLE_SILPH_CO_5F_ITEM_3",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "A key item: pick it up to progress; it is outside the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_SILPH_CO_5F_ITEM_3",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SILPH_CO_6F_ITEM_1",
@@ -3930,7 +3972,6 @@
         "title": "Tm03",
         "ruleIds": [
           108051,
-          108367,
           108365
         ],
         "rawItemId": 203,
@@ -3944,9 +3985,14 @@
           "key": "TOGGLE_SILPH_CO_7F_ITEM_2",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_SILPH_CO_7F_ITEM_2",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "hidden-18",
@@ -3955,8 +4001,7 @@
         "kind": "pickup",
         "title": "Hidden Elixer",
         "ruleIds": [
-          108051,
-          108367
+          108051
         ],
         "rawItemId": 82,
         "x": 12,
@@ -3969,9 +4014,14 @@
           "key": "18",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Reachable, but outside the Living Itemfinder /109 counter (January 2026 checklist and player reports); collect it for its own achievement or the area sweep."
+        ],
         "manualKey": "area:hidden-18",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "hidden-19",
@@ -3980,8 +4030,7 @@
         "kind": "pickup",
         "title": "Hidden Max Potion",
         "ruleIds": [
-          108051,
-          108367
+          108051
         ],
         "rawItemId": 17,
         "x": 2,
@@ -3994,9 +4043,14 @@
           "key": "19",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Reachable, but outside the Living Itemfinder /109 counter (January 2026 checklist and player reports); collect it for its own achievement or the area sweep."
+        ],
         "manualKey": "area:hidden-19",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "door-EVENT_SILPH_CO_2_UNLOCKED_DOOR1",
@@ -4015,8 +4069,9 @@
           "key": "EVENT_SILPH_CO_2_UNLOCKED_DOOR1",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_2_UNLOCKED_DOOR1",
         "proof": "direct"
       },
@@ -4037,8 +4092,9 @@
           "key": "EVENT_SILPH_CO_2_UNLOCKED_DOOR2",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_2_UNLOCKED_DOOR2",
         "proof": "direct"
       },
@@ -4059,8 +4115,9 @@
           "key": "EVENT_SILPH_CO_3_UNLOCKED_DOOR1",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_3_UNLOCKED_DOOR1",
         "proof": "direct"
       },
@@ -4081,8 +4138,9 @@
           "key": "EVENT_SILPH_CO_3_UNLOCKED_DOOR2",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_3_UNLOCKED_DOOR2",
         "proof": "direct"
       },
@@ -4103,8 +4161,9 @@
           "key": "EVENT_SILPH_CO_4_UNLOCKED_DOOR1",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_4_UNLOCKED_DOOR1",
         "proof": "direct"
       },
@@ -4125,8 +4184,9 @@
           "key": "EVENT_SILPH_CO_4_UNLOCKED_DOOR2",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_4_UNLOCKED_DOOR2",
         "proof": "direct"
       },
@@ -4147,8 +4207,9 @@
           "key": "EVENT_SILPH_CO_5_UNLOCKED_DOOR1",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_5_UNLOCKED_DOOR1",
         "proof": "direct"
       },
@@ -4169,8 +4230,9 @@
           "key": "EVENT_SILPH_CO_5_UNLOCKED_DOOR2",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_5_UNLOCKED_DOOR2",
         "proof": "direct"
       },
@@ -4191,8 +4253,9 @@
           "key": "EVENT_SILPH_CO_5_UNLOCKED_DOOR3",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_5_UNLOCKED_DOOR3",
         "proof": "direct"
       },
@@ -4213,8 +4276,9 @@
           "key": "EVENT_SILPH_CO_6_UNLOCKED_DOOR",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_6_UNLOCKED_DOOR",
         "proof": "direct"
       },
@@ -4235,8 +4299,9 @@
           "key": "EVENT_SILPH_CO_7_UNLOCKED_DOOR1",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_7_UNLOCKED_DOOR1",
         "proof": "direct"
       },
@@ -4257,8 +4322,9 @@
           "key": "EVENT_SILPH_CO_7_UNLOCKED_DOOR2",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_7_UNLOCKED_DOOR2",
         "proof": "direct"
       },
@@ -4279,8 +4345,9 @@
           "key": "EVENT_SILPH_CO_7_UNLOCKED_DOOR3",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_7_UNLOCKED_DOOR3",
         "proof": "direct"
       },
@@ -4301,8 +4368,9 @@
           "key": "EVENT_SILPH_CO_8_UNLOCKED_DOOR",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_8_UNLOCKED_DOOR",
         "proof": "direct"
       },
@@ -4323,8 +4391,9 @@
           "key": "EVENT_SILPH_CO_9_UNLOCKED_DOOR1",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_9_UNLOCKED_DOOR1",
         "proof": "direct"
       },
@@ -4345,8 +4414,9 @@
           "key": "EVENT_SILPH_CO_9_UNLOCKED_DOOR2",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_9_UNLOCKED_DOOR2",
         "proof": "direct"
       },
@@ -4367,8 +4437,9 @@
           "key": "EVENT_SILPH_CO_9_UNLOCKED_DOOR3",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_9_UNLOCKED_DOOR3",
         "proof": "direct"
       },
@@ -4389,8 +4460,9 @@
           "key": "EVENT_SILPH_CO_9_UNLOCKED_DOOR4",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_9_UNLOCKED_DOOR4",
         "proof": "direct"
       },
@@ -4411,8 +4483,9 @@
           "key": "EVENT_SILPH_CO_10_UNLOCKED_DOOR",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
-        "instructions": [],
+        "instructions": [
+          "Doors and items stay after Silph Giovanni; open this one before Giovanni’s 11F door so the /67 counter is complete when that door opens."
+        ],
         "manualKey": "area:door-EVENT_SILPH_CO_10_UNLOCKED_DOOR",
         "proof": "direct"
       },
@@ -4433,7 +4506,7 @@
           "key": "EVENT_SILPH_CO_11_UNLOCKED_DOOR",
           "meaning": "Door currently unlocked."
         },
-        "deadline": "Open final 11F door after other clearance, before battling Giovanni.",
+        "deadline": "Open Giovanni’s 11F door last. Save on 11F first: Hostage Situation pops as the door opens and Giovanni engages at once.",
         "instructions": [],
         "manualKey": "area:door-EVENT_SILPH_CO_11_UNLOCKED_DOOR",
         "proof": "direct"
@@ -4446,7 +4519,7 @@
         "title": "Receive TM SELFDESTRUCT",
         "ruleIds": [
           108365,
-          108367
+          108051
         ],
         "rawItemId": 236,
         "proof": "manual",
@@ -4467,7 +4540,7 @@
       {
         "id": "trainer-EVENT_BEAT_MANSION_1_TRAINER_0",
         "area": "PokemonMansion1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "trainer",
         "title": "PokemonMansion1F trainer 1",
         "ruleIds": [
@@ -4488,7 +4561,7 @@
       {
         "id": "trainer-EVENT_BEAT_MANSION_2_TRAINER_0",
         "area": "PokemonMansion2F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "trainer",
         "title": "PokemonMansion2F trainer 1",
         "ruleIds": [
@@ -4509,12 +4582,10 @@
       {
         "id": "trainer-EVENT_BEAT_MANSION_3_TRAINER_0",
         "area": "PokemonMansion3F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "trainer",
         "title": "PokemonMansion3F trainer 1",
-        "ruleIds": [
-          108368
-        ],
+        "ruleIds": [],
         "sourceUrls": [
           "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/PokemonMansion3F.asm#L98"
         ],
@@ -4523,14 +4594,19 @@
           "key": "EVENT_BEAT_MANSION_3_TRAINER_0",
           "meaning": "Trainer victory event; optional gym/Dojo bits may be set by leader victory."
         },
-        "instructions": [],
+        "instructions": [
+          "One Pokémon Mansion Burglar reportedly does not move the /221 counter, and reports point to this 3F Burglar. Fight him anyway."
+        ],
         "manualKey": "area:trainer-EVENT_BEAT_MANSION_3_TRAINER_0",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108368
+        ]
       },
       {
         "id": "trainer-EVENT_BEAT_MANSION_3_TRAINER_1",
         "area": "PokemonMansion3F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "trainer",
         "title": "PokemonMansion3F trainer 2",
         "ruleIds": [
@@ -4551,7 +4627,7 @@
       {
         "id": "trainer-EVENT_BEAT_MANSION_4_TRAINER_0",
         "area": "PokemonMansionB1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "trainer",
         "title": "PokemonMansionB1F trainer 1",
         "ruleIds": [
@@ -4572,7 +4648,7 @@
       {
         "id": "trainer-EVENT_BEAT_MANSION_4_TRAINER_1",
         "area": "PokemonMansionB1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "trainer",
         "title": "PokemonMansionB1F trainer 2",
         "ruleIds": [
@@ -4593,7 +4669,7 @@
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_1F_ITEM_1",
         "area": "POKEMON_MANSION_1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Escape Rope",
         "ruleIds": [
@@ -4617,7 +4693,7 @@
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_1F_ITEM_2",
         "area": "POKEMON_MANSION_1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Carbos",
         "ruleIds": [
@@ -4641,7 +4717,7 @@
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_2F_ITEM",
         "area": "POKEMON_MANSION_2F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Calcium",
         "ruleIds": [
@@ -4665,7 +4741,7 @@
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_3F_ITEM_1",
         "area": "POKEMON_MANSION_3F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Max Potion",
         "ruleIds": [
@@ -4689,7 +4765,7 @@
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_3F_ITEM_2",
         "area": "POKEMON_MANSION_3F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Iron",
         "ruleIds": [
@@ -4713,7 +4789,7 @@
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_B1F_ITEM_1",
         "area": "POKEMON_MANSION_B1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Rare Candy",
         "ruleIds": [
@@ -4737,12 +4813,10 @@
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_B1F_ITEM_2",
         "area": "POKEMON_MANSION_B1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Full Restore",
-        "ruleIds": [
-          108367
-        ],
+        "ruleIds": [],
         "rawItemId": 16,
         "x": 1,
         "y": 22,
@@ -4754,18 +4828,22 @@
           "key": "TOGGLE_POKEMON_MANSION_B1F_ITEM_2",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Reachable, but outside the Living Itemfinder /109 counter (January 2026 checklist and player reports); collect it for its own achievement or the area sweep."
+        ],
         "manualKey": "area:pickup-TOGGLE_POKEMON_MANSION_B1F_ITEM_2",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_B1F_ITEM_3",
         "area": "POKEMON_MANSION_B1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Tm14",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 214,
@@ -4779,18 +4857,22 @@
           "key": "TOGGLE_POKEMON_MANSION_B1F_ITEM_3",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_POKEMON_MANSION_B1F_ITEM_3",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_B1F_ITEM_4",
         "area": "POKEMON_MANSION_B1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Tm22",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 222,
@@ -4804,19 +4886,22 @@
           "key": "TOGGLE_POKEMON_MANSION_B1F_ITEM_4",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_POKEMON_MANSION_B1F_ITEM_4",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_POKEMON_MANSION_B1F_ITEM_5",
         "area": "POKEMON_MANSION_B1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Secret Key",
-        "ruleIds": [
-          108367
-        ],
+        "ruleIds": [],
         "rawItemId": 43,
         "x": 5,
         "y": 13,
@@ -4828,14 +4913,19 @@
           "key": "TOGGLE_POKEMON_MANSION_B1F_ITEM_5",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "A key item: pick it up to progress; it is outside the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_POKEMON_MANSION_B1F_ITEM_5",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "hidden-27",
         "area": "POKEMON_MANSION_1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Hidden Moon Stone",
         "ruleIds": [
@@ -4859,7 +4949,7 @@
       {
         "id": "hidden-28",
         "area": "POKEMON_MANSION_3F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Hidden Max Revive",
         "ruleIds": [
@@ -4883,7 +4973,7 @@
       {
         "id": "hidden-15",
         "area": "POKEMON_MANSION_B1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Hidden Rare Candy",
         "ruleIds": [
@@ -4907,7 +4997,7 @@
       {
         "id": "journal-1",
         "area": "PokemonMansion2F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "session",
         "title": "Read journal 1",
         "ruleIds": [
@@ -4927,7 +5017,7 @@
       {
         "id": "journal-2",
         "area": "PokemonMansion2F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "session",
         "title": "Read journal 2",
         "ruleIds": [
@@ -4947,7 +5037,7 @@
       {
         "id": "journal-3",
         "area": "PokemonMansion3F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "session",
         "title": "Read journal 3",
         "ruleIds": [
@@ -4967,7 +5057,7 @@
       {
         "id": "journal-4",
         "area": "PokemonMansionB1F",
-        "routeStepId": "cinnabar",
+        "routeStepId": "surf-cleanup",
         "kind": "session",
         "title": "Read journal 4",
         "ruleIds": [
@@ -5240,7 +5330,6 @@
         "title": "Tm43",
         "ruleIds": [
           108140,
-          108367,
           108365
         ],
         "rawItemId": 243,
@@ -5254,9 +5343,14 @@
           "key": "TOGGLE_VICTORY_ROAD_1F_ITEM_1",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_VICTORY_ROAD_1F_ITEM_1",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_VICTORY_ROAD_1F_ITEM_2",
@@ -5291,7 +5385,6 @@
         "title": "Tm17",
         "ruleIds": [
           108140,
-          108367,
           108365
         ],
         "rawItemId": 217,
@@ -5305,9 +5398,14 @@
           "key": "TOGGLE_VICTORY_ROAD_2F_ITEM_1",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_VICTORY_ROAD_2F_ITEM_1",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_VICTORY_ROAD_2F_ITEM_2",
@@ -5316,8 +5414,7 @@
         "kind": "pickup",
         "title": "Full Heal",
         "ruleIds": [
-          108140,
-          108367
+          108140
         ],
         "rawItemId": 52,
         "x": 18,
@@ -5330,9 +5427,14 @@
           "key": "TOGGLE_VICTORY_ROAD_2F_ITEM_2",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Reachable, but outside the Living Itemfinder /109 counter (January 2026 checklist and player reports); collect it for its own achievement or the area sweep."
+        ],
         "manualKey": "area:pickup-TOGGLE_VICTORY_ROAD_2F_ITEM_2",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_VICTORY_ROAD_2F_ITEM_3",
@@ -5342,7 +5444,6 @@
         "title": "Tm05",
         "ruleIds": [
           108140,
-          108367,
           108365
         ],
         "rawItemId": 205,
@@ -5356,9 +5457,14 @@
           "key": "TOGGLE_VICTORY_ROAD_2F_ITEM_3",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_VICTORY_ROAD_2F_ITEM_3",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_VICTORY_ROAD_2F_ITEM_4",
@@ -5367,8 +5473,7 @@
         "kind": "pickup",
         "title": "Guard Spec",
         "ruleIds": [
-          108140,
-          108367
+          108140
         ],
         "rawItemId": 55,
         "x": 11,
@@ -5381,9 +5486,14 @@
           "key": "TOGGLE_VICTORY_ROAD_2F_ITEM_4",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Reachable, but outside the Living Itemfinder /109 counter (January 2026 checklist and player reports); collect it for its own achievement or the area sweep."
+        ],
         "manualKey": "area:pickup-TOGGLE_VICTORY_ROAD_2F_ITEM_4",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_VICTORY_ROAD_3F_ITEM_1",
@@ -5418,7 +5528,6 @@
         "title": "Tm47",
         "ruleIds": [
           108140,
-          108367,
           108365
         ],
         "rawItemId": 247,
@@ -5432,9 +5541,14 @@
           "key": "TOGGLE_VICTORY_ROAD_3F_ITEM_2",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_VICTORY_ROAD_3F_ITEM_2",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "hidden-32",
@@ -5507,7 +5621,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Save in front of it. Catch it with ordinary balls after sleep or paralysis; never run and never knock it out."
         ],
         "manualKey": "area:static-EVENT_BEAT_MOLTRES"
       }
@@ -8400,9 +8514,7 @@
         "routeStepId": "celadon",
         "kind": "trainer",
         "title": "Route8 trainer 7",
-        "ruleIds": [
-          108368
-        ],
+        "ruleIds": [],
         "sourceUrls": [
           "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/Route8.asm#L44"
         ],
@@ -8411,9 +8523,14 @@
           "key": "EVENT_BEAT_ROUTE_8_TRAINER_6",
           "meaning": "Trainer victory event; optional gym/Dojo bits may be set by leader victory."
         },
-        "instructions": [],
+        "instructions": [
+          "Lowest Lass of the four trainers standing in a row on Route 8: reported not to move the /221 counter. Fight her anyway."
+        ],
         "manualKey": "area:trainer-EVENT_BEAT_ROUTE_8_TRAINER_6",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108368
+        ]
       },
       {
         "id": "trainer-EVENT_BEAT_ROUTE_8_TRAINER_7",
@@ -8589,9 +8706,7 @@
         "routeStepId": "celadon",
         "kind": "trainer",
         "title": "Route9 trainer 7",
-        "ruleIds": [
-          108368
-        ],
+        "ruleIds": [],
         "sourceUrls": [
           "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/Route9.asm#L45"
         ],
@@ -8600,9 +8715,14 @@
           "key": "EVENT_BEAT_ROUTE_9_TRAINER_6",
           "meaning": "Trainer victory event; optional gym/Dojo bits may be set by leader victory."
         },
-        "instructions": [],
+        "instructions": [
+          "Route 9 Bug Catcher with two Beedrill: player reports and the January 2026 checklist say this battle does not move the /221 counter. Fight him anyway."
+        ],
         "manualKey": "area:trainer-EVENT_BEAT_ROUTE_9_TRAINER_6",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108368
+        ]
       },
       {
         "id": "trainer-EVENT_BEAT_ROUTE_9_TRAINER_7",
@@ -8649,11 +8769,10 @@
       {
         "id": "pickup-TOGGLE_ROUTE_12_ITEM_1",
         "area": "ROUTE_12",
-        "routeStepId": "safari-prep",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Tm16",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 216,
@@ -8667,9 +8786,14 @@
           "key": "TOGGLE_ROUTE_12_ITEM_1",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROUTE_12_ITEM_1",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_ROUTE_12_ITEM_2",
@@ -8702,7 +8826,6 @@
         "kind": "pickup",
         "title": "Tm20",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 220,
@@ -8716,14 +8839,19 @@
           "key": "TOGGLE_ROUTE_15_ITEM",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROUTE_15_ITEM",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_ROUTE_2_ITEM_1",
         "area": "ROUTE_2",
-        "routeStepId": "misty-prep",
+        "routeStepId": "cut-cleanup",
         "kind": "pickup",
         "title": "Moon Stone",
         "ruleIds": [
@@ -8740,14 +8868,16 @@
           "key": "TOGGLE_ROUTE_2_ITEM_1",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Route 2 east, behind Cut trees: reachable after Misty. This is Moon Stone #3 territory; it counts toward Living Itemfinder since 2026."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROUTE_2_ITEM_1",
         "proof": "direct"
       },
       {
         "id": "pickup-TOGGLE_ROUTE_2_ITEM_2",
         "area": "ROUTE_2",
-        "routeStepId": "misty-prep",
+        "routeStepId": "cut-cleanup",
         "kind": "pickup",
         "title": "Hp Up",
         "ruleIds": [
@@ -8764,7 +8894,9 @@
           "key": "TOGGLE_ROUTE_2_ITEM_2",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Route 2 east, behind Cut trees: reachable after Misty. This is Moon Stone #3 territory; it counts toward Living Itemfinder since 2026."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROUTE_2_ITEM_2",
         "proof": "direct"
       },
@@ -8775,7 +8907,6 @@
         "kind": "pickup",
         "title": "Tm45",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 245,
@@ -8789,9 +8920,14 @@
           "key": "TOGGLE_ROUTE_24_ITEM",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROUTE_24_ITEM",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_ROUTE_25_ITEM",
@@ -8800,7 +8936,6 @@
         "kind": "pickup",
         "title": "Tm19",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 219,
@@ -8814,18 +8949,22 @@
           "key": "TOGGLE_ROUTE_25_ITEM",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROUTE_25_ITEM",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_ROUTE_4_ITEM",
         "area": "ROUTE_4",
-        "routeStepId": "moon",
+        "routeStepId": "misty-prep",
         "kind": "pickup",
         "title": "Tm04",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 204,
@@ -8839,9 +8978,15 @@
           "key": "TOGGLE_ROUTE_4_ITEM",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter.",
+          "The ledge from Mt. Moon is one-way: reach Route 4’s upper path by walking west from Cerulean City."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROUTE_4_ITEM",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_ROUTE_9_ITEM",
@@ -8850,7 +8995,6 @@
         "kind": "pickup",
         "title": "Tm30",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 230,
@@ -8864,14 +9008,19 @@
           "key": "TOGGLE_ROUTE_9_ITEM",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_ROUTE_9_ITEM",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_WARDENS_HOUSE_ITEM",
         "area": "WARDENS_HOUSE",
-        "routeStepId": "postgame",
+        "routeStepId": "articuno",
         "kind": "pickup",
         "title": "Rare Candy",
         "ruleIds": [
@@ -8888,7 +9037,9 @@
           "key": "TOGGLE_WARDENS_HOUSE_ITEM",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Behind a Strength boulder in the Warden’s house: field Strength needs Erika’s badge."
+        ],
         "manualKey": "area:pickup-TOGGLE_WARDENS_HOUSE_ITEM",
         "proof": "direct"
       },
@@ -9063,7 +9214,7 @@
       {
         "id": "hidden-20",
         "area": "COPYCATS_HOUSE_2F",
-        "routeStepId": "postgame",
+        "routeStepId": "safari-prep",
         "kind": "pickup",
         "title": "Hidden Nugget",
         "ruleIds": [
@@ -9159,7 +9310,7 @@
       {
         "id": "hidden-35",
         "area": "VIRIDIAN_CITY",
-        "routeStepId": "postgame",
+        "routeStepId": "pallet",
         "kind": "pickup",
         "title": "Hidden Potion",
         "ruleIds": [
@@ -9176,7 +9327,9 @@
           "key": "35",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Viridian City (14,4): the lone cuttable tree in north-west Viridian, just west of the road north to Route 2. Stand beside it, face it and press A; Cut is never needed."
+        ],
         "manualKey": "area:hidden-35",
         "proof": "direct"
       },
@@ -9351,7 +9504,7 @@
       {
         "id": "hidden-43",
         "area": "UNDERGROUND_PATH_NORTH_SOUTH",
-        "routeStepId": "postgame",
+        "routeStepId": "misty-prep",
         "kind": "pickup",
         "title": "Hidden Full Restore",
         "ruleIds": [
@@ -9375,7 +9528,7 @@
       {
         "id": "hidden-44",
         "area": "UNDERGROUND_PATH_NORTH_SOUTH",
-        "routeStepId": "postgame",
+        "routeStepId": "misty-prep",
         "kind": "pickup",
         "title": "Hidden X Special",
         "ruleIds": [
@@ -9399,7 +9552,7 @@
       {
         "id": "hidden-45",
         "area": "UNDERGROUND_PATH_WEST_EAST",
-        "routeStepId": "postgame",
+        "routeStepId": "celadon",
         "kind": "pickup",
         "title": "Hidden Nugget",
         "ruleIds": [
@@ -9423,7 +9576,7 @@
       {
         "id": "hidden-46",
         "area": "UNDERGROUND_PATH_WEST_EAST",
-        "routeStepId": "postgame",
+        "routeStepId": "celadon",
         "kind": "pickup",
         "title": "Hidden Elixer",
         "ruleIds": [
@@ -9447,7 +9600,7 @@
       {
         "id": "hidden-47",
         "area": "CELADON_CITY",
-        "routeStepId": "postgame",
+        "routeStepId": "celadon",
         "kind": "pickup",
         "title": "Hidden Pp Up",
         "ruleIds": [
@@ -9471,7 +9624,7 @@
       {
         "id": "hidden-51",
         "area": "VERMILION_CITY",
-        "routeStepId": "postgame",
+        "routeStepId": "surf-cleanup",
         "kind": "pickup",
         "title": "Hidden Max Ether",
         "ruleIds": [
@@ -9495,7 +9648,7 @@
       {
         "id": "hidden-52",
         "area": "CERULEAN_CITY",
-        "routeStepId": "postgame",
+        "routeStepId": "misty-prep",
         "kind": "pickup",
         "title": "Hidden Rare Candy",
         "ruleIds": [
@@ -9512,14 +9665,16 @@
           "key": "52",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Cerulean City (15,8): the fenced yard behind the north-west house. Enter that house by its front door and leave by the back door; it is not the burgled house’s yard."
+        ],
         "manualKey": "area:hidden-52",
         "proof": "direct"
       },
       {
         "id": "hidden-53",
         "area": "ROUTE_4",
-        "routeStepId": "moon",
+        "routeStepId": "misty-prep",
         "kind": "pickup",
         "title": "Hidden Great Ball",
         "ruleIds": [
@@ -9536,7 +9691,9 @@
           "key": "53",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "The ledge from Mt. Moon is one-way: reach Route 4’s upper path by walking west from Cerulean City."
+        ],
         "manualKey": "area:hidden-53",
         "proof": "direct"
       },
@@ -9555,26 +9712,35 @@
           "key": "EVENT_BEAT_ROUTE24_ROCKET",
           "meaning": "Scripted battle milestone."
         },
-        "instructions": [],
+        "instructions": [
+          "Nugget Bridge Rocket: outside the /221 counter, and losing to him skips the battle for good. Fight and beat him anyway."
+        ],
         "manualKey": "area:story-EVENT_BEAT_ROUTE24_ROCKET",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108368
+        ]
       },
       {
         "id": "story-EVENT_BEAT_CERULEAN_ROCKET_THIEF",
         "area": "CeruleanCity",
         "routeStepId": "misty-prep",
-        "kind": "session",
-        "title": "Cerulean thief",
-        "ruleIds": [],
+        "kind": "trainer",
+        "title": "Cerulean burgled-house Rocket",
+        "ruleIds": [
+          108368
+        ],
         "sourceUrls": [
           "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/CeruleanCity.asm"
         ],
         "observation": {
           "namespace": "events",
           "key": "EVENT_BEAT_CERULEAN_ROCKET_THIEF",
-          "meaning": "Scripted battle milestone."
+          "meaning": "Trainer victory event for the Rocket behind the burgled house."
         },
-        "instructions": [],
+        "instructions": [
+          "He stands in the yard behind the burgled house in north-east Cerulean and counts toward Genocide Route; talk to him again after the win for TM28 Dig."
+        ],
         "manualKey": "area:story-EVENT_BEAT_CERULEAN_ROCKET_THIEF",
         "proof": "direct"
       },
@@ -9599,14 +9765,14 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Wake it with the Poké Flute (after Mr. Fuji). Save in front of it. Catch at least one Snorlax; defeating the second one is fine once one is caught. Never run."
         ],
         "manualKey": "area:static-EVENT_BEAT_ROUTE12_SNORLAX"
       },
       {
         "id": "static-EVENT_BEAT_ROUTE16_SNORLAX",
         "area": "ROUTE_16",
-        "routeStepId": "celadon",
+        "routeStepId": "safari-prep",
         "kind": "static",
         "title": "Route16 Snorlax",
         "ruleIds": [
@@ -9624,7 +9790,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Wake it with the Poké Flute (after Mr. Fuji). Save in front of it. Catch at least one Snorlax; defeating the second one is fine once one is caught. Never run."
         ],
         "manualKey": "area:static-EVENT_BEAT_ROUTE16_SNORLAX"
       },
@@ -9635,8 +9801,7 @@
         "kind": "gift",
         "title": "Receive the Potion sample with bag space",
         "ruleIds": [
-          108020,
-          108367
+          108020
         ],
         "proof": "manual",
         "sourceUrls": [
@@ -9653,12 +9818,11 @@
       {
         "id": "disk-gift-TM_SOFTBOILED",
         "area": "CeladonCity",
-        "routeStepId": "celadon",
+        "routeStepId": "surf-cleanup",
         "kind": "gift",
         "title": "Receive TM SOFTBOILED",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 241,
         "proof": "manual",
@@ -9677,8 +9841,7 @@
         "kind": "gift",
         "title": "Receive TM COUNTER",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 218,
         "proof": "manual",
@@ -9697,8 +9860,7 @@
         "kind": "gift",
         "title": "Receive TM TRI ATTACK",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 249,
         "proof": "manual",
@@ -9717,8 +9879,7 @@
         "kind": "gift",
         "title": "Receive TM ROCK SLIDE",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 248,
         "proof": "manual",
@@ -9737,8 +9898,7 @@
         "kind": "gift",
         "title": "Receive TM ICE BEAM",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 213,
         "proof": "manual",
@@ -9753,12 +9913,11 @@
       {
         "id": "disk-gift-TM_DIG",
         "area": "CeruleanCity",
-        "routeStepId": "postgame",
+        "routeStepId": "misty-prep",
         "kind": "gift",
         "title": "Receive TM DIG",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 228,
         "proof": "manual",
@@ -9777,8 +9936,7 @@
         "kind": "gift",
         "title": "Receive TM METRONOME",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 235,
         "proof": "manual",
@@ -9793,12 +9951,11 @@
       {
         "id": "disk-gift-TM_MIMIC",
         "area": "CopycatsHouse2F",
-        "routeStepId": "postgame",
+        "routeStepId": "safari-prep",
         "kind": "gift",
         "title": "Receive TM MIMIC",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 231,
         "proof": "manual",
@@ -9813,12 +9970,11 @@
       {
         "id": "disk-gift-TM_PSYCHIC_M",
         "area": "MrPsychicsHouse",
-        "routeStepId": "postgame",
+        "routeStepId": "safari-prep",
         "kind": "gift",
         "title": "Receive TM PSYCHIC M",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 229,
         "proof": "manual",
@@ -9837,8 +9993,7 @@
         "kind": "gift",
         "title": "Receive TM SWIFT",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 239,
         "proof": "manual",
@@ -9858,7 +10013,7 @@
         "title": "Receive HM FLY",
         "ruleIds": [
           108365,
-          108367
+          108036
         ],
         "rawItemId": 197,
         "proof": "manual",
@@ -9873,12 +10028,12 @@
       {
         "id": "disk-gift-HM_FLASH",
         "area": "Route2Gate",
-        "routeStepId": "misty-prep",
+        "routeStepId": "cut-cleanup",
         "kind": "gift",
         "title": "Receive HM FLASH",
         "ruleIds": [
           108365,
-          108367
+          108028
         ],
         "rawItemId": 200,
         "proof": "manual",
@@ -9893,12 +10048,11 @@
       {
         "id": "disk-gift-TM_DREAM_EATER",
         "area": "ViridianCity",
-        "routeStepId": "postgame",
+        "routeStepId": "cut-cleanup",
         "kind": "gift",
         "title": "Receive TM DREAM EATER",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 242,
         "proof": "manual",
@@ -9918,7 +10072,7 @@
         "title": "Receive HM STRENGTH",
         "ruleIds": [
           108365,
-          108367
+          108048
         ],
         "rawItemId": 199,
         "proof": "manual",
@@ -9937,8 +10091,7 @@
         "kind": "gift",
         "title": "Town Map",
         "ruleIds": [
-          108021,
-          108367
+          108021
         ],
         "instructions": [
           "Receive with bag space; preserve unrelated session/deadline obligations."
@@ -9961,8 +10114,7 @@
         "kind": "gift",
         "title": "Pokédex",
         "ruleIds": [
-          108022,
-          108367
+          108022
         ],
         "instructions": [
           "Receive with bag space; preserve unrelated session/deadline obligations."
@@ -9985,8 +10137,7 @@
         "kind": "gift",
         "title": "Oak’s five Poké Balls",
         "ruleIds": [
-          108023,
-          108367
+          108023
         ],
         "instructions": [
           "Receive with bag space; preserve unrelated session/deadline obligations."
@@ -10009,8 +10160,7 @@
         "kind": "gift",
         "title": "Itemfinder from aide at 30 owned",
         "ruleIds": [
-          108027,
-          108367
+          108027
         ],
         "instructions": [
           "Receive with bag space; preserve unrelated session/deadline obligations."
@@ -10033,8 +10183,7 @@
         "kind": "gift",
         "title": "Exp. All from aide at 50 owned",
         "ruleIds": [
-          108044,
-          108367
+          108044
         ],
         "instructions": [
           "Receive with bag space; preserve unrelated session/deadline obligations."
@@ -10057,8 +10206,7 @@
         "kind": "gift",
         "title": "Poké Flute",
         "ruleIds": [
-          4418,
-          108367
+          4418
         ],
         "instructions": [
           "Receive with bag space; preserve unrelated session/deadline obligations."
@@ -10081,8 +10229,7 @@
         "kind": "gift",
         "title": "Bicycle",
         "ruleIds": [
-          108049,
-          108367
+          108049
         ],
         "instructions": [
           "Receive with bag space; preserve unrelated session/deadline obligations."
@@ -10101,13 +10248,10 @@
       {
         "id": "gift-amber",
         "area": "Museum1F",
-        "routeStepId": "misty-prep",
+        "routeStepId": "cut-cleanup",
         "kind": "gift",
         "title": "Old Amber via Cut side entrance",
-        "ruleIds": [
-          108052,
-          108367
-        ],
+        "ruleIds": [],
         "instructions": [
           "Receive with bag space; preserve unrelated session/deadline obligations."
         ],
@@ -10129,8 +10273,7 @@
         "kind": "gift",
         "title": "Master Ball after clearance and Giovanni",
         "ruleIds": [
-          108050,
-          108367
+          108050
         ],
         "instructions": [
           "Receive with bag space; preserve unrelated session/deadline obligations."
@@ -10154,8 +10297,7 @@
         "title": "Receive Old Rod",
         "rawItemId": 76,
         "ruleIds": [
-          108043,
-          108367
+          108043
         ],
         "instructions": [
           "Accept the rod from the fishing guru with bag space."
@@ -10179,8 +10321,7 @@
         "title": "Receive Good Rod",
         "rawItemId": 77,
         "ruleIds": [
-          108043,
-          108367
+          108043
         ],
         "instructions": [
           "Accept the rod from the fishing guru with bag space."
@@ -10204,8 +10345,7 @@
         "title": "Receive Super Rod",
         "rawItemId": 78,
         "ruleIds": [
-          108043,
-          108367
+          108043
         ],
         "instructions": [
           "Accept the rod from the fishing guru with bag space."
@@ -10220,6 +10360,31 @@
           "key": "wStatusFlags1:5",
           "meaning": "Rod receipt bit is set after successful GiveItem."
         }
+      },
+      {
+        "id": "trainer-EVENT_BEAT_GAME_CORNER_ROCKET",
+        "area": "GameCorner",
+        "routeStepId": "celadon",
+        "kind": "trainer",
+        "title": "Game Corner poster Rocket",
+        "ruleIds": [],
+        "instructions": [
+          "Game Corner poster Rocket: a required battle that reportedly does not move the /221 counter."
+        ],
+        "sourceUrls": [
+          "https://github.com/pret/pokered/blob/af519899719f0754965776faac0e836a3b906e6d/scripts/GameCorner.asm",
+          "https://github.com/RetroAchievements/guides/wiki/Pokemon-Red-Version-%28Game-Boy%29"
+        ],
+        "observation": {
+          "namespace": "objectFlags",
+          "key": "TOGGLE_GAME_CORNER_ROCKET",
+          "meaning": "The guard is hidden after his battle; the poster then opens the Hideout stairs."
+        },
+        "manualKey": "area:trainer-EVENT_BEAT_GAME_CORNER_ROCKET",
+        "proof": "direct",
+        "uncountedFor": [
+          108368
+        ]
       }
     ]
   },
@@ -11173,8 +11338,7 @@
         "kind": "gift",
         "title": "Receive TM MEGA DRAIN",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 221,
         "proof": "manual",
@@ -11193,8 +11357,7 @@
         "kind": "gift",
         "title": "Receive TM BUBBLEBEAM",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 211,
         "proof": "manual",
@@ -11213,8 +11376,7 @@
         "kind": "gift",
         "title": "Receive TM FIRE BLAST",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 238,
         "proof": "manual",
@@ -11233,8 +11395,7 @@
         "kind": "gift",
         "title": "Receive TM TOXIC",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 206,
         "proof": "manual",
@@ -11253,8 +11414,7 @@
         "kind": "gift",
         "title": "Receive TM BIDE",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 234,
         "proof": "manual",
@@ -11273,8 +11433,7 @@
         "kind": "gift",
         "title": "Receive TM PSYWAVE",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 246,
         "proof": "manual",
@@ -11293,8 +11452,7 @@
         "kind": "gift",
         "title": "Receive TM THUNDERBOLT",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 224,
         "proof": "manual",
@@ -11313,8 +11471,7 @@
         "kind": "gift",
         "title": "Receive TM FISSURE",
         "ruleIds": [
-          108365,
-          108367
+          108365
         ],
         "rawItemId": 227,
         "proof": "manual",
@@ -11593,7 +11750,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Save in front of it. Catch it with ordinary balls after sleep or paralysis; never run and never knock it out."
         ],
         "manualKey": "area:static-EVENT_BEAT_MEWTWO"
       }
@@ -11682,7 +11839,6 @@
         "kind": "pickup",
         "title": "Tm25",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 225,
@@ -11696,9 +11852,14 @@
           "key": "TOGGLE_POWER_PLANT_ITEM_4",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_POWER_PLANT_ITEM_4",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_POWER_PLANT_ITEM_5",
@@ -11707,7 +11868,6 @@
         "kind": "pickup",
         "title": "Tm33",
         "ruleIds": [
-          108367,
           108365
         ],
         "rawItemId": 233,
@@ -11721,9 +11881,14 @@
           "key": "TOGGLE_POWER_PLANT_ITEM_5",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_POWER_PLANT_ITEM_5",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "hidden-23",
@@ -11794,7 +11959,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Power Plant ball: a Voltorb or Electrode. Defeating or catching it is fine; never run from it."
         ],
         "manualKey": "area:static-EVENT_BEAT_POWER_PLANT_VOLTORB_0"
       },
@@ -11819,7 +11984,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Power Plant ball: a Voltorb or Electrode. Defeating or catching it is fine; never run from it."
         ],
         "manualKey": "area:static-EVENT_BEAT_POWER_PLANT_VOLTORB_1"
       },
@@ -11844,7 +12009,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Power Plant ball: a Voltorb or Electrode. Defeating or catching it is fine; never run from it."
         ],
         "manualKey": "area:static-EVENT_BEAT_POWER_PLANT_VOLTORB_2"
       },
@@ -11869,7 +12034,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Power Plant ball: a Voltorb or Electrode. Defeating or catching it is fine; never run from it."
         ],
         "manualKey": "area:static-EVENT_BEAT_POWER_PLANT_VOLTORB_3"
       },
@@ -11894,7 +12059,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Power Plant ball: a Voltorb or Electrode. Defeating or catching it is fine; never run from it."
         ],
         "manualKey": "area:static-EVENT_BEAT_POWER_PLANT_VOLTORB_4"
       },
@@ -11919,7 +12084,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Power Plant ball: a Voltorb or Electrode. Defeating or catching it is fine; never run from it."
         ],
         "manualKey": "area:static-EVENT_BEAT_POWER_PLANT_VOLTORB_5"
       },
@@ -11944,7 +12109,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Power Plant ball: a Voltorb or Electrode. Defeating or catching it is fine; never run from it."
         ],
         "manualKey": "area:static-EVENT_BEAT_POWER_PLANT_VOLTORB_6"
       },
@@ -11969,7 +12134,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Power Plant ball: a Voltorb or Electrode. Defeating or catching it is fine; never run from it."
         ],
         "manualKey": "area:static-EVENT_BEAT_POWER_PLANT_VOLTORB_7"
       },
@@ -11994,7 +12159,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Save in front of it. Catch it with ordinary balls after sleep or paralysis; never run and never knock it out."
         ],
         "manualKey": "area:static-EVENT_BEAT_ZAPDOS"
       }
@@ -12038,8 +12203,7 @@
         "kind": "pickup",
         "title": "Full Restore",
         "ruleIds": [
-          108045,
-          108367
+          108045
         ],
         "rawItemId": 16,
         "x": 21,
@@ -12054,9 +12218,14 @@
         },
         "deferredUntil": "Koga badge and Surf; one uninterrupted hunt",
         "deadline": "Do not collect in pre-Koga catches; protect all eleven objects",
-        "instructions": [],
+        "instructions": [
+          "Reachable, but outside the Living Itemfinder /109 counter (January 2026 checklist and player reports); collect it for its own achievement or the area sweep."
+        ],
         "manualKey": "area:pickup-TOGGLE_SAFARI_ZONE_EAST_ITEM_1",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SAFARI_ZONE_EAST_ITEM_2",
@@ -12065,8 +12234,7 @@
         "kind": "pickup",
         "title": "Max Potion",
         "ruleIds": [
-          108045,
-          108367
+          108045
         ],
         "rawItemId": 17,
         "x": 3,
@@ -12081,9 +12249,14 @@
         },
         "deferredUntil": "Koga badge and Surf; one uninterrupted hunt",
         "deadline": "Do not collect in pre-Koga catches; protect all eleven objects",
-        "instructions": [],
+        "instructions": [
+          "Reachable, but outside the Living Itemfinder /109 counter (January 2026 checklist and player reports); collect it for its own achievement or the area sweep."
+        ],
         "manualKey": "area:pickup-TOGGLE_SAFARI_ZONE_EAST_ITEM_2",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SAFARI_ZONE_EAST_ITEM_3",
@@ -12092,8 +12265,7 @@
         "kind": "pickup",
         "title": "Carbos",
         "ruleIds": [
-          108045,
-          108367
+          108045
         ],
         "rawItemId": 38,
         "x": 20,
@@ -12108,9 +12280,14 @@
         },
         "deferredUntil": "Koga badge and Surf; one uninterrupted hunt",
         "deadline": "Do not collect in pre-Koga catches; protect all eleven objects",
-        "instructions": [],
+        "instructions": [
+          "Reachable, but outside the Living Itemfinder /109 counter (January 2026 checklist and player reports); collect it for its own achievement or the area sweep."
+        ],
         "manualKey": "area:pickup-TOGGLE_SAFARI_ZONE_EAST_ITEM_3",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SAFARI_ZONE_EAST_ITEM_4",
@@ -12120,7 +12297,6 @@
         "title": "Tm37",
         "ruleIds": [
           108045,
-          108367,
           108365
         ],
         "rawItemId": 237,
@@ -12136,9 +12312,14 @@
         },
         "deferredUntil": "Koga badge and Surf; one uninterrupted hunt",
         "deadline": "Do not collect in pre-Koga catches; protect all eleven objects",
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_SAFARI_ZONE_EAST_ITEM_4",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SAFARI_ZONE_NORTH_ITEM_1",
@@ -12147,8 +12328,7 @@
         "kind": "pickup",
         "title": "Protein",
         "ruleIds": [
-          108045,
-          108367
+          108045
         ],
         "rawItemId": 36,
         "x": 25,
@@ -12163,9 +12343,14 @@
         },
         "deferredUntil": "Koga badge and Surf; one uninterrupted hunt",
         "deadline": "Do not collect in pre-Koga catches; protect all eleven objects",
-        "instructions": [],
+        "instructions": [
+          "Reachable, but outside the Living Itemfinder /109 counter (January 2026 checklist and player reports); collect it for its own achievement or the area sweep."
+        ],
         "manualKey": "area:pickup-TOGGLE_SAFARI_ZONE_NORTH_ITEM_1",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SAFARI_ZONE_NORTH_ITEM_2",
@@ -12175,7 +12360,6 @@
         "title": "Tm40",
         "ruleIds": [
           108045,
-          108367,
           108365
         ],
         "rawItemId": 240,
@@ -12191,9 +12375,14 @@
         },
         "deferredUntil": "Koga badge and Surf; one uninterrupted hunt",
         "deadline": "Do not collect in pre-Koga catches; protect all eleven objects",
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_SAFARI_ZONE_NORTH_ITEM_2",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SAFARI_ZONE_WEST_ITEM_1",
@@ -12230,7 +12419,6 @@
         "title": "Tm32",
         "ruleIds": [
           108045,
-          108367,
           108365
         ],
         "rawItemId": 232,
@@ -12246,9 +12434,14 @@
         },
         "deferredUntil": "Koga badge and Surf; one uninterrupted hunt",
         "deadline": "Do not collect in pre-Koga catches; protect all eleven objects",
-        "instructions": [],
+        "instructions": [
+          "Field TMs count toward Disk Collector, not the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_SAFARI_ZONE_WEST_ITEM_2",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "pickup-TOGGLE_SAFARI_ZONE_WEST_ITEM_3",
@@ -12283,10 +12476,7 @@
         "routeStepId": "safari-prep",
         "kind": "pickup",
         "title": "Gold Teeth",
-        "ruleIds": [
-          108048,
-          108367
-        ],
+        "ruleIds": [],
         "rawItemId": 64,
         "x": 19,
         "y": 7,
@@ -12298,9 +12488,14 @@
           "key": "TOGGLE_SAFARI_ZONE_WEST_ITEM_4",
           "meaning": "Successful ordinary pickup receipt; inventory may have since changed."
         },
-        "instructions": [],
+        "instructions": [
+          "A key item: pick it up to progress; it is outside the Living Itemfinder /109 counter."
+        ],
         "manualKey": "area:pickup-TOGGLE_SAFARI_ZONE_WEST_ITEM_4",
-        "proof": "direct"
+        "proof": "direct",
+        "uncountedFor": [
+          108367
+        ]
       },
       {
         "id": "hidden-17",
@@ -12337,7 +12532,7 @@
         "title": "Receive HM SURF",
         "ruleIds": [
           108365,
-          108367
+          108046
         ],
         "rawItemId": 198,
         "proof": "manual",
@@ -12448,7 +12643,7 @@
           "meaning": "Encounter resolved; this is not proof of capture or method."
         },
         "instructions": [
-          "Catch required birds, Mewtwo and at least one Snorlax before resolving remaining encounters."
+          "Save in front of it. Catch it with ordinary balls after sleep or paralysis; never run and never knock it out."
         ],
         "manualKey": "area:static-EVENT_BEAT_ARTICUNO"
       }

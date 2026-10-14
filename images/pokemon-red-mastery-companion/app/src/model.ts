@@ -71,9 +71,13 @@ export interface AchievementRule {
   preservation: PreservationObligation[]; evidence: EvidenceRequirement[]; attemptPolicy: AttemptPolicy
   routeStepIds: string[]; instructions: string[]; sourceUrls: string[]; auditStatus: AuditStatus
   validationEvidence?: string[]; tags?: string[]; acquisitions?: CanonicalAcquisition[]
+  /** In-game RA counter target. Exactly this many area entries carry the rule ID; uncounted extras use uncountedFor. */
+  counter?: AchievementCounter
 }
+export interface AchievementCounter { total: number; unit: string; note: string }
 export interface RouteStep { id: string; order: number; area: string; title: string; instructions: string[]; ruleIds: number[]; prerequisites: Predicate[]; preserves: PreservationObligation[]; checkpoint?: GymCheckpoint; afterStepIds?: string[]; session?: string }
-export interface GymCheckpoint { leader: string; badgeMask: number; ownedCount: number; requiredDex: number[]; branchGroups: BranchGroup[]; levelCap: number; ruleIds: number[] }
+/** orderGroup: checkpoints sharing a group may be beaten in any order once every earlier checkpoint is done (Oak Badges V–VII). marginAdvice: the guide's safer party level, below the hard cap. */
+export interface GymCheckpoint { leader: string; badgeMask: number; ownedCount: number; requiredDex: number[]; branchGroups: BranchGroup[]; levelCap: number; ruleIds: number[]; orderGroup?: string; marginAdvice?: number }
 export type CanonicalPhase = 'brock' | 'misty' | 'koga' | 'erika' | 'surge' | 'league' | 'postgame'
 export type AcquisitionMilestone = 'old-rod' | 'good-rod' | 'super-rod' | 'surf' | 'strength' | 'moon-stone' | 'celadon-stones'
 export interface CanonicalAcquisition { targetDex: number; phase: CanonicalPhase; method: Encounter['method'] | 'level' | 'item' | 'trade'; area?: string; executionArea?: string; level?: number; rawItemId?: number; sourceDex?: number; sourceUrl: string; dependencies: CanonicalAcquisition[]; requiredMilestones: AcquisitionMilestone[]; historyRuleIds: number[] }
@@ -93,7 +97,7 @@ export interface GlitchMethod {
   validationEvidence?: string[]; validationBlockers?: string[]; oakRosters?: Record<string, OakGlitchRoster>; collectionTargets?: { dexNumber: number; special: number; followUp: string }[]; experienceRoute?: GlitchExperienceRoute; warnings: string[]; transport?: 'none' | 'pc-underflow' | 'trainer-fly' | 'save-corruption' | 'old-man' | 'safari-exit' | 'pending'; successfulGrowls?: number | { bulbasaur: number; charmander: number; squirtle: number }; experienceAward?: { minimum: number; maximum: number }
 }
 export interface Dataset { areas?: AreaChecklist[]; manifest: DatasetManifest; sets: AchievementSet[]; game: GameData; route: RouteStep[]; rules: AchievementRule[]; glitches: GlitchMethod[] }
-export type DatasetIssueCode = 'unpublished-rule' | 'missing-rule' | 'duplicate-rule' | 'duplicate-method' | 'duplicate-route' | 'missing-source' | 'unresolved-reference' | 'unvalidated-rule' | 'unvalidated-method' | 'missing-guidance' | 'missing-placement' | 'missing-evidence' | 'missing-validation-evidence' | 'runtime-prerequisite' | 'invalid-membership' | 'inaccessible-acquisition'
+export type DatasetIssueCode = 'unpublished-rule' | 'missing-rule' | 'duplicate-rule' | 'duplicate-method' | 'duplicate-route' | 'missing-source' | 'unresolved-reference' | 'unvalidated-rule' | 'unvalidated-method' | 'missing-guidance' | 'missing-placement' | 'missing-evidence' | 'missing-validation-evidence' | 'runtime-prerequisite' | 'invalid-membership' | 'inaccessible-acquisition' | 'counter-mismatch'
 export interface DatasetIssue { code: DatasetIssueCode; message: string; ruleId?: number; methodId?: string; reference?: string }
 export interface PlanInput { project: MasteryProject; attempt: Attempt; dataset: Dataset }
 export interface PredicateAssessment { readiness: Readiness; reasons: string[] }
@@ -148,6 +152,8 @@ export interface AreaChecklistEntry {
  proof: 'direct' | 'manual' | 'spawned' | 'trainer-before-leader' | 'resolution'
  spawnEvent?: string; invalidatedByEvent?: string; rawItemId?: number; x?: number; y?: number
  deadline?: string; deferredUntil?: string
+ /** Counter rules this entry is still advised for but reportedly does not move (e.g. Genocide Route "fight anyway"). Never counted. */
+ uncountedFor?: number[]
 }
 export interface AreaChecklist { id: string; title: string; entries: AreaChecklistEntry[] }
 export interface AreaEntryAssessment {
@@ -155,3 +161,5 @@ export interface AreaEntryAssessment {
  evidence: 'save' | 'manual' | 'unknown'; manualEvidence: ManualEvidence[]; reasons: string[]
 }
 export interface AreaAssessment { id: string; title: string; entries: AreaEntryAssessment[] }
+/** Checklist progress toward a counter rule: save flags and the player's own marks only, never an award. */
+export interface CounterProgress { ruleId: number; total: number; listed: number; done: number; unknown: number; outstanding: number; uncounted: number }

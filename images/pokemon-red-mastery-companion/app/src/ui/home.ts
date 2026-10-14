@@ -28,13 +28,29 @@ export function homeStage(input: PlanInput, plan: RunPlan): string {
   const s = input.attempt.snapshot
   let floor = 0
   if (s?.badgeMask.known) {
+    const badges = s.badgeMask.value
+    const has = (step: RouteStep) => !!step.checkpoint && (badges & step.checkpoint.badgeMask) !== 0
+    // The first unbeaten leader (an order group counts from its first member) bounds progress, so
+    // out-of-order badges never skip earlier stages; otherwise start after the last beaten leader.
+    let gap = route.findIndex((step) => step.checkpoint && !has(step))
+    const group = gap >= 0 ? route[gap]!.checkpoint!.orderGroup : undefined
+    if (group) gap = route.findIndex((r) => r.checkpoint?.orderGroup === group)
+    const limit = gap >= 0 ? gap : route.length
     route.forEach((step, i) => {
-      if (step.checkpoint && s.badgeMask.known && (s.badgeMask.value & step.checkpoint.badgeMask) !== 0) floor = Math.max(floor, i + 1)
+      if (i < limit && step.checkpoint && has(step)) floor = Math.max(floor, i + 1)
     })
   }
   // Oak's five-ball gift closes the Pallet stage's ordering window.
   if (s?.events.known && s.events.value.EVENT_GOT_POKEBALLS_FROM_OAK) floor = Math.max(floor, 1)
+  // Within an order-free group, skip leaders already beaten and the stages that only lead up to them.
+  const inGroup = route.filter((r) => r.checkpoint?.orderGroup)
+  const isBeaten = (r: RouteStep) => !!s?.badgeMask.known && (s.badgeMask.value & r.checkpoint!.badgeMask) !== 0
+  const beaten = inGroup.filter(isBeaten), open = inGroup.filter((r) => !isBeaten(r))
+  // A preparation stage is passed only when it leads to beaten leaders alone (Cinnabar quiz → Blaine, not Articuno).
+  const stillNeeded = new Set(open.flatMap((r) => r.afterStepIds ?? []))
+  const passed = new Set([...beaten.map((r) => r.id), ...beaten.flatMap((r) => r.afterStepIds ?? []).filter((id) => !route.find((r) => r.id === id)?.checkpoint && !stillNeeded.has(id))])
   for (let i = Math.min(floor, route.length - 1); i < route.length; i++) {
+    if (passed.has(route[i]!.id) && i < route.length - 1) continue
     const actions = ruleActions(plan, route[i]!.id)
     if (actions.some((a) => !actionDone(input, plan, a))) return route[i]!.id
   }

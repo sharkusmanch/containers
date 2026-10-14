@@ -1,6 +1,7 @@
 import type { MasteryProject } from '../model'
 import { nextGeneration } from './project'
 import { reviewGlitchSetup } from './glitch-setup'
+import { migrateEvidenceKeys } from './key-migrations'
 
 export type RestoreResult = { ok: true; project: MasteryProject } | { ok: false; error: string }
 type Decoder = (value: unknown) => unknown
@@ -129,7 +130,8 @@ export function restoreProject(raw: string): RestoreResult {
     if (raw.length > 8_000_000) throw new Error('Project is too large')
     const data = object(JSON.parse(raw))
     if (data.format !== 'pokemon-red-mastery' || data.version !== 1) throw new Error('Unsupported project format or version')
-    const p = validateProject(data.project)
+    // Renamed objective keys follow their marks; retired keys stay visible (key-migrations.ts).
+    const p = migrateEvidenceKeys(validateProject(data.project))
     return { ok: true, project: { ...p, importGeneration: nextGeneration(p), pendingImport: null,
       attempts: p.attempts.map(a => ({ ...reviewGlitchSetup(a), heldImport: undefined })),
       resetUndo: p.resetUndo ? { ...p.resetUndo, attempt: { ...reviewGlitchSetup(p.resetUndo.attempt), heldImport: undefined } } : undefined } }

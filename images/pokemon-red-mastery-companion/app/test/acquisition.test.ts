@@ -134,7 +134,7 @@ describe('observed acquisition resources', () => {
     s.party=known([{...pokemon(61),moves:unknown}])
     expect(planAcquisitions(s,[62,81],dataset).targets.map(t=>t.paths[0]?.readiness)).toEqual(['ready','unknown'])
   })
-  it.each([[147,'SAFARI_ZONE_EAST'],[113,'SafariZoneCenter']] as const)('uses Safari supply rather than ordinary balls for #%i at %s', (dex,area) => {
+  it.each([[115,'SafariZoneEast'],[113,'SafariZoneNorth']] as const)('uses Safari supply rather than ordinary balls for #%i at %s', (dex,area) => {
     const s=snapshot([],3); s.bag=known([{position:1,rawItemId:78,quantity:1}])
     const result=planAcquisitions(s,[dex],dataset).targets[0]!
     expect(result.paths[0]).toMatchObject({method:'catch',area,readiness:'unknown'})

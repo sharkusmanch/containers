@@ -1,17 +1,17 @@
 # Glitch Showcase source audit and planner contract
 
-`planGlitches(input: PlanInput): GlitchPlan` supports all eight published objectives in backing game11632/site subset4827. Every shipped method is **sourced**, and final `readiness` remains blocked. No target ROM/core execution, crash, safe underflow operation, achievement trigger decoding or hardcore validation occurred. Manual runtime-validation checkboxes cannot change the dataset audit. Task6 implementation is complete at source/planning scope; Task6 runtime steps4 and full validated coverage step6 remain explicit Task9 release gates.
+`planGlitches(input: PlanInput): GlitchPlan` supports all eight published objectives in backing game11632/site subset4827. Every shipped method is **sourced**, and final `readiness` remains blocked. No target ROM/core execution, crash, safe underflow operation, achievement trigger decoding or hardcore validation occurred. Manual runtime-validation checkboxes cannot change the dataset audit. Planning is complete at source scope; runtime execution and validated coverage remain explicit release gates.
 
-The source handoff is `.superpowers/sdd/2026-10-11-pokemon-red-mastery-companion/inputs/glitch-audit.md`. Factual source is [pret/pokered af519899719f0754965776faac0e836a3b906e6d](https://github.com/pret/pokered/tree/af519899719f0754965776faac0e836a3b906e6d). Per-method `sourceUrls` identify the actual files/procedure references. Source proofs, hand-calculated arithmetic, and synthetic save observations do not establish runtime success. The published API `MemAddr` hashes do not disclose trigger predicates.
+Sources are the per-method `sourceUrls` below and the public RA achievement pages and forum. Factual source is [pret/pokered af519899719f0754965776faac0e836a3b906e6d](https://github.com/pret/pokered/tree/af519899719f0754965776faac0e836a3b906e6d). Per-method `sourceUrls` identify the actual files/procedure references. Source proofs, hand-calculated arithmetic, and synthetic save observations do not establish runtime success. The published API `MemAddr` hashes do not disclose trigger predicates.
 
 | Objective | Chosen sourced guidance | Placement / pending evidence |
 | --- | --- | --- |
-| 57639 | Celadon Hotel PC: stand(13,4), face north toward(13,3), press A | Normal Celadon canonical visit; observed PC use and hardcore result pending |
-| 57640 | Actual invalid-item crash candidate | Expendable physically separate glitch SRAM; exact item ID/slot/map/party/action unresolved. Freeze is insufficient; never recommend random item use |
-| 57641 | Fresh RED/JOHN, TID25794 SRAM-corruption Any% route | Separate fresh speedrun SRAM; manual TID setup, four-frame core timing, corrupted menu and ≤1minute Hall-of-Fame transition pending |
+| 57639 | Celadon Hotel PC: stand(13,4), face north toward(13,3), press A | On the save copy after mastery, subset opted in; observed PC use and hardcore result pending |
+| 57640 | Safari exit setup, steps run out on Route 1, exit into Route 1's Glitch City and walk off the map edge until a real crash; fallback: a glitch item in the corrupted Speedrun? bag | Same save copy after 57644; reset without saving; a freeze, softlock or white screen is insufficient |
+| 57641 | Empty-save SRAM-corruption route; names and Trainer ID do not matter for the casual recipes (the official any% list assumes RED/JOHN/TID25794) | Separate empty save copy, last; four-frame reset timing, corrupted menu and ≤1minute Hall-of-Fame transition pending |
 | 57642 | Special21 → six successful Growls → party level1 Mew → one battle awarding1–53EXP | After protected main/Oak; separate glitch SRAM while encounter transport remains unvalidated |
 | 57643 | Old-man encounter; physical bag slot6 Rare Candy×1 →129 → toss2 →127 →255 | After protected main/Oak; exact player-name encounter compatibility, slot order and hardcore trigger pending |
-| 57644 | Safari exit; remaining counter expires on Route20; exit gate into malformed map and Fly away | After protected Safari and main/Oak; separate glitch SRAM; current accepted RA map scope and safe exit pending |
+| 57644 | Safari exit; remaining steps run out in Pallet Town; exit the gate south into the Pallet Town Glitch City (the only one reported to pop it) and Fly away | After protected Safari and main/Oak, on the save copy; needs ¥500, Fly and the Thunder Badge; observed entry and hardcore result pending |
 | 57645 | Special226 → branch-correct successful Growls → correct full Oak roster and victory | After protected main/Oak; separate glitch SRAM; transport and correct-roster result pending |
 | 57655 | Continue own legitimate collection below151; exact Special encounters and ordinary evolutions; observe final acquisition | After protected main/Oak; separate glitch SRAM until repeated transport validated; own provenance/final transition pending |
 
@@ -42,6 +42,8 @@ Collection counts deduplicate only owned legitimate Dex IDs1–151. Seen flags, 
 
 ## Transport and reservations
 
+On a finished main save every trainer is beaten, so the trainer-free PC underflow is the transport for the three Special-encounter methods; Trainer-Fly is listed only for a save that still has both trainers unbeaten, and it never holds back trainers in the main run. All Glitch Showcase work happens on a renamed copy of the completed main save (Speedrun? on an empty copy), with the subset opted out until main and Oak are mastered.
+
 `GlitchPlan.transports` contains two separate candidates, without adding a ninth chosen objective. Both remain sourced/blocked; their `prerequisites` describe preflight eligibility for a new transport use. The selected method's `encounter.assessment` governs its actual setup phase; do not substitute transport preflight for an existing pending encounter. `ordinary-trainer-fly` requires Fly/field badge and both actual unbeaten flags:
 
 - Route8 north-facing Gambler `(13,9)`, sight4, `EVENT_BEAT_ROUTE_8_TRAINER_1`. Release him only after final planned use, then legitimately defeat him.
@@ -51,7 +53,7 @@ Either defeated flag blocks ordinary transport even with Ditto and measured Spec
 
 The trainer-free PC-underflow candidate carries its exact sourced A×1/B×1/C×255, N−2 tosses,253 toss, two swaps, absolute slot100,255 toss and Route24 trigger sequence in transport instructions. This crosses unrelated memory, so canonical-safe operation and repeatability remain unavailable. Verify slot numbering, affected bytes, key items, bag/PC contents, trainer flags and ordinary postgame behavior in separately stored controlled SRAM before any support promotion. No random glitch item use, key-item discards or backup restoration is recommended.
 
-## Task8 history handoff
+## Manual history keys
 
 Use existing `record-manual` with active attempt/revision. Source audits remain dataset-owned, never user-editable validation. Relevant keys are:
 
@@ -62,11 +64,12 @@ Use existing `record-manual` with active attempt/revision. Source audits remain 
 - `glitch:ditto-access` remains access preparation. Transform, neutral Attack, no intervening encounter, successful Growls and exact underflow setup use generated scoped confirmation controls. Old shared `glitch:*` records for those observations are visible history only and cannot certify a current encounter.
 - `glitch:balls-and-finisher`, `glitch:mew-own-untouched`, `glitch:oak-battle-supplies` remain preparation. Exact EXP award uses the numeric setup-bound control; shared old `glitch:exp-award` history cannot certify a new Mew setup.
 - `glitch:old-man-compatible`: observed appropriate encoded-name encounter eligibility, not guessed from Cinnabar location.
-- `glitch:celadon-access`, `glitch:safari-entry-fee` (¥500), `glitch:cinnabar-access`.
-- `glitch:fresh-start`, string `glitch:rival-name`=`JOHN`; current save trainer must also be RED/TID25794.
+- `glitch:celadon-access`, `glitch:safari-entry-fee` (¥500). `glitch:cinnabar-access` is retired (the Route 20 method was replaced); old marks stay visible under More → Marks no longer used.
+- `glitch:subset-opted-in-after-mastery`: the Glitch Showcase subset is opted in only for a save copy, after main and Oak are mastered (every method requires it).
+- `glitch:fresh-start`. The former `glitch:rival-name`=`JOHN` and RED/TID25794 checks are retired: names do not matter for the casual routes.
 - `glitch:own-collection`, `glitch:collection-start-below151`, `glitch:balls-and-storage`, numeric `glitch:collection-target-dex` selecting a sourced target. The scoped Growl count must be0 for ordinary catches.
 
-## Encounter setup controls and lifetime (Task6 review fix)
+## Encounter setup controls and lifetime
 
 Special-based methods57642/45/55 expose `encounter: GlitchEncounterAssessment` with `identity: Fact<GlitchSetupIdentity>`, explicit `phase`, current phase `assessment`, and labelled controls. Identity binds method, selected transport, current donor party slot/internal species/Special, source revision and required Growl count. Every Start action appends a persisted manual start record; its new UUID is `setupId`, and its ordinal among start records is the setup generation. Repeated Start clicks create new identities even for the same donor; old confirmations remain history.
 
@@ -83,7 +86,7 @@ Phases separate resource lifetime:
 
 Starting preflight readiness is captured by the planner-created Start descriptor; entering `pending` cannot repair a trainer already lost or zero initial PP. This captured resource guard is user-attributed setup metadata, not independent runtime validation. It does not synthesize future trainer flags or party stats. Final method readiness remains source-blocked in every phase.
 
-Task8 must render the provided labels and value types rather than offer private-key entry:
+The UI renders the provided labels and value types rather than offering private-key entry:
 
 - `startControls[]`: label `Start/new setup: party slot N, Special S`, with `action: {key,value,ruleId}`. Dispatch `{type:'record-manual', ...control.action}`. New controls require a selected supported transport and a current measured matching donor.
 - `phaseControls[]`: labelled preflight/restored/pending/EXP actions in the same shape. Render the current phase and `encounter.assessment` reasons. These actions record user stage assertions, not game actions; the planner still verifies the phase prerequisites.
@@ -91,7 +94,7 @@ Task8 must render the provided labels and value types rather than offer private-
 
 Controls are method/transport-specific: ordinary transport supplies escape/restoration, PC underflow supplies exact setup, and only Mew supplies EXP entry. Actual game execution remains deferred behind the eight existing source/runtime gates. A setup confirmation is never an RA timestamp or dataset audit promotion.
 
-## Mew catch boundary and EXP continuation (Task6 review round2)
+## Mew catch boundary and EXP continuation
 
 The donor's live slot lifetime ends at the intended catch, rather than extending through the level-jump battle. This matters when the Special21 donor began first: moving caught Mew into slot1 moves the donor to slot2, and the release trainer/PP are already consumed.
 

@@ -5,8 +5,8 @@
     "area": "Pallet and Viridian",
     "title": "Pallet and Viridian",
     "instructions": [
-      "Collect the initial gifts before registering another species.",
-      "Accept Route 1 Potion with bag room, deliver Oak’s Parcel, receive Pokédex and Town Map; win Route 22 Rival, then receive Oak’s five balls before catching/evolving."
+      "Collect the initial gifts before registering another species, and switch Battle Style to SET in the options now (gym challenges need it from Brock on).",
+      "Accept the Route 1 Potion with bag room, deliver Oak’s Parcel, receive the Pokédex and Town Map, win the first Route 22 Rival battle, then talk to Oak for the five balls before catching or evolving anything — and before beating Brock, which closes the gift."
     ],
     "ruleIds": [
       108020,
@@ -24,9 +24,9 @@
     "area": "Pewter and Viridian Forest",
     "title": "Pewter and Viridian Forest",
     "instructions": [
-      "Register the chosen starter line and all first-phase species; box grinders before Brock.",
-      "Before gym music, check the exact 21-species branch collection, box every party member above level 14, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
-      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader.",
+      "Register the chosen starter line and all first-phase species; box grinders before Brock. Spares for later trades: two more Nidoran♂ (SPOT and TERRY trades) and a second Spearow (Farfetch’d trade).",
+      "Before the leader: own exactly 21, confirm every species achievement of this phase has popped in hardcore (not just the Pokédex count), and register nothing from the next phase. Keep every party member at 14 or lower (confirmed inclusive). Box before the gym: the evolved starter forms, Pidgeot/Pidgeotto (18+), Fearow, Raticate (20+), Nidorino and Nidorina (16+). B-team: Butterfree with Confusion.",
+      "Gym challenge rules: Battle Style SET before entering; party levels are checked while the gym music plays (boxed Pokémon don’t count, levelling up mid-battle is fine); never open the Item menu in the leader battle (the Poké Flute counts as an item); party size is not a condition, but six costs nothing. Check the challenge icon on the leader’s first Pokémon: no icon, reload. After the win confirm the challenge, the badge and the Oak badge all popped before saving.",
       "Catch and evolve the first Oak group only after Parting Gift. Finish the Forest’s three Bug Catchers and five pickups; its encounter-free traversal is a separate repeatable session."
     ],
     "ruleIds": [
@@ -135,12 +135,24 @@
     "area": "Mt. Moon",
     "title": "Mt. Moon",
     "instructions": [
-      "Choose a fossil, obtain two Moon Stones and the seller’s Magikarp.",
-      "Route 3 and Mt. Moon follow Brock. Buy the level-5 Magikarp from Mt. Moon Pokémon Center for the six-gift history. Register a chosen fossil branch and preserve it for Cinnabar."
+      "Catch the Mt. Moon species, buy the Magikarp, take one fossil and use both Mt. Moon Moon Stones on two different species.",
+      "Route 3 and Mt. Moon follow Brock. Buy the level-5 Magikarp in the Mt. Moon Pokémon Center (it is one of the six gifts). Take one fossil and keep it for Cinnabar. If you leave without a stone, walk west from Cerulean along Route 4’s upper path and re-enter through Mt. Moon’s east exit; Diglett’s Cave does not lead back."
     ],
     "ruleIds": [
       4414,
-      108025
+      108025,
+      165628,
+      165629,
+      165630,
+      165631,
+      165632,
+      165633,
+      165638,
+      165639,
+      165644,
+      165645,
+      165652,
+      165653
     ],
     "prerequisites": [],
     "preserves": [],
@@ -154,38 +166,25 @@
     "area": "Cerulean to Vermilion",
     "title": "Cerulean to Vermilion",
     "instructions": [
-      "Explore south before Misty for trades, Diglett’s Cave and the collection.",
-      "Visit Routes 24/25, rescue Bill for the S.S. Ticket, travel south through Routes 5/6 to Vermilion; obtain Old Rod, Bike Voucher/Bicycle, Itemfinder and Flash via Diglett’s Cave. Trade Spearow for Farfetch’d and Abra for Mr. Mime. Use exactly two distinct Mt. Moon stone evolutions before Misty."
+      "Explore Cerulean, Routes 24/25, 5/6, 11 and Vermilion before Misty for trades and the collection.",
+      "Rescue Bill for the S.S. Ticket, get the Old Rod and Bike Voucher/Bicycle, and the Itemfinder once 30 are owned. Trade a Spearow for Farfetch’d and an Abra for Mr. Mime (Route 2 trade house via Diglett’s Cave’s Route 2 exit, no Cut needed). Catch three Abra (Mr. Mime trade plus two to raise as Kadabra) and a spare Diglett to keep at 23 or lower with Dig for Surge. Flash waits until after Misty (Cut)."
     ],
     "ruleIds": [
       108049,
-      165628,
-      165629,
-      165630,
-      165631,
-      165632,
-      165633,
       165634,
       165635,
       165636,
       165637,
-      165638,
-      165639,
       165640,
       165641,
       165642,
       165643,
-      165644,
-      165645,
       165646,
       165647,
       165648,
       165649,
       165650,
-      165651,
-      165652,
-      165653,
-      108028
+      165651
     ],
     "prerequisites": [],
     "preserves": [],
@@ -229,8 +228,8 @@
     "title": "Cerulean Gym",
     "instructions": [
       "Check 47 exact entries including two distinct Moon Stone evolutions before entering.",
-      "Before gym music, check the exact 47-species branch collection, box every party member above level 21, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
-      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+      "Before the leader: own exactly 47, confirm every species achievement of this phase has popped in hardcore (not just the Pokédex count), and register nothing from the next phase. The hard cap is 21; keep every party member at 20 or lower, because players have failed at the cap with every other condition met. Box before the gym: everything from Brock’s list plus Golbat, Arbok, Parasect, Graveler, Hypno, Dugtrio, Primeape, Gloom, and Kadabra, Gyarados, Raticate or the Moon Stone forms if over 20. B-team: Pikachu (Thunder Wave), Butterfree, Gyarados or Raticate at 20.",
+      "Gym challenge rules: Battle Style SET before entering; party levels are checked while the gym music plays (boxed Pokémon don’t count, levelling up mid-battle is fine); never open the Item menu in the leader battle (the Poké Flute counts as an item); party size is not a condition, but six costs nothing. Check the challenge icon on the leader’s first Pokémon: no icon, reload. After the win confirm the challenge, the badge and the Oak badge all popped before saving."
     ],
     "ruleIds": [
       4402,
@@ -357,28 +356,22 @@
         165654,
         4402,
         108059
-      ]
+      ],
+      "marginAdvice": 20
     }
   },
   {
-    "id": "celadon",
+    "id": "cut-cleanup",
     "order": 6,
-    "area": "Celadon and Rocket Hideout",
-    "title": "Celadon and Rocket Hideout",
+    "area": "Route 2, Pewter and Viridian",
+    "title": "Cut cleanup after Misty",
     "instructions": [
-      "Collect Eevee, stones, Fly and coins; obtain Scope but store it before the ghost.",
-      "Travel Route 9/10 and Rock Tunnel with Flash, then Route 8 to Celadon. Complete the eleven pre-Scope Hideout Rockets and 15 pickups before Giovanni; collect Scope afterwards, buy Poké Doll and box Scope. Preserve remaining Moon Stones and buy the needed evolution stones."
+      "Field Cut works after Misty: clear the Route 2 trees for the Moon Stone and HP Up, the Pewter Museum back entrance for the Old Amber and the Route 2 gate aide for Flash.",
+      "With 10 or more species owned, talk to Oak’s aide in the Route 2 gate (behind the Cut trees) for HM05 Flash. Cut the Viridian tree near the pond for TM42 Dream Eater. Keep the Old Amber for Cinnabar."
     ],
     "ruleIds": [
-      108035,
-      108036,
-      108037,
-      108038,
-      108039,
-      108179,
-      108180,
-      108182,
-      57639
+      108028,
+      108035
     ],
     "prerequisites": [],
     "preserves": [],
@@ -387,17 +380,45 @@
     ]
   },
   {
-    "id": "tower",
+    "id": "celadon",
     "order": 7,
+    "area": "Celadon and Rocket Hideout",
+    "title": "Celadon and Rocket Hideout",
+    "instructions": [
+      "Rock Tunnel, Celadon, the Game Corner and the Rocket Hideout: Eevee, stones, Fly, coins and the Silph Scope.",
+      "Travel Route 9/10 and Rock Tunnel, then Route 8 to Celadon. Clear the Rocket Hideout: 11 Rockets, 15 pickups, Giovanni, then the Silph Scope he leaves (the hidden Super Potion behind him too). Buy a Poké Doll and the evolution stones; keep the remaining Moon Stones for distinct species."
+    ],
+    "ruleIds": [
+      108036,
+      108037,
+      108038,
+      108039,
+      108179,
+      108180,
+      108182,
+      165699,
+      165700
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "cut-cleanup"
+    ]
+  },
+  {
+    "id": "tower",
+    "order": 8,
     "area": "Lavender Tower",
     "title": "Lavender Tower",
     "instructions": [
-      "Use Poké Doll without Scope in bag, then complete Tower and flute."
+      "With the Silph Scope in the bag, catch Gastly and Cubone on Tower 3F–5F; then walk back to the Lavender Pokémon Center and deposit the Scope (save). Use the Poké Doll on the 6F stairs ghost (Dearly Beloved), free Mr. Fuji on 7F and get the Poké Flute. Withdraw the Scope later for Haunter."
     ],
     "ruleIds": [
       4418,
       108040,
-      108041
+      108041,
+      165673,
+      165682
     ],
     "prerequisites": [],
     "preserves": [],
@@ -407,12 +428,12 @@
   },
   {
     "id": "safari-prep",
-    "order": 8,
+    "order": 9,
     "area": "Fuchsia, Safari, Dojo and fishing",
     "title": "Fuchsia, Safari, Dojo and fishing",
     "instructions": [
-      "Catch pre-Surf species; take HM03 and Gold Teeth only, deferring eleven optional Safari objects.",
-      "Before Koga obtain all three rods, Safari catches, HM03/Gold Teeth, Dojo prize, Eevee evolution, remaining Moon Stone evolutions, Game Corner prizes, NPC trades and the 105-entry collection. Lapras requires the ordered Silph visit next. Keep every optional Safari pickup untouched."
+      "Catch pre-Surf species; in the Safari Zone take only HM03 and the Gold Teeth, leaving the eleven optional items for one later sweep.",
+      "Before Koga: the three rods, the Safari catches, the Dojo prize, the Eevee evolution, Moon Stones III and IV, Porygon (and Dratini if you buy it) from the Game Corner once, and the Phase 3 trades. Spares: a second Venonat (Tangela trade), a second Poliwhirl (Jynx trade) and a Growlithe kept at 28 or lower for Erika. This Is Illegal, You Know waits for the postgame."
     ],
     "ruleIds": [
       4416,
@@ -424,7 +445,6 @@
       108048,
       108139,
       108173,
-      108183,
       618978,
       618979,
       618980,
@@ -447,7 +467,6 @@
       165670,
       165671,
       165672,
-      165673,
       165674,
       165675,
       165676,
@@ -456,7 +475,6 @@
       165679,
       165680,
       165681,
-      165682,
       165683,
       165684,
       165685,
@@ -471,10 +489,7 @@
       165694,
       165695,
       165696,
-      165697,
       165698,
-      165699,
-      165700,
       165701,
       165702,
       165703,
@@ -496,7 +511,7 @@
   },
   {
     "id": "silph-rival",
-    "order": 9,
+    "order": 10,
     "area": "Silph Co. Rival",
     "title": "Silph Co. Rival",
     "instructions": [
@@ -522,16 +537,17 @@
   },
   {
     "id": "silph-clear",
-    "order": 10,
+    "order": 11,
     "area": "Silph Co. clearance",
     "title": "Silph Co. clearance",
     "instructions": [
-      "Clear remaining trainers/items/doors before Giovanni, and receive Lapras.",
-      "After recorded Rival arrival, finish all 30 trainers, 16 physical pickups, 20 doors and extra TM36 gift before Giovanni. Receive Lapras for Oak105. NPC disappearance alone cannot prove trainer victories."
+      "After the Rival, clear the remaining trainers, items and doors; save on 11F and open Giovanni’s door last.",
+      "Finish all 30 trainers, 16 items, the 2F TM36 gift and 19 doors (the 3F and 11F grunts vanish with the rest when Silph Giovanni falls). Hostage Situation pops as the 11F door opens and Giovanni engages at once. Then receive Lapras on 7F and the Master Ball from the President."
     ],
     "ruleIds": [
       108050,
-      108051
+      108051,
+      165697
     ],
     "prerequisites": [],
     "preserves": [],
@@ -541,13 +557,13 @@
   },
   {
     "id": "koga",
-    "order": 11,
+    "order": 12,
     "area": "Fuchsia Gym",
     "title": "Fuchsia Gym",
     "instructions": [
       "Check all 105 species and a legal team, then earn Surf access.",
-      "Before gym music, check the exact 105-species branch collection, box every party member above level 43, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
-      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+      "Before the leader: own exactly 105, confirm every species achievement of this phase has popped in hardcore (not just the Pokédex count), and register nothing from the next phase. The hard cap is 43; keep every party member at 42 or lower, because players have failed at the cap with every other condition met. Box before the gym: Dragonite (Lv55 minimum) and anything else over 42. B-team: Kadabra with Psychic (Lv38) and Dugtrio with Dig.",
+      "Gym challenge rules: Battle Style SET before entering; party levels are checked while the gym music plays (boxed Pokémon don’t count, levelling up mid-battle is fine); never open the Item menu in the leader battle (the Poké Flute counts as an item); party size is not a condition, but six costs nothing. Check the challenge icon on the leader’s first Pokémon: no icon, reload. After the win confirm the challenge, the badge and the Oak badge all popped before saving."
     ],
     "ruleIds": [
       4405,
@@ -771,17 +787,18 @@
         165713,
         4405,
         108062
-      ]
+      ],
+      "marginAdvice": 42
     }
   },
   {
     "id": "surf-cleanup",
-    "order": 12,
+    "order": 13,
     "area": "Cinnabar, Power Plant and Safari",
     "title": "Cinnabar, Power Plant and Safari",
     "instructions": [
-      "Use Surf for the next species phase and uninterrupted optional Safari sweep. Defer Articuno until field Strength is enabled.",
-      "Koga enables Surf for Cinnabar, fossil revival and Power Plant. Register Zapdos, Aerodactyl, selected revived fossil line and remaining pre-Erika species for 121. Complete the protected 11-item Safari hunt with Surf and space; defer Articuno until Erika enables Strength."
+      "Use Surf for the Phase 4 species, the first Mansion stay and the one-hunt Safari item sweep; leave Articuno until after Erika.",
+      "Reach Cinnabar by Surfing south from Pallet Town (Route 21): Fly needs Surge’s badge and Route 20 from Fuchsia is blocked by Seafoam’s currents until Strength. Revive the fossil and the Old Amber, do the last three trades in the Cinnabar Lab, read the four Mansion diaries in one stay, and Surf down Route 10 to the Power Plant for Zapdos. Catch a second Ponyta for the Seel trade. Do not fight Blaine yet; do not go below Seafoam 1F."
     ],
     "ruleIds": [
       108045,
@@ -800,7 +817,12 @@
       165726,
       165727,
       165728,
-      165729
+      165729,
+      108052,
+      108053,
+      108141,
+      108054,
+      108364
     ],
     "prerequisites": [],
     "preserves": [
@@ -810,6 +832,13 @@
         "description": "Leave all eleven optional Safari objects until the uninterrupted Surf sweep.",
         "consumingRuleId": 108045,
         "releaseAfterRuleId": 108045
+      },
+      {
+        "id": "reserve-108053",
+        "resource": "pokemon",
+        "description": "Retain each registered trade donor until its particular NPC exchange.",
+        "consumingRuleId": 108053,
+        "releaseAfterRuleId": 108053
       }
     ],
     "afterStepIds": [
@@ -818,13 +847,13 @@
   },
   {
     "id": "erika",
-    "order": 13,
+    "order": 14,
     "area": "Celadon Gym",
     "title": "Celadon Gym",
     "instructions": [
       "At 121 entries defeat Erika to enable field Strength.",
-      "Before gym music, check the exact 121-species branch collection, box every party member above level 29, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
-      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+      "Before the leader: own exactly 121, confirm every species achievement of this phase has popped in hardcore (not just the Pokédex count), and register nothing from the next phase. The hard cap is 29; keep every party member at 28 or lower, because players have failed at the cap with every other condition met. Box before the gym: nearly the whole Phase 4 catch (revived fossils and Aerodactyl come out at Lv30, Zapdos at 50) and everything else over 28. B-team: a second Kadabra held at 27–28 (Psybeam), an Arcanine evolved from a Growlithe at 28 or lower, Butterfree.",
+      "Gym challenge rules: Battle Style SET before entering; party levels are checked while the gym music plays (boxed Pokémon don’t count, levelling up mid-battle is fine); never open the Item menu in the leader battle (the Poké Flute counts as an item); party size is not a condition, but six costs nothing. Check the challenge icon on the leader’s first Pokémon: no icon, reload. After the win confirm the challenge, the badge and the Oak badge all popped before saving."
     ],
     "ruleIds": [
       4404,
@@ -1081,17 +1110,18 @@
         165730,
         4404,
         108061
-      ]
+      ],
+      "marginAdvice": 28
     }
   },
   {
     "id": "articuno",
-    "order": 14,
+    "order": 15,
     "area": "Seafoam Islands",
     "title": "Seafoam Islands",
     "instructions": [
       "Use Strength to solve boulders and catch Articuno for entry 122.",
-      "With Erika’s badge, HM04 and a Strength carrier, solve Seafoam’s boulders and catch Articuno for entry 122. Do not KO the bird."
+      "With Erika’s badge, HM04 and a Strength carrier, solve Seafoam’s boulders and catch Articuno (entry 122) before the first of Surge, Sabrina and Blaine. Save in front of it; never run and never knock it out. The Warden’s Rare Candy behind the Strength boulder is reachable now."
     ],
     "ruleIds": [
       165731
@@ -1104,13 +1134,13 @@
   },
   {
     "id": "surge",
-    "order": 15,
+    "order": 16,
     "area": "Vermilion Gym",
     "title": "Vermilion Gym",
     "instructions": [
-      "At 122 entries return to Surge with a legal level-24 party.",
-      "Before gym music, check the exact 122-species branch collection, box every party member above level 24, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
-      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+      "At 122 entries (Articuno caught) beat Lt. Surge, Sabrina and Blaine in any order; Surge first is recommended because his badge enables Fly.",
+      "Before the leader: own exactly 122, confirm every species achievement of this phase has popped in hardcore (not just the Pokédex count), and register nothing from the next phase. The hard cap is 24; keep every party member at 23 or lower, because players have failed at the cap with every other condition met. Box everything over 23 (nearly the whole box). B-team: the spare Diglett with Dig kept at 23 or lower, plus Geodude, Cubone or Onix at 23 or lower.",
+      "Gym challenge rules: Battle Style SET before entering; party levels are checked while the gym music plays (boxed Pokémon don’t count, levelling up mid-battle is fine); never open the Item menu in the leader battle (the Poké Flute counts as an item); party size is not a condition, but six costs nothing. Check the challenge icon on the leader’s first Pokémon: no icon, reload. After the win confirm the challenge, the badge and the Oak badge all popped before saving."
     ],
     "ruleIds": [
       4403,
@@ -1368,18 +1398,20 @@
         165732,
         4403,
         108060
-      ]
+      ],
+      "orderGroup": "badges-5-7",
+      "marginAdvice": 23
     }
   },
   {
     "id": "sabrina",
-    "order": 16,
+    "order": 17,
     "area": "Saffron Gym",
     "title": "Saffron Gym",
     "instructions": [
-      "Keep the 122-entry collection; use four warps and a legal team.",
-      "Before gym music, check the exact 122-species branch collection, box every party member above level 43, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
-      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+      "Keep the 122-entry collection. Sabrina can come before or after Surge and Blaine; reach her in four warps for Monkey’s Tounge.",
+      "Before the leader: own exactly 122, confirm every species achievement of this phase has popped in hardcore (not just the Pokédex count), and register nothing from the next phase. The hard cap is 43; keep every party member at 42 or lower, because players have failed at the cap with every other condition met. Box Zapdos and Articuno (Lv50), Dragonite and anything over 42. Suggested team: Snorlax (Body Slam, Amnesia), Hypno, Dugtrio.",
+      "Gym challenge rules: Battle Style SET before entering; party levels are checked while the gym music plays (boxed Pokémon don’t count, levelling up mid-battle is fine); never open the Item menu in the leader battle (the Poké Flute counts as an item); party size is not a condition, but six costs nothing. Check the challenge icon on the leader’s first Pokémon: no icon, reload. After the win confirm the challenge, the badge and the Oak badge all popped before saving."
     ],
     "ruleIds": [
       4406,
@@ -1390,7 +1422,7 @@
     "prerequisites": [],
     "preserves": [],
     "afterStepIds": [
-      "surge"
+      "articuno"
     ],
     "checkpoint": {
       "leader": "Sabrina",
@@ -1638,38 +1670,39 @@
         165733,
         4406,
         108063
-      ]
+      ],
+      "orderGroup": "badges-5-7",
+      "marginAdvice": 42
     }
   },
   {
     "id": "cinnabar",
-    "order": 17,
+    "order": 18,
     "area": "Cinnabar Mansion and Gym",
     "title": "Cinnabar Mansion and Gym",
     "instructions": [
-      "Before Cinnabar gym music, box every party member above level 47 and select Set. Review Blaine’s exact 122-species checkpoint below before entering for the quizzes; use no items in the later leader battle.",
-      "Read all four journals in one stay; answer all quizzes before any trainers.",
-      "Mansion journals are a separate one-stay checklist. Before Cinnabar gym trainers, complete all six quizzes without exit/reset."
+      "Blaine’s quiz visit: save outside the gym with the party at 46 or lower, SET, exactly 122 owned and every pop confirmed. Answer the six quizzes before any trainer battle; leaving or reloading inside fails 2000 IQ.",
+      "The Mansion diaries and the first Mansion stay belong to the Surf cleanup before Erika; the quiz visit comes once Articuno is caught."
     ],
     "ruleIds": [
-      108054,
       108056
     ],
     "prerequisites": [],
     "preserves": [],
     "afterStepIds": [
-      "sabrina"
+      "articuno"
     ]
   },
   {
     "id": "blaine",
-    "order": 18,
+    "order": 19,
     "area": "Cinnabar Gym leader",
     "title": "Cinnabar Gym leader",
     "instructions": [
-      "At 122 entries defeat Blaine with a legal level-47 party.",
-      "Before gym music, check the exact 122-species branch collection, box every party member above level 47, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
-      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+      "At 122 entries, after the quiz session, beat one remaining gym trainer and then Blaine; Blaine can come before or after Surge and Sabrina.",
+      "Order inside the gym: save outside → answer the six quizzes Yes, No, No, No, Yes, No with no battles (2000 IQ pops) → save inside → beat one gym trainer (this arms Fire Fighter) → Blaine with SET, no items, everyone 46 or lower. After any reload inside, beat another trainer first.",
+      "Before the leader: own exactly 122, confirm every species achievement of this phase has popped in hardcore (not just the Pokédex count), and register nothing from the next phase. The hard cap is 47; keep every party member at 46 or lower, because players have failed at the cap with every other condition met. Box Zapdos and Articuno (Lv50), Dragonite and anything over 46. Any Surf user works.",
+      "Gym challenge rules: Battle Style SET before entering; party levels are checked while the gym music plays (boxed Pokémon don’t count, levelling up mid-battle is fine); never open the Item menu in the leader battle (the Poké Flute counts as an item); party size is not a condition, but six costs nothing. Check the challenge icon on the leader’s first Pokémon: no icon, reload. After the win confirm the challenge, the badge and the Oak badge all popped before saving."
     ],
     "ruleIds": [
       4407,
@@ -1927,18 +1960,20 @@
         165734,
         4407,
         108065
-      ]
+      ],
+      "orderGroup": "badges-5-7",
+      "marginAdvice": 46
     }
   },
   {
     "id": "giovanni",
-    "order": 19,
+    "order": 20,
     "area": "Viridian Gym",
     "title": "Viridian Gym",
     "instructions": [
-      "At 122 entries avoid spin tiles, collect Revive and defeat Giovanni.",
-      "Before gym music, check the exact 122-species branch collection, box every party member above level 50, and select Set. Use no items in the leader fight; record that battle history separately from current readiness.",
-      "Optional local trainer bits can be set by the leader without fighting them; keep any desired battle history before the leader."
+      "Giovanni is last: beat him only after Surge, Sabrina and Blaine, at 122 entries. Avoid the spin tiles and collect the Revive.",
+      "Before the leader: own exactly 122, confirm every species achievement of this phase has popped in hardcore (not just the Pokédex count), and register nothing from the next phase. The hard cap is 50; keep every party member at 49 or lower, because players have failed at the cap with every other condition met. Box Zapdos and Articuno (a Lv50 Articuno voided one run), Dragonite and anything over 49. Surf users and Kadabra work well.",
+      "Gym challenge rules: Battle Style SET before entering; party levels are checked while the gym music plays (boxed Pokémon don’t count, levelling up mid-battle is fine); never open the Item menu in the leader battle (the Poké Flute counts as an item); party size is not a condition, but six costs nothing. Check the challenge icon on the leader’s first Pokémon: no icon, reload. After the win confirm the challenge, the badge and the Oak badge all popped before saving."
     ],
     "ruleIds": [
       4408,
@@ -1950,6 +1985,8 @@
     "prerequisites": [],
     "preserves": [],
     "afterStepIds": [
+      "surge",
+      "sabrina",
       "blaine"
     ],
     "checkpoint": {
@@ -2198,22 +2235,24 @@
         165735,
         4408,
         108068
-      ]
+      ],
+      "marginAdvice": 49
     }
   },
   {
     "id": "victory",
-    "order": 20,
+    "order": 21,
     "area": "Victory Road",
     "title": "Victory Road",
     "instructions": [
       "Catch Moltres for entry 123 and clear trainers/items.",
-      "Use Surf/Strength with eight badges. Register Moltres for entry 123 and finish 11 ordinary Victory Road trainers plus ten items; the bird is a separate static capture."
+      "Use Surf and Strength with eight badges. Catch Moltres (entry 123) and clear Victory Road’s 11 trainers and 10 items; any battle here can take a slot-one Pokémon from 49 to 50 for Halfway (Solo)."
     ],
     "ruleIds": [
       4420,
       108140,
-      165736
+      165736,
+      4411
     ],
     "prerequisites": [],
     "preserves": [],
@@ -2223,12 +2262,12 @@
   },
   {
     "id": "league50",
-    "order": 21,
+    "order": 22,
     "area": "League level-50 clear",
     "title": "League level-50 clear",
     "instructions": [
-      "Check entire party at entry, Set mode and no battle items; complete one continuous session.",
-      "Clear with canonical123, legal level-50 party at entry, Set and no battle items. Preserve this team until entry; execute other incompatible party clears separately."
+      "First League clear: own exactly 123, SET, every party member 50 or lower at Lorelei’s door, no Item menu in battle, one session to the Hall of Fame.",
+      "Champ is treated as one-shot: whether a rematch with exactly 123 can still pop it is unverified, so make this the first clear. Healing from the START menu between battles is fine."
     ],
     "ruleIds": [
       4410,
@@ -2243,7 +2282,7 @@
   },
   {
     "id": "league-solo",
-    "order": 22,
+    "order": 23,
     "area": "League solo clear",
     "title": "League solo clear",
     "instructions": [
@@ -2262,7 +2301,7 @@
   },
   {
     "id": "league-red",
-    "order": 23,
+    "order": 24,
     "area": "League Red-exclusive clear",
     "title": "League Red-exclusive clear",
     "instructions": [
@@ -2279,64 +2318,71 @@
     ]
   },
   {
-    "id": "postgame",
-    "order": 24,
-    "area": "Cerulean Cave and regional cleanup",
-    "title": "Cerulean Cave and regional cleanup",
+    "id": "league-target",
+    "order": 25,
+    "area": "Indigo Plateau",
+    "title": "League fourth run: Target Acquired",
     "instructions": [
-      "Catch Mewtwo without Master Ball after 123 species; finish acquisition/session/global objectives.",
-      "After canonical123 and Champion, prepare an empty box and supplies for the 15 ordinary Cave catches in one stay, then catch Mewtwo without Master Ball for entry124. Finish all nine actual NPC trades, six gifts, field disks, static resolutions, battle feats and regional pickups/trainers."
+      "Target Acquired needs X Accuracy, which the level-50 clear forbids, and the solo and Red-exclusive clears have no fast one-hit-KO user: use a fourth League run.",
+      "Lead with a Pokémon faster than Lorelei’s team that knows a one-hit-KO move (for example Dugtrio with Fissure from TM27, Giovanni’s reward). Use one X Accuracy, then land five one-hit KOs in a row on her five full-HP Pokémon. One player’s damaged target did not count."
     ],
     "ruleIds": [
-      4411,
-      4412,
-      4421,
-      4425,
-      108033,
-      108034,
-      108052,
-      108053,
-      108141,
-      108172,
-      108174,
-      108175,
-      108176,
-      108364,
-      108365,
-      108366,
-      108367,
-      108368,
-      165738
+      108034
     ],
     "prerequisites": [],
-    "preserves": [
-      {
-        "id": "reserve-108053",
-        "resource": "pokemon",
-        "description": "Retain each registered trade donor until its particular NPC exchange.",
-        "consumingRuleId": 108053,
-        "releaseAfterRuleId": 108053
-      }
-    ],
+    "preserves": [],
     "afterStepIds": [
       "league-red"
     ]
   },
   {
-    "id": "glitch-postgame",
-    "order": 25,
-    "area": "Postgame glitch preparation",
-    "title": "Postgame glitch preparation",
+    "id": "postgame",
+    "order": 26,
+    "area": "Cerulean Cave and regional cleanup",
+    "title": "Cerulean Cave and regional cleanup",
     "instructions": [
-      "Protect completed main/Oak history, preserve resources, and review sourced methods before any glitch.",
-      "Keep a Rare Candy and obtainable Growl carrier; review the separate glitch planner. Ordinary Trainer-Fly also needs escape/restoration trainers. A wild Ditto alone is not a trainer-free method, and item-underflow transport remains runtime-unvalidated."
+      "Catch Mewtwo with exactly 123 owned before it, after the Area Unknown session; then the postgame sweeps.",
+      "In Cerulean Cave: first the 15 Area Unknown species in one stay (empty box, no reset, no Master Ball, don’t leave), then Mewtwo with ordinary balls after sleep or paralysis. Then This Is Illegal, You Know and Disk Buyer sessions, Genocide Route and Living Itemfinder cleanup (the Cave items and the Route 4 Lass west of Cerulean)."
+    ],
+    "ruleIds": [
+      4412,
+      4421,
+      4425,
+      108033,
+      108172,
+      108174,
+      108175,
+      108176,
+      108365,
+      108366,
+      108367,
+      108368,
+      165738,
+      108183
+    ],
+    "prerequisites": [],
+    "preserves": [],
+    "afterStepIds": [
+      "league-target"
+    ]
+  },
+  {
+    "id": "glitch-postgame",
+    "order": 27,
+    "area": "Postgame glitch preparation",
+    "title": "Glitch Showcase on a save copy",
+    "instructions": [
+      "Only after main 93/93 and Oak 133/133 are mastered. Keep the Glitch Showcase subset opted out until then: loaded on a normal save, Speedrun? can false-pop on loads and resets.",
+      "Back up the main save first. Work on a renamed copy of the same ROM with its own save file (a copy of the completed main save), never on the main save; if a copy breaks, copy the main save again rather than restoring a backup.",
+      "Re-check the Glitch Showcase list on RetroAchievements before starting: more glitches may be added. Suggested order on the copy: Escaping the Simulation, Ruining the Neighborhood, Ya Dun Goofed, Rare Candy Addiction, then the PC item-underflow encounters (No Experience Necessary, The Third Starter Wasn’t Alone, Catch ’Em All). On a finished save every trainer is beaten, so the PC underflow is the encounter transport, not Trainer-Fly."
     ],
     "ruleIds": [
       57642,
       57643,
       57644,
       57645,
-      57655
+      57655,
+      57639
     ],
     "prerequisites": [],
     "preserves": [
@@ -2359,32 +2405,36 @@
   },
   {
     "id": "glitch-expendable",
-    "order": 26,
+    "order": 28,
     "area": "Separate expendable glitch attempt",
-    "title": "Separate expendable glitch attempt",
+    "title": "Glitch copy: crash the game",
     "instructions": [
-      "Use a named expendable attempt for a crash candidate; require target-core evidence."
+      "On the same save copy, after Ruining the Neighborhood: a real crash (not a freeze) for Ya Dun Goofed. Never save after it."
     ],
     "ruleIds": [
       57640
     ],
     "prerequisites": [],
     "preserves": [],
-    "afterStepIds": []
+    "afterStepIds": [
+      "glitch-postgame"
+    ]
   },
   {
     "id": "glitch-fresh",
-    "order": 27,
+    "order": 29,
     "area": "Separate fresh speedrun attempt",
     "title": "Separate fresh speedrun attempt",
     "instructions": [
-      "Use a new named attempt and validated fresh-save route for the one-minute objective."
+      "Last, on a second renamed ROM copy with an empty save: the save-corruption route to the Hall of Fame within one minute for Speedrun?."
     ],
     "ruleIds": [
       57641
     ],
     "prerequisites": [],
     "preserves": [],
-    "afterStepIds": []
+    "afterStepIds": [
+      "glitch-expendable"
+    ]
   }
 ]

@@ -17,9 +17,9 @@ const entry=(i: PlanInput,id: string)=>planRun(i).areas!.flatMap(a=>a.entries).f
 // Mutations caught: empty/incorrect route, unsafe early capture, count-only gyms, unknown-as-false,
 // account/manual-history conflation, object-off-as-battle/capture, global scope omissions.
 describe('canonical mastery route',()=>{
- it('places every main/Oak objective and all 28 stages in a deterministic plan without a save',()=>{
+ it('places every main/Oak objective and all 30 stages in a deterministic plan without a save',()=>{
   const i=input(null),p=planRun(i)
-  expect(new Set(p.actions.map(a=>a.routeStepId)).size).toBe(28)
+  expect(new Set(p.actions.map(a=>a.routeStepId)).size).toBe(30)
   expect(p.achievements.filter(a=>dataset.rules.find(r=>r.id===a.ruleId)?.setKey!=='glitch')).toHaveLength(226)
   for(const r of dataset.rules.filter(r=>r.setKey!=='glitch'))expect(p.actions.some(a=>a.ruleIds.includes(r.id)),String(r.id)).toBe(true)
   expect(p.actions.map(a=>a.order)).toEqual([...p.actions.map(a=>a.order)].sort((a,b)=>a-b))
@@ -132,7 +132,7 @@ describe('history and finite resource guards',()=>{
  it('keeps historical gym proof separate from current preparation after a legal later party',()=>{
   const i=input(snapshot([...brock,1,2,3],1));confirm(i,'rule:108058:completed');expect(action(i,108058).readiness).toBe('ready')
   i.attempt.manualEvidence[0]!.status='needs-review';expect(action(i,108058).readiness).toBe('unknown')
-  expect(action(i,108058).instructions.join(' ')).toMatch(/battle item/)
+  expect(action(i,108058).instructions.join(' ')).toMatch(/Item menu/)
  })
  it('does not turn a species registration into a Safari capture or League session',()=>{
   const i=input(snapshot([113,115,123,128],255));i.attempt.snapshot!.hallOfFame=known(true)

@@ -818,3 +818,7 @@ button.link:hover {
   background: none;
   color: var(--ink);
 }
+.counter {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
