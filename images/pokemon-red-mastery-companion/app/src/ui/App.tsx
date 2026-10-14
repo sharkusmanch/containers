@@ -10,6 +10,7 @@ import { Dex } from './Dex'
 import { Areas } from './Areas'
 import { Achievements } from './Achievements'
 import { More } from './More'
+import { saveStatus } from './status'
 const screens = ['Next', 'Dex', 'Areas', 'Achievements', 'More'] as const
 type Screen = (typeof screens)[number]
 const icons = [
@@ -27,7 +28,8 @@ export function App({
   dataset: Dataset
 }) {
   const [, update] = useState(0),
-    [screen, setScreen] = useState<Screen>('Next')
+    [screen, setScreen] = useState<Screen>('Next'),
+    [now, setNow] = useState(() => Date.now())
   useEffect(
     () => controller.subscribe(() => update((n) => n + 1)),
     [controller],
@@ -42,8 +44,11 @@ export function App({
     glitches = useMemo(() => planGlitches(input), [input])
   useEffect(() => {
     const refresh = () => {
-      if (document.visibilityState !== 'hidden')
+      setNow(Date.now())
+      if (document.visibilityState !== 'hidden') {
         void controller.saves.refresh(true)
+        controller.syncDeployment()
+      }
     }
     const timer = setInterval(refresh, AUTOMATIC_INTERVAL)
     document.addEventListener('visibilitychange', refresh)
@@ -60,7 +65,9 @@ export function App({
     setScreen(next)
     window.scrollTo?.(0, 0)
   }
-  const error = controller.getError()
+  const error = controller.getError(),
+    deployment = controller.getDeployment(),
+    status = saveStatus(project, attempt, deployment, now)
   return (
     <div class="app-shell">
       <a class="skip" href="#main">
@@ -104,25 +111,18 @@ export function App({
             <strong>{attempt.name}</strong>
             <span>
               {attempt.kind === 'canonical'
-                ? 'Protected main / Oak'
-                : attempt.kind + ' attempt'}
+                ? 'Main + Professor Oak run'
+                : `Separate ${attempt.kind} save`}
             </span>
           </div>
-          <div class="freshness">
-            <span class={`status-dot ${attempt.snapshot ? 'has-save' : ''}`} />
-            <span>
-              {project.pendingImport
-                ? 'Reading save…'
-                : attempt.snapshot
-                  ? `Save observed ${new Date(attempt.snapshot.importedAt).toLocaleString()}`
-                  : 'No save imported'}
-              {attempt.source.lastError
-                ? attempt.snapshot
-                  ? ' · last good snapshot retained'
-                  : ' · source unavailable'
-                : ''}
-              {attempt.source.paused ? ' · auto paused' : ''}
-            </span>
+          <div class={`freshness ${status.tone}`} role="status">
+            <span class={`status-dot ${status.tone}`} />
+            <span>{status.text}</span>
+            {status.signedOut && (
+              <button class="link" onClick={() => location.reload()}>
+                Reload
+              </button>
+            )}
           </div>
         </header>
         <main id="main" tabIndex={-1}>
@@ -140,6 +140,18 @@ export function App({
               input={input}
               plan={plan}
               onAreas={() => navigate('Areas')}
+              onMore={() => navigate('More')}
+              onStarter={(starter) =>
+                controller.dispatch({
+                  type: 'set-branches',
+                  branches: { starter },
+                })
+              }
+              guideUrl={
+                deployment.status === 'private'
+                  ? deployment.config.guideUrl
+                  : undefined
+              }
             />
           )}
           {screen === 'Dex' && <Dex input={input} />}
@@ -168,8 +180,7 @@ export function App({
             />
           )}
           <footer>
-            English Pokémon Red · read-only companion · sourced guidance with
-            open runtime validation
+            Pokémon Red (English) · reads your save, never changes it · methods come from published guides and the game’s source code; none has been tested in-game yet
           </footer>
         </main>
       </div>

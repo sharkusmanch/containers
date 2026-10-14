@@ -87,7 +87,7 @@ const evidence = shape({ id: text, attemptId: text, continuityRevision: counter,
 const continuityBaseline = shape({ trainer: optional(shape({ name: text, id })),
   playTime: optional(shape({ hours: integer(65535), minutes: byte, seconds: byte })), ownedDex: optional(dexList), badgeMask: optional(byte) })
 const attempt = shape({ id: text, name: text, kind: choice('canonical', 'glitch', 'speedrun'), continuityRevision: counter, continuityBaseline: optional(continuityBaseline),
-  source: shape({ kind: sourceKind, url: optional(text), revision: counter, label: optional(text), lastImportAt: optional(timestamp), lastError: optional(text), enabled: optional(bool), paused: optional(bool) }),
+  source: shape({ kind: sourceKind, url: optional(text), revision: counter, label: optional(text), lastImportAt: optional(timestamp), lastError: optional(text), enabled: optional(bool), paused: optional(bool), origin: optional(choice('deployment', 'user')) }),
   snapshot: nullable(snapshot), manualEvidence: list(evidence), branches, createdAt: timestamp, importGeneration: optional(counter), diagnostics: optional(list(text)),
   lastImportedHash: optional(text), ignoredHashes: optional(list(text)), heldImport: optional(shape({ context, snapshot, issues: list(issue) })),
 })

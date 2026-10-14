@@ -13,6 +13,7 @@ export type ProjectAction =
   | { type: 'archive-manual'; evidenceId: string }
   | { type: 'set-source'; source: Pick<SaveSource, 'kind' | 'url' | 'enabled' | 'label'> }
   | { type: 'pause-source'; paused: boolean }
+  | { type: 'set-source-enabled'; enabled: boolean }
   | { type: 'request-import'; sourceKind: SourceKind; automatic?: boolean }
   | { type: 'import-result'; context: ImportContext; result: ParseResult }
   | { type: 'import-error'; context: ImportContext; reason: string }
@@ -47,11 +48,19 @@ export function reduceProject(project: MasteryProject, action: ProjectAction): M
         { ...record, id: crypto.randomUUID(), continuityRevision: attempt.continuityRevision, status: 'active', recordedAt: new Date().toISOString() }] })
     }
     case 'archive-manual': return updateAttempt(project, { ...attempt, manualEvidence: attempt.manualEvidence.map(e => e.id === action.evidenceId ? { ...e, status: 'archived' } : e) })
-    case 'set-source': {
+        case 'set-source': {
+      // Same address and kind: no new source, so no continuity review. Re-saving an address makes it the player's own;
+      // saving settings with no address before and after changes nothing about the source (origin untouched).
+      const sameUrl = (action.source.url?.trim() || undefined) === (attempt.source.url?.trim() || undefined)
+      if (sameUrl && action.source.kind === attempt.source.kind)
+        return updateAttempt(project, { ...attempt, source: { ...attempt.source, label: action.source.label, enabled: action.source.enabled ?? false, paused: false,
+          ...(attempt.source.url ? { origin: 'user' as const } : {}) } })
       const next = reviewContinuity(attempt, 'Save source changed; history needs review.')
-      return { ...updateAttempt(project, { ...next, heldImport: undefined, source: { ...action.source, revision: attempt.source.revision + 1, enabled: action.source.enabled ?? false, paused: false } }),
+      return { ...updateAttempt(project, { ...next, heldImport: undefined, source: { ...action.source, revision: attempt.source.revision + 1, enabled: action.source.enabled ?? false, paused: false, origin: 'user' } }),
         pendingImport: null, importGeneration: nextGeneration(project) }
     }
+            // Automatic reload toggle: same source, same origin; turning it on also resumes after an upload pause.
+    case 'set-source-enabled': return updateAttempt(project, { ...attempt, source: { ...attempt.source, enabled: action.enabled, paused: false } })
     case 'pause-source': return { ...updateAttempt(project, { ...attempt, source: { ...attempt.source, paused: action.paused }, heldImport: undefined }), pendingImport: null, importGeneration: nextGeneration(project) }
     case 'request-import':
       if (action.sourceKind === 'url' && (!attempt.source.url || action.automatic && (!attempt.source.enabled || attempt.source.paused || project.pendingImport?.sourceKind === 'upload'))) return project

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Vendored reviewed source; bump this first *_VERSION ARG for each shipped change.
-ARG POKEMON_RED_MASTERY_COMPANION_VERSION=v0.1.0
+ARG POKEMON_RED_MASTERY_COMPANION_VERSION=v0.2.0
 
 # renovate: datasource=docker depName=node
 ARG NODE_VERSION=24.21.0

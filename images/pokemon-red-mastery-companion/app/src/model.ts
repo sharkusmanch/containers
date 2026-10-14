@@ -30,7 +30,8 @@ export interface SaveSnapshot {
 export interface ParseIssue { code: string; message: string; section?: keyof SaveSnapshot; offset?: number }
 export type ParseResult = { status: 'readable' | 'partial'; snapshot: SaveSnapshot; issues: ParseIssue[] } | { status: 'rejected'; issues: ParseIssue[] }
 export interface ImportContext { projectId: string; attemptId: string; sourceRevision: number; sourceKind: SourceKind; generation: number }
-export interface SaveSource { kind: SourceKind; url?: string; revision: number; label?: string; lastImportAt?: string; lastError?: string; enabled?: boolean; paused?: boolean }
+/** origin: 'deployment' = adopted from the private server's app-config; 'user' = set explicitly in source settings. */
+export interface SaveSource { kind: SourceKind; url?: string; revision: number; label?: string; lastImportAt?: string; lastError?: string; enabled?: boolean; paused?: boolean; origin?: 'deployment' | 'user' }
 export interface BranchChoices { starter?: 'bulbasaur' | 'charmander' | 'squirtle'; fossil?: 'helix' | 'dome'; dojo?: 'hitmonlee' | 'hitmonchan'; eevee?: 'vaporeon' | 'jolteon' | 'flareon'; moonstones?: number[] }
 export interface ManualEvidence { id: string; attemptId: string; continuityRevision: number; status: 'active' | 'needs-review' | 'archived'; key: string; value: boolean | number | string; recordedAt: string; ruleId?: number; note?: string }
 /** Historical comparison guards only; never current-save facts or readiness evidence. */

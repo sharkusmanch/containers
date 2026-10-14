@@ -37,11 +37,11 @@ export function Areas({
   return (
     <>
       <div class="page-intro">
-        <p class="eyebrow">Area field notes</p>
-        <h1>Clear the right obligations.</h1>
+        <p class="eyebrow">Area checklist</p>
+        <h1>Trainers, items and events</h1>
         <p>
-          Individual battles, pickups and session history. A resolved encounter
-          does not establish capture.
+          Everything the achievements need, area by area. Defeating a stationary
+          Pokémon is not the same as catching it.
         </p>
       </div>
       <div class="filters">
@@ -57,7 +57,7 @@ export function Areas({
           </select>
         </label>
         <label>
-          Find an obligation
+          Search
           <input
             type="search"
             value={query}
@@ -84,19 +84,19 @@ export function Areas({
           </select>
         </label>
         <label>
-          Evidence status
+          Status
           <select
             value={status}
             onChange={(e) => setStatus(e.currentTarget.value)}
           >
-            <option value="all">All evidence</option>
-            <option value="outstanding">Observed outstanding</option>
-            <option value="unknown">Unknown</option>
-            <option value="recorded">Recorded</option>
+            <option value="all">Everything</option>
+            <option value="outstanding">Still to do</option>
+            <option value="unknown">Can’t tell yet</option>
+            <option value="recorded">Done</option>
           </select>
         </label>
       </div>
-      <p>{entries.length} obligations match</p>
+      <p>{entries.length} shown</p>
       {entries.map((a) => (
         <details class="card" key={a.entry.id}>
           <summary>
@@ -105,21 +105,21 @@ export function Areas({
               {a.entry.area} · {a.entry.kind} ·{' '}
               {a.completion.known
                 ? a.completion.value
-                  ? 'recorded'
-                  : 'outstanding'
-                : 'unknown'}
+                  ? 'done'
+                  : 'still to do'
+                : 'can’t tell yet'}
             </span>
           </summary>
           <p>
-            <FactText
-              fact={a.completion}
-              yes="Obligation recorded"
-              no="Obligation outstanding"
-            />{' '}
-            · {a.evidence} evidence
+            <FactText fact={a.completion} yes="Done" no="Still to do" /> ·{' '}
+            {a.evidence === 'save'
+              ? 'from your save'
+              : a.evidence === 'manual'
+                ? 'from your mark'
+                : 'not readable yet'}
           </p>
           <p>
-            Literal source observation: <FactText fact={a.observed} />
+            Save flag: <FactText fact={a.observed} yes="set" no="not set" />
           </p>
           {a.entry.deadline && (
             <p class="notice">Deadline: {a.entry.deadline}</p>
@@ -128,7 +128,7 @@ export function Areas({
           <Reasons items={[...a.entry.instructions, ...a.reasons]} />
           <Sources urls={a.entry.sourceUrls} />
           <details>
-            <summary>Record attempt history</summary>
+            <summary>Mark it yourself</summary>
             <ManualInput
               controller={controller}
               control={{
@@ -149,8 +149,7 @@ export function Areas({
       ))}
       {!entries.length && (
         <p class="notice">
-          No obligations match. Change the filters to explore the full
-          checklist.
+          Nothing matches. Change the filters to see the full checklist.
         </p>
       )}
     </>

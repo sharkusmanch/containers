@@ -11,7 +11,7 @@ const historyKey=(id:number)=>`rule:${id}:completed`
 function confirmed(input:PlanInput,key:string){const f=manualFact(input,key);return f.known&&f.value===true}
 function reviewedHistory(input:PlanInput,id:number){return input.attempt.manualEvidence.some(e=>e.key===historyKey(id)&&!manualEvidenceIsEligible(e,input.attempt))}
 function sourceComplete(input:PlanInput,id:number){const flag=storyEvents[id];if(!flag)return false;const f=flagFact(input,'events',flag);return f.known&&f.value}
-function eligibleCompletion(input:PlanInput,id:number){return confirmed(input,historyKey(id))||sourceComplete(input,id)}
+export function eligibleCompletion(input:PlanInput,id:number){return confirmed(input,historyKey(id))||sourceComplete(input,id)}
 function ruleTargets(rule:AchievementRule,input:PlanInput):number[]{
  const branch=rule.branches.find(g=>g.choiceKey)
  if(branch?.choiceKey){const selected=branch.options.find(o=>o.value===input.attempt.branches[branch.choiceKey!]);if(!selected)return [];return (rule.acquisitions??[]).filter(a=>selected.dexNumbers.includes(a.targetDex)).map(a=>a.targetDex)}

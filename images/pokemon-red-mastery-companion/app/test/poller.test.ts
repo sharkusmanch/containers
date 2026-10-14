@@ -248,7 +248,7 @@ describe('private save transport', () => {
     )
     await expect(
       refreshSave(context, './save', new AbortController().signal),
-    ).rejects.toThrow(/HTML/)
+    ).rejects.toThrow(/web page/)
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {

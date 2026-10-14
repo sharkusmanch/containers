@@ -62,6 +62,39 @@ def http(path, method='GET', headers=None):
         return error.code, error.headers, error.read()
 
 
+GUIDE = 'https://wiki.example/doc/red-guide_AbC~1%20+x'
+CONFIG = b'{"saveUrl":"./save","companionUrl":"./companion/"}\n'
+GUIDE_CONFIG = ('{"saveUrl":"./save","companionUrl":"./companion/","guideUrl":"%s"}\n' % GUIDE).encode()
+
+
+def wait_healthy(proc=None):
+    for _ in range(100):
+        try:
+            if http('/healthz')[0] == 200:
+                return
+        except OSError:
+            pass
+        assert proc is None or proc.poll() is None, 'nginx exited before healthz'
+        time.sleep(0.05)
+    raise AssertionError('nginx did not start')
+
+
+def check_config(expected):
+    status, headers, body = http('/app-config.json')
+    assert (status, body) == (200, expected), (status, body)
+    assert headers['Content-Type'] == 'application/json', headers['Content-Type']
+    assert headers['Cache-Control'] == 'no-store' and headers['X-Content-Type-Options'] == 'nosniff'
+    json.loads(body)
+    status, headers, body = http('/app-config.json', 'HEAD')
+    assert status == 200 and not body and int(headers['Content-Length']) == len(expected)
+    for method in ['POST', 'PUT', 'DELETE']:
+        status, headers, _ = http('/app-config.json', method, headers={'Content-Type': 'application/json'})
+        assert status == 405 and headers['Cache-Control'] == 'no-store', (method, status)
+    assert http('/app-config.json')[2] == expected
+    for path in ['/app-config.json/', '/app-config.json.new', '/app-config.jsonx']:
+        assert http(path)[0] == 404, path
+
+
 with tempfile.TemporaryDirectory(prefix='red-runtime-') as directory:
     tmp = Path(directory)
     tmp.chmod(0o755)
@@ -108,7 +141,7 @@ with tempfile.TemporaryDirectory(prefix='red-runtime-') as directory:
         template = template.replace('/srv/site', str(site))
         template = template.replace('listen 8080;', f'listen {port};')
         (tmp / 'nginx.conf.template').write_text(template)
-        entry = (root / 'entrypoint.sh').read_text().replace('/etc/nginx/nginx.conf.template', str(tmp / 'nginx.conf.template')).replace('/tmp/nginx.conf', str(tmp / 'nginx.conf'))
+        entry = (root / 'entrypoint.sh').read_text().replace('/tmp/', str(tmp) + '/').replace('/etc/nginx/nginx.conf.template', str(tmp / 'nginx.conf.template'))
         (tmp / 'entrypoint.sh').write_text(entry)
 
         def start(extra=None):
@@ -123,7 +156,18 @@ with tempfile.TemporaryDirectory(prefix='red-runtime-') as directory:
                            ('COMPANION_UPSTREAM', 'localhost:8080;evil'),
                            ('COMPANION_UPSTREAM', 'localhost:0'),
                            ('COMPANION_UPSTREAM', 'localhost:65536'),
-                           ('COMPANION_UPSTREAM', 'localhost:8080\n')]:
+                           ('COMPANION_UPSTREAM', 'localhost:8080\n'),
+                           ('GUIDE_URL', 'http://wiki.example/guide'),
+                           ('GUIDE_URL', 'javascript:alert(1)'),
+                           ('GUIDE_URL', 'https://wiki.example/a"b'),
+                           ('GUIDE_URL', "https://wiki.example/a'b"),
+                           ('GUIDE_URL', 'https://wiki.example/a\\b'),
+                           ('GUIDE_URL', 'https://wiki.example/a\nb'),
+                           ('GUIDE_URL', 'https://wiki.example/a b'),
+                           ('GUIDE_URL', 'https://wiki.example:8443/guide'),
+                           ('GUIDE_URL', 'https://wiki.example/guide?x=1'),
+                           ('GUIDE_URL', 'https://user@wiki.example/guide'),
+                           ('GUIDE_URL', 'https://wiki.example/' + 'a' * 280)]:
             invalid = start({key: value})
             try:
                 assert invalid.wait(timeout=10) != 0, (key, 'accepted unsafe value')
@@ -131,17 +175,21 @@ with tempfile.TemporaryDirectory(prefix='red-runtime-') as directory:
                 invalid.terminate()
                 raise AssertionError(f'{key}: unsafe configuration started nginx')
         print('PASS: unsafe configuration rejected')
+        # Without GUIDE_URL the declaration carries only the two fixed routes.
         process = start()
-        for _ in range(100):
-            try:
-                if http('/healthz')[0] == 200:
-                    break
-            except OSError:
-                pass
-            assert process.poll() is None, 'nginx exited before healthz'
-            time.sleep(0.05)
+        wait_healthy(process)
+        check_config(CONFIG)
+        if args.image:
+            subprocess.run(['docker', 'stop', '-t', '3', name], capture_output=True)
         else:
-            raise AssertionError('nginx did not start')
+            process.terminate()
+        process.wait(timeout=10)
+        if args.image:
+            subprocess.run(['docker', 'rm', '-f', name], capture_output=True)
+        process = start({'GUIDE_URL': GUIDE})
+        wait_healthy(process)
+        check_config(GUIDE_CONFIG)
+        print('PASS: app-config.json exact JSON with and without GUIDE_URL, read-only methods')
         status, headers, body = http('/save')
         assert (status, body) == (200, data), (status, len(body))
         assert headers['Content-Type'] == 'application/octet-stream'
@@ -181,7 +229,15 @@ with tempfile.TemporaryDirectory(prefix='red-runtime-') as directory:
             assert subprocess.run(['docker', 'exec', name, 'id', '-u'], capture_output=True, text=True, check=True).stdout.strip() == '10000'
             for path in ['/saves/write-test', '/srv/site/write-test', '/etc/write-test']:
                 assert subprocess.run(['docker', 'exec', name, 'touch', path], capture_output=True).returncode != 0
-            print('PASS: UID 10000, read-only save mount and root filesystem')
+            assert subprocess.run(['docker', 'exec', name, 'sh', '-c', 'echo x > /tmp/app-config.json'], capture_output=True).returncode != 0
+            mode = subprocess.run(['docker', 'exec', name, 'stat', '-c', '%a', '/tmp/app-config.json'], capture_output=True, text=True, check=True).stdout.strip()
+            assert mode == '444', mode
+            # A container restart keeps /tmp (like a Kubernetes emptyDir) and its 0444 file.
+            subprocess.run(['docker', 'restart', '-t', '3', name], capture_output=True, check=True)
+            wait_healthy()
+            check_config(GUIDE_CONFIG)
+            print('PASS: UID 10000, read-only save mount, root filesystem and app-config.json across restart')
+        assert http('/app-config.json')[2] == GUIDE_CONFIG
         after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in saves.iterdir()}
         assert before == after
         save.rename(saves / 'temporarily-missing')

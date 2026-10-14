@@ -10,8 +10,9 @@ import type {
 } from '../model'
 import type { Controller } from './controller'
 import { manualEvidenceIsEligible } from '../state/project'
+import { readinessLabel } from './status'
 export function Badge({ status }: { status: Readiness | string }) {
-  return <span class={`badge ${status}`}>{status}</span>
+  return <span class={`badge ${status}`}>{readinessLabel(status)}</span>
 }
 export function Reasons({ items }: { items: string[] }) {
   return items.length ? (
@@ -105,7 +106,7 @@ export function ManualInput({
     <fieldset class="manual-input">
       <legend>{control.label}</legend>
       <small>
-        {control.scope}. User observation, separate from an HC award.
+        {control.scope}. Your own mark — it never counts as a hardcore unlock.
       </small>
       {observed && (
         <p>
@@ -115,7 +116,7 @@ export function ManualInput({
         </p>
       )}
       <label>
-        Observation note
+        Note (optional)
         <input
           value={note}
           onInput={(e) => setNote(e.currentTarget.value)}
@@ -169,24 +170,22 @@ export function History({
   attempt: Attempt
   controller: Controller
 }) {
-  if (!records.length) return <p class="muted">No attempt history recorded.</p>
+  if (!records.length) return <p class="muted">No marks recorded yet.</p>
   return (
     <ul class="history">
       {records.map((e) => (
         <li key={e.id}>
           <strong>
             {manualEvidenceIsEligible(e, attempt)
-              ? 'Eligible history'
+              ? 'Active'
               : e.status === 'archived'
-                ? 'Archived history'
-                : 'Needs review'}
+                ? 'Archived'
+                : 'Needs a fresh check'}
           </strong>
           <p>
             {e.note ?? e.key} · {String(e.value)}
           </p>
-          <small>
-            {e.recordedAt} · revision {e.continuityRevision}
-          </small>
+          <small>Marked {new Date(e.recordedAt).toLocaleString()}</small>
           <div class="button-row">
             {e.status !== 'archived' && (
               <>
@@ -200,7 +199,7 @@ export function History({
                   }
                   disabled={e.key === 'glitch:encounter-setup'}
                 >
-                  Reconfirm observation
+                  Still true — keep it
                 </button>
                 <button
                   class="quiet"

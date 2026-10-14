@@ -1,4 +1,9 @@
-import type { ImportContext, MasteryProject, ParseResult } from '../model'
+import type {
+  ImportContext,
+  MasteryProject,
+  ParseResult,
+  SaveSource,
+} from '../model'
 import { activeAttempt, beginImport, applySnapshot } from '../state/project'
 import { reduceProject } from '../state/reducer'
 import { parseRedSave } from '../save/parse'
@@ -9,12 +14,15 @@ interface Options {
   getProject: () => MasteryProject
   setProject: (project: MasteryProject) => void
   refresh?: typeof refreshSave
+  /** Gate for addresses that only exist on another host (see deployment.ts). */
+  sourceAllowed?: (source: SaveSource) => boolean
 }
 /** Cancellation is a courtesy; full-context reducer guards are the authority. */
 export function createSaveController({
   getProject,
   setProject,
   refresh = refreshSave,
+  sourceAllowed = () => true,
 }: Options) {
   let active:
     | { context: ImportContext; abort: AbortController; cancelWait: () => void }
@@ -90,7 +98,7 @@ export function createSaveController({
       const project = getProject(),
         attempt = activeAttempt(project),
         url = attempt.source.url
-      if (!url?.trim()) return
+      if (!url?.trim() || !sourceAllowed(attempt.source)) return
       const key = `${project.id}/${attempt.id}/${attempt.source.revision}`
       if (
         automatic &&

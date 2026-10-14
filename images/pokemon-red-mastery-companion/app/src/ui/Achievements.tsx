@@ -23,6 +23,9 @@ export function Achievements({
       f.setKey === set && f.accountIdentity === input.project.accountIdentity,
   )
   const known = !!feed?.lastSuccessfulFetchAt
+  const notLoaded = input.project.accountIdentity
+    ? 'Hardcore: not loaded yet'
+    : 'Hardcore: not connected'
   const all = input.dataset.rules.filter((r) => r.setKey === set),
     rules = all
       .filter((r) =>
@@ -43,11 +46,12 @@ export function Achievements({
   return (
     <>
       <div class="page-intro">
-        <p class="eyebrow">Three sets · 234 objectives</p>
-        <h1>Mastery, with evidence.</h1>
+        <p class="eyebrow">Three sets · 234 achievements</p>
+        <h1>Achievements</h1>
         <p>
-          Current readiness helps you prepare. Manual history records your
-          observations. Only attributed account feeds confirm hardcore awards.
+          The status says whether your save looks ready. Your own marks are
+          notes for you. Only a RetroAchievements hardcore unlock counts as
+          earned.
         </p>
       </div>
       <div class="set-tabs" aria-label="Achievement sets">
@@ -69,14 +73,16 @@ export function Achievements({
         <div class="section-heading">
           <h2>{labels[set]}</h2>
           <span class="stat">
-            {known ? `${feed!.unlocks.length} / ${all.length}` : 'HC unknown'}
+            {known
+              ? `${feed!.unlocks.length} / ${all.length}`
+              : notLoaded}
           </span>
         </div>
         <p>{all.length} achievements</p>
         <p>
           {known
-            ? `Confirmed hardcore · last successful fetch ${feed!.lastSuccessfulFetchAt}${feed!.stale ? ' · stale, last good progress retained' : ''}`
-            : 'Hardcore progress has not been synced successfully for this account and set.'}
+            ? `Hardcore unlocks · checked ${new Date(feed!.lastSuccessfulFetchAt!).toLocaleString()}${feed!.stale ? ' · latest check failed, showing the last good result' : ''}`
+            : 'Hardcore unlocks are not loaded. Connect them in More.'}
         </p>
         {feed?.unavailableReason && (
           <p class="notice">{feed.unavailableReason}</p>
@@ -96,18 +102,18 @@ export function Achievements({
           />
         </label>
         <label>
-          Achievement evidence
+          Show
           <select
             value={status}
             onChange={(e) => setStatus(e.currentTarget.value)}
           >
-            <option value="all">All objectives</option>
+            <option value="all">All achievements</option>
             <option value="ready">Ready</option>
-            <option value="blocked">Blocked</option>
-            <option value="unknown">Unknown readiness</option>
-            <option value="missed">Missed</option>
-            <option value="earned">Confirmed HC</option>
-            <option value="history">Has manual history</option>
+            <option value="blocked">Not ready yet</option>
+            <option value="unknown">Can’t tell yet</option>
+            <option value="missed">May be missed</option>
+            <option value="earned">Unlocked (hardcore)</option>
+            <option value="history">Has your marks</option>
           </select>
         </label>
       </div>
@@ -123,27 +129,30 @@ export function Achievements({
                 <Badge status={g?.readiness ?? a.readiness} />
                 <span>
                   {a.hardcoreEarned
-                    ? 'HC confirmed'
+                    ? 'Unlocked (hardcore)'
                     : known
-                      ? 'HC not confirmed'
-                      : 'HC unknown'}
+                      ? 'Not unlocked yet'
+                      : notLoaded}
                 </span>
-                <span>{a.manualEvidence.length} history records</span>
+                {a.manualEvidence.length ? (
+                  <span>{a.manualEvidence.length} of your marks</span>
+                ) : null}
               </span>
             </summary>
             <p class="objective">{r.objective}</p>
             <p>
-              Knowledge: {g?.auditStatus ?? r.auditStatus} · {r.points} points ·
-              #{r.id}
+              {(g?.auditStatus ?? r.auditStatus) === 'validated'
+                ? 'Method checked against the game’s source code (not tested in-game)' : 'Method from published guides (not tested in-game)'}{' '}
+              · {r.points} points · #{r.id}
             </p>
             {a.earnedAt && (
               <p>
-                Account HC earned at {a.earnedAt}
-                {feed?.stale ? ' (stale feed)' : ''}
+                Unlocked in hardcore on {new Date(a.earnedAt).toLocaleString()}
+                {feed?.stale ? ' (latest check failed)' : ''}
               </p>
             )}
             <Reasons items={g?.reasons ?? a.reasons} />
-            <h3>Source procedure</h3>
+            <h3>How to do it</h3>
             <Reasons items={g?.instructions ?? r.instructions} />
             <Sources urls={r.sourceUrls} />
             {g && (
@@ -155,7 +164,7 @@ export function Achievements({
               />
             )}
             <details>
-              <summary>Record attempt history</summary>
+              <summary>Mark it yourself</summary>
               {a.manualControls?.map((c) => (
                 <ManualInput key={c.key} controller={controller} control={c} />
               ))}

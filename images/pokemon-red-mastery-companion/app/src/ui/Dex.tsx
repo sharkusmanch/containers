@@ -33,11 +33,11 @@ export function Dex({ input }: { input: PlanInput }) {
   return (
     <>
       <div class="page-intro">
-        <p class="eyebrow">The complete 151</p>
-        <h1>Dex & acquisition</h1>
+        <p class="eyebrow">All 151</p>
+        <h1>Pokédex</h1>
         <p>
-          Registration survives an evolution or trade. A registered species is
-          not necessarily held now.
+          Caught (registered) stays true after you evolve or trade it away, so a
+          caught species is not always one you still have.
         </p>
       </div>
       <div class="filters">
@@ -57,9 +57,9 @@ export function Dex({ input }: { input: PlanInput }) {
             onChange={(e) => setFilter(e.currentTarget.value)}
           >
             <option value="all">All species</option>
-            <option value="registered">Registered</option>
-            <option value="missing">Not registered</option>
-            <option value="unknown">Unknown</option>
+            <option value="registered">Caught</option>
+            <option value="missing">Not caught yet</option>
+            <option value="unknown">Can’t tell yet</option>
           </select>
         </label>
       </div>
@@ -104,7 +104,7 @@ export function Dex({ input }: { input: PlanInput }) {
                 <p>A held instance is already observed.</p>
               )}
               <details>
-                <summary>Canonical and later source guidance</summary>
+                <summary>Achievements and guide notes for this species</summary>
                 {rules.map((r) => (
                   <div key={r.id}>
                     <h4>{r.title}</h4>
@@ -141,7 +141,7 @@ export function Dex({ input }: { input: PlanInput }) {
         })}
       </div>
       <details class="panel">
-        <summary>Storage and acquisition diagnostics</summary>
+        <summary>Technical notes</summary>
         <Reasons items={acquisitions.diagnostics} />
       </details>
     </>

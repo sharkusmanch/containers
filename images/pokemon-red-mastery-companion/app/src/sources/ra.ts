@@ -1,5 +1,6 @@
 import type { AchievementSet, HardcoreProgress, HardcoreRefreshResult } from '../model'
 import memberships from '../data/sets.json'
+import { SIGNED_OUT, isSignedOut } from './deployment'
 
 const sets = memberships as AchievementSet[]
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -28,12 +29,14 @@ function mapFeed(set: AchievementSet, body: unknown): HardcoreProgress {
     lastSuccessfulFetchAt: body.fetchedAt, stale: false, unlocks }
 }
 
+const feedUrl = (baseUrl: string, id: number) => `${baseUrl.replace(/\/+$/, '')}/api/achievements/ra/${id}`
 type FeedResult = { progress: HardcoreProgress; failure?: never } | { progress?: never; failure: HardcoreRefreshResult['failures'][number] }
 const FEED_TIMEOUT = 10_000
 
 async function readFeed(set: AchievementSet, baseUrl: string, signal: AbortSignal): Promise<FeedResult> {
   try {
-    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/api/achievements/ra/${set.apiGameId}`, { signal })
+    const response = await fetch(feedUrl(baseUrl, set.apiGameId), { signal, credentials: 'same-origin', redirect: 'manual' })
+    if (isSignedOut(response)) return { failure: { setKey: set.key, reason: SIGNED_OUT } }
     if (!response.ok) return { failure: { setKey: set.key, reason: response.status === 403 || response.status === 404
       ? 'Feed denied or unavailable; check the server allowlist.' : 'Progress service unavailable.' } }
     // Parsing errors must not surface arbitrary upstream text or credentials.
@@ -84,4 +87,41 @@ export async function fetchHardcoreProgress(baseUrl: string, signal: AbortSignal
     progress: [], failures: [...failures, ...progress.map(feed => ({ setKey: feed.setKey, reason: 'Account identity mismatch between achievement feeds.' }))],
   }
   return { progress, failures }
+}
+
+export type IdentityDiscovery = { identity: string; error?: never } | { identity?: never; error: string }
+/**
+ * Read the account name the server's Main feed reports so the player can confirm it.
+ * Nothing is stored here: the caller records the identity only after explicit confirmation.
+ */
+async function readIdentity(baseUrl: string, signal: AbortSignal): Promise<IdentityDiscovery> {
+  const set = sets.find(s => s.key === 'main')!
+  try {
+    const response = await fetch(feedUrl(baseUrl, set.apiGameId), { signal, credentials: 'same-origin', redirect: 'manual' })
+    if (isSignedOut(response)) return { error: SIGNED_OUT }
+    if (!response.ok) return { error: 'Progress service unavailable.' }
+    let body: unknown
+    try { body = await response.json() } catch { return { error: 'Invalid achievement response.' } }
+    if (!record(body) || body.source !== 'ra' || body.id !== String(set.apiGameId)) return { error: 'Unexpected achievement source.' }
+    const identity = typeof body.accountIdentity === 'string' ? body.accountIdentity.trim() : ''
+    if (!identity || identity.length > 100) return { error: 'The server did not report an account.' }
+    return { identity }
+  } catch {
+    return { error: signal.aborted ? 'Cancelled.' : 'Progress service could not be reached.' }
+  }
+}
+export async function discoverAccountIdentity(baseUrl: string, signal: AbortSignal): Promise<IdentityDiscovery> {
+  if (!baseUrl.trim()) return { error: 'No progress service is configured.' }
+  const request = new AbortController()
+  let settle!: (result: IdentityDiscovery) => void
+  const interrupted = new Promise<IdentityDiscovery>(resolve => { settle = resolve })
+  const cancel = () => { settle({ error: 'Cancelled.' }); request.abort() }
+  signal.addEventListener('abort', cancel, { once: true })
+  const timer = setTimeout(() => { settle({ error: 'Progress service timed out after 10 seconds.' }); request.abort() }, FEED_TIMEOUT)
+  try {
+    return await Promise.race([readIdentity(baseUrl, request.signal), interrupted])
+  } finally {
+    clearTimeout(timer)
+    signal.removeEventListener('abort', cancel)
+  }
 }

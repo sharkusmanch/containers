@@ -2,14 +2,14 @@
 
 Raw saves live locally in ignored `private/`; do not commit saves or ROMs. The complete directory is ignored, including alternative extensions, screenshots, and any emulator artifacts. Tests use freshly allocated defensive SRAM in memory and optional local independent fixtures. If independent fixture files are absent, the corresponding test groups visibly skip: that is not runtime validation.
 
-Available local files were copied unchanged from `/tmp/pokemon-red-reader-fixtures`. Expected values are literal assertions from the independent field audit and in-game session observations, never computed by the production parser.
+Optional local files must be kept unchanged. Expected values are literal assertions from independent field audits and in-game session observations, never computed by the production parser.
 
 | Files | Provenance and scope |
 |---|---|
-| `emulator-initial-red.srm`, `emulator-starter-red.srm`, `emulator-starter-set-red.srm` | Root-captured Serverboy 0.0.7 ordinary NEW GAME/SAVE and continuation using button inputs, with fresh SRAM and no RAM/SRAM changes. Independent metadata is in the local task inputs `emulator-fixtures.json`. Initial has no party; starter captures hold Charmander level 5, actual Special 11, Scratch/Growl PP 35/40, and demonstrate Shift/Set bit polarity. These prove only the observed early gameplay on Serverboy, not target Gambatte acceptance. |
+| `emulator-initial-red.srm`, `emulator-starter-red.srm`, `emulator-starter-set-red.srm` | Optional independent Serverboy 0.0.7 ordinary NEW GAME/SAVE and continuation captures, using button inputs with fresh SRAM and no RAM/SRAM changes. Initial has no party; starter captures hold Charmander level 5, actual Special 11, Scratch/Growl PP 35/40, and demonstrate Shift/Set bit polarity. These prove only the observed early gameplay on Serverboy, not target Gambatte acceptance. Raw captures and their execution records are not distributed here. |
 | `BaseSAV.sav` | Independent public natural-clean fixture at repository pin `c815dae36d2d577d119f9da43c7358697d4fa7c8`; no verified emulator/core/no-edit provenance. Tests check all applicable checksums, initialized box 12 with live count 4 versus archived count 0, nonactive archived counts, party Special and PP Ups, and conservative postgame/HoF handling. It supports reader development but is not a verified gameplay capture. |
 | `BaseSAV.new.sav` | Same independent public source with unverified emulator provenance. Main region is a new game; archived banks and bank-zero HoF are inherited. Tests ensure stale valid archives and records do not create ownership/history. |
-| `private-current-red.srm` | Private synced Gambatte battery image with an erased invalid main region. Rejection fixture only; neither positive gameplay evidence nor a normal playable save. No private names/IDs are logged or publicized. |
+| `private-current-red.srm` | Optional local invalid-main-region rejection fixture. It is not positive gameplay evidence or a normal playable save. Keep fixture bytes and personal observations private. |
 
 Public source: [natural-clean fixtures at pinned revision](https://github.com/1fairyfox/pokered-save-editor-2/tree/c815dae36d2d577d119f9da43c7358697d4fa7c8/assets/saves/natural-clean). Source code is Apache 2.0; third-party asset licensing/provenance needs separate review before vendoring any bytes. Neither public fixture has been exported/resaved through another editor.
 

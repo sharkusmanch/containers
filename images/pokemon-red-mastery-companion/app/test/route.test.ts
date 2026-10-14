@@ -5,7 +5,7 @@ import { createProject } from '../src/state/project'
 import type { PlanInput, SaveSnapshot } from '../src/model'
 import { brock, known, pokemon, snapshot, unknown } from './planner-fixtures'
 function input(s: SaveSnapshot | null = snapshot()): PlanInput {
- const project=createProject('marcus1255'); const attempt=project.attempts[0]!
+ const project=createProject('example-player'); const attempt=project.attempts[0]!
  attempt.snapshot=s; attempt.branches={starter:'bulbasaur',eevee:'vaporeon',dojo:'hitmonlee',fossil:'helix'}
  return {project,attempt,dataset}
 }
@@ -45,7 +45,7 @@ describe('canonical mastery route',()=>{
   s.party=known([pokemon(1,14)]);s.battleStyle=unknown;expect(action(i,108058).readiness).toBe('unknown')
  })
  it('keeps current attempt safety and reservations when account-wide HC is earned',()=>{
-  const i=input();i.project.accountProgress=[{setKey:'main',apiGameId:724,accountIdentity:'marcus1255',stale:false,lastSuccessfulFetchAt:'2026-10-11',unlocks:[{achievementId:108023,earnedAt:'2025-01-01'}]}, {setKey:'glitch',apiGameId:11632,accountIdentity:'marcus1255',stale:false,lastSuccessfulFetchAt:'2026-10-11',unlocks:[{achievementId:57643,earnedAt:'2025-01-01'}]}]
+  const i=input();i.project.accountProgress=[{setKey:'main',apiGameId:724,accountIdentity:'example-player',stale:false,lastSuccessfulFetchAt:'2026-10-11',unlocks:[{achievementId:108023,earnedAt:'2025-01-01'}]}, {setKey:'glitch',apiGameId:11632,accountIdentity:'example-player',stale:false,lastSuccessfulFetchAt:'2026-10-11',unlocks:[{achievementId:57643,earnedAt:'2025-01-01'}]}]
   const p=planRun(i);expect(p.achievements.find(a=>a.ruleId===108023)?.hardcoreEarned).toBe(true)
   expect(p.actions.some(a=>a.id==='rule-108023')).toBe(true);expect(p.reservations.some(r=>r.consumingRuleId===57643)).toBe(true)
  })

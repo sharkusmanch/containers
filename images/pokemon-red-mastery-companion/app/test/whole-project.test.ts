@@ -196,7 +196,8 @@ describe('whole-project sourced mastery scenario (synthetic, no runtime claim)',
     expect(action(project, 108069).readiness).toBe('missed')
     project = record(project, 'safari:prior-pickup')
     expect(action(project, 108045).readiness).toBe('missed')
-    project = reduceProject(project, { type: 'set-source', source: { kind: 'upload', enabled: false } })
+    // A genuine source change (an address replacing uploads) sends history to review. Saving unchanged empty settings does not (stage-1 final review M1).
+    project = reduceProject(project, { type: 'set-source', source: { kind: 'url', url: './other-save', enabled: false } })
     expect(activeAttempt(project).manualEvidence[0]!.status).toBe('needs-review')
     const unreadable = { ...s, events: unknown, ownedDex: unknown, badgeMask: unknown, party: unknown, bag: unknown }
     project = importObservation(project, unreadable, 2)

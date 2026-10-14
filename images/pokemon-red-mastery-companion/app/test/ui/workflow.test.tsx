@@ -31,7 +31,7 @@ function controller(partial = false) {
 it('provides entire guide without a save or sync and all three achievement sets', () => {
   const c = createController({ storage: null })
   render(<App controller={c} dataset={dataset} />)
-  expect(screen.getAllByText(/No save imported/).length).toBeGreaterThan(0)
+  expect(screen.getAllByText(/No save loaded/).length).toBeGreaterThan(0)
   fireEvent.click(
     screen.getByRole('button', { name: 'Achievements', exact: true }),
   )
@@ -43,7 +43,7 @@ it('provides entire guide without a save or sync and all three achievement sets'
     fireEvent.click(screen.getByRole('button', { name: label, exact: true }))
     expect(screen.getByText(`${count} achievements`)).toBeTruthy()
   }
-  expect(screen.getAllByText(/HC unknown/).length).toBeGreaterThan(0)
+  expect(screen.getAllByText(/Hardcore: not connected/).length).toBeGreaterThan(0)
 })
 it('pre-Brock shows species names, exact requirements and gym preparation', () => {
   render(<App controller={controller()} dataset={dataset} />)
@@ -70,7 +70,7 @@ it('partial party remains unknown, and manual history never grants HC', () => {
   fireEvent.click(
     screen.getByRole('button', { name: 'Achievements', exact: true }),
   )
-  fireEvent.click(screen.getAllByText('Record attempt history')[0]!)
+  fireEvent.click(screen.getAllByText('Mark it yourself')[0]!)
   fireEvent.click(
     screen.getAllByRole('button', { name: 'Confirm observed' })[0]!,
   )

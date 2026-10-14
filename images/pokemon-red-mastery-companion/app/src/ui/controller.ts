@@ -1,15 +1,32 @@
 import type { MasteryProject } from '../model'
-import { createProject, heldImportIsCurrent } from '../state/project'
+import {
+  adoptDeploymentSave,
+  createProject,
+  heldImportIsCurrent,
+} from '../state/project'
 import { reduceProject } from '../state/reducer'
 import type { ProjectAction } from '../state/reducer'
 import { restoreProject, serializeProject } from '../state/persist'
 import { createSaveController } from '../sources/poller'
-import { fetchHardcoreProgress } from '../sources/ra'
+import { discoverAccountIdentity, fetchHardcoreProgress } from '../sources/ra'
+import type { DeploymentState } from '../sources/deployment'
+import { SIGNED_OUT, sourceAvailable } from '../sources/deployment'
 export const STORAGE_KEY = 'pokemon-red-mastery-project-v1'
+/** Automatic hardcore refreshes on open/focus are at least this far apart. */
+export const PROGRESS_INTERVAL = 5 * 60_000
 type Storage = Pick<globalThis.Storage, 'getItem' | 'setItem'>
 export function createController(
-  options: { initial?: MasteryProject; storage?: Storage | null } = {},
+  options: {
+    initial?: MasteryProject
+    storage?: Storage | null
+    deployment?: DeploymentState
+  } = {},
 ) {
+  const deployment: DeploymentState = options.deployment ?? { status: 'public' }
+  const adopt = (p: MasteryProject) =>
+    deployment.status === 'private'
+      ? adoptDeploymentSave(p, deployment.config.saveUrl)
+      : p
   let project = options.initial ?? createProject(),
     error = '',
     recoveryRaw: string | null = null,
@@ -19,7 +36,8 @@ export function createController(
   const listeners = new Set<() => void>()
   let syncGeneration = 0,
     syncAbort: AbortController | undefined,
-    syncing = false
+    syncing = false,
+    lastAutomaticSync = -Infinity
   try {
     storage =
       options.storage === undefined ? globalThis.localStorage : options.storage
@@ -39,6 +57,21 @@ export function createController(
     persistenceBlocked = true
     error = 'Could not read local storage. Keep an exported project backup.'
   }
+  // Existing browser projects keep their data; only an unset canonical source is filled in.
+  project = adopt(project)
+  // This page load passed sign-in, so a stored "Signed out" error is stale.
+  if (
+    deployment.status !== 'signed-out' &&
+    project.attempts.some((a) => a.source.lastError?.startsWith(SIGNED_OUT))
+  )
+    project = {
+      ...project,
+      attempts: project.attempts.map((a) =>
+        a.source.lastError?.startsWith(SIGNED_OUT)
+          ? { ...a, source: { ...a.source, lastError: undefined } }
+          : a,
+      ),
+    }
   const notify = () => listeners.forEach((fn) => fn())
   function persist() {
     if (persistenceBlocked) return
@@ -57,7 +90,11 @@ export function createController(
     persist()
     notify()
   }
-  const saves = createSaveController({ getProject: () => project, setProject })
+  const saves = createSaveController({
+    getProject: () => project,
+    setProject,
+    sourceAllowed: (source) => sourceAvailable(source, deployment),
+  })
   const invalidating = new Set([
     'create-attempt',
     'switch-attempt',
@@ -69,6 +106,7 @@ export function createController(
   ])
   const controller = {
     getProject: () => project,
+    getDeployment: () => deployment,
     canAssignHeld: () => heldImportIsCurrent(project),
     getError: () => error,
     isPersistenceBlocked: () => persistenceBlocked,
@@ -92,7 +130,7 @@ export function createController(
         syncing = false
       }
       try {
-        const next = reduceProject(project, action)
+        const next = adopt(reduceProject(project, action))
         if (action.type === 'restore-project') {
           error = next.recoveryError ?? ''
           if (!next.recoveryError) persistenceBlocked = false
@@ -190,6 +228,31 @@ export function createController(
           notify()
         }
       }
+    },
+    /** Automatic refresh only for a deployment-declared service and a confirmed account. */
+    syncDeployment(automatic = true) {
+      if (
+        deployment.status !== 'private' ||
+        !deployment.config.companionUrl ||
+        !project.accountIdentity ||
+        syncing
+      )
+        return
+      if (automatic && Date.now() - lastAutomaticSync < PROGRESS_INTERVAL)
+        return
+      lastAutomaticSync = Date.now()
+      void controller.sync(deployment.config.companionUrl)
+    },
+    /** Reads the server-reported account; the caller confirms before set-account-identity. */
+    discoverIdentity() {
+      if (deployment.status !== 'private' || !deployment.config.companionUrl)
+        return Promise.resolve({
+          error: 'No progress service is configured.',
+        } as const)
+      return discoverAccountIdentity(
+        deployment.config.companionUrl,
+        new AbortController().signal,
+      )
     },
     dispose() {
       restoreGeneration++

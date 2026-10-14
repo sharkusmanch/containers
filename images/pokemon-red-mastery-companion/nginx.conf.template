@@ -59,6 +59,15 @@ http {
         }
         location /companion { return 404; }
 
+        # Deployment declaration written by the entrypoint; not an nginx template.
+        location = /app-config.json {
+            alias /tmp/app-config.json;
+            types { }
+            default_type application/json;
+            add_header Cache-Control "no-store" always;
+            add_header X-Content-Type-Options "nosniff" always;
+        }
+
         location /assets/ {
             try_files $uri =404;
             add_header Cache-Control "public, max-age=31536000, immutable";

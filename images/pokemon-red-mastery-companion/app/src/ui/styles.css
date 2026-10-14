@@ -288,8 +288,87 @@ small {
   border-radius: 50%;
   flex-shrink: 0;
 }
-.status-dot.has-save {
+.status-dot.has-save,
+.status-dot.ok {
   background: var(--green);
+}
+.status-dot.busy {
+  background: #b88a1f;
+}
+.status-dot.warn {
+  background: var(--red);
+}
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.freshness.warn {
+  color: var(--red);
+  font-weight: 600;
+}
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  min-height: 0;
+  color: var(--red);
+  text-decoration: underline;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.glance {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 1.2rem;
+}
+.glance > div {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+}
+.glance strong {
+  display: block;
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+.glance span {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.todo {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.9rem;
+}
+.todo > li {
+  border-top: 1px solid var(--line);
+  padding-top: 0.8rem;
+}
+.todo > li:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.todo p {
+  margin: 0.2rem 0;
+}
+.deadline-panel {
+  border-top: 3px solid var(--red);
+}
+.warning-panel {
+  background: #fbf1e6;
+}
+.advanced > summary,
+.browse > summary {
+  font-size: 1.05rem;
+}
+.upload {
+  margin-top: 0.8rem;
 }
 main {
   max-width: 1160px;
@@ -622,16 +701,33 @@ form > button {
     margin: 0;
   }
   .topbar {
-    padding: 0.8rem 1rem;
-    align-items: flex-start;
-    gap: 0.7rem;
+    padding: 0.6rem 1rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.2rem;
   }
   .topbar > div:first-child {
-    max-width: 46%;
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
   }
   .freshness {
-    max-width: 52%;
+    max-width: none;
     align-items: flex-start;
+  }
+  .glance {
+    gap: 0.35rem;
+  }
+  .glance > div {
+    padding: 0.45rem 0.5rem;
+  }
+  .glance strong {
+    font-size: 1.05rem;
+  }
+  .glance span {
+    font-size: 0.68rem;
+    line-height: 1.2;
+    display: block;
   }
   .status-dot {
     margin-top: 0.4rem;
@@ -717,4 +813,8 @@ form > button {
   stroke-linecap: round;
   stroke-linejoin: round;
   flex-shrink: 0;
+}
+button.link:hover {
+  background: none;
+  color: var(--ink);
 }

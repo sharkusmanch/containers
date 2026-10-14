@@ -127,3 +127,26 @@ export function applySnapshot(project: MasteryProject, context: ImportContext, r
   }
   return updateAttempt(settled, commitObservation(attempt, result.snapshot, messages))
 }
+/** The protected main/Oak attempt: the first canonical attempt. Named attempts never share its save. */
+export function canonicalAttempt(project: MasteryProject): Attempt | undefined {
+  return project.attempts.find(a => a.kind === 'canonical')
+}
+/**
+ * Give the canonical attempt the private deployment's save route when the player never chose
+ * one, and keep a deployment-adopted route current. A URL the player set (origin 'user', or any
+ * legacy URL) is never replaced, and glitch/speedrun attempts are never touched. Snapshots,
+ * marks and branches are kept; continuity guards still apply to the first import.
+ */
+export function adoptDeploymentSave(project: MasteryProject, saveUrl: string | undefined): MasteryProject {
+  const url = saveUrl?.trim(), attempt = canonicalAttempt(project)
+  if (!url || !attempt) return project
+  const current = attempt.source.url?.trim()
+  const adopt = !current && attempt.source.origin !== 'user'
+  const follow = attempt.source.origin === 'deployment' && current !== url
+  if (!adopt && !follow) return project
+  const next = updateAttempt(project, { ...attempt, heldImport: undefined,
+    source: { ...attempt.source, kind: 'url', url, enabled: adopt ? true : attempt.source.enabled, paused: adopt ? false : attempt.source.paused, origin: 'deployment', revision: attempt.source.revision + 1, lastError: undefined } })
+  // Invalidate any pending import for the old source context.
+  const pending = project.pendingImport?.attemptId === attempt.id
+  return pending ? { ...next, pendingImport: null, importGeneration: nextGeneration(project) } : next
+}
