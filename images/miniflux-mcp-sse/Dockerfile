@@ -20,7 +20,7 @@ ARG MCP_SDK_VERSION=1.30.0
 ARG GOLANG_VERSION=1.27
 
 # renovate: datasource=docker depName=python versioning=docker
-ARG PYTHON_VERSION=3.14
+ARG PYTHON_VERSION=3.15
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
