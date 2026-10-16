@@ -12,6 +12,7 @@ import type {
 } from "../shared/types.js";
 import type { Api } from "./api.js";
 import { createAchievementsView } from "./achievements-view.js";
+import { createAssistantView } from "./assistant-view.js";
 import {
   createWakeLock,
   displayModeFullscreen,
@@ -56,6 +57,8 @@ export interface AppOptions {
   doc: Document;
   api: Api;
   storage: StorageLike;
+  /** Where the Ask conversation is kept: sessionStorage in the browser; in memory without it. */
+  session?: StorageLike;
   setInterval?: typeof setInterval;
   setTimeout?: typeof setTimeout;
   /** The browser's navigator, for the screen wake lock. Without it the lock is unsupported. */
@@ -133,6 +136,12 @@ function scopeFor(game: GameRef | null, hub: GuideHub | null): string | null {
   return hub === null ? null : hub.hubId;
 }
 
+/** A storage that lasts as long as the page. */
+function memoryStorage(): StorageLike {
+  const data = new Map<string, string>();
+  return { getItem: (k) => data.get(k) ?? null, setItem: (k, v) => void data.set(k, v) };
+}
+
 export function startApp(opts: AppOptions): App {
   const { doc, api, storage } = opts;
   const afterDelay = opts.setTimeout ?? setTimeout;
@@ -184,6 +193,7 @@ export function startApp(opts: AppOptions): App {
   banner.append(bannerLabel, accept, dismiss);
 
   const view = createAchievementsView(doc, { storage, onFind: (a) => void findInGuide(a) });
+  const assistant = createAssistantView(doc, { api, storage: opts.session ?? memoryStorage() });
   const frames = createFrames(doc, SLOT_COUNT, {
     ...(opts.setInterval === undefined ? {} : { setInterval: opts.setInterval }),
     onInteract: () => onGuideInteract(),
@@ -199,13 +209,18 @@ export function startApp(opts: AppOptions): App {
   });
   const stage = doc.createElement("div");
   stage.classList.add("stage");
-  stage.append(view.element, frames.element, toast);
+  stage.append(view.element, assistant.element, frames.element, toast);
 
   const rail = createRail(doc, {
     onSelect(index) {
       if (current === null) return;
+      askOpen = false;
       current.layout = activate(current.layout, index);
       save();
+      render();
+    },
+    onAsk() {
+      askOpen = true;
       render();
     },
     onMore() {
@@ -219,6 +234,7 @@ export function startApp(opts: AppOptions): App {
   const picker = createPicker(doc, {
     onPage(page) {
       if (current === null || !isSafeDocUrl(page.url)) return;
+      askOpen = false;
       current.layout = assignSlot(current.layout, page);
       save();
       render();
@@ -283,6 +299,7 @@ export function startApp(opts: AppOptions): App {
     onLink(link) {
       const c = current;
       if (c === null || !c.links.some((l) => l.url === link.url)) return;
+      askOpen = false;
       c.layout = assignSlot(c.layout, link);
       save();
       render();
@@ -373,6 +390,10 @@ export function startApp(opts: AppOptions): App {
   // The status text now showing, or null while the row is hidden.
   let presenceShown: string | null = null;
   let toastSeq = 0;
+  // Whether the server offers the assistant, from the last successful status poll.
+  let assistantOn = false;
+  // The Ask panel covers the stage while open. Never part of the layout, so never stored.
+  let askOpen = false;
 
   function showToast(text: string, ms = 6000): void {
     toastSeq += 1;
@@ -565,6 +586,7 @@ export function startApp(opts: AppOptions): App {
       showToast("Could not open that page");
       return;
     }
+    askOpen = false;
     c.layout = assignSlot(c.layout, { title: match.pageTitle, url: match.pageUrl });
     save();
     render();
@@ -744,7 +766,13 @@ export function startApp(opts: AppOptions): App {
     presence.setAttribute("aria-expanded", expanded ? "true" : "false");
   }
 
+  /** Ask needs the assistant and a game to ask about; otherwise the panel closes. */
+  function canAsk(): boolean {
+    return assistantOn && current !== null && current.scope !== null;
+  }
+
   function render(): void {
+    if (!canAsk()) askOpen = false;
     const layout = current?.layout ?? emptyLayout();
     renderRail(layout);
     renderHeader();
@@ -758,7 +786,12 @@ export function startApp(opts: AppOptions): App {
     // the achievements rather than leaving the stage empty.
     const slot =
       active !== null && (isLinkUrl(active.url) || isSafeDocUrl(active.url)) ? active : null;
-    if (slot === null) {
+    assistant.element.hidden = !askOpen;
+    if (askOpen) {
+      if (!view.element.hidden) savedScroll = view.element.scrollTop;
+      view.element.hidden = true;
+      frames.hideAll();
+    } else if (slot === null) {
       if (view.element.hidden) {
         view.element.hidden = false;
         view.element.scrollTop = savedScroll;
@@ -780,6 +813,7 @@ export function startApp(opts: AppOptions): App {
         slot === null || isLinkUrl(slot.url) ? null : (progress.get(docId(slot.url)) ?? null),
       ),
     );
+    rail.setAsk(assistantOn ? (canAsk() ? "enabled" : "disabled") : "hidden", askOpen);
   }
 
   async function refreshProgress(c: Current, fresh = false): Promise<void> {
@@ -896,6 +930,8 @@ export function startApp(opts: AppOptions): App {
     }
     if (key !== declinedKey) declinedKey = "";
     const scope = scopeFor(game, hub);
+    const shown = achievementsSource({ game, hub });
+    assistant.setScope(scope, scope === null ? null : { hubId: hub?.hubId ?? null, game: shown });
     const waiting: Current = {
       game,
       hub,
@@ -1025,6 +1061,10 @@ export function startApp(opts: AppOptions): App {
     nowFailed = false;
     everReached = true;
     lastNow = now;
+    if (assistantOn !== (now.assistant === true)) {
+      assistantOn = now.assistant === true;
+      render();
+    }
     if (whereFor?.failed === true) whereFor = null;
     renderPresence();
     if (!adoptedFirst) {

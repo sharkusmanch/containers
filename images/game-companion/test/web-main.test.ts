@@ -13,6 +13,7 @@ import type {
   GuideProgressResponse,
   GuideWhereResponse,
   HubTreeResponse,
+  AskRequest,
   NowResponse,
   WhereMatch,
 } from "../src/shared/types.js";
@@ -112,6 +113,7 @@ interface Fake extends Api {
   whereValue: GuideWhereResponse | null;
   progressValue: GuideProgressResponse | null;
   failNow: boolean;
+  askCalls: AskRequest[];
 }
 
 function fakeApi(nowValue: NowResponse): Fake {
@@ -125,6 +127,10 @@ function fakeApi(nowValue: NowResponse): Fake {
     whereValue: { matches: [] },
     progressValue: { pages: [] },
     failNow: false,
+    askCalls: [],
+    ask: async (req) => {
+      f.askCalls.push(req);
+    },
     now: async () => {
       if (f.failNow) throw new Error("down");
       return f.nowValue;
@@ -225,7 +231,7 @@ describe("startApp", () => {
       setInterval: noTimers,
     });
     await first.ready;
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     expect($(".picker")?.hidden).toBe(false);
     expect(($(".picker-pages") as HTMLElement).hidden).toBe(false);
     (document.querySelectorAll(".picker-pages .picker-item")[1] as HTMLElement).click();
@@ -355,7 +361,7 @@ describe("startApp", () => {
     expect($(".game-title")?.textContent).toBe("Alpha");
     // The game whose guide was just chosen is the detected one: no offer to switch to it.
     expect($(".switch-banner")?.hidden).toBe(true);
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     ($('[data-tab="games"]') as HTMLElement).click();
     expect(titles()).toEqual(["Alpha", "Zeta"]);
   });
@@ -369,7 +375,7 @@ describe("startApp", () => {
       setInterval: noTimers,
     });
     await first.ready;
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     (document.querySelectorAll(".picker-pages .picker-item")[1] as HTMLElement).click();
     const saved = storage.getItem("game-companion:v1:layout:hA");
     expect(saved).not.toBeNull();
@@ -546,7 +552,7 @@ describe("startApp", () => {
       it("collapses when another game is picked by hand", async () => {
         const { app } = await started();
         button().click();
-        (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+        (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
         ($('[data-tab="games"]') as HTMLElement).click();
         (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
         await app.tick();
@@ -603,7 +609,7 @@ describe("startApp", () => {
       const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
       await app.ready;
       expect(hidden()).toBe(false);
-      (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+      (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
       ($('[data-tab="games"]') as HTMLElement).click();
       (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
       await app.tick();
@@ -642,7 +648,7 @@ describe("startApp", () => {
         await gate;
         return tree(id === "hA" ? hubA : hubZ);
       };
-      (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+      (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
       ($('[data-tab="games"]') as HTMLElement).click();
       (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
       const switching = app.tick();
@@ -686,7 +692,7 @@ describe("startApp", () => {
         return { api, app, hold, release: () => release() };
       }
       const pickByHand = (index: number): void => {
-        (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+        (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
         ($('[data-tab="games"]') as HTMLElement).click();
         (document.querySelectorAll(".picker-games .picker-item")[index] as HTMLElement).click();
       };
@@ -787,7 +793,7 @@ describe("startApp", () => {
       const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
       await app.ready;
       expect(hidden()).toBe(false);
-      (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+      (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
       (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
       await app.tick();
       expect($(".game-title")?.textContent).toBe("Beta");
@@ -809,7 +815,7 @@ describe("startApp", () => {
       const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
       await app.ready;
       expect(hidden()).toBe(false);
-      (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+      (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
       (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
       await app.tick();
       expect($(".game-title")?.textContent).toBe("Sigma");
@@ -920,7 +926,7 @@ describe("startApp", () => {
     expect($(".switch-banner")?.hidden).toBe(true);
     expect($(".game-note")?.textContent).toBe("No guide selected");
     // The guide can still be chosen from the games list.
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     ($('[data-tab="games"]') as HTMLElement).click();
     expect(document.querySelectorAll(".picker-games .picker-item")).toHaveLength(2);
   });
@@ -985,7 +991,7 @@ describe("startApp", () => {
     await app.ready;
     (document.querySelectorAll(".rail button")[1] as HTMLElement).click();
     expect($("iframe:not(.inactive)")?.getAttribute("src")).toBe("/doc/hA-checklist");
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     const remove = $(".picker-pages .picker-unpin") as HTMLElement;
     expect(remove.getAttribute("aria-label")).toBe("Remove Achievement Checklist from the sidebar");
     remove.click();
@@ -1023,11 +1029,11 @@ describe("startApp", () => {
       setInterval: noTimers,
     });
     await app.ready;
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     (document.querySelectorAll(".picker-pages .picker-item")[1] as HTMLElement).click(); // pin + show Collectibles in slot 1
     const reading = $("iframe:not(.inactive)");
     expect(reading?.getAttribute("src")).toBe("/doc/hA-coll");
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     ($(".picker-pages .picker-unpin") as HTMLElement).click(); // removes Achievement Checklist (slot 0)
     const rail = [...document.querySelectorAll<HTMLButtonElement>(".rail button")];
     expect(rail.slice(1, 5).map((b) => b.textContent)).toEqual(["CO", "", "", ""]);
@@ -1065,7 +1071,7 @@ describe("startApp", () => {
     await app.tick();
     expect($(".switch-banner")?.hidden).toBe(false);
     // And the games list is the full list again, not the two guides of that chooser.
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     ($('[data-tab="games"]') as HTMLElement).click();
     expect(
       [...document.querySelectorAll(".picker-games .picker-item .picker-title")].map(
@@ -1181,7 +1187,7 @@ describe("startApp", () => {
     // Opening the picker asks again, so a guide added since start shows up.
     const hubC: GuideHub = { ...hubZ, hubId: "hC", title: "Gamma", gameId: "30" };
     list = { available: true, hubs: [hubA, hubC, hubZ] };
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(calls.length).toBe(before + 1);
     expect(calls.at(-1)).toBeUndefined();
@@ -1195,7 +1201,7 @@ describe("startApp", () => {
     api.guides = async () => {
       throw new Error("down");
     };
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     ($('[data-tab="games"]') as HTMLElement).click();
     expect(document.querySelectorAll(".picker-games .picker-item")).toHaveLength(2);
@@ -1281,7 +1287,7 @@ describe("startApp", () => {
     api.failNow = true;
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
     await app.ready;
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
     await app.tick();
     expect($(".game-title")?.textContent).toBe("Zeta");
@@ -1319,7 +1325,7 @@ describe("startApp", () => {
     // Loaded now: no more retries, and a pin is saved.
     await app.tick();
     expect(treeCalls).toBe(3);
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     (document.querySelectorAll(".picker-pages .picker-item")[1] as HTMLElement).click();
     expect(storage.getItem("game-companion:v1:layout:hA")).not.toBeNull();
   });
@@ -1385,7 +1391,7 @@ describe("startApp", () => {
     api.now = () => new Promise<NowResponse>((resolve) => (release = resolve));
     const inFlight = app.tick();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    (document.querySelectorAll(".rail button")[5] as HTMLElement).click();
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     ($('[data-tab="games"]') as HTMLElement).click();
     (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
     expect($(".game-title")?.textContent).toBe("Zeta");
@@ -4227,7 +4233,7 @@ describe("your links", () => {
     document.body.innerHTML = '<main id="app"></main>';
     return start(now, storage);
   };
-  const more = (): void => railButtons()[5]?.click();
+  const more = (): void => railButtons()[6]?.click();
   const section = (): HTMLElement => $(".picker-links") as HTMLElement;
   const rows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>(".picker-link")];
   const titles = (): (string | null | undefined)[] =>
@@ -4891,5 +4897,137 @@ describe("your links", () => {
       expect(shown().map((f) => f.getAttribute("src"))).toEqual([COLL]);
       expect(linkFrame?.getAttribute("src")).toBe(MAP);
     });
+  });
+});
+
+describe("Ask panel", () => {
+  const askButton = (): HTMLButtonElement =>
+    document.querySelector('.rail button[aria-label="Ask"]') as HTMLButtonElement;
+  const askPanel = (): HTMLElement => $(".ask") as HTMLElement;
+  const withAssistant = (hub: GuideHub): NowResponse => ({ ...playing(hub), assistant: true });
+
+  it("has no Ask button when the server has no assistant", async () => {
+    const app = startApp({
+      doc: document,
+      api: fakeApi(playing(hubA)),
+      storage: memory(),
+      setInterval: noTimers,
+    });
+    await app.ready;
+    expect(askButton().hidden).toBe(true);
+    expect(askPanel().hidden).toBe(true);
+  });
+
+  it("opens over the achievements and frames; any rail item closes it", async () => {
+    const app = startApp({
+      doc: document,
+      api: fakeApi(withAssistant(hubA)),
+      storage: memory(),
+      setInterval: noTimers,
+    });
+    await app.ready;
+    expect(askButton().hidden).toBe(false);
+    expect(askButton().disabled).toBe(false);
+    railButtons()[1]?.click();
+    expect($("iframe:not(.inactive)")).not.toBeNull();
+    askButton().click();
+    expect(askPanel().hidden).toBe(false);
+    expect($(".ach")?.hidden).toBe(true);
+    expect($("iframe:not(.inactive)")).toBeNull();
+    expect(askButton().classList.contains("active")).toBe(true);
+    expect(railButtons()[1]?.classList.contains("active")).toBe(false);
+    railButtons()[1]?.click();
+    expect(askPanel().hidden).toBe(true);
+    expect($("iframe:not(.inactive)")?.getAttribute("src")).toBe("/doc/hA-checklist");
+    askButton().click();
+    railButtons()[0]?.click();
+    expect(askPanel().hidden).toBe(true);
+    expect($(".ach")?.hidden).toBe(false);
+    expect(askButton().classList.contains("active")).toBe(false);
+  });
+
+  it("never records the Ask panel in the stored layout", async () => {
+    const storage = memory();
+    const first = startApp({
+      doc: document,
+      api: fakeApi(withAssistant(hubA)),
+      storage,
+      setInterval: noTimers,
+    });
+    await first.ready;
+    railButtons()[1]?.click();
+    const before = storage.getItem("game-companion:v1:layout:hA");
+    askButton().click();
+    expect(storage.getItem("game-companion:v1:layout:hA")).toBe(before);
+    expect(JSON.parse(before as string)).toMatchObject({ active: 0 });
+
+    document.body.innerHTML = '<main id="app"></main>';
+    const second = startApp({
+      doc: document,
+      api: fakeApi(withAssistant(hubA)),
+      storage,
+      setInterval: noTimers,
+    });
+    await second.ready;
+    expect(askPanel().hidden).toBe(true);
+    expect($("iframe:not(.inactive)")?.getAttribute("src")).toBe("/doc/hA-checklist");
+  });
+
+  it("asks about the current hub and game and keeps the conversation under the links scope", async () => {
+    const api = fakeApi(withAssistant(hubA));
+    const session = memory();
+    api.ask = async (req, _signal, onEvent) => {
+      api.askCalls.push(req);
+      onEvent({ type: "text", text: "Try the north door." });
+      onEvent({ type: "done", truncatedGuide: false });
+    };
+    const app = startApp({ doc: document, api, storage: memory(), session, setInterval: noTimers });
+    await app.ready;
+    askButton().click();
+    (document.querySelector(".ask-starter") as HTMLElement).click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(api.askCalls).toEqual([
+      {
+        hubId: "hA",
+        game: { source: "ra", id: "20" },
+        history: [],
+        question: "What should I do next?",
+        depth: "hint",
+      },
+    ]);
+    expect(JSON.parse(session.getItem("game-companion:v1:ask:game:ra:20") as string)).toEqual([
+      { question: "What should I do next?", answer: "Try the north door." },
+    ]);
+  });
+
+  it("is disabled, and closes, when nothing identifies the game", async () => {
+    const api = fakeApi({
+      game: { source: "steam", id: null, title: "Mystery" },
+      state: "playing",
+      stale: false,
+      observedAt: "2026-10-06T18:00:00.000Z",
+      presence: null,
+      hubs: [],
+      assistant: true,
+    });
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    expect(askButton().hidden).toBe(false);
+    expect(askButton().disabled).toBe(true);
+    askButton().click();
+    expect(askPanel().hidden).toBe(true);
+  });
+
+  it("hides the button and the panel when a later poll says the assistant is gone", async () => {
+    const api = fakeApi(withAssistant(hubA));
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    askButton().click();
+    expect(askPanel().hidden).toBe(false);
+    api.nowValue = playing(hubA);
+    await app.tick();
+    expect(askButton().hidden).toBe(true);
+    expect(askPanel().hidden).toBe(true);
+    expect($(".ach")?.hidden).toBe(false);
   });
 });

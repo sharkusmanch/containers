@@ -875,3 +875,135 @@ button {
   font-size: 13px;
   color: var(--text-dim);
 }
+
+/* ---- Ask panel: same place and stacking as .ach; the input row stays at the bottom ---- */
+
+.ask {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+/* The conversation takes the room left over and scrolls; the controls below never move. */
+.ask-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 8px 12px;
+}
+
+.ask-notice {
+  margin: 0;
+  padding: 8px 0;
+  color: var(--text-dim);
+}
+
+.ask-turn {
+  margin-bottom: 16px;
+}
+
+.ask-question {
+  width: fit-content;
+  max-width: 85%;
+  margin: 0 0 8px auto;
+  padding: 8px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg-active);
+  border-radius: 10px;
+}
+
+.ask-body p,
+.ask-body li {
+  margin: 0 0 8px;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.ask-body ul {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.ask-search {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.ask-error {
+  margin: 0;
+  color: var(--warn);
+}
+
+.ask-full,
+.ask-starter,
+.ask-send,
+.ask-stop,
+.ask-new {
+  flex: 0 0 auto;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  white-space: nowrap;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ask-send,
+.ask-stop {
+  font-weight: 600;
+  background: var(--bg-active);
+  border-color: var(--accent);
+}
+
+.ask button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* One row that scrolls sideways, so the starters never push the conversation off screen. */
+.ask-starters {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px 0;
+  overflow-x: auto;
+  overscroll-behavior: contain;
+}
+
+.ask-input-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.ask-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 7em;
+  padding: 10px 12px;
+  resize: none;
+  font: inherit;
+  /* 16px or larger keeps mobile browsers from zooming the page on focus */
+  font-size: 16px;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.ask-counter {
+  align-self: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}

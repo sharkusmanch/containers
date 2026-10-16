@@ -5,6 +5,7 @@ startApp({
   doc: document,
   api: createApi(),
   storage: window.localStorage,
+  session: window.sessionStorage,
   nav: navigator,
   win: window,
 });

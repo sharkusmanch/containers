@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError, REQUEST_TIMEOUT_MS, createApi } from "../src/web/api.js";
+import type { AskEvent, AskRequest } from "../src/shared/types.js";
 
 function fake(status: number, body: unknown): { fn: typeof fetch; urls: string[] } {
   const urls: string[] = [];
@@ -149,5 +150,96 @@ describe("createApi", () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect((err as ApiError).status).toBe(500);
+  });
+});
+
+describe("api.ask", () => {
+  const request: AskRequest = {
+    hubId: "h1",
+    game: { source: "ra", id: "20" },
+    history: [{ question: "Q", answer: "A" }],
+    question: "Where now?",
+    depth: "hint",
+  };
+
+  function streamOf(chunks: (string | Uint8Array)[]): ReadableStream<Uint8Array> {
+    const enc = new TextEncoder();
+    return new ReadableStream({
+      start(controller) {
+        for (const c of chunks) controller.enqueue(typeof c === "string" ? enc.encode(c) : c);
+        controller.close();
+      },
+    });
+  }
+
+  it("posts the request as JSON with only the caller's signal", async () => {
+    const seen: { url: string; init: RequestInit | undefined }[] = [];
+    const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: input as string, init });
+      return new Response(streamOf([]), { status: 200 });
+    }) as typeof fetch;
+    const controller = new AbortController();
+    await createApi(fn).ask(request, controller.signal, () => undefined);
+    expect(seen).toHaveLength(1);
+    const { url, init } = seen[0] as { url: string; init: RequestInit };
+    expect(url).toBe("api/ask");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toEqual({
+      "content-type": "application/json",
+      accept: "application/x-ndjson",
+    });
+    expect(JSON.parse(init.body as string)).toEqual(request);
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("parses NDJSON split across chunk boundaries and skips lines that are not JSON", async () => {
+    const e = new TextEncoder().encode('{"type":"text","text":"café"}\n');
+    const cut = e.indexOf(0xc3) + 1; // inside the two bytes of "é"
+    const fn = (async () =>
+      new Response(
+        streamOf([
+          '{"type":"search","qu',
+          'ery":"sample"}\n',
+          e.slice(0, cut),
+          e.slice(cut),
+          "not json\n\n",
+          '{"type":"done","truncatedGuide":false}',
+        ]),
+        { status: 200 },
+      )) as typeof fetch;
+    const events: AskEvent[] = [];
+    await createApi(fn).ask(request, new AbortController().signal, (ev) => events.push(ev));
+    expect(events).toEqual([
+      { type: "search", query: "sample" },
+      { type: "text", text: "café" },
+      { type: "done", truncatedGuide: false },
+    ]);
+  });
+
+  it("throws ApiError carrying the limit and retry-after seconds of a 429", async () => {
+    const fn = (async () =>
+      new Response(JSON.stringify({ error: "rate limited", limit: "minute" }), {
+        status: 429,
+        headers: { "retry-after": "17" },
+      })) as typeof fetch;
+    const err = await createApi(fn)
+      .ask(request, new AbortController().signal, () => undefined)
+      .catch((x: unknown) => x);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 429, limit: "minute", retryAfter: 17 });
+  });
+
+  it("throws ApiError with no limit for other failures, whatever the body", async () => {
+    for (const [status, body] of [
+      [503, "not json"],
+      [400, JSON.stringify({ error: "bad request" })],
+    ] as const) {
+      const fn = (async () => new Response(body, { status })) as typeof fetch;
+      const err = await createApi(fn)
+        .ask(request, new AbortController().signal, () => undefined)
+        .catch((x: unknown) => x);
+      expect(err).toBeInstanceOf(ApiError);
+      expect(err).toMatchObject({ status, limit: undefined, retryAfter: undefined });
+    }
   });
 });
