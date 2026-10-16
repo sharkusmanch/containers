@@ -1,9 +1,9 @@
-import { createServer, type Server } from "node:http";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHandler, IMAGE_HOSTS, type RouteDeps } from "../src/server/routes.js";
 import type {
   AchievementsResponse,
@@ -31,6 +31,7 @@ const now: NowResponse = {
   observedAt: null,
   presence: null,
   hubs: [],
+  assistant: false,
 };
 let nowValue: NowResponse = now;
 const ach: AchievementsResponse = {
@@ -76,6 +77,7 @@ beforeAll(async () => {
   await writeFile(join(dir, "manifest.webmanifest"), '{"name":"Sample"}');
   await writeFile(join(dir, "icon-192.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const deps: RouteDeps = {
+    ask: null,
     staticDir: dir,
     now: () => nowValue,
     guides: () => ({ available: true, hubs: [hub] }),
@@ -286,6 +288,7 @@ describe("routes", () => {
 
     it("turns a throwing dependency into a 500 without leaking its message", async () => {
       const deps: RouteDeps = {
+        ask: null,
         staticDir: "/nonexistent",
         now: () => now,
         guides: () => ({ available: false, hubs: [] }),
@@ -456,6 +459,7 @@ describe("routes", () => {
 
   it("turns a throwing dependency into a 500 without leaking the message", async () => {
     const deps: RouteDeps = {
+      ask: null,
       staticDir: "/nonexistent",
       now: () => {
         throw new Error("secret detail");
@@ -477,5 +481,297 @@ describe("routes", () => {
     expect(r.status).toBe(500);
     expect(await r.text()).not.toContain("secret detail");
     await new Promise<void>((res) => s.close(() => res()));
+  });
+});
+
+describe("POST /companion/api/ask", () => {
+  const ORIGIN = "https://wiki.example.test";
+  const LIMIT = 32768;
+  const valid = {
+    hubId: "h1",
+    game: { source: "steam", id: "10" },
+    history: [{ question: "Q1", answer: "A1" }],
+    question: "What next?",
+    depth: "hint",
+  };
+  type Ask = NonNullable<RouteDeps["ask"]>;
+
+  let s: Server;
+  let url: string;
+  let ask: Ask | null;
+  let admission: ReturnType<Ask["admit"]>;
+  let startArgs: unknown[][];
+  let startResult: "events" | "null" | "hang";
+  let signal: AbortSignal | null;
+  let admitCalls: number;
+
+  beforeAll(async () => {
+    const deps: RouteDeps = {
+      staticDir: "/nonexistent",
+      now: () => ({ ...now, assistant: ask !== null }),
+      guides: () => ({ available: false, hubs: [] }),
+      hubTree: () => null,
+      refreshGuides: () => {},
+      achievements: async () => null,
+      find: async () => null,
+      marks: async () => null,
+      where: async () => null,
+      progress: async () => null,
+      get ask() {
+        return ask;
+      },
+    };
+    s = createServer((req, res) => void createHandler(deps)(req, res));
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+    url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/companion/api/ask`;
+  });
+  afterAll(() => new Promise<void>((r) => s.close(() => r())));
+
+  beforeEach(() => {
+    admission = { ok: true };
+    startArgs = [];
+    startResult = "events";
+    signal = null;
+    admitCalls = 0;
+    ask = {
+      origin: ORIGIN,
+      admit: () => {
+        admitCalls += 1;
+        return admission;
+      },
+      start: async (...args) => {
+        startArgs.push(args);
+        signal = args[1];
+        if (startResult === "null") return null;
+        return (async function* () {
+          yield { type: "search", query: "sample query" } as const;
+          yield { type: "text", text: "Go left." } as const;
+          if (startResult === "hang") await new Promise(() => undefined);
+          yield { type: "done", truncatedGuide: false } as const;
+        })();
+      },
+    };
+  });
+
+  const post = (body: unknown, headers: Record<string, string> = {}) =>
+    fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN, ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  /** Sends exact headers, so a declared content-length need not match the bytes written. */
+  function raw(
+    headers: Record<string, string>,
+    chunks: Buffer[],
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(url, { method: "POST", headers }, (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (d: string) => (body += d));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      });
+      req.on("error", reject);
+      for (const c of chunks) req.write(c);
+      req.end();
+    });
+  }
+
+  it("keeps every other path GET/HEAD only, and answers other methods here with allow: POST", async () => {
+    const other = await fetch(url.replace("/api/ask", "/api/asks"), { method: "POST" });
+    expect(other.status).toBe(405);
+    expect(other.headers.get("allow")).toBe("GET, HEAD");
+    for (const method of ["GET", "PUT", "DELETE", "HEAD"]) {
+      const r = await fetch(url, { method });
+      expect(r.status).toBe(405);
+      expect(r.headers.get("allow")).toBe("POST");
+    }
+    expect(startArgs).toHaveLength(0);
+  });
+
+  it("rejects a wrong or missing content type with 415", async () => {
+    for (const type of ["text/plain", "application/json-patch+json", "application/jsonx"]) {
+      expect((await post(valid, { "content-type": type })).status).toBe(415);
+    }
+    const none = await raw({ origin: ORIGIN, "content-length": "2" }, [Buffer.from("{}")]);
+    expect(none.status).toBe(415);
+    expect(admitCalls).toBe(0);
+  });
+
+  it("accepts a parameter and any case on the media type", async () => {
+    for (const type of ["application/json; charset=utf-8", "Application/JSON"]) {
+      expect((await post(valid, { "content-type": type })).status).toBe(200);
+    }
+  });
+
+  it("rejects a missing or different origin with 403", async () => {
+    expect((await post(valid, { origin: "https://evil.example.test" })).status).toBe(403);
+    expect((await post(valid, { origin: `${ORIGIN}/` })).status).toBe(403);
+    const none = await raw({ "content-type": "application/json", "content-length": "2" }, [
+      Buffer.from("{}"),
+    ]);
+    expect(none.status).toBe(403);
+    expect(startArgs).toHaveLength(0);
+  });
+
+  it("rejects a declared length over the limit with 413 before reading the body", async () => {
+    const r = await raw(
+      { "content-type": "application/json", origin: ORIGIN, "content-length": String(LIMIT + 1) },
+      [Buffer.from("{}")],
+    );
+    expect(r.status).toBe(413);
+    expect(admitCalls).toBe(0);
+  });
+
+  it("rejects a chunked body over the limit with 413, and accepts one at the limit", async () => {
+    const headers = { "content-type": "application/json", origin: ORIGIN };
+    const over = await raw(headers, [Buffer.alloc(LIMIT, 0x20), Buffer.from("x")]);
+    expect(over.status).toBe(413);
+    expect(startArgs).toHaveLength(0);
+
+    const body = JSON.stringify(valid);
+    const padded = Buffer.from(body + " ".repeat(LIMIT - body.length));
+    const exact = await raw(headers, [padded.subarray(0, 100), padded.subarray(100)]);
+    expect(exact.status).toBe(200);
+  });
+
+  it("answers 503 when the assistant is not configured", async () => {
+    ask = null;
+    const r = await post(valid);
+    expect(r.status).toBe(503);
+    expect(await r.json()).toEqual({ error: "assistant unavailable" });
+  });
+
+  it("reports the assistant on /api/now only when configured", async () => {
+    const nowUrl = url.replace("/api/ask", "/api/now");
+    expect(((await (await fetch(nowUrl)).json()) as NowResponse).assistant).toBe(true);
+    ask = null;
+    expect(((await (await fetch(nowUrl)).json()) as NowResponse).assistant).toBe(false);
+  });
+
+  it("rejects invalid JSON and every schema violation with 400, without asking the limiter", async () => {
+    const bad: unknown[] = [
+      "{not json",
+      "[]",
+      "null",
+      "42",
+      { ...valid, hubId: "has space" },
+      { ...valid, hubId: "x".repeat(65) },
+      { ...valid, hubId: 5 },
+      { ...valid, game: { source: "gog", id: "10" } },
+      { ...valid, game: { source: "steam", id: "abc" } },
+      { ...valid, game: { source: "steam", id: "12345678901" } },
+      { ...valid, game: { source: "steam", id: 10 } },
+      { ...valid, game: "steam:10" },
+      { ...valid, hubId: null, game: null },
+      { ...valid, question: "" },
+      { ...valid, question: "   \n " },
+      { ...valid, question: "x".repeat(1001) },
+      { ...valid, question: 7 },
+      { ...valid, history: Array.from({ length: 11 }, () => ({ question: "q", answer: "a" })) },
+      { ...valid, history: [{ question: "q", answer: "a".repeat(8001) }] },
+      { ...valid, history: [{ question: "q".repeat(1001), answer: "a" }] },
+      { ...valid, history: [{ question: "q" }] },
+      { ...valid, history: "none" },
+      { ...valid, depth: "medium" },
+      { ...valid, depth: undefined },
+    ];
+    for (const body of bad) {
+      const r = await post(body);
+      expect(r.status, JSON.stringify(body)?.slice(0, 80)).toBe(400);
+    }
+    expect(admitCalls).toBe(0);
+    expect(startArgs).toHaveLength(0);
+  });
+
+  it("accepts the boundaries and ignores extra keys", async () => {
+    const body = {
+      ...valid,
+      hubId: null,
+      game: { source: "ra", id: "1234567890" },
+      history: Array.from({ length: 3 }, () => ({
+        question: "q".repeat(1000),
+        answer: "a".repeat(8000),
+      })),
+      question: "x".repeat(1000),
+      extra: { anything: true },
+    };
+    const r = await post(body);
+    expect(r.status).toBe(200);
+    const sent = startArgs[0]?.[0] as Record<string, unknown>;
+    expect(Object.keys(sent).sort()).toEqual(["depth", "game", "history", "hubId", "question"]);
+    expect(sent.hubId).toBeNull();
+  });
+
+  it("passes the trimmed question and the parsed fields to start, and nothing else", async () => {
+    const r = await post({ ...valid, question: "  What next?\n" }, { cookie: "session=secret" });
+    expect(r.status).toBe(200);
+    await r.text();
+    expect(startArgs).toHaveLength(1);
+    expect(startArgs[0]).toHaveLength(2);
+    expect(startArgs[0]?.[0]).toEqual({ ...valid, question: "What next?" });
+    expect(startArgs[0]?.[1]).toBeInstanceOf(AbortSignal);
+    expect(JSON.stringify(startArgs)).not.toContain("secret");
+  });
+
+  it("answers 429 with retry-after and the limit when not admitted", async () => {
+    admission = { ok: false, limit: "day", retryAfterSec: 90 };
+    const r = await post(valid);
+    expect(r.status).toBe(429);
+    expect(r.headers.get("retry-after")).toBe("90");
+    expect(await r.json()).toEqual({ error: "rate limited", limit: "day" });
+    expect(startArgs).toHaveLength(0);
+  });
+
+  it("answers 404 when start has no such game", async () => {
+    startResult = "null";
+    const r = await post(valid);
+    expect(r.status).toBe(404);
+    expect(admitCalls).toBe(1);
+  });
+
+  it("streams one JSON object per line with the shared headers", async () => {
+    const r = await post(valid);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("application/x-ndjson; charset=utf-8");
+    expect(r.headers.get("cache-control")).toBe("no-store");
+    expect(r.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(r.headers.get("referrer-policy")).toBe("same-origin");
+    const baseCsp = (await fetch(`${base}/companion/`)).headers.get("content-security-policy");
+    expect(r.headers.get("content-security-policy")).toBe(baseCsp);
+    const text = await r.text();
+    expect(text.endsWith("\n")).toBe(true);
+    expect(
+      text
+        .trimEnd()
+        .split("\n")
+        .map((l) => JSON.parse(l) as unknown),
+    ).toEqual([
+      { type: "search", query: "sample query" },
+      { type: "text", text: "Go left." },
+      { type: "done", truncatedGuide: false },
+    ]);
+  });
+
+  it("aborts the signal when the client goes away mid-stream, and not after a normal end", async () => {
+    startResult = "hang";
+    const ctrl = new AbortController();
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN },
+      body: JSON.stringify(valid),
+      signal: ctrl.signal,
+    });
+    const reader = (r.body as ReadableStream<Uint8Array>).getReader();
+    await reader.read();
+    expect(signal?.aborted).toBe(false);
+    ctrl.abort();
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+
+    startResult = "events";
+    await (await post(valid)).text();
+    await new Promise((r2) => setTimeout(r2, 20));
+    expect(signal?.aborted).toBe(false);
   });
 });

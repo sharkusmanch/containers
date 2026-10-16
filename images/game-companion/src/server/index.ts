@@ -1,11 +1,13 @@
 import { createServer } from "node:http";
 import { AchievementService } from "./achievements.js";
 import { buildDeps } from "./app.js";
+import { Assistant, sdkStreamClient } from "./assistant.js";
 import { loadConfig } from "./config.js";
 import { Detector } from "./detector.js";
 import { GuideIndex } from "./guide-index.js";
 import { GuidePageService } from "./guide-pages.js";
 import { OutlineClient } from "./outline.js";
+import { AskLimiter } from "./rate-limit.js";
 import { RaClient } from "./ra.js";
 import { createHandler } from "./routes.js";
 import { SteamClient } from "./steam.js";
@@ -36,6 +38,24 @@ const index = new GuideIndex({
 const achievements = new AchievementService({ steam, ra });
 const pages = new GuidePageService({ index, source: outline });
 
+const ask = config.anthropicApiKey
+  ? {
+      origin: new URL(config.outlineBaseUrl).origin,
+      limiter: new AskLimiter({
+        perMinute: config.assistantPerMinute,
+        perDay: config.assistantPerDay,
+      }),
+      assistant: new Assistant({
+        client: sdkStreamClient(config.anthropicApiKey),
+        model: config.assistantModel,
+        effort: config.assistantEffort,
+        log,
+      }),
+      guideChars: config.assistantGuideChars,
+    }
+  : null;
+log(ask ? "assistant enabled" : "assistant disabled (no key)");
+
 detector.start();
 // While Outline stays unreachable the index retries every few seconds; log only the first
 // failure of a run, not every retry.
@@ -57,6 +77,7 @@ const handler = createHandler(
     index,
     achievements,
     pages,
+    ask,
   }),
 );
 const server = createServer((req, res) => void handler(req, res));

@@ -162,6 +162,7 @@ const playing = (hub: GuideHub): NowResponse => ({
   observedAt: "2026-10-06T18:00:00.000Z",
   presence: null,
   hubs: [hub],
+  assistant: false,
 });
 
 const noTimers = (() => 0) as unknown as typeof setInterval;
@@ -280,6 +281,7 @@ describe("startApp", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     });
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
     await app.ready;
@@ -299,6 +301,7 @@ describe("startApp", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     });
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
     await app.ready;
@@ -320,6 +323,7 @@ describe("startApp", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     });
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
     await app.ready;
@@ -875,6 +879,7 @@ describe("startApp", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     });
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
     await app.ready;
@@ -936,6 +941,7 @@ describe("startApp", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     };
     await app.tick();
     api.nowValue = playing(hubZ);
@@ -1154,6 +1160,7 @@ describe("startApp", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     });
     const calls: (boolean | undefined)[] = [];
     let list = { available: false, hubs: [] as GuideHub[] };
@@ -1242,6 +1249,7 @@ describe("startApp", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     };
     await app.tick();
     expect($(".switch-banner")?.hidden).toBe(true);
@@ -4141,6 +4149,7 @@ describe("refresh on wake", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     });
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
     await app.ready;
@@ -4491,6 +4500,7 @@ describe("your links", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     });
     expect(section().hidden).toBe(true);
   });
@@ -4801,6 +4811,7 @@ describe("your links", () => {
         observedAt: null,
         presence: null,
         hubs: [],
+        assistant: false,
       });
       api.guides = async () => ({ available: true, hubs: [hubQ] });
       api.hubTree = async () => tree(hubQ);

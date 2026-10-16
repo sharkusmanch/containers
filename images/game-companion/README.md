@@ -61,7 +61,8 @@ The page is served at `/companion/` and must be reached on the **same hostname a
 (route `/companion` on Outline's hostname to this container). Outline only allows itself to
 be framed by its own origin, so the guide frames stay blank on any other hostname.
 
-There is no sign-in. Every endpoint is read-only. Put it only where everyone who can reach it
+There is no sign-in. Every endpoint is read-only except `POST /companion/api/ask`, which spends
+money on the Anthropic API (see **Ask assistant**). Put it only where everyone who can reach it
 may see what is being played, achievement progress, checklist counts and the text of the guide
 pages: the guide search returns headings and matching lines from them, although Outline itself
 requires a sign-in. The page's Content-Security-Policy allows frames from itself and from any
@@ -84,6 +85,12 @@ that device is ever framed.
 | `OUTLINE_SCHEDULE_DOC_ID`  | No       | ID of a document whose `## Now Playing` section lists games to show first                                                                                              |
 | `DEFAULT_PINNED_PAGES`     | No       | Comma-separated guide page titles to pin the first time a game is opened                                                                                               |
 | `EDITABLE_PAGES`           | No       | Comma-separated guide page titles that stay typeable in reader mode (for example a notes page)                                                                         |
+| `ANTHROPIC_API_KEY`        | No       | Anthropic API key. Without it the Ask assistant is off and `/api/now` reports `assistant: false`                                                                       |
+| `ASSISTANT_MODEL`          | No       | Model for Ask (default `claude-opus-5-5`)                                                                                                                              |
+| `ASSISTANT_EFFORT`         | No       | `low`, `medium` or `high` (default `low`)                                                                                                                              |
+| `ASSISTANT_PER_MINUTE`     | No       | Questions admitted per rolling minute, all callers together (default `10`)                                                                                             |
+| `ASSISTANT_PER_DAY`        | No       | Questions admitted per calendar day in `TZ` (default `150`)                                                                                                            |
+| `ASSISTANT_GUIDE_CHARS`    | No       | Character budget for the guide text sent with each question (default `120000`)                                                                                         |
 | `PORT`                     | No       | Listening port (default `8080`)                                                                                                                                        |
 | `STATIC_DIR`               | No       | Directory of the built front end (default `/app/dist/web`)                                                                                                             |
 
@@ -104,6 +111,29 @@ The Outline key needs only these scopes:
 | `GET /companion/api/guides/<hubId>/where`       | Guide headings that match the status line of the game being played    |
 | `GET /companion/api/guides/<hubId>/progress`    | Ticked and total checkboxes per page (`?refresh=1` re-reads the wiki) |
 | `GET /companion/api/achievements/<source>/<id>` | Achievements for a game that has a guide or is being played           |
+| `POST /companion/api/ask`                       | Streams an answer to a question about a game (newline-delimited JSON) |
+
+## Ask assistant
+
+`POST /companion/api/ask` takes `{hubId, game, history, question, depth}` (a JSON body of at
+most 32 KiB; `hubId` or `game` may be `null`, not both; the question is 1-1,000 characters, up to
+10 earlier turns) and streams one JSON event per line (`search`, `text`, `done`, `error`) as
+`application/x-ndjson`. The model sees the game's guide (up to `ASSISTANT_GUIDE_CHARS`
+characters, pinned pages first), the play state and the player's achievement progress, and may
+search the web at most twice per question.
+
+Requests are checked in this order, each failing before any later work: `Content-Type` must be
+`application/json` (415); `Origin` must be the origin of `OUTLINE_BASE_URL` (403); the body must
+fit (413); the assistant must be configured (503); the body must validate (400); the rate limit
+must admit it (429, with `Retry-After`); the hub or game must be known (404). Only these three
+request headers are read, and only by this route.
+
+Cost and limits: every admitted question is billed by Anthropic, including a web search or
+two. The guide is sent as a cached prefix, so repeat questions about one game are cheaper while
+the guide is unchanged. The limits are counted in memory for the whole service, not per caller,
+so a restart resets them; set a monthly spend limit in the Anthropic Console as the hard
+backstop. Question and answer text is never logged: the one log line per question carries the
+model, token counts, stop reason, search count and duration.
 
 RA responses include the configured `accountIdentity` and the last successful upstream
 `fetchedAt` timestamp. Stale cache reads and failed retries preserve that timestamp;

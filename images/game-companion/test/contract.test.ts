@@ -25,6 +25,7 @@ const now: NowResponse = {
   observedAt: "2026-10-06T00:00:00.000Z",
   presence: "Chapter 2: Sample Caves",
   hubs: [hub],
+  assistant: false,
 };
 let nowValue: NowResponse = now;
 const ach: AchievementsResponse = {
@@ -57,6 +58,7 @@ let refreshCalls = 0;
 
 beforeAll(async () => {
   const deps: RouteDeps = {
+    ask: null,
     staticDir: "/nonexistent",
     now: () => nowValue,
     guides: () => ({ available: true, hubs: [hub] }),
@@ -343,7 +345,9 @@ it("serves all configured Red private routes through the RA client, normalizer a
       marks: async () => null,
       where: async () => null,
       progress: async () => null,
+      texts: async () => null,
     },
+    ask: null,
     detector: {
       current: () => ({
         game: null,

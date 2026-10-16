@@ -1,7 +1,11 @@
+import type { AchievementsResponse, Source } from "../shared/types.js";
 import type { AchievementService } from "./achievements.js";
+import type { Assistant } from "./assistant.js";
+import { buildContext } from "./assistant-context.js";
 import type { Detector, DetectorSnapshot } from "./detector.js";
 import type { GuideIndex } from "./guide-index.js";
-import type { GuidePageService } from "./guide-pages.js";
+import { type GuidePageService, missableMarks } from "./guide-pages.js";
+import type { AskLimiter } from "./rate-limit.js";
 import type { RouteDeps } from "./routes.js";
 
 /** How many games the detector has reported that stay eligible for achievement lookups. */
@@ -18,7 +22,16 @@ export interface AppParts {
   detector: Pick<Detector, "current">;
   index: Pick<GuideIndex, "available" | "hubs" | "lookup" | "tree" | "requestRefresh">;
   achievements: Pick<AchievementService, "get">;
-  pages: Pick<GuidePageService, "find" | "marks" | "where" | "progress">;
+  pages: Pick<GuidePageService, "find" | "marks" | "where" | "progress" | "texts">;
+  /** Null when no API key is configured. */
+  ask: null | {
+    /** Origin of the wiki that frames the page: the one origin allowed to post questions. */
+    origin: string;
+    limiter: Pick<AskLimiter, "admit">;
+    assistant: Pick<Assistant, "ask">;
+    /** Character budget for the guide text sent with each question. */
+    guideChars: number;
+  };
 }
 
 /**
@@ -48,6 +61,27 @@ export function buildDeps(parts: AppParts): RouteDeps {
     return snap;
   };
 
+  /** Whether anonymous lookups may name this game: detected lately, in a guide, or allowlisted. */
+  const lookupAllowed = (source: Source, id: string): boolean =>
+    detected.has(`${source}:${id}`) ||
+    index.lookup(source, id).length > 0 ||
+    (source === "ra" && additionalRaIds.has(id));
+
+  // Guide sections matching the status line. The status text is the detector's own and is
+  // offered only for the game being played, so a guide for any other game never sees it.
+  const whereFor = async (hubId: string) => {
+    const hub = index.tree(hubId)?.hub;
+    if (!hub) return null;
+    const snap = snapshot();
+    const game = snap.game;
+    const status = snap.presence;
+    if (snap.state !== "playing" || status === null || game === null) return { matches: [] };
+    if (hub.source === null || hub.gameId === null) return { matches: [] };
+    if (game.source !== hub.source || game.id !== hub.gameId) return { matches: [] };
+    return pages.where(hubId, status);
+  };
+
+  const askParts = parts.ask;
   return {
     staticDir: parts.staticDir,
     now: () => {
@@ -60,6 +94,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
         observedAt: snap.observedAt === null ? null : new Date(snap.observedAt).toISOString(),
         presence: snap.presence,
         hubs: game && game.id !== null ? index.lookup(game.source, game.id) : [],
+        assistant: askParts !== null,
       };
     },
     guides: () => ({ available: index.available(), hubs: index.hubs() }),
@@ -76,29 +111,74 @@ export function buildDeps(parts: AppParts): RouteDeps {
       // Priority is for the one game /api/now reports. A caller can request any game in the
       // detected history, so that history only makes a request allowed, never prioritised.
       const priority = game !== null && game.id !== null && `${game.source}:${game.id}` === key;
-      if (
-        !detected.has(key) &&
-        index.lookup(source, id).length === 0 &&
-        !(source === "ra" && additionalRaIds.has(id))
-      )
-        return null;
+      if (!lookupAllowed(source, id)) return null;
       return achievements.get(source, id, { priority });
     },
     find: (hubId, query) => pages.find(hubId, query),
     marks: (hubId) => pages.marks(hubId),
-    where: async (hubId) => {
-      const hub = index.tree(hubId)?.hub;
-      if (!hub) return null;
-      // The status text is the detector's own. It is offered only for the game being played, so
-      // a guide for any other game never sees it.
-      const snap = snapshot();
-      const game = snap.game;
-      const status = snap.presence;
-      if (snap.state !== "playing" || status === null || game === null) return { matches: [] };
-      if (hub.source === null || hub.gameId === null) return { matches: [] };
-      if (game.source !== hub.source || game.id !== hub.gameId) return { matches: [] };
-      return pages.where(hubId, status);
-    },
+    where: whereFor,
     progress: (hubId, opts) => pages.progress(hubId, opts),
+    ask:
+      askParts === null
+        ? null
+        : {
+            origin: askParts.origin,
+            admit: () => askParts.limiter.admit(),
+            start: async (req, signal) => {
+              const snap = snapshot();
+              const hub = req.hubId === null ? null : (index.tree(req.hubId)?.hub ?? null);
+              if (req.hubId !== null && hub === null) return null;
+              if (req.game !== null && !lookupAllowed(req.game.source, req.game.id)) return null;
+
+              // The game the question is about; the hub's own, when there is one.
+              const target =
+                hub?.source != null && hub.gameId != null
+                  ? { source: hub.source, id: hub.gameId }
+                  : req.game;
+              const detectedGame = snap.game;
+              const isDetected =
+                target !== null &&
+                detectedGame !== null &&
+                detectedGame.source === target.source &&
+                detectedGame.id === target.id;
+              const playing = isDetected && snap.state === "playing";
+
+              let ach: AchievementsResponse | null = null;
+              if (req.game !== null) {
+                const priority =
+                  detectedGame !== null &&
+                  detectedGame.source === req.game.source &&
+                  detectedGame.id === req.game.id;
+                ach = await achievements
+                  .get(req.game.source, req.game.id, { priority })
+                  .catch(() => null);
+              }
+
+              const texts = req.hubId === null ? [] : ((await pages.texts(req.hubId)) ?? []);
+              const match =
+                playing && req.hubId !== null ? (await whereFor(req.hubId))?.matches[0] : undefined;
+              const ctx = buildContext({
+                gameTitle:
+                  hub?.title ?? ach?.title ?? (isDetected ? detectedGame.title : "Unknown game"),
+                platformLabel:
+                  hub?.platformLabel ?? (req.game?.source === "ra" ? "RetroAchievements" : "Steam"),
+                playState: !isDetected
+                  ? "not detected"
+                  : snap.state === "playing"
+                    ? "playing"
+                    : snap.state === "last-played"
+                      ? "last-played"
+                      : "not detected",
+                presence: playing ? snap.presence : null,
+                achievements: ach,
+                missableNames: missableMarks(texts).map((n) => n.toLowerCase()),
+                where: match ? { pageTitle: match.pageTitle, heading: match.heading } : null,
+                pages: texts,
+                pinnedTitles: parts.defaultPins,
+                guideChars: askParts.guideChars,
+              });
+              return askParts.assistant.ask(ctx, req.history, req.question, req.depth, signal);
+            },
+          },
   };
 }

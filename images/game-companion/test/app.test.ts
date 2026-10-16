@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildDeps } from "../src/server/app.js";
-import type { GuideHub } from "../src/shared/types.js";
+import type { PageText } from "../src/server/guide-pages.js";
+import type { AchievementsResponse, AskEvent, GuideHub } from "../src/shared/types.js";
 
 const hub: GuideHub = {
   hubId: "h1",
@@ -40,7 +41,9 @@ function parts(over: Record<string, unknown> = {}) {
       marks: async () => null,
       where: async () => null,
       progress: async () => null,
+      texts: async () => null,
     },
+    ask: null,
     ...over,
   };
 }
@@ -87,6 +90,7 @@ describe("buildDeps", () => {
       observedAt: "2026-10-06T00:00:00.000Z",
       presence: null,
       hubs: [hub],
+      assistant: false,
     });
   });
 
@@ -145,6 +149,7 @@ describe("buildDeps", () => {
       observedAt: null,
       presence: null,
       hubs: [],
+      assistant: false,
     });
   });
 
@@ -625,5 +630,291 @@ describe("achievements allowlist", () => {
       await d.achievements("steam", "1");
       expect(calls).toEqual([["steam", "1", false]]);
     });
+  });
+});
+
+describe("ask", () => {
+  const ORIGIN = "https://wiki.example.test";
+  const req = (over: Record<string, unknown> = {}) => ({
+    hubId: "h1" as string | null,
+    game: { source: "steam" as const, id: "10" } as { source: "steam" | "ra"; id: string } | null,
+    history: [{ question: "Q1", answer: "A1" }],
+    question: "What next?",
+    depth: "hint" as const,
+    ...over,
+  });
+  const text = (title: string, body: string): PageText => ({
+    id: title,
+    title,
+    url: `/doc/${title}`,
+    text: body,
+  });
+  const achievements: AchievementsResponse = {
+    source: "steam",
+    id: "10",
+    title: "Zeta Achievements",
+    total: 4,
+    unlocked: 1,
+    stale: false,
+    achievements: [
+      {
+        id: "A",
+        name: "Golden Lantern",
+        description: "Find it",
+        icon: null,
+        unlocked: false,
+        unlockedAt: null,
+        unlockPercent: null,
+        hidden: false,
+        missable: false,
+        kind: null,
+      },
+    ],
+  };
+  const events: AskEvent[] = [
+    { type: "text", text: "Go left." },
+    { type: "done", truncatedGuide: false },
+  ];
+
+  function setup(over: Record<string, unknown> = {}, guideChars = 1000) {
+    const calls = {
+      ask: [] as unknown[][],
+      texts: [] as string[],
+      get: [] as unknown[][],
+      where: [] as unknown[][],
+    };
+    const base = parts();
+    const built = parts({
+      defaultPins: ["Notes"],
+      index: {
+        ...base.index,
+        tree: (id: string) => (id === "h1" ? { hub, pages: [] } : null),
+      },
+      achievements: {
+        get: async (...args: unknown[]) => {
+          calls.get.push(args);
+          return achievements;
+        },
+      },
+      pages: {
+        ...base.pages,
+        texts: async (id: string) => {
+          calls.texts.push(id);
+          return id === "h1"
+            ? [text("Walkthrough", "walk"), text("Notes", "- [ ] \u26A0 **Golden Lantern**")]
+            : null;
+        },
+        where: async (...args: unknown[]) => {
+          calls.where.push(args);
+          return {
+            matches: [
+              {
+                pageTitle: "Walkthrough",
+                pageUrl: "/doc/w",
+                heading: "Mock Village",
+                phrase: "Mock",
+              },
+            ],
+          };
+        },
+      },
+      ask: {
+        origin: ORIGIN,
+        limiter: { admit: () => ({ ok: true }) },
+        guideChars,
+        assistant: {
+          ask: async function* (...args: unknown[]) {
+            calls.ask.push(args);
+            yield* events;
+          },
+        },
+      },
+      ...over,
+    });
+    return { calls, d: buildDeps(built) };
+  }
+  const detecting = (
+    game: { source: "steam" | "ra"; id: string | null } | null,
+    state: "playing" | "last-played" | "none",
+    presence: string | null = null,
+  ) => ({
+    current: () => ({
+      game: game && { ...game, title: "Detected Title" },
+      state,
+      observedAt: 1,
+      presence,
+      stale: false,
+    }),
+  });
+  const collect = async (g: AsyncGenerator<AskEvent> | null) => {
+    const out: AskEvent[] = [];
+    for await (const e of g ?? []) out.push(e);
+    return out;
+  };
+
+  it("reports the assistant on now() and exposes the origin and admission", () => {
+    const { d } = setup();
+    expect(d.now().assistant).toBe(true);
+    expect(d.ask?.origin).toBe(ORIGIN);
+    expect(d.ask?.admit()).toEqual({ ok: true });
+    const off = buildDeps(parts());
+    expect(off.now().assistant).toBe(false);
+    expect(off.ask).toBeNull();
+  });
+
+  it("answers null for an unknown hub", async () => {
+    const { d, calls } = setup();
+    expect(await d.ask?.start(req({ hubId: "nope" }), new AbortController().signal)).toBeNull();
+    expect(calls.ask).toHaveLength(0);
+  });
+
+  it("gates a game exactly like the achievements lookup", async () => {
+    const signal = new AbortController().signal;
+    // Not detected, not indexed, not allowlisted.
+    const closed = setup({
+      detector: detecting({ source: "steam", id: "99" }, "playing"),
+      index: { ...parts().index, lookup: () => [] },
+    });
+    expect(
+      await closed.d.ask?.start(req({ hubId: null, game: { source: "ra", id: "5" } }), signal),
+    ).toBeNull();
+    expect(await closed.d.achievements("ra", "5")).toBeNull();
+    expect(closed.calls.get).toHaveLength(0);
+
+    // Detected game.
+    const seen = setup({
+      detector: detecting({ source: "ra", id: "5" }, "playing"),
+      index: { ...parts().index, lookup: () => [] },
+    });
+    expect(
+      await collect(
+        (await seen.d.ask?.start(req({ hubId: null, game: { source: "ra", id: "5" } }), signal)) ??
+          null,
+      ),
+    ).toEqual(events);
+
+    // Indexed game.
+    const indexed = setup({ detector: detecting(null, "none") });
+    expect(await indexed.d.ask?.start(req({ hubId: null }), signal)).not.toBeNull();
+
+    // Explicit RA allowlist.
+    const listed = setup({
+      detector: detecting(null, "none"),
+      additionalRaGameIds: ["77"],
+      index: { ...parts().index, lookup: () => [] },
+    });
+    expect(
+      await listed.d.ask?.start(req({ hubId: null, game: { source: "ra", id: "77" } }), signal),
+    ).not.toBeNull();
+    expect(
+      await listed.d.ask?.start(req({ hubId: null, game: { source: "steam", id: "77" } }), signal),
+    ).toBeNull();
+  });
+
+  it("builds the context from the hub's pages, achievements and the playing status", async () => {
+    const { d, calls } = setup({
+      detector: detecting({ source: "steam", id: "10" }, "playing", "In Mock Village"),
+    });
+    const ctl = new AbortController();
+    const out = await collect((await d.ask?.start(req(), ctl.signal)) ?? null);
+    expect(out).toEqual(events);
+    expect(calls.texts).toEqual(["h1"]);
+    expect(calls.get).toEqual([["steam", "10", { priority: true }]]);
+    expect(calls.where).toEqual([["h1", "In Mock Village"]]);
+
+    const [ctx, history, question, depth, signal] = calls.ask[0] as [
+      { system: string; statusBlock: string; truncatedGuide: boolean },
+      unknown,
+      unknown,
+      unknown,
+      AbortSignal,
+    ];
+    expect(ctx.system.indexOf("## Notes")).toBeLessThan(ctx.system.indexOf("## Walkthrough"));
+    expect(ctx.system).toContain("walk");
+    expect(ctx.statusBlock).toBe(
+      [
+        "Game: Zeta (Steam)",
+        "State: playing",
+        "Status line: In Mock Village",
+        "Achievements: 1/4 unlocked",
+        "Missables still open:",
+        "- Golden Lantern \u2014 Find it",
+        "Guide section matching the status line: Walkthrough \u203A Mock Village",
+      ].join("\n"),
+    );
+    expect(history).toEqual([{ question: "Q1", answer: "A1" }]);
+    expect(question).toBe("What next?");
+    expect(depth).toBe("hint");
+    expect(signal).toBe(ctl.signal);
+  });
+
+  it("applies the configured guide budget and pinned titles", async () => {
+    const { d, calls } = setup({}, 8);
+    await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
+    const ctx = calls.ask[0]?.[0] as { system: string; truncatedGuide: boolean };
+    expect(ctx.truncatedGuide).toBe(true);
+    expect(ctx.system).not.toContain("## Walkthrough");
+  });
+
+  it("leaves out the status line and the section unless this hub's game is being played", async () => {
+    for (const snap of [
+      detecting({ source: "steam", id: "10" }, "last-played", "In Mock Village"),
+      detecting({ source: "ra", id: "10" }, "playing", "In Mock Village"),
+      detecting(null, "none"),
+    ]) {
+      const { d, calls } = setup({ detector: snap });
+      await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
+      const status = (calls.ask[0]?.[0] as { statusBlock: string }).statusBlock;
+      expect(status).not.toContain("Status line");
+      expect(status).not.toContain("Guide section");
+      expect(calls.where).toHaveLength(0);
+    }
+  });
+
+  it("maps the detector state to the play state", async () => {
+    const states: [ReturnType<typeof detecting>, string][] = [
+      [detecting({ source: "steam", id: "10" }, "last-played"), "State: last-played"],
+      [detecting({ source: "ra", id: "10" }, "playing"), "State: not detected"],
+      [detecting(null, "none"), "State: not detected"],
+    ];
+    for (const [snap, line] of states) {
+      const { d, calls } = setup({ detector: snap });
+      await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
+      expect((calls.ask[0]?.[0] as { statusBlock: string }).statusBlock).toContain(line);
+    }
+  });
+
+  it("asks for achievements without priority when another game is playing", async () => {
+    const { d, calls } = setup({ detector: detecting({ source: "steam", id: "11" }, "playing") });
+    await d.ask?.start(req(), new AbortController().signal);
+    expect(calls.get).toEqual([["steam", "10", { priority: false }]]);
+  });
+
+  it("tolerates an achievements failure", async () => {
+    const { d, calls } = setup({
+      achievements: {
+        get: async () => {
+          throw new Error("down");
+        },
+      },
+    });
+    await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
+    expect((calls.ask[0]?.[0] as { statusBlock: string }).statusBlock).toContain(
+      "Achievements: unknown",
+    );
+  });
+
+  it("works from a game alone: no pages, titled from the achievements, labelled by source", async () => {
+    const { d, calls } = setup({ detector: detecting(null, "none"), additionalRaGameIds: ["5"] });
+    await collect(
+      (await d.ask?.start(
+        req({ hubId: null, game: { source: "ra", id: "5" } }),
+        new AbortController().signal,
+      )) ?? null,
+    );
+    expect(calls.texts).toHaveLength(0);
+    const ctx = calls.ask[0]?.[0] as { system: string; statusBlock: string };
+    expect(ctx.system).not.toContain("walk");
+    expect(ctx.statusBlock.split("\n")[0]).toBe("Game: Zeta Achievements (RetroAchievements)");
   });
 });
