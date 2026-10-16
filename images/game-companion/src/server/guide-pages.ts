@@ -533,6 +533,11 @@ export class GuidePageService {
     return pages && findInPages(pages, query);
   }
 
+  /** Null for an unknown hub. The hub's page texts in tree order, from the same cache as `find`. */
+  async texts(hubId: string): Promise<PageText[] | null> {
+    return this.pages(hubId);
+  }
+
   async marks(hubId: string): Promise<GuideMarksResponse | null> {
     const pages = await this.pages(hubId);
     return pages && { missable: missableMarks(pages) };

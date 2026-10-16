@@ -146,3 +146,22 @@ export interface GuideProgressResponse {
 export interface ErrorResponse {
   error: string;
 }
+
+export interface AskHistoryEntry {
+  question: string;
+  answer: string;
+}
+
+export interface AskRequest {
+  hubId: string | null;
+  game: { source: Source; id: string } | null;
+  history: AskHistoryEntry[];
+  question: string;
+  depth: "hint" | "full";
+}
+
+export type AskEvent =
+  | { type: "search"; query: string }
+  | { type: "text"; text: string }
+  | { type: "done"; truncatedGuide: boolean }
+  | { type: "error"; message: string };

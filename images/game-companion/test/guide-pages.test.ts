@@ -896,6 +896,23 @@ describe("GuidePageService", () => {
     expect(state.loads).toEqual([]);
   });
 
+  it("returns a hub's page texts from the same cache as find and marks", async () => {
+    const { make, state } = setup();
+    const svc = make();
+    expect(await svc.texts("h1")).toEqual([
+      { id: "a", title: "Page a", url: "/doc/a", text: "# Intro\nalpha needle" },
+      { id: "b", title: "Page b", url: "/doc/b", text: "- [ ] **Beta** ⚠\nbeta needle" },
+    ]);
+    await svc.marks("h1");
+    expect(state.loads).toEqual(["a", "b"]);
+  });
+
+  it("answers null from texts for an unknown hub", async () => {
+    const { make, state } = setup();
+    expect(await make().texts("nope")).toBeNull();
+    expect(state.loads).toEqual([]);
+  });
+
   it("serves from the cache within the TTL and reloads after it", async () => {
     const { make, state } = setup();
     const svc = make({ ttlMs: 60_000 });
