@@ -84,4 +84,48 @@ describe("loadConfig", () => {
       loadConfig({ ...base, OUTLINE_BASE_URL: "https://o.example.test/" }).outlineBaseUrl,
     ).toBe("https://o.example.test");
   });
+
+  it("defaults the assistant settings", () => {
+    const c = loadConfig(base);
+    expect(c.anthropicApiKey).toBeNull();
+    expect(c.assistantModel).toBe("claude-opus-5-5");
+    expect(c.assistantEffort).toBe("low");
+    expect(c.assistantPerMinute).toBe(10);
+    expect(c.assistantPerDay).toBe(150);
+    expect(c.assistantGuideChars).toBe(120000);
+  });
+
+  it("reads the assistant settings", () => {
+    const c = loadConfig({
+      ...base,
+      ANTHROPIC_API_KEY: "a",
+      ASSISTANT_MODEL: "some-model",
+      ASSISTANT_EFFORT: "high",
+      ASSISTANT_PER_MINUTE: "3",
+      ASSISTANT_PER_DAY: "20",
+      ASSISTANT_GUIDE_CHARS: "5000",
+    });
+    expect(c.anthropicApiKey).toBe("a");
+    expect(c.assistantModel).toBe("some-model");
+    expect(c.assistantEffort).toBe("high");
+    expect(c.assistantPerMinute).toBe(3);
+    expect(c.assistantPerDay).toBe(20);
+    expect(c.assistantGuideChars).toBe(5000);
+  });
+
+  it("treats an empty ANTHROPIC_API_KEY as absent", () => {
+    expect(loadConfig({ ...base, ANTHROPIC_API_KEY: "" }).anthropicApiKey).toBeNull();
+  });
+
+  it("rejects an unknown assistant effort", () => {
+    expect(() => loadConfig({ ...base, ASSISTANT_EFFORT: "extreme" })).toThrow(/ASSISTANT_EFFORT/);
+  });
+
+  it.each(["0", "-1", "1.5", "abc", " "])("rejects ASSISTANT_PER_DAY=%j", (raw) => {
+    expect(() => loadConfig({ ...base, ASSISTANT_PER_DAY: raw })).toThrow(/ASSISTANT_PER_DAY/);
+  });
+
+  it.each(["ASSISTANT_PER_MINUTE", "ASSISTANT_GUIDE_CHARS"])("rejects a bad %s", (name) => {
+    expect(() => loadConfig({ ...base, [name]: "0" })).toThrow(new RegExp(name));
+  });
 });

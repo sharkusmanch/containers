@@ -17,6 +17,14 @@ export interface Config {
   defaultPinnedPages: string[];
   /** Titles of pages that are for typing in; the web client never applies reader mode to them. */
   editablePages: string[];
+  /** Null until the key is provisioned; the Ask assistant is then unavailable. */
+  anthropicApiKey: string | null;
+  assistantModel: string;
+  assistantEffort: "low" | "medium" | "high";
+  assistantPerMinute: number;
+  assistantPerDay: number;
+  /** Character budget for the guide text sent with each question. */
+  assistantGuideChars: number;
 }
 
 const REQUIRED = [
@@ -50,7 +58,29 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     outlineScheduleDocId: env.OUTLINE_SCHEDULE_DOC_ID || null,
     defaultPinnedPages: parseTitles(env.DEFAULT_PINNED_PAGES),
     editablePages: parseTitles(env.EDITABLE_PAGES),
+    anthropicApiKey: env.ANTHROPIC_API_KEY || null,
+    assistantModel: env.ASSISTANT_MODEL || "claude-opus-5-5",
+    assistantEffort: parseEffort(env.ASSISTANT_EFFORT),
+    assistantPerMinute: positiveInt(env, "ASSISTANT_PER_MINUTE", 10),
+    assistantPerDay: positiveInt(env, "ASSISTANT_PER_DAY", 150),
+    assistantGuideChars: positiveInt(env, "ASSISTANT_GUIDE_CHARS", 120000),
   };
+}
+
+function parseEffort(raw: string | undefined): "low" | "medium" | "high" {
+  if (raw === undefined || raw === "") return "low";
+  if (raw === "low" || raw === "medium" || raw === "high") return raw;
+  throw new Error("ASSISTANT_EFFORT must be low, medium or high");
+}
+
+function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
+  const raw = env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const n = Number(raw);
+  if (raw.trim() === "" || !Number.isSafeInteger(n) || n < 1) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return n;
 }
 
 /** Comma-separated titles: trimmed, empty entries dropped, duplicates dropped keeping the first. */
