@@ -501,10 +501,14 @@ describe("POST /companion/api/ask", () => {
   let ask: Ask | null;
   let admission: ReturnType<Ask["admit"]>;
   let startArgs: unknown[][];
-  let startResult: "events" | "null" | "hang";
+  let startResult: "events" | "null" | "hang" | "silent";
   let signal: AbortSignal | null;
   let admitCalls: number;
   let allowedResult: boolean;
+  /** Timers the route started through `setTimer`; a test fires one by calling `fn`. */
+  let timers: { fn: () => void; ms: number; over: boolean }[];
+  /** Timers neither fired nor cancelled. */
+  const pending = () => timers.filter((t) => !t.over);
 
   beforeAll(async () => {
     const deps: RouteDeps = {
@@ -521,6 +525,20 @@ describe("POST /companion/api/ask", () => {
       get ask() {
         return ask;
       },
+      setTimer: (fn, ms) => {
+        const t = {
+          fn: () => {
+            t.over = true;
+            fn();
+          },
+          ms,
+          over: false,
+        };
+        timers.push(t);
+        return () => {
+          t.over = true;
+        };
+      },
     };
     s = createServer((req, res) => void createHandler(deps)(req, res));
     await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
@@ -535,6 +553,7 @@ describe("POST /companion/api/ask", () => {
     signal = null;
     admitCalls = 0;
     allowedResult = true;
+    timers = [];
     ask = {
       origin: ORIGIN,
       allowed: () => allowedResult,
@@ -547,6 +566,7 @@ describe("POST /companion/api/ask", () => {
         signal = args[1];
         if (startResult === "null") return null;
         return (async function* () {
+          if (startResult === "silent") await new Promise(() => undefined);
           yield { type: "search", query: "sample query" } as const;
           yield { type: "text", text: "Go left." } as const;
           if (startResult === "hang") await new Promise(() => undefined);
@@ -783,5 +803,36 @@ describe("POST /companion/api/ask", () => {
     await (await post(valid)).text();
     await new Promise((r2) => setTimeout(r2, 20));
     expect(signal?.aborted).toBe(false);
+  });
+
+  it("sends the headers at once and a ping line when the stream stays silent", async () => {
+    startResult = "silent";
+    const ctrl = new AbortController();
+    // Resolves only once the headers arrive: nothing else is written yet.
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN },
+      body: JSON.stringify(valid),
+      signal: ctrl.signal,
+    });
+    expect(r.status).toBe(200);
+    expect(pending().map((t) => t.ms)).toEqual([15000]);
+    pending()[0]?.fn();
+    const reader = (r.body as ReadableStream<Uint8Array>).getReader();
+    const { value } = await reader.read();
+    expect(new TextDecoder().decode(value)).toBe('{"type":"ping"}\n');
+    // Still silent: the next interval is armed, and pings again.
+    expect(pending().map((t) => t.ms)).toEqual([15000]);
+    ctrl.abort();
+    await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+    await vi.waitFor(() => expect(pending()).toEqual([]));
+  });
+
+  it("restarts the keep-alive interval after each event and clears it at the end", async () => {
+    const r = await post(valid);
+    await r.text();
+    // One interval armed at the start and one after each of the three events, all cleared.
+    expect(timers.map((t) => t.ms)).toEqual([15000, 15000, 15000, 15000]);
+    expect(pending()).toEqual([]);
   });
 });

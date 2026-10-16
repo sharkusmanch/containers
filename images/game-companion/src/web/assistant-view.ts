@@ -8,6 +8,11 @@ const COUNTER_FROM = 900;
 const HISTORY_MAX = 10;
 /** The most of an earlier answer the server accepts, in characters. */
 const HISTORY_ANSWER_MAX = 8000;
+/**
+ * The most a request may take as JSON, in UTF-8 bytes: under the server's 32,768-byte limit,
+ * with room to spare. The oldest history is left out of a request that would pass it.
+ */
+const REQUEST_BYTES_MAX = 30000;
 export const STARTERS = [
   "What should I do next?",
   "Anything missable around here?",
@@ -73,6 +78,7 @@ export function errorText(err: unknown): string {
         : `Too many questions. Try again in ${err.retryAfter ?? 60} seconds.`;
     }
     if (err.status === 503) return "The assistant isn't set up.";
+    if (err.status === 413) return "This chat is too long. Start a New chat.";
   }
   return UNAVAILABLE;
 }
@@ -112,6 +118,9 @@ function answerNodes(doc: Document, text: string): HTMLElement[] {
 
 /** Cuts text to `max` characters (code points), never splitting a surrogate pair. */
 const cut = (text: string, max: number): string => [...text].slice(0, max).join("");
+
+const requestBytes = (req: AskRequest): number =>
+  new TextEncoder().encode(JSON.stringify(req)).length;
 
 export function createAssistantView(
   doc: Document,
@@ -244,10 +253,15 @@ export function createAssistantView(
       question,
       depth,
     };
+    // Left out of this request only: the conversation stays stored and on screen. With no
+    // history left the request goes as it is, and the server decides.
+    while (req.history.length > 0 && requestBytes(req) > REQUEST_BYTES_MAX) req.history.shift();
     const controller = new AbortController();
     streaming = controller;
     const mine = generation;
     const askedIn = scope;
+    // Offered again if this turn ends with nothing kept, since the newest stored answer is unchanged.
+    const fullBefore = fullFor;
     fullFor = null;
     const { turn, searches, body, answer } = turnEl(question);
     log.append(turn);
@@ -257,6 +271,7 @@ export function createAssistantView(
     let received = "";
     let outcome: { error: string } | "done" | null = null;
     const onEvent = (e: AskEvent): void => {
+      if (e.type === "ping") return;
       if (outcome !== null || controller.signal.aborted || mine !== generation) return;
       const follow = nearBottom();
       if (e.type === "text" && typeof e.text === "string") {
@@ -298,7 +313,8 @@ export function createAssistantView(
       }
       if (kept !== null) remember(askedIn, mine, { question, answer: kept });
       if (!onScreen) return;
-      if (kept !== null && offersFull(history.at(-1))) fullFor = turn;
+      if (kept === null) fullFor = fullBefore;
+      else if (offersFull(history.at(-1))) fullFor = turn;
       refreshControls();
       if (follow) toBottom();
     };

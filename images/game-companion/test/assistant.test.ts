@@ -186,6 +186,21 @@ describe("Assistant abort", () => {
     expect(log).toHaveBeenCalledTimes(1);
     expect(log.mock.calls[0]![1]).toMatchObject({ stop: "aborted" });
   });
+
+  it("logs stop: aborted when the consumer stops early after an abort", async () => {
+    const controller = new AbortController();
+    const f = fake([start("text", 0), text(0, "Hi"), text(0, " there"), stop(0)], {
+      stop_reason: "end_turn",
+      usage: {},
+    });
+    const { assistant, log } = make(f);
+    const gen = assistant.ask(ctx, history, QUESTION, "hint", controller.signal);
+    expect(await gen.next()).toEqual({ done: false, value: { type: "text", text: "Hi" } });
+    controller.abort();
+    await gen.return(undefined);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0]![1]).toMatchObject({ stop: "aborted" });
+  });
 });
 
 describe("Assistant logging", () => {
@@ -244,6 +259,19 @@ describe("Assistant logging", () => {
     await run(assistant);
     expect(log).toHaveBeenCalledTimes(1);
     expect(log.mock.calls[0]![1]).toMatchObject({ error: "UpstreamBoom" });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("sk-secret");
+  });
+
+  it("logs the SDK error's class name and status, never its message", async () => {
+    // Like SDK 0.135.0's error classes: no `name` of its own, a numeric `status`.
+    class AuthenticationError extends Error {
+      readonly status = 401;
+    }
+    const f = fake([], undefined, new AuthenticationError("invalid x-api-key sk-secret"));
+    const { assistant, log } = make(f);
+    await run(assistant);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0]![1]).toMatchObject({ error: "AuthenticationError", status: 401 });
     expect(JSON.stringify(log.mock.calls)).not.toContain("sk-secret");
   });
 });

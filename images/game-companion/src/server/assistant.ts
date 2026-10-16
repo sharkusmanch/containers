@@ -83,6 +83,8 @@ export class Assistant {
     const info: Record<string, unknown> = { model: this.model };
     let searches = 0;
     const blocks = new Map<number, Block>();
+    // False while the body may still be suspended at a yield the consumer never resumes.
+    let completed = false;
     try {
       const stream = this.client.stream(
         {
@@ -130,18 +132,28 @@ export class Assistant {
       for (const f of USAGE_FIELDS) info[f] = final.usage[f];
       if (final.stop_reason === "refusal") {
         yield { type: "error", message: REFUSED };
+        completed = true;
         return;
       }
       if (final.stop_reason === "max_tokens") yield { type: "text", text: "\n(answer cut short)" };
       yield { type: "done", truncatedGuide: ctx.truncatedGuide };
+      completed = true;
     } catch (err) {
       if (signal.aborted) {
         info.stop = "aborted";
         return;
       }
-      info.error = err instanceof Error ? err.name : "unknown";
+      // The SDK's error classes set no `name`, so the class is named by its constructor. Only
+      // the class and HTTP status are logged: the message may echo the request or the key.
+      info.error =
+        (err as { constructor?: { name?: string } } | null)?.constructor?.name ?? "Error";
+      const status = (err as { status?: unknown } | null)?.status;
+      if (typeof status === "number") info.status = status;
       yield { type: "error", message: UNAVAILABLE };
+      completed = true;
     } finally {
+      // A consumer that stops at a yield after an abort (the route's `break`) ends the body here.
+      if (!completed && signal.aborted) info.stop = "aborted";
       this.log("ask", { ...info, ms: this.now() - started, searches });
     }
   }

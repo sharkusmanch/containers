@@ -166,4 +166,6 @@ export type AskEvent =
   | { type: "search"; query: string }
   | { type: "text"; text: string }
   | { type: "done"; truncatedGuide: boolean }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  /** Keeps a silent stream open through proxies; carries nothing. */
+  | { type: "ping" };

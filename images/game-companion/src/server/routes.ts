@@ -45,6 +45,8 @@ export interface RouteDeps {
     /** Null when `allowed` would refuse; kept as a defence against a change between the calls. */
     start(req: AskRequest, signal: AbortSignal): Promise<AsyncGenerator<AskEvent> | null>;
   };
+  /** Starts a timer and returns a function that cancels it. Defaults to `setTimeout`. */
+  setTimer?: (fn: () => void, ms: number) => () => void;
 }
 
 /** Bounds on the trimmed search text, in characters (code points). */
@@ -59,6 +61,18 @@ const ASK_BODY_MAX = 32768;
 const QUESTION_MAX = 1000;
 const ANSWER_MAX = 8000;
 const HISTORY_MAX = 10;
+/**
+ * A streaming answer writes a ping line after this long without any other line, so a proxy that
+ * closes a silent response (ingress-nginx after 60 seconds) keeps it open.
+ */
+const KEEPALIVE_MS = 15000;
+const PING = `${JSON.stringify({ type: "ping" } satisfies AskEvent)}\n`;
+
+const defaultTimer = (fn: () => void, ms: number): (() => void) => {
+  const handle = setTimeout(fn, ms);
+  handle.unref();
+  return () => clearTimeout(handle);
+};
 
 /** Icons load straight from these hosts in the browser; nothing else is allowed. */
 export const IMAGE_HOSTS = [
@@ -234,12 +248,34 @@ async function handleAsk(
     200,
     securityHeaders("application/x-ndjson; charset=utf-8", { "cache-control": "no-store" }),
   );
+  res.flushHeaders();
+
+  // Restarted after every line written, so a ping goes out only after a silent interval.
+  const setTimer = deps.setTimer ?? defaultTimer;
+  let cancelPing: (() => void) | null = null;
+  const stopPing = (): void => {
+    cancelPing?.();
+    cancelPing = null;
+  };
+  const armPing = (): void => {
+    stopPing();
+    cancelPing = setTimer(() => {
+      cancelPing = null;
+      if (controller.signal.aborted || res.writableEnded) return;
+      res.write(PING);
+      armPing();
+    }, KEEPALIVE_MS);
+  };
+  res.on("close", stopPing);
+  armPing();
   try {
     for await (const ev of events) {
       if (controller.signal.aborted) break;
       res.write(`${JSON.stringify(ev)}\n`);
+      armPing();
     }
   } finally {
+    stopPing();
     res.end();
   }
 }

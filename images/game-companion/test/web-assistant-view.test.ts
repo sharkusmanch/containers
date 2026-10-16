@@ -224,6 +224,7 @@ describe("assistant view: errors", () => {
     [new ApiError(429, "day", 3600), "Daily question limit reached. Try again after midnight."],
     [new ApiError(429, "minute", 42), "Too many questions. Try again in 42 seconds."],
     [new ApiError(503), "The assistant isn't set up."],
+    [new ApiError(413), "This chat is too long. Start a New chat."],
     [new ApiError(400), "The assistant is unavailable right now."],
     [new ApiError(404), "The assistant is unavailable right now."],
     [new ApiError(500), "The assistant is unavailable right now."],
@@ -244,6 +245,49 @@ describe("assistant view: errors", () => {
       "The assistant is unavailable right now.",
     );
     expect(storage.getItem(KEY)).toBeNull();
+  });
+
+  it("offers Full answer again under the hint answer after a later question fails", async () => {
+    starters()[0]?.click();
+    await answer(
+      fake.calls[0],
+      { type: "text", text: "A hint." },
+      { type: "done", truncatedGuide: false },
+    );
+    type("And then?");
+    press("Enter");
+    expect(q(".ask-full")).toBeNull();
+    await answer(fake.calls[1], { type: "error", message: "Upstream trouble." });
+    const full = q<HTMLButtonElement>(".ask-full");
+    expect(full).not.toBeNull();
+    expect(turns()[0]?.contains(full)).toBe(true);
+    expect(full.disabled).toBe(false);
+  });
+
+  it("offers Full answer again under the hint answer after a later question is stopped with no text", async () => {
+    starters()[0]?.click();
+    await answer(
+      fake.calls[0],
+      { type: "text", text: "A hint." },
+      { type: "done", truncatedGuide: false },
+    );
+    starters()[1]?.click();
+    q(".ask-stop").click();
+    await settle();
+    expect(turns()[0]?.contains(q(".ask-full"))).toBe(true);
+  });
+
+  it("ignores ping events", async () => {
+    starters()[0]?.click();
+    const call = fake.calls[0]!;
+    call.emit({ type: "text", text: "Hint." });
+    const before = lastAnswer().innerHTML;
+    call.emit({ type: "ping" });
+    expect(lastAnswer().innerHTML).toBe(before);
+    expect(q(".ask-stop").hidden).toBe(false);
+    await answer(call, { type: "ping" }, { type: "done", truncatedGuide: false });
+    expect(lastAnswer().querySelector(".ask-error")).toBeNull();
+    expect(stored()).toEqual([{ question: "What should I do next?", answer: "Hint." }]);
   });
 
   it("does not save a done answer whose text is blank", async () => {
@@ -321,6 +365,26 @@ describe("assistant view: full answer and history", () => {
     starters()[0]?.click();
     expect([...(fake.calls[1]?.req.history[0]?.answer ?? "")]).toHaveLength(8000);
     expect((stored() as { answer: string }[])[0]?.answer).toBe(long);
+  });
+
+  it("leaves the oldest history out of a request that would pass 30,000 bytes, keeping it stored", () => {
+    const line = "Go left — then up.\n";
+    const long = line.repeat(Math.ceil(7000 / line.length)).slice(0, 7000);
+    const entries = Array.from({ length: 10 }, (_, i) => ({
+      question: `Question ${i}`,
+      answer: `${i}${long}`.slice(0, 7000),
+    }));
+    storage.setItem(KEY, JSON.stringify(entries));
+    view.setScope(null, null);
+    view.setScope("game:ra:20", target);
+    starters()[0]?.click();
+    const req = fake.calls[0]!.req;
+    expect(new TextEncoder().encode(JSON.stringify(req)).length).toBeLessThanOrEqual(30000);
+    expect(req.history.length).toBeGreaterThan(0);
+    expect(req.history.length).toBeLessThan(10);
+    expect(req.history).toEqual(entries.slice(-req.history.length));
+    expect(stored()).toEqual(entries);
+    expect(turns()).toHaveLength(11);
   });
 
   it("keeps a conversation per scope and restores it on setScope", async () => {
