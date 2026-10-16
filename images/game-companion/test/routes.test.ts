@@ -504,6 +504,7 @@ describe("POST /companion/api/ask", () => {
   let startResult: "events" | "null" | "hang";
   let signal: AbortSignal | null;
   let admitCalls: number;
+  let allowedResult: boolean;
 
   beforeAll(async () => {
     const deps: RouteDeps = {
@@ -533,8 +534,10 @@ describe("POST /companion/api/ask", () => {
     startResult = "events";
     signal = null;
     admitCalls = 0;
+    allowedResult = true;
     ask = {
       origin: ORIGIN,
+      allowed: () => allowedResult,
       admit: () => {
         admitCalls += 1;
         return admission;
@@ -724,11 +727,18 @@ describe("POST /companion/api/ask", () => {
     expect(startArgs).toHaveLength(0);
   });
 
-  it("answers 404 when start has no such game", async () => {
+  it("answers 400 without spending a slot when the hub or game is not allowed", async () => {
+    allowedResult = false;
+    const r = await post(valid);
+    expect(r.status).toBe(400);
+    expect(admitCalls).toBe(0);
+    expect(startArgs).toHaveLength(0);
+  });
+
+  it("still answers 404 if start refuses after admission", async () => {
     startResult = "null";
     const r = await post(valid);
     expect(r.status).toBe(404);
-    expect(admitCalls).toBe(1);
   });
 
   it("streams one JSON object per line with the shared headers", async () => {

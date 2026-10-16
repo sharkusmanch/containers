@@ -764,6 +764,7 @@ describe("ask", () => {
 
   it("answers null for an unknown hub", async () => {
     const { d, calls } = setup();
+    expect(d.ask?.allowed(req({ hubId: "nope" }))).toBe(false);
     expect(await d.ask?.start(req({ hubId: "nope" }), new AbortController().signal)).toBeNull();
     expect(calls.ask).toHaveLength(0);
   });
@@ -778,6 +779,9 @@ describe("ask", () => {
     expect(
       await closed.d.ask?.start(req({ hubId: null, game: { source: "ra", id: "5" } }), signal),
     ).toBeNull();
+    expect(closed.d.ask?.allowed(req({ hubId: null, game: { source: "ra", id: "5" } }))).toBe(
+      false,
+    );
     expect(await closed.d.achievements("ra", "5")).toBeNull();
     expect(closed.calls.get).toHaveLength(0);
 
@@ -792,10 +796,12 @@ describe("ask", () => {
           null,
       ),
     ).toEqual(events);
+    expect(seen.d.ask?.allowed(req({ hubId: null, game: { source: "ra", id: "5" } }))).toBe(true);
 
     // Indexed game.
     const indexed = setup({ detector: detecting(null, "none") });
     expect(await indexed.d.ask?.start(req({ hubId: null }), signal)).not.toBeNull();
+    expect(indexed.d.ask?.allowed(req({ hubId: null }))).toBe(true);
 
     // Explicit RA allowlist.
     const listed = setup({
@@ -809,6 +815,12 @@ describe("ask", () => {
     expect(
       await listed.d.ask?.start(req({ hubId: null, game: { source: "steam", id: "77" } }), signal),
     ).toBeNull();
+    expect(listed.d.ask?.allowed(req({ hubId: null, game: { source: "ra", id: "77" } }))).toBe(
+      true,
+    );
+    expect(listed.d.ask?.allowed(req({ hubId: null, game: { source: "steam", id: "77" } }))).toBe(
+      false,
+    );
   });
 
   it("builds the context from the hub's pages, achievements and the playing status", async () => {
@@ -888,6 +900,34 @@ describe("ask", () => {
     const { d, calls } = setup({ detector: detecting({ source: "steam", id: "11" }, "playing") });
     await d.ask?.start(req(), new AbortController().signal);
     expect(calls.get).toEqual([["steam", "10", { priority: false }]]);
+  });
+
+  it("seeds a hub-only question with the hub's game's achievements", async () => {
+    const { d, calls } = setup({
+      detector: detecting({ source: "steam", id: "10" }, "playing", "In Mock Village"),
+    });
+    const hubOnly = req({ game: null });
+    expect(d.ask?.allowed(hubOnly)).toBe(true);
+    await collect((await d.ask?.start(hubOnly, new AbortController().signal)) ?? null);
+    expect(calls.get).toEqual([["steam", "10", { priority: true }]]);
+    const status = (calls.ask[0]?.[0] as { statusBlock: string }).statusBlock;
+    expect(status).toContain("Achievements: 1/4 unlocked");
+    expect(status).toContain("- Golden Lantern");
+  });
+
+  it("builds the whole context from the hub's game when a different game is sent with it", async () => {
+    const snap = detecting({ source: "steam", id: "10" }, "playing", "In Mock Village");
+    const matched = setup({ detector: snap });
+    await collect((await matched.d.ask?.start(req(), new AbortController().signal)) ?? null);
+
+    const mismatched = setup({ detector: snap });
+    const other = req({ game: { source: "ra", id: "5" } });
+    // The sent game is ignored, so it need not be allowed.
+    expect(mismatched.d.ask?.allowed(other)).toBe(true);
+    await collect((await mismatched.d.ask?.start(other, new AbortController().signal)) ?? null);
+
+    expect(mismatched.calls.get).toEqual([["steam", "10", { priority: true }]]);
+    expect(mismatched.calls.ask[0]?.[0]).toEqual(matched.calls.ask[0]?.[0]);
   });
 
   it("tolerates an achievements failure", async () => {

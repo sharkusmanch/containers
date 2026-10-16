@@ -39,8 +39,10 @@ export interface RouteDeps {
   ask: null | {
     /** Origin of OUTLINE_BASE_URL: the one page origin allowed to post questions. */
     origin: string;
+    /** Whether the hub is known and the game may be looked up (same gating as achievements). */
+    allowed(req: AskRequest): boolean;
     admit(): Admission;
-    /** Null when the hub or game is not allowed (same gating as achievement lookups). */
+    /** Null when `allowed` would refuse; kept as a defence against a change between the calls. */
     start(req: AskRequest, signal: AbortSignal): Promise<AsyncGenerator<AskEvent> | null>;
   };
 }
@@ -206,7 +208,8 @@ async function handleAsk(
   } catch {
     parsed = null;
   }
-  if (parsed === null) return json(res, 400, { error: "bad request" });
+  // An unknown hub or a game that may not be looked up is a bad request, and costs no slot.
+  if (parsed === null || !ask.allowed(parsed)) return json(res, 400, { error: "bad request" });
 
   const admission = ask.admit();
   if (!admission.ok) {

@@ -124,8 +124,10 @@ search the web at most twice per question.
 
 Requests are checked in this order, each failing before any later work: `Content-Type` must be
 `application/json` (415); `Origin` must be the origin of `OUTLINE_BASE_URL` (403); the body must
-fit (413); the assistant must be configured (503); the body must validate (400); the rate limit
-must admit it (429, with `Retry-After`); the hub or game must be known (404). Only these three
+fit (413); the assistant must be configured (503); the body must validate and name a known
+hub and a game that may be looked up (400); the rate limit must admit it (429, with
+`Retry-After`). A refused question is not counted. When a hub has a game of its own, a `game`
+sent with it is ignored. Only these three
 request headers are read, and only by this route.
 
 Cost and limits: every admitted question is billed by Anthropic, including a web search or

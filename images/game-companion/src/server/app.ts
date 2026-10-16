@@ -1,4 +1,4 @@
-import type { AchievementsResponse, Source } from "../shared/types.js";
+import type { AchievementsResponse, AskRequest, Source } from "../shared/types.js";
 import type { AchievementService } from "./achievements.js";
 import type { Assistant } from "./assistant.js";
 import { buildContext } from "./assistant-context.js";
@@ -81,6 +81,21 @@ export function buildDeps(parts: AppParts): RouteDeps {
     return pages.where(hubId, status);
   };
 
+  /**
+   * The hub and the game a question is about, or null when either is not allowed. The target is
+   * the hub's own game when it has one (a `game` sent with it is ignored), else the request's.
+   * Synchronous, so the route can refuse before the rate limiter counts the question.
+   */
+  const resolveAsk = (req: AskRequest) => {
+    snapshot();
+    const hub = req.hubId === null ? null : (index.tree(req.hubId)?.hub ?? null);
+    if (req.hubId !== null && hub === null) return null;
+    const target =
+      hub?.source != null && hub.gameId != null ? { source: hub.source, id: hub.gameId } : req.game;
+    if (target !== null && !lookupAllowed(target.source, target.id)) return null;
+    return { hub, target };
+  };
+
   const askParts = parts.ask;
   return {
     staticDir: parts.staticDir,
@@ -124,17 +139,12 @@ export function buildDeps(parts: AppParts): RouteDeps {
         : {
             origin: askParts.origin,
             admit: () => askParts.limiter.admit(),
+            allowed: (req) => resolveAsk(req) !== null,
             start: async (req, signal) => {
               const snap = snapshot();
-              const hub = req.hubId === null ? null : (index.tree(req.hubId)?.hub ?? null);
-              if (req.hubId !== null && hub === null) return null;
-              if (req.game !== null && !lookupAllowed(req.game.source, req.game.id)) return null;
-
-              // The game the question is about; the hub's own, when there is one.
-              const target =
-                hub?.source != null && hub.gameId != null
-                  ? { source: hub.source, id: hub.gameId }
-                  : req.game;
+              const resolved = resolveAsk(req);
+              if (resolved === null) return null;
+              const { hub, target } = resolved;
               const detectedGame = snap.game;
               const isDetected =
                 target !== null &&
@@ -144,13 +154,9 @@ export function buildDeps(parts: AppParts): RouteDeps {
               const playing = isDetected && snap.state === "playing";
 
               let ach: AchievementsResponse | null = null;
-              if (req.game !== null) {
-                const priority =
-                  detectedGame !== null &&
-                  detectedGame.source === req.game.source &&
-                  detectedGame.id === req.game.id;
+              if (target !== null) {
                 ach = await achievements
-                  .get(req.game.source, req.game.id, { priority })
+                  .get(target.source, target.id, { priority: isDetected })
                   .catch(() => null);
               }
 
@@ -161,7 +167,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
                 gameTitle:
                   hub?.title ?? ach?.title ?? (isDetected ? detectedGame.title : "Unknown game"),
                 platformLabel:
-                  hub?.platformLabel ?? (req.game?.source === "ra" ? "RetroAchievements" : "Steam"),
+                  hub?.platformLabel ?? (target?.source === "ra" ? "RetroAchievements" : "Steam"),
                 playState: !isDetected
                   ? "not detected"
                   : snap.state === "playing"
