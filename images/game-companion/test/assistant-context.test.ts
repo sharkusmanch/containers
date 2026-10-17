@@ -59,27 +59,61 @@ const input = (over: Partial<ContextInput> = {}): ContextInput => ({
   ...over,
 });
 
-const guideOf = (system: string): string => system.slice(system.indexOf("# Guide\n\n"));
+const pinnedOf = (system: string): string => system.slice(system.indexOf("# Pinned pages\n\n"));
+const outlineOf = (system: string): string => {
+  const end = system.indexOf("\n\n# Pinned pages");
+  return system.slice(system.indexOf("# Guide outline\n\n"), end === -1 ? undefined : end);
+};
 
 describe("buildContext guide", () => {
-  it("renders each page as a heading, a blank line, the text and a blank line", () => {
-    const { system } = buildContext(input());
-    expect(guideOf(system)).toBe(
-      "# Guide\n\n## Notes\n\nnote text\n\n## Achievement Checklist\n\ncheck text\n\n## Walkthrough\n\nwalk text\n\n",
+  it("shows the outline of every page and the text of pinned pages only", () => {
+    const { system } = buildContext(input({ pinnedTitles: ["Walkthrough"] }));
+    expect(system).toBe(
+      `${INSTRUCTIONS}\n\n# Guide outline\n\n` +
+        "## Notes (9 chars)\n## Achievement Checklist (10 chars)\n## Walkthrough (9 chars)" +
+        "\n\n# Pinned pages\n\n## Walkthrough\n\nwalk text\n\n",
     );
   });
 
-  it("puts pinned pages first in pinnedTitles order, then the rest in tree order", () => {
+  it("keeps a non-pinned page's body out of the system prompt", () => {
+    const { system } = buildContext(input({ pinnedTitles: ["Walkthrough"] }));
+    expect(system).toContain("## Notes (9 chars)");
+    expect(system).not.toContain("note text");
+    expect(system).not.toContain("check text");
+  });
+
+  it("lists headings in the outline", () => {
+    const pages = [page("Walkthrough", "# Part One\ntext\n## Garden\nmore")];
+    const { system } = buildContext(input({ pages }));
+    expect(outlineOf(system)).toBe(
+      `# Guide outline\n\n## Walkthrough (${pages[0]!.text.length} chars)\n  - Part One\n    - Garden`,
+    );
+  });
+
+  it("renders pinned pages in pinnedTitles order", () => {
     const { system } = buildContext(
       input({ pinnedTitles: ["Walkthrough", "Achievement Checklist"] }),
     );
-    const titles = [...guideOf(system).matchAll(/^## (.*)$/gm)].map((m) => m[1]);
-    expect(titles).toEqual(["Walkthrough", "Achievement Checklist", "Notes"]);
+    expect(pinnedOf(system)).toBe(
+      "# Pinned pages\n\n## Walkthrough\n\nwalk text\n\n## Achievement Checklist\n\ncheck text\n\n",
+    );
+  });
+
+  it("has no pinned section when no page is pinned", () => {
+    const { system } = buildContext(input());
+    expect(system).not.toContain("# Pinned pages");
+    expect(system).toContain("## Notes (9 chars)");
+  });
+
+  it("says there is no guide, with no pinned section, when there are no pages", () => {
+    const ctx = buildContext(input({ pages: [], pinnedTitles: ["Walkthrough"] }));
+    expect(ctx.system).toBe(`${INSTRUCTIONS}\n\n# Guide outline\n\nThis game has no guide.`);
+    expect(ctx.truncatedGuide).toBe(false);
   });
 
   it("starts with the instructions and is byte-stable for equal inputs", () => {
-    const a = buildContext(input());
-    const b = buildContext(input());
+    const a = buildContext(input({ pinnedTitles: ["Notes"] }));
+    const b = buildContext(input({ pinnedTitles: ["Notes"] }));
     expect(a.system.startsWith(INSTRUCTIONS)).toBe(true);
     expect(a.system === b.system).toBe(true);
   });
@@ -99,35 +133,51 @@ describe("buildContext guide", () => {
   });
 
   it("is not truncated with a big budget", () => {
-    const ctx = buildContext(input());
+    const ctx = buildContext(input({ pinnedTitles: ["Walkthrough"] }));
     expect(ctx.truncatedGuide).toBe(false);
-    expect(ctx.system).not.toContain("The guide below is incomplete.");
+    expect(ctx.system).not.toContain("incomplete");
     expect(ctx.system).not.toContain("[guide cut here]");
   });
 
-  it("cuts the overflowing page at the last newline that fits and drops later pages", () => {
+  it("is not truncated by pages that are not pinned, however small the budget", () => {
+    const ctx = buildContext(input({ guideChars: 0 }));
+    expect(ctx.truncatedGuide).toBe(false);
+    expect(ctx.system).toContain("## Walkthrough (9 chars)");
+  });
+
+  it("cuts the overflowing pinned page at the last newline that fits and drops later pinned pages", () => {
     const pages = [page("One", "aaa"), page("Two", "line1\nline2\nline3"), page("Three", "zzz")];
     const first = "## One\n\naaa\n\n";
     // Room for the second page's heading, "line1" and a few characters of "line2".
     const budget = first.length + "## Two\n\nline1\nlin".length;
-    const ctx = buildContext(input({ pages, guideChars: budget }));
+    const ctx = buildContext(
+      input({ pages, pinnedTitles: ["One", "Two", "Three"], guideChars: budget }),
+    );
     expect(ctx.truncatedGuide).toBe(true);
-    expect(guideOf(ctx.system)).toBe(`# Guide\n\n${first}## Two\n\nline1\n[guide cut here]\n`);
-    expect(ctx.system).not.toContain("Three");
-    expect(ctx.system).toContain("The guide below is incomplete.");
+    expect(pinnedOf(ctx.system)).toBe(
+      `# Pinned pages\n\n${first}## Two\n\nline1\n[guide cut here]\n`,
+    );
+    expect(ctx.system).toContain("## Three (3 chars)");
+    expect(ctx.system).not.toContain("zzz");
+    expect(ctx.system).toContain("incomplete");
   });
 
-  it("cuts a page with no newline that fits down to its heading", () => {
+  it("cuts a pinned page with no newline that fits down to nothing", () => {
     const pages = [page("One", "aaa bbb")];
-    const ctx = buildContext(input({ pages, guideChars: 5 }));
+    const ctx = buildContext(input({ pages, pinnedTitles: ["One"], guideChars: 5 }));
     expect(ctx.truncatedGuide).toBe(true);
-    expect(guideOf(ctx.system)).toBe("# Guide\n\n\n[guide cut here]\n");
+    expect(pinnedOf(ctx.system)).toBe("# Pinned pages\n\n\n[guide cut here]\n");
   });
 
-  it("counts only the rendered pages against the budget", () => {
+  it("counts only the rendered pinned pages against the budget", () => {
+    const pinnedTitles = PAGES.map((p) => p.title);
     const rendered = PAGES.map((p) => `## ${p.title}\n\n${p.text}\n\n`).join("");
-    expect(buildContext(input({ guideChars: rendered.length })).truncatedGuide).toBe(false);
-    expect(buildContext(input({ guideChars: rendered.length - 1 })).truncatedGuide).toBe(true);
+    expect(buildContext(input({ pinnedTitles, guideChars: rendered.length })).truncatedGuide).toBe(
+      false,
+    );
+    expect(
+      buildContext(input({ pinnedTitles, guideChars: rendered.length - 1 })).truncatedGuide,
+    ).toBe(true);
   });
 });
 
@@ -261,5 +311,14 @@ describe("buildMessages", () => {
     expect(buildMessages(ctx, [], "where?", "full")).toEqual([
       { role: "user", content: `${ctx.statusBlock}\n\nAnswer depth: full\n\nQuestion: where?` },
     ]);
+  });
+});
+
+describe("INSTRUCTIONS", () => {
+  it("points the model at the outline, the guide tools and web search", () => {
+    expect(INSTRUCTIONS).toContain("the outline and pinned pages below");
+    expect(INSTRUCTIONS).toContain("search_guide and read_guide_page");
+    expect(INSTRUCTIONS).toContain("use web search, and open a result page");
+    expect(INSTRUCTIONS).not.toContain("Ground answers");
   });
 });

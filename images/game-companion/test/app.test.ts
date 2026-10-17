@@ -841,8 +841,11 @@ describe("ask", () => {
       unknown,
       AbortSignal,
     ];
-    expect(ctx.system.indexOf("## Notes")).toBeLessThan(ctx.system.indexOf("## Walkthrough"));
-    expect(ctx.system).toContain("walk");
+    // The outline lists every page; only the pinned page's text is sent.
+    expect(ctx.system.indexOf("## Walkthrough (4 chars)")).toBeGreaterThan(-1);
+    expect(ctx.system.indexOf("## Notes (")).toBeGreaterThan(-1);
+    expect(ctx.system.slice(ctx.system.indexOf("# Pinned pages"))).toContain("Golden Lantern");
+    expect(ctx.system).not.toContain("## Walkthrough\n\nwalk");
     expect(ctx.statusBlock).toBe(
       [
         "Game: Zeta (Steam)",
@@ -865,7 +868,9 @@ describe("ask", () => {
     await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
     const ctx = calls.ask[0]?.[0] as { system: string; truncatedGuide: boolean };
     expect(ctx.truncatedGuide).toBe(true);
-    expect(ctx.system).not.toContain("## Walkthrough");
+    expect(ctx.system).toContain("## Walkthrough (4 chars)");
+    expect(ctx.system).toContain("[guide cut here]");
+    expect(ctx.system).not.toContain("Golden Lantern");
   });
 
   it("leaves out the status line and the section unless this hub's game is being played", async () => {

@@ -22,7 +22,7 @@ const SNIPPET_MAX = 160;
 // The patterns below are written to run in linear time on any line: every quantified group
 // is delimited by a character it cannot contain, so a long run of brackets or parentheses
 // from a page cannot make a match backtrack across the line.
-const HEADING = /^ {0,3}#{1,6}(?:[ \t]+(.*))?$/s;
+const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/s;
 // Quote marks, then one list marker (bullet or number) and an optional checkbox.
 const LEADING_MARKERS = /^[ \t]*(?:>[ \t]*)*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]+)?)?/;
 // `[text](url)`, where the url may hold one level of parentheses.
@@ -51,12 +51,16 @@ function markName(raw: string): string {
     .toLowerCase();
 }
 
-const lines = (text: string): string[] => text.replace(/\r\n/g, "\n").split("\n");
+export const lines = (text: string): string[] => text.replace(/\r\n/g, "\n").split("\n");
 
-function headingText(line: string): string | null | undefined {
+/**
+ * A heading line: its level (the count of leading `#`) and its plain text, which is null for
+ * an empty heading. Undefined for a line that is not a heading.
+ */
+export function headingOf(line: string): { level: number; text: string | null } | undefined {
   const m = HEADING.exec(line);
   if (!m) return undefined;
-  let text = (m[1] ?? "").trim();
+  let text = (m[2] ?? "").trim();
   // A closing run of `#` is a marker only when a space precedes it ("C#" keeps its hash).
   let end = text.length;
   while (end > 0 && text[end - 1] === "#") end -= 1;
@@ -64,7 +68,11 @@ function headingText(line: string): string | null | undefined {
     text = text.slice(0, end).trimEnd();
   }
   text = plainHeading(text);
-  return text === "" ? null : cutEnd(text);
+  return { level: (m[1] as string).length, text: text === "" ? null : cutEnd(text) };
+}
+
+function headingText(line: string): string | null | undefined {
+  return headingOf(line)?.text;
 }
 
 /**

@@ -1,10 +1,13 @@
 import type { AchievementsResponse, AskHistoryEntry } from "../shared/types.js";
 import type { PageText } from "./guide-pages.js";
+import { guideOutline } from "./guide-tools.js";
 
 export const INSTRUCTIONS = `You are a game companion shown on a small second screen next to the game. The player asks quick questions while playing.
 - Answer in a few short lines. Plain text only; lines may start with "- " for bullets. No headings, tables, links or bold.
-- Ground answers in the player's own guide below. When you go beyond it, say so briefly.
-- Use web search only when the guide and your own knowledge do not cover the question, and say when an answer came from the web.
+- For anything about the game itself (locations, items, enemies, progression, requirements), check the player's guide first: the outline and pinned pages below, then the search_guide and read_guide_page tools.
+- If the guide does not cover it, use web search, and open a result page when a snippet is not enough, instead of answering from memory.
+- Say briefly whether the answer came from the guide, the web, or your own memory. Use memory alone only for general, low-stakes facts.
+- Do not describe your lookups; the screen shows them.
 - Never reveal story events, bosses, characters or places beyond the player's progress (shown in the status) unless the answer depth is full.
 - Answer depth hint: give the smallest useful nudge and offer more. Answer depth full: answer directly and completely.
 - If you are not sure, say so rather than guessing.`;
@@ -25,29 +28,30 @@ export interface ContextInput {
   pages: PageText[];
   /** Default pinned page titles, in order. */
   pinnedTitles: string[];
-  /** Budget for the rendered guide, in characters. */
+  /** Budget for the rendered pinned pages, in characters. */
   guideChars: number;
 }
 
 export interface BuiltContext {
-  /** Instructions plus guide; byte-stable for equal inputs. */
+  /** Instructions, guide outline and pinned pages; byte-stable for equal inputs. */
   system: string;
   /** Goes into the last user turn. */
   statusBlock: string;
+  /** True only when pinned pages were cut to fit the budget. */
   truncatedGuide: boolean;
 }
 
 const CUT_MARKER = "\n[guide cut here]\n";
 const STORY_LIMIT = 5;
 
-/** Pinned pages first, in pinned order (the first page of each title), then the rest in tree order. */
-function orderPages(pages: PageText[], pinnedTitles: string[]): PageText[] {
+/** The pinned pages, in pinned order (the first page of each title not already taken). */
+function pinnedPages(pages: PageText[], pinnedTitles: string[]): PageText[] {
   const pinned: PageText[] = [];
   for (const title of pinnedTitles) {
     const found = pages.find((p) => p.title === title && !pinned.includes(p));
     if (found) pinned.push(found);
   }
-  return [...pinned, ...pages.filter((p) => !pinned.includes(p))];
+  return pinned;
 }
 
 function renderGuide(pages: PageText[], budget: number): { guide: string; truncated: boolean } {
@@ -94,14 +98,14 @@ function achievementLines(a: AchievementsResponse, missableNames: string[]): str
 }
 
 export function buildContext(input: ContextInput): BuiltContext {
-  const { guide, truncated } = renderGuide(
-    orderPages(input.pages, input.pinnedTitles),
-    input.guideChars,
-  );
+  const pinned = pinnedPages(input.pages, input.pinnedTitles);
+  const { guide, truncated } = renderGuide(pinned, input.guideChars);
+  const outline = input.pages.length === 0 ? "This game has no guide." : guideOutline(input.pages);
   const system =
     INSTRUCTIONS +
-    (truncated ? "\nThe guide below is incomplete." : "") +
-    `\n\n# Guide\n\n${guide}`;
+    (truncated ? "\nThe pinned pages below are incomplete." : "") +
+    `\n\n# Guide outline\n\n${outline}` +
+    (pinned.length === 0 ? "" : `\n\n# Pinned pages\n\n${guide}`);
 
   const status = [`Game: ${input.gameTitle} (${input.platformLabel})`, `State: ${input.playState}`];
   if (input.presence !== null) status.push(`Status line: ${input.presence}`);
