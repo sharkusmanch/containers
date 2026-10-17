@@ -41,8 +41,14 @@ const UNAVAILABLE = "The assistant is unavailable right now. Try again in a minu
 const REFUSED = "I can't help with that one.";
 const TOO_MANY = "That needed too many lookups. Try a narrower question.";
 const LIMIT_REACHED = "Lookup limit reached; answer with what you have.";
+const WEB_SPENT =
+  "Web lookups for this question are used up (3 searches, 2 pages). Answer from the guide and what you already found.";
 const MAX_ROUNDS = 8;
 const MAX_GUIDE_CALLS = 6;
+// The question's web budget. The tools' max_uses caps each request only; this budget is kept
+// softly across rounds so the tools (part of the cached prefix) never change.
+const WEB_SEARCHES = 3;
+const WEB_FETCHES = 2;
 const USAGE_FIELDS = [
   "input_tokens",
   "output_tokens",
@@ -184,6 +190,8 @@ export class Assistant {
     let guideCalls = 0;
     let lookups = 0;
     let fetches = 0;
+    // The last character of answer text streamed so far, "" before any.
+    let tail = "";
     let messages: unknown[] = buildMessages(ctx, history, question, depth);
     // Container-bound server tools reject a follow-up that omits the container the question's
     // earlier rounds ran in. Scoped to this question only.
@@ -196,12 +204,8 @@ export class Assistant {
           info.stop = "aborted";
           return;
         }
-        if (rounds === MAX_ROUNDS) {
-          yield { type: "error", message: TOO_MANY };
-          completed = true;
-          return;
-        }
         rounds += 1;
+        let roundText = false;
         const blocks = new Map<number, Block>();
         const stream = this.client.stream(
           {
@@ -227,7 +231,13 @@ export class Assistant {
             const d = (ev.delta ?? {}) as Record<string, unknown>;
             const block = blocks.get(index);
             if (d.type === "text_delta" && block?.type === "text") {
-              yield { type: "text", text: str(d.text) };
+              const t = str(d.text);
+              if (!roundText && rounds > 1 && tail !== "" && !/\s/.test(tail)) {
+                yield { type: "text", text: "\n\n" };
+              }
+              roundText = true;
+              if (t !== "") tail = t.slice(-1);
+              yield { type: "text", text: t };
             } else if (d.type === "input_json_delta" && block?.type === "server_tool_use") {
               block.json += str(d.partial_json);
             }
@@ -265,14 +275,20 @@ export class Assistant {
         }
         // The content goes back exactly as returned: preserved thinking needs it unmodified.
         const assistantTurn = { role: "assistant", content: final.content };
-        if (final.stop_reason === "pause_turn") {
-          messages = [...messages, assistantTurn];
-          continue;
-        }
         const calls =
           final.stop_reason === "tool_use"
             ? (final.content as Record<string, unknown>[]).filter((b) => b?.type === "tool_use")
             : [];
+        if ((final.stop_reason === "pause_turn" || calls.length > 0) && rounds === MAX_ROUNDS) {
+          info.stop = "max_rounds";
+          yield { type: "error", message: TOO_MANY };
+          completed = true;
+          return;
+        }
+        if (final.stop_reason === "pause_turn") {
+          messages = [...messages, assistantTurn];
+          continue;
+        }
         if (calls.length === 0) {
           if (final.stop_reason === "max_tokens") {
             yield { type: "text", text: "\n(answer cut short)" };
@@ -314,7 +330,9 @@ export class Assistant {
             yield { type: "lookup", label: run.label };
           }
         }
-        messages = [...messages, assistantTurn, { role: "user", content: results }];
+        const spent = searches >= WEB_SEARCHES || fetches >= WEB_FETCHES;
+        const content = spent ? [...results, { type: "text", text: WEB_SPENT }] : results;
+        messages = [...messages, assistantTurn, { role: "user", content }];
       }
     } catch (err) {
       if (signal.aborted) {
@@ -337,6 +355,7 @@ export class Assistant {
         ms: this.now() - started,
         searches,
         rounds,
+        guideCalls,
         lookups,
         fetches,
       });

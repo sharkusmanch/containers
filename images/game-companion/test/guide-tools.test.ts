@@ -192,6 +192,16 @@ describe("readGuide", () => {
     expect(r.text).toBe('No section called "Cellar" on Notes. The page has no headings.');
   });
 
+  it("says an empty page's content is in the pages under it", () => {
+    for (const body of ["", "  \n\t\n "]) {
+      expect(readGuide([page("Chapter One", body)], "chapter one")).toEqual({
+        text: "This page is empty; its content is in the pages under it.",
+        label: "Read guide: Chapter One",
+        ok: true,
+      });
+    }
+  });
+
   it("reports that there is no guide when there are no pages", () => {
     expect(readGuide([], "Notes")).toEqual({
       text: "This game has no guide.",
@@ -232,7 +242,9 @@ describe("readGuide", () => {
       const p = page("Flat", `# Only\n${"y".repeat(READ_MAX + 10)}`);
       const solid = page("Solid", "z".repeat(READ_MAX + 10));
       const r = readGuide([solid], "Solid");
-      expect(r.text).toBe(`${"z".repeat(READ_MAX)}\n[cut at 30,000 characters]`);
+      expect(r.text).toBe(
+        `${"z".repeat(READ_MAX)}\n[cut at 30,000 characters — use search_guide to find text further on]`,
+      );
       expect(readGuide([p], "Flat").text).toBe(
         "# Only\n[cut at 30,000 characters — read a section: Only]",
       );
@@ -241,6 +253,17 @@ describe("readGuide", () => {
     it("does not cut a page of exactly the limit", () => {
       const exact = page("Exact", "a".repeat(READ_MAX));
       expect(readGuide([exact], "Exact").text).toBe("a".repeat(READ_MAX));
+    });
+
+    it("points at search_guide when a cut section has no sub-headings", () => {
+      const rows = Array.from({ length: 400 }, (_, i) => `row ${i} ${"x".repeat(92)}`);
+      const p = page("Plain", ["# Top", ...rows, "# Next", "end"].join("\n"));
+      const r = readGuide([p], "Plain", "Top");
+      expect(r.ok).toBe(true);
+      expect(
+        r.text.endsWith("\n[cut at 30,000 characters — use search_guide to find text further on]"),
+      ).toBe(true);
+      expect(r.text).not.toContain("read a section");
     });
 
     it("lists the section's sub-headings when a section was cut", () => {

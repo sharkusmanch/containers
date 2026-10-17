@@ -991,6 +991,26 @@ describe("ask", () => {
     });
   });
 
+  it("gives a hub whose pages could not be loaded a runner that says so", async () => {
+    const { d, calls } = setup({ pages: parts().pages });
+    await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
+    const runner = calls.ask[0]?.[5] as {
+      search(query: string): string;
+      read(page: string, section?: string): { text: string; label: string; ok: boolean };
+    };
+    expect(runner.search("Golden Lantern")).toBe("The guide could not be loaded right now.");
+    expect(runner.read("Walkthrough")).toEqual({
+      text: "The guide could not be loaded right now.",
+      label: "Read guide: Walkthrough",
+      ok: false,
+    });
+    expect(runner.read("Walkthrough", "Intro")).toEqual({
+      text: "The guide could not be loaded right now.",
+      label: "Read guide: Walkthrough › Intro",
+      ok: false,
+    });
+  });
+
   it("works from a game alone: no pages, titled from the achievements, labelled by source", async () => {
     const { d, calls } = setup({ detector: detecting(null, "none"), additionalRaGameIds: ["5"] });
     await collect(

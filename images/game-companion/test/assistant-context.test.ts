@@ -321,4 +321,13 @@ describe("INSTRUCTIONS", () => {
     expect(INSTRUCTIONS).toContain("use web search, and open a result page");
     expect(INSTRUCTIONS).not.toContain("Ground answers");
   });
+
+  it("keeps hint-depth lookups to the player's progress, right after the spoiler rule", () => {
+    const rows = INSTRUCTIONS.split("\n");
+    const spoiler = rows.findIndex((r) => r.startsWith("- Never reveal story events"));
+    expect(spoiler).toBeGreaterThan(0);
+    expect(rows[spoiler + 1]).toBe(
+      "- At answer depth hint, keep guide searches and the sections you read to the player's current progress where you can, because the screen shows them.",
+    );
+  });
 });

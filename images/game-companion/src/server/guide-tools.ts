@@ -84,7 +84,8 @@ function limited(body: string, headings: Heading[]): string {
   const newline = body.lastIndexOf("\n", READ_MAX);
   const kept = body.slice(0, newline > 0 ? newline : READ_MAX);
   const names = headings.map((h) => h.text).join("; ");
-  const note = names === "" ? "" : ` — read a section: ${names}`;
+  const note =
+    names === "" ? " — use search_guide to find text further on" : ` — read a section: ${names}`;
   return `${kept}\n[cut at ${READ_MAX.toLocaleString("en-US")} characters${note}]`;
 }
 
@@ -105,6 +106,13 @@ export function readGuide(
     return { text, label: label(page), ok: false };
   }
   if (wanted === undefined) {
+    if (found.text.trim() === "") {
+      return {
+        text: "This page is empty; its content is in the pages under it.",
+        label: label(found.title),
+        ok: true,
+      };
+    }
     return {
       text: limited(found.text, headingsOf(found.text, OUTLINE_MAX_LEVEL)),
       label: label(found.title),

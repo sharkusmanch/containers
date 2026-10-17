@@ -41,17 +41,20 @@ const guideRunner = (texts: PageText[]): GuideToolRunner => ({
   read: (page, section) => readGuide(texts, page, section),
 });
 
-const NO_GUIDE = "This game has no guide.";
-
-/** The guide tools for a question about a game with no hub: every lookup reports there is no guide. */
-const noGuide: GuideToolRunner = {
-  search: () => NO_GUIDE,
+/** Guide tools that answer every lookup with `message`, as a failure. */
+const unavailableGuide = (message: string): GuideToolRunner => ({
+  search: () => message,
   read: (page, section) => ({
-    text: NO_GUIDE,
+    text: message,
     label: `Read guide: ${page}${section === undefined || section.trim() === "" ? "" : ` › ${section}`}`,
     ok: false,
   }),
-};
+});
+
+/** For a question about a game with no hub. */
+const noGuide = unavailableGuide("This game has no guide.");
+/** For a hub whose pages could not be loaded. */
+const unloadedGuide = unavailableGuide("The guide could not be loaded right now.");
 
 /**
  * Adapts the detector, guide index and achievement service to the request handler.
@@ -208,7 +211,11 @@ export function buildDeps(parts: AppParts): RouteDeps {
                 req.question,
                 req.depth,
                 signal,
-                req.hubId === null ? noGuide : guideRunner(texts),
+                req.hubId === null
+                  ? noGuide
+                  : texts.length === 0
+                    ? unloadedGuide
+                    : guideRunner(texts),
               );
             },
           },

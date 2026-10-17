@@ -127,10 +127,14 @@ Tools the model may call while answering:
 - `search_guide` finds lines in the game's guide pages (at most 20 matches);
   `read_guide_page` reads one page or one section of it (at most 30,000 characters). Together
   they are limited to 6 calls per question. A question about a game with no guide gets
-  "This game has no guide."
-- Web search, at most 3 per question, and web fetch, at most 2 per question (8,000 tokens per
-  page).
-- A question takes at most 8 model rounds.
+  "This game has no guide.", and one whose guide pages could not be loaded gets "The guide
+  could not be loaded right now."
+- Web search and web fetch (8,000 tokens per page), with a budget of 3 searches and 2 pages per
+  question. The server enforces the budget softly: once it is used up, each later tool round
+  tells the model to answer from the guide and what it already found (the tools stay the same,
+  so the cached prefix is kept). Each single model request is also capped at 3 searches and 2
+  pages.
+- A question takes at most 8 model rounds; an 8th round that asks for more ends with an error.
 
 Each lookup shows above the answer as one line: `Searched your guide: <query>`,
 `Read guide: <page>` (or `Read guide: <page> › <section>`), `Searched the web: <query>` and
@@ -150,8 +154,9 @@ answered from the guide in the prompt. The guide is sent as a cached prefix, so 
 the guide is unchanged. The limits are counted in memory for the whole service, not per caller,
 so a restart resets them; set a monthly spend limit in the Anthropic Console as the hard
 backstop. Question and answer text is never logged: the one log line per question carries the
-model, token counts, stop reason, search count, `rounds`, `lookups` (guide tool calls),
-`fetches` (pages opened) and duration.
+model, token counts, stop reason (`max_rounds` when the round cap ended it), search count,
+`rounds`, `guideCalls` (guide tool calls asked for, including refused ones), `lookups` (guide
+lookups run), `fetches` (pages opened) and duration.
 
 RA responses include the configured `accountIdentity` and the last successful upstream
 `fetchedAt` timestamp. Stale cache reads and failed retries preserve that timestamp;

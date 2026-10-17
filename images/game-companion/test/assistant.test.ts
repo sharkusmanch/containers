@@ -337,6 +337,7 @@ describe("Assistant logging", () => {
       cache_creation_input_tokens: 44,
       searches: 2,
       rounds: 1,
+      guideCalls: 0,
       lookups: 0,
       fetches: 0,
       stop: "end_turn",
@@ -485,7 +486,9 @@ describe("Assistant tool loop", () => {
       answer("ok"),
     ]);
     const guide = fakeGuide();
-    const events = await run(make(f).assistant, undefined, guide);
+    const { assistant, log } = make(f);
+    const events = await run(assistant, undefined, guide);
+    expect(log.mock.calls[0]![1]).toMatchObject({ guideCalls: 4, lookups: 1 });
     expect(guide.ran).toEqual([["read", "Missing", undefined]]);
     expect(events).toEqual([
       { type: "lookup", label: "Read guide: Missing" },
@@ -579,7 +582,7 @@ describe("Assistant tool loop", () => {
     expect(results(3)).toEqual([
       { type: "tool_result", tool_use_id: "8", content: LIMIT, is_error: true },
     ]);
-    expect(log.mock.calls[0]![1]).toMatchObject({ rounds: 4, lookups: 6 });
+    expect(log.mock.calls[0]![1]).toMatchObject({ rounds: 4, guideCalls: 8, lookups: 6 });
   });
 
   it("never sends a 9th request: ends with the too-many-lookups error", async () => {
@@ -598,7 +601,160 @@ describe("Assistant tool loop", () => {
     expect(events.at(-1)).toEqual({ type: "error", message: TOO_MANY });
     expect(events.filter((e) => e.type === "done" || e.type === "error")).toHaveLength(1);
     expect(log).toHaveBeenCalledTimes(1);
-    expect(log.mock.calls[0]![1]).toMatchObject({ rounds: 8, lookups: 4 });
+    expect(log.mock.calls[0]![1]).toMatchObject({ rounds: 8, lookups: 4, stop: "max_rounds" });
+  });
+
+  it("ends at an 8th round that asks for guide tools without running them", async () => {
+    const rounds: Round[] = [];
+    for (let i = 0; i < 7; i += 1) {
+      rounds.push({ events: [], final: { stop_reason: "pause_turn", usage: {}, content: [] } });
+    }
+    rounds.push(toolRound([search("late", "late query")]));
+    const f = scripted(rounds);
+    const guide = fakeGuide();
+    const { assistant, log } = make(f);
+    const events = await run(assistant, undefined, guide);
+    expect(f.calls).toHaveLength(8);
+    expect(guide.ran).toEqual([]);
+    expect(events).toEqual([{ type: "error", message: TOO_MANY }]);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0]![1]).toMatchObject({
+      rounds: 8,
+      guideCalls: 0,
+      lookups: 0,
+      stop: "max_rounds",
+    });
+  });
+});
+
+describe("Assistant text across rounds", () => {
+  const textThenTool = (t: string): Round => {
+    const round = toolRound([search("1", "q")]);
+    return {
+      ...round,
+      events: [start("text", 0), text(0, t), stop(0), ...toolUse(1, search("1", "q"))],
+    };
+  };
+
+  it("separates a later round's text from earlier text that ends mid-line", async () => {
+    const f = scripted([
+      textThenTool("Let me check"),
+      {
+        events: [start("text", 0), text(0, "Found"), text(0, " it"), stop(0)],
+        final: { stop_reason: "end_turn", usage: {}, content: [] },
+      },
+    ]);
+    expect(await run(make(f).assistant)).toEqual([
+      { type: "text", text: "Let me check" },
+      { type: "lookup", label: "Searched your guide: q" },
+      { type: "text", text: "\n\n" },
+      { type: "text", text: "Found" },
+      { type: "text", text: " it" },
+      { type: "done", truncatedGuide: true },
+    ]);
+  });
+
+  it("adds no separator after whitespace or when nothing was streamed before", async () => {
+    const afterSpace = scripted([textThenTool("Checking.\n"), answer("Found it")]);
+    expect((await run(make(afterSpace).assistant)).filter((e) => e.type === "text")).toEqual([
+      { type: "text", text: "Checking.\n" },
+      { type: "text", text: "Found it" },
+    ]);
+    const silent = scripted([toolRound([search("1", "q")]), answer("Found it")]);
+    expect((await run(make(silent).assistant)).filter((e) => e.type === "text")).toEqual([
+      { type: "text", text: "Found it" },
+    ]);
+  });
+});
+
+describe("Assistant per-question web budget", () => {
+  const SPENT =
+    "Web lookups for this question are used up (3 searches, 2 pages). Answer from the guide and what you already found.";
+
+  /** A tool_use round that first runs `searches` web searches and `fetches` web fetches. */
+  function webRound(searches: number, fetches: number, call: Call): Round {
+    const events: StreamEvent[] = [];
+    let i = 0;
+    for (let n = 0; n < searches; n += 1, i += 1) {
+      events.push(
+        start("server_tool_use", i, { name: "web_search" }),
+        delta(i, { type: "input_json_delta", partial_json: `{"query":"w${i}"}` }),
+        stop(i),
+      );
+    }
+    for (let n = 0; n < fetches; n += 1, i += 1) {
+      events.push(
+        start("server_tool_use", i, { name: "web_fetch" }),
+        delta(i, {
+          type: "input_json_delta",
+          partial_json: `{"url":"https://h${i}.example.test/"}`,
+        }),
+        stop(i),
+      );
+    }
+    events.push(...toolUse(i, call));
+    return {
+      events,
+      final: {
+        stop_reason: "tool_use",
+        usage: {},
+        content: [{ type: "tool_use", id: call.id, name: call.name, input: call.input }],
+      },
+    };
+  }
+
+  const lastContent = (f: Fake, call: number) =>
+    (f.calls[call]!.params.messages as { content: unknown }[]).at(-1)!.content;
+
+  it("adds no note while under budget", async () => {
+    const f = scripted([
+      webRound(2, 1, search("1", "a")),
+      webRound(0, 0, search("2", "b")),
+      answer("ok"),
+    ]);
+    await run(make(f).assistant);
+    expect(lastContent(f, 1)).toEqual([
+      { type: "tool_result", tool_use_id: "1", content: "RESULTS FOR a" },
+    ]);
+    expect(lastContent(f, 2)).toEqual([
+      { type: "tool_result", tool_use_id: "2", content: "RESULTS FOR b" },
+    ]);
+  });
+
+  it("adds the note after the tool results once 3 searches ran, and on every later round", async () => {
+    const f = scripted([
+      webRound(3, 0, search("1", "a")),
+      webRound(0, 0, search("2", "b")),
+      answer("ok"),
+    ]);
+    await run(make(f).assistant);
+    expect(lastContent(f, 1)).toEqual([
+      { type: "tool_result", tool_use_id: "1", content: "RESULTS FOR a" },
+      { type: "text", text: SPENT },
+    ]);
+    expect(lastContent(f, 2)).toEqual([
+      { type: "tool_result", tool_use_id: "2", content: "RESULTS FOR b" },
+      { type: "text", text: SPENT },
+    ]);
+    for (const call of f.calls) expect(call.params.tools).toEqual(TOOLS);
+  });
+
+  it("adds the note once 2 pages were opened across rounds, keeping the tools unchanged", async () => {
+    const f = scripted([
+      webRound(1, 1, search("1", "a")),
+      webRound(0, 1, search("2", "b")),
+      answer("ok"),
+    ]);
+    await run(make(f).assistant);
+    expect(lastContent(f, 1)).toEqual([
+      { type: "tool_result", tool_use_id: "1", content: "RESULTS FOR a" },
+    ]);
+    expect(lastContent(f, 2)).toEqual([
+      { type: "tool_result", tool_use_id: "2", content: "RESULTS FOR b" },
+      { type: "text", text: SPENT },
+    ]);
+    expect(f.calls[2]!.params.tools).toEqual(f.calls[0]!.params.tools);
+    expect(f.calls[2]!.params.tools).toEqual(TOOLS);
   });
 });
 
@@ -766,6 +922,7 @@ describe("Assistant tool loop logging", () => {
       cache_creation_input_tokens: 44,
       searches: 1,
       rounds: 2,
+      guideCalls: 2,
       lookups: 2,
       fetches: 1,
       stop: "end_turn",
