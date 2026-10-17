@@ -29,10 +29,44 @@ const selectorsIn = (block: string): string[] =>
   );
 
 describe("the layout stylesheet rules", () => {
-  it("respects the safe areas on every outer edge", () => {
-    for (const edge of ["top", "right", "bottom", "left"]) {
-      expect(css).toContain(`env(safe-area-inset-${edge}`);
+  // Every innermost rule, media blocks included: its selectors and its body.
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+    selectors: (m[1] ?? "")
+      .split(",")
+      .map((s) => s.trim().replace(/\s+/g, " "))
+      .filter((s) => s !== ""),
+    body: (m[2] ?? "").replace(/\s+/g, " ").trim(),
+  }));
+  const scoped = (selector: string): boolean => /^(#app)?\.layout-(tabs|split)( |$)/.test(selector);
+
+  it("keeps the safe areas to bottom tabs and two panes, never a single page", () => {
+    const withInsets = rules.filter((r) => r.body.includes("safe-area-inset"));
+    expect(withInsets.length).toBeGreaterThan(0);
+    for (const rule of withInsets) {
+      for (const selector of rule.selectors) expect(scoped(selector)).toBe(true);
     }
+  });
+
+  it.each(["tabs", "split"])("pads the outer edges with the safe areas in %s", (mode) => {
+    const edges = rules
+      .filter((r) => r.selectors.some((s) => s === `#app.layout-${mode}`))
+      .map((r) => r.body)
+      .join(" ");
+    for (const edge of ["top", "right", "bottom", "left"]) {
+      expect(edges).toContain(`env(safe-area-inset-${edge}`);
+    }
+    const picker = rules
+      .filter((r) => r.selectors.some((s) => s === `.layout-${mode} .picker`))
+      .map((r) => r.body)
+      .join(" ");
+    expect(picker).toContain("inset: env(safe-area-inset-top");
+  });
+
+  it("leaves the page grid and the picker as they were for a single page", () => {
+    const app = rules.find((r) => r.selectors.join() === "#app" && r.body.includes("display"));
+    expect(app?.body).not.toContain("padding");
+    const picker = rules.find((r) => r.selectors.join() === ".picker");
+    expect(picker?.body).toContain("inset: 0;");
   });
 
   it("pads the bottom tab bar by the bottom safe area", () => {

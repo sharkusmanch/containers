@@ -56,9 +56,6 @@ button {
   grid-template-rows: auto auto auto 1fr;
   min-width: 0;
   min-height: 0;
-  /* Clear of notches, rounded corners and the home indicator; all zero on a plain screen. */
-  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
-    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
 .rail {
@@ -565,8 +562,7 @@ button {
 
 .picker {
   position: fixed;
-  inset: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
-    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  inset: 0;
   z-index: 10;
   overflow-y: auto;
   background: var(--bg);
@@ -1010,6 +1006,23 @@ button {
   align-self: center;
   font-size: 12px;
   color: var(--text-dim);
+}
+
+/*
+ * ---- Safe areas: bottom tabs and two panes keep clear of notches, rounded corners and the
+ * home indicator. A single page (the Thor) keeps its edges exactly as they were. ----
+ */
+
+#app.layout-tabs,
+#app.layout-split {
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+}
+
+.layout-tabs .picker,
+.layout-split .picker {
+  inset: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
 /* ---- Bottom tabs: the rail, same buttons in the same order, as a bar under the stage ---- */
