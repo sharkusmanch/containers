@@ -164,6 +164,8 @@ export interface AskRequest {
 
 export type AskEvent =
   | { type: "search"; query: string }
+  /** A guide lookup or a web page opened, as its on-screen label. */
+  | { type: "lookup"; label: string }
   | { type: "text"; text: string }
   | { type: "done"; truncatedGuide: boolean }
   | { type: "error"; message: string }

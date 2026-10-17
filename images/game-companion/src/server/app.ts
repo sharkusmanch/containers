@@ -5,6 +5,7 @@ import { buildContext } from "./assistant-context.js";
 import type { Detector, DetectorSnapshot } from "./detector.js";
 import type { GuideIndex } from "./guide-index.js";
 import { type GuidePageService, missableMarks } from "./guide-pages.js";
+import { readGuide, searchGuide } from "./guide-tools.js";
 import type { AskLimiter } from "./rate-limit.js";
 import type { RouteDeps } from "./routes.js";
 
@@ -183,7 +184,10 @@ export function buildDeps(parts: AppParts): RouteDeps {
                 pinnedTitles: parts.defaultPins,
                 guideChars: askParts.guideChars,
               });
-              return askParts.assistant.ask(ctx, req.history, req.question, req.depth, signal);
+              return askParts.assistant.ask(ctx, req.history, req.question, req.depth, signal, {
+                search: (query) => searchGuide(texts, query),
+                read: (page, section) => readGuide(texts, page, section),
+              });
             },
           },
   };
