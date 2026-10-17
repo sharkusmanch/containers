@@ -25,6 +25,8 @@ const delta = (index: number, d: Record<string, unknown>): StreamEvent => ({
 const stop = (index: number): StreamEvent => ({ type: "content_block_stop", index });
 const text = (index: number, t: string): StreamEvent =>
   delta(index, { type: "text_delta", text: t });
+/** Longer than the 280 characters held back as possible narration, so it streams live. */
+const LONG = "The zorblax key is under the third bridge. ".repeat(7).trimEnd();
 
 interface Final {
   stop_reason: string | null;
@@ -246,13 +248,13 @@ describe("Assistant stream", () => {
 
   it("reports a mid-stream failure as one generic error", async () => {
     const f = fake(
-      [start("text", 0), text(0, "Hi")],
+      [start("text", 0), text(0, LONG)],
       undefined,
       new Error("upstream said: secret detail"),
     );
     const events = await run(make(f).assistant);
     expect(events).toEqual([
-      { type: "text", text: "Hi" },
+      { type: "text", text: LONG },
       { type: "error", message: "The assistant is unavailable right now. Try again in a minute." },
     ]);
   });
@@ -261,7 +263,7 @@ describe("Assistant stream", () => {
 describe("Assistant abort", () => {
   it("passes the same signal and ends silently when aborted", async () => {
     const controller = new AbortController();
-    const f = fake([start("text", 0), text(0, "Hi")], undefined, new Error("aborted"));
+    const f = fake([start("text", 0), text(0, LONG)], undefined, new Error("aborted"));
     const { assistant, log } = make(f);
     const out: AskEvent[] = [];
     for await (const e of assistant.ask(
@@ -276,7 +278,7 @@ describe("Assistant abort", () => {
       controller.abort();
     }
     expect(f.calls[0]!.signal).toBe(controller.signal);
-    expect(out).toEqual([{ type: "text", text: "Hi" }]);
+    expect(out).toEqual([{ type: "text", text: LONG }]);
     expect(log).toHaveBeenCalledTimes(1);
     expect(log.mock.calls[0]![1]).toMatchObject({ stop: "aborted" });
   });
@@ -638,14 +640,14 @@ describe("Assistant text across rounds", () => {
 
   it("separates a later round's text from earlier text that ends mid-line", async () => {
     const f = scripted([
-      textThenTool("Let me check"),
+      textThenTool(LONG),
       {
         events: [start("text", 0), text(0, "Found"), text(0, " it"), stop(0)],
         final: { stop_reason: "end_turn", usage: {}, content: [] },
       },
     ]);
     expect(await run(make(f).assistant)).toEqual([
-      { type: "text", text: "Let me check" },
+      { type: "text", text: LONG },
       { type: "lookup", label: "Searched your guide: q" },
       { type: "text", text: "\n\n" },
       { type: "text", text: "Found" },
@@ -655,9 +657,9 @@ describe("Assistant text across rounds", () => {
   });
 
   it("adds no separator after whitespace or when nothing was streamed before", async () => {
-    const afterSpace = scripted([textThenTool("Checking.\n"), answer("Found it")]);
+    const afterSpace = scripted([textThenTool(`${LONG}\n`), answer("Found it")]);
     expect((await run(make(afterSpace).assistant)).filter((e) => e.type === "text")).toEqual([
-      { type: "text", text: "Checking.\n" },
+      { type: "text", text: `${LONG}\n` },
       { type: "text", text: "Found it" },
     ]);
     const silent = scripted([toolRound([search("1", "q")]), answer("Found it")]);
@@ -666,6 +668,26 @@ describe("Assistant text across rounds", () => {
     ]);
   });
 });
+
+const CALLER = { type: "code_execution_20260120", tool_id: "srv_code" };
+
+/** A code_execution block whose code calls the web tools (input streamed as JSON). */
+const codeExecution = (index: number): StreamEvent[] => [
+  start("server_tool_use", index, { id: "srv_code", name: "code_execution", input: {} }),
+  delta(index, { type: "input_json_delta", partial_json: '{"code":"web_search(q)"}' }),
+  stop(index),
+];
+
+/** A web_search called from code: its whole input is in the start event, no JSON deltas. */
+const nestedSearch = (index: number, query: string): StreamEvent[] => [
+  start("server_tool_use", index, {
+    id: `srv_${index}`,
+    name: "web_search",
+    input: { query },
+    caller: CALLER,
+  }),
+  stop(index),
+];
 
 describe("Assistant per-question web budget", () => {
   const SPENT =
@@ -756,6 +778,38 @@ describe("Assistant per-question web budget", () => {
     expect(f.calls[2]!.params.tools).toEqual(f.calls[0]!.params.tools);
     expect(f.calls[2]!.params.tools).toEqual(TOOLS);
   });
+
+  it("counts web searches made from code, whose input arrives whole at block start", async () => {
+    const f = scripted([
+      {
+        events: [
+          ...codeExecution(0),
+          ...nestedSearch(1, "n1"),
+          ...nestedSearch(2, "n2"),
+          ...nestedSearch(3, "n3"),
+          ...toolUse(4, search("1", "a")),
+        ],
+        final: {
+          stop_reason: "tool_use",
+          usage: {},
+          content: [{ type: "tool_use", id: "1", name: "search_guide", input: { query: "a" } }],
+        },
+      },
+      answer("ok"),
+    ]);
+    const { assistant, log } = make(f);
+    const events = await run(assistant);
+    expect(events.filter((e) => e.type === "search")).toEqual([
+      { type: "search", query: "n1" },
+      { type: "search", query: "n2" },
+      { type: "search", query: "n3" },
+    ]);
+    expect(lastContent(f, 1)).toEqual([
+      { type: "tool_result", tool_use_id: "1", content: "RESULTS FOR a" },
+      { type: "text", text: SPENT },
+    ]);
+    expect(log.mock.calls[0]![1]).toMatchObject({ searches: 3 });
+  });
 });
 
 describe("Assistant tool loop abort", () => {
@@ -764,7 +818,7 @@ describe("Assistant tool loop abort", () => {
     const f = scripted([
       toolRound([search("1", "first")]),
       {
-        events: [start("text", 0), text(0, "Partial"), stop(0), ...toolUse(1, search("2", "x"))],
+        events: [start("text", 0), text(0, LONG), stop(0), ...toolUse(1, search("2", "x"))],
         final: {
           stop_reason: "tool_use",
           usage: {},
@@ -785,7 +839,7 @@ describe("Assistant tool loop abort", () => {
     expect(guide.ran).toEqual([["search", "first"]]);
     expect(out).toEqual([
       { type: "lookup", label: "Searched your guide: first" },
-      { type: "text", text: "Partial" },
+      { type: "text", text: LONG },
     ]);
     expect(log).toHaveBeenCalledTimes(1);
     expect(log.mock.calls[0]![1]).toMatchObject({ stop: "aborted", rounds: 2 });
@@ -993,5 +1047,175 @@ describe("Assistant code-execution container", () => {
     const f = scripted([toolRound([search("1", "a")]), answer("ok")]);
     await run(make(f).assistant);
     expect(f.calls[1]!.params).not.toHaveProperty("container");
+  });
+});
+
+describe("Assistant server tool labels", () => {
+  it("shows a web search made from code, its input given at block start", async () => {
+    const f = fake([
+      ...codeExecution(0),
+      ...nestedSearch(1, "zorblax drop"),
+      start("web_search_tool_result", 2, { caller: CALLER }),
+      stop(2),
+      start("code_execution_tool_result", 3),
+      stop(3),
+      start("text", 4),
+      text(4, "Answer."),
+      stop(4),
+    ]);
+    const { assistant, log } = make(f);
+    expect(await run(assistant)).toEqual([
+      { type: "search", query: "zorblax drop" },
+      { type: "text", text: "Answer." },
+      { type: "done", truncatedGuide: true },
+    ]);
+    expect(log.mock.calls[0]![1]).toMatchObject({ searches: 1, fetches: 0 });
+  });
+
+  it("shows a direct web search once when its input streams after an empty start input", async () => {
+    const f = fake([
+      start("server_tool_use", 0, { id: "srv_1", name: "web_search", input: {} }),
+      delta(0, { type: "input_json_delta", partial_json: '{"query":' }),
+      delta(0, { type: "input_json_delta", partial_json: '"zorblax key"}' }),
+      stop(0),
+    ]);
+    const { assistant, log } = make(f);
+    expect(await run(assistant)).toEqual([
+      { type: "search", query: "zorblax key" },
+      { type: "done", truncatedGuide: true },
+    ]);
+    expect(log.mock.calls[0]![1]).toMatchObject({ searches: 1 });
+  });
+
+  it("shows the host of a web fetch whose input is given at block start", async () => {
+    const f = fake([
+      start("server_tool_use", 0, {
+        id: "srv_1",
+        name: "web_fetch",
+        input: { url: "https://wiki.example.test/zorblax" },
+        caller: CALLER,
+      }),
+      stop(0),
+    ]);
+    const { assistant, log } = make(f);
+    expect(await run(assistant)).toEqual([
+      { type: "lookup", label: "Opened: wiki.example.test" },
+      { type: "done", truncatedGuide: true },
+    ]);
+    expect(log.mock.calls[0]![1]).toMatchObject({ fetches: 1, searches: 0 });
+  });
+});
+
+describe("Assistant narration and text shaping", () => {
+  const texts = (events: AskEvent[]) => events.filter((e) => e.type === "text");
+
+  it("drops a short text block followed by a tool call, adding no separator", async () => {
+    const f = fake([
+      start("text", 0),
+      text(0, "Guide doesn't list a drop. Search web."),
+      stop(0),
+      ...nestedSearch(1, "zorblax drop"),
+      start("web_search_tool_result", 2),
+      stop(2),
+      start("text", 3),
+      text(3, "Answer."),
+      stop(3),
+    ]);
+    expect(await run(make(f).assistant)).toEqual([
+      { type: "search", query: "zorblax drop" },
+      { type: "text", text: "Answer." },
+      { type: "done", truncatedGuide: true },
+    ]);
+  });
+
+  it("shows a short answer that is the last block", async () => {
+    const f = fake([start("text", 0), text(0, "Short "), text(0, "answer."), stop(0)]);
+    expect(await run(make(f).assistant)).toEqual([
+      { type: "text", text: "Short " },
+      { type: "text", text: "answer." },
+      { type: "done", truncatedGuide: true },
+    ]);
+  });
+
+  it("streams a long text block live, before the block stops", async () => {
+    const first = "a".repeat(200);
+    const second = "b".repeat(100);
+    let stopped = false;
+    const client: StreamClient = {
+      stream: () => ({
+        async *[Symbol.asyncIterator]() {
+          yield start("text", 0);
+          yield text(0, first);
+          yield text(0, second);
+          yield text(0, " end");
+          stopped = true;
+          yield stop(0);
+        },
+        finalMessage: async () => ({ stop_reason: "end_turn", usage: {}, content: [] }),
+      }),
+    };
+    const assistant = new Assistant({ client, model: "m-1", effort: "low", log: vi.fn() });
+    const gen = assistant.ask(ctx, history, QUESTION, "hint", new AbortController().signal, {
+      search: () => "",
+      read: () => ({ text: "", label: "", ok: true }),
+    });
+    expect((await gen.next()).value).toEqual({ type: "text", text: first });
+    expect((await gen.next()).value).toEqual({ type: "text", text: second });
+    expect(stopped).toBe(false);
+    expect((await gen.next()).value).toEqual({ type: "text", text: " end" });
+    expect((await gen.next()).value).toEqual({ type: "done", truncatedGuide: true });
+  });
+
+  it("joins consecutive text blocks split by citations exactly", async () => {
+    const parts = ["Wight kings", " can all", " drop them.\nYou can also", " get them "];
+    const f = fake(parts.flatMap((p, i) => [start("text", i), text(i, p), stop(i)]));
+    const events = await run(make(f).assistant);
+    expect(texts(events)).toEqual(parts.map((p) => ({ type: "text", text: p })));
+    expect(events.at(-1)).toEqual({ type: "done", truncatedGuide: true });
+  });
+
+  it("separates text that follows a web search in the same round", async () => {
+    const f = fake([
+      start("text", 0),
+      text(0, LONG),
+      stop(0),
+      ...nestedSearch(1, "zorblax"),
+      start("web_search_tool_result", 2),
+      stop(2),
+      start("text", 3),
+      text(3, "More."),
+      stop(3),
+    ]);
+    expect(texts(await run(make(f).assistant))).toEqual([
+      { type: "text", text: LONG },
+      { type: "text", text: "\n\n" },
+      { type: "text", text: "More." },
+    ]);
+  });
+
+  it("drops a short text that ends a round going on to run guide tools, passing it back unchanged", async () => {
+    const round1Content = [
+      { type: "tool_use", id: "1", name: "search_guide", input: { query: "q" } },
+      { type: "text", text: "Let me look that up." },
+    ];
+    const f = scripted([
+      {
+        events: [
+          ...toolUse(0, search("1", "q")),
+          start("text", 1),
+          text(1, "Let me look that up."),
+          stop(1),
+        ],
+        final: { stop_reason: "tool_use", usage: {}, content: round1Content },
+      },
+      answer("Found."),
+    ]);
+    expect(await run(make(f).assistant)).toEqual([
+      { type: "lookup", label: "Searched your guide: q" },
+      { type: "text", text: "Found." },
+      { type: "done", truncatedGuide: true },
+    ]);
+    const messages = f.calls[1]!.params.messages as { content: unknown }[];
+    expect(messages.at(-2)!.content).toBe(round1Content);
   });
 });

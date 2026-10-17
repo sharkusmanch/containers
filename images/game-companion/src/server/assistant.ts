@@ -49,6 +49,10 @@ const MAX_GUIDE_CALLS = 6;
 // softly across rounds so the tools (part of the cached prefix) never change.
 const WEB_SEARCHES = 3;
 const WEB_FETCHES = 2;
+// Block types that call a tool: a short text block just before one is narration.
+const TOOL_BLOCKS = new Set(["server_tool_use", "tool_use"]);
+// The longest text block held back while it may still turn out to be narration.
+const NARRATION_MAX = 280;
 const USAGE_FIELDS = [
   "input_tokens",
   "output_tokens",
@@ -88,6 +92,9 @@ const TOOLS = [
 interface Block {
   type: string;
   name: string;
+  /** A server tool's input when given whole at block start (calls made from code), else null. */
+  input: Record<string, unknown> | null;
+  /** A server tool's input streamed as JSON deltas. */
   json: string;
 }
 
@@ -100,14 +107,22 @@ interface ToolResult {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-/** The string field `key` of a server tool's input JSON, or null when absent, empty or unparsable. */
-function inputField(json: string, key: string): string | null {
-  try {
-    const value = (JSON.parse(json) as Record<string, unknown>)[key];
-    return typeof value === "string" && value !== "" ? value : null;
-  } catch {
-    return null;
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** The string field `key` of a server tool block's input, or null when absent, empty or unparsable. */
+function inputField(block: Block, key: string): string | null {
+  let input = block.input;
+  if (input === null) {
+    try {
+      const parsed: unknown = JSON.parse(block.json);
+      input = isRecord(parsed) ? parsed : {};
+    } catch {
+      return null;
+    }
   }
+  const value = input[key];
+  return typeof value === "string" && value !== "" ? value : null;
 }
 
 function hostOf(url: string): string | null {
@@ -150,6 +165,61 @@ function runGuideTool(
   return { content: `Unknown tool: ${name}.`, ok: false, label: null };
 }
 
+/**
+ * Decides which answer text the player sees. A text block is held while it is short: if the next
+ * block calls a tool it was narration ("Let me search the web.") and is dropped; otherwise it is
+ * shown. Text after another kind of block is set off from earlier text by a blank line, while
+ * consecutive text blocks (split by citations) join exactly.
+ */
+class TextShaper {
+  /** The last character shown, "" before any. */
+  private tail = "";
+  /** Another kind of block came after the last text shown. */
+  private apart = false;
+  /** The current text block's chunks while held; null when there is none or it streams live. */
+  private held: string[] | null = null;
+  private heldLength = 0;
+
+  /** A block starts: settles a held text block by the new block's type, then opens the new one. */
+  start(type: string): string[] {
+    const out = this.held === null || TOOL_BLOCKS.has(type) ? [] : this.release();
+    this.held = type === "text" ? [] : null;
+    this.heldLength = 0;
+    if (type !== "text") this.apart = true;
+    return out;
+  }
+
+  /** A text delta of the current text block. */
+  text(t: string): string[] {
+    if (t === "") return [];
+    if (this.held === null) return this.show(t);
+    this.held.push(t);
+    this.heldLength += t.length;
+    return this.heldLength > NARRATION_MAX ? this.release() : [];
+  }
+
+  /** The round ended: a held block is shown unless the round goes on to run tools. */
+  end(toolsFollow: boolean): string[] {
+    const out = this.held === null || toolsFollow ? [] : this.release();
+    this.held = null;
+    return out;
+  }
+
+  /** Shows the held chunks; the rest of the block, if any, streams live. */
+  private release(): string[] {
+    const chunks = this.held ?? [];
+    this.held = null;
+    return chunks.flatMap((t) => this.show(t));
+  }
+
+  private show(t: string): string[] {
+    const out = this.apart && this.tail !== "" && !/\s/.test(this.tail) ? ["\n\n", t] : [t];
+    this.apart = false;
+    this.tail = t.slice(-1);
+    return out;
+  }
+}
+
 export class Assistant {
   private readonly client: StreamClient;
   private readonly model: string;
@@ -190,8 +260,7 @@ export class Assistant {
     let guideCalls = 0;
     let lookups = 0;
     let fetches = 0;
-    // The last character of answer text streamed so far, "" before any.
-    let tail = "";
+    const shaper = new TextShaper();
     let messages: unknown[] = buildMessages(ctx, history, question, depth);
     // Container-bound server tools reject a follow-up that omits the container the question's
     // earlier rounds ran in. Scoped to this question only.
@@ -205,7 +274,6 @@ export class Assistant {
           return;
         }
         rounds += 1;
-        let roundText = false;
         const blocks = new Map<number, Block>();
         const stream = this.client.stream(
           {
@@ -226,18 +294,16 @@ export class Assistant {
           const index = typeof ev.index === "number" ? ev.index : -1;
           if (ev.type === "content_block_start") {
             const cb = (ev.content_block ?? {}) as Record<string, unknown>;
-            blocks.set(index, { type: str(cb.type), name: str(cb.name), json: "" });
+            const type = str(cb.type);
+            // A server tool called from code arrives with its whole input and no JSON deltas.
+            const input = isRecord(cb.input) && Object.keys(cb.input).length > 0 ? cb.input : null;
+            blocks.set(index, { type, name: str(cb.name), input, json: "" });
+            for (const t of shaper.start(type)) yield { type: "text", text: t };
           } else if (ev.type === "content_block_delta") {
             const d = (ev.delta ?? {}) as Record<string, unknown>;
             const block = blocks.get(index);
             if (d.type === "text_delta" && block?.type === "text") {
-              const t = str(d.text);
-              if (!roundText && rounds > 1 && tail !== "" && !/\s/.test(tail)) {
-                yield { type: "text", text: "\n\n" };
-              }
-              roundText = true;
-              if (t !== "") tail = t.slice(-1);
-              yield { type: "text", text: t };
+              for (const t of shaper.text(str(d.text))) yield { type: "text", text: t };
             } else if (d.type === "input_json_delta" && block?.type === "server_tool_use") {
               block.json += str(d.partial_json);
             }
@@ -246,11 +312,11 @@ export class Assistant {
             blocks.delete(index);
             if (block?.type === "server_tool_use" && block.name === "web_search") {
               searches += 1;
-              const query = inputField(block.json, "query");
+              const query = inputField(block, "query");
               if (query !== null) yield { type: "search", query };
             } else if (block?.type === "server_tool_use" && block.name === "web_fetch") {
               fetches += 1;
-              const url = inputField(block.json, "url");
+              const url = inputField(block, "url");
               const host = url === null ? null : hostOf(url);
               if (host !== null) yield { type: "lookup", label: `Opened: ${host}` };
             }
@@ -268,17 +334,19 @@ export class Assistant {
           const n = final.usage[f];
           if (typeof n === "number") info[f] = ((info[f] as number | undefined) ?? 0) + n;
         }
+        const calls =
+          final.stop_reason === "tool_use"
+            ? (final.content as Record<string, unknown>[]).filter((b) => b?.type === "tool_use")
+            : [];
+        for (const t of shaper.end(calls.length > 0)) yield { type: "text", text: t };
         if (final.stop_reason === "refusal") {
           yield { type: "error", message: REFUSED };
           completed = true;
           return;
         }
-        // The content goes back exactly as returned: preserved thinking needs it unmodified.
+        // The content goes back exactly as returned, dropped narration included: preserved
+        // thinking needs it unmodified.
         const assistantTurn = { role: "assistant", content: final.content };
-        const calls =
-          final.stop_reason === "tool_use"
-            ? (final.content as Record<string, unknown>[]).filter((b) => b?.type === "tool_use")
-            : [];
         if ((final.stop_reason === "pause_turn" || calls.length > 0) && rounds === MAX_ROUNDS) {
           info.stop = "max_rounds";
           yield { type: "error", message: TOO_MANY };
