@@ -15,6 +15,8 @@ export interface StreamClient {
       usage: Record<string, unknown>;
       /** The response's content blocks, exactly as the SDK returns them. */
       content: unknown[];
+      /** Set when the response ran code (dynamic-filtering web tools). */
+      container?: { id?: unknown } | null;
     }>;
   };
 }
@@ -183,6 +185,9 @@ export class Assistant {
     let lookups = 0;
     let fetches = 0;
     let messages: unknown[] = buildMessages(ctx, history, question, depth);
+    // Container-bound server tools reject a follow-up that omits the container the question's
+    // earlier rounds ran in. Scoped to this question only.
+    let container: string | null = null;
     // False while the body may still be suspended at a yield the consumer never resumes.
     let completed = false;
     try {
@@ -208,6 +213,7 @@ export class Assistant {
             tools: TOOLS,
             betas: ["server-side-fallback-2026-07-01"],
             fallbacks: "default",
+            ...(container === null ? {} : { container }),
           },
           { signal },
         );
@@ -246,6 +252,8 @@ export class Assistant {
         }
         const final = await stream.finalMessage();
         info.stop = final.stop_reason;
+        const containerId = final.container?.id;
+        if (typeof containerId === "string" && containerId !== "") container = containerId;
         for (const f of USAGE_FIELDS) {
           const n = final.usage[f];
           if (typeof n === "number") info[f] = ((info[f] as number | undefined) ?? 0) + n;

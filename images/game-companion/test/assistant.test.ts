@@ -30,6 +30,7 @@ interface Final {
   stop_reason: string | null;
   usage: Record<string, unknown>;
   content: unknown[];
+  container?: { id?: unknown } | null;
 }
 
 interface Round {
@@ -781,5 +782,59 @@ describe("Assistant tool loop logging", () => {
     ]) {
       expect(dump).not.toContain(secret);
     }
+  });
+});
+
+describe("Assistant code-execution container", () => {
+  const withContainer = (round: Round, id: string): Round => ({
+    ...round,
+    final: { ...round.final, container: { id, expires_at: "2026-10-16T23:00:00Z" } as never },
+  });
+
+  it("sends the container a tool round ran in on the next round only", async () => {
+    const f = scripted([withContainer(toolRound([search("1", "a")]), "cont_1"), answer("ok")]);
+    await run(make(f).assistant);
+    expect(f.calls).toHaveLength(2);
+    expect(f.calls[0]!.params).not.toHaveProperty("container");
+    expect(f.calls[1]!.params.container).toBe("cont_1");
+  });
+
+  it("carries the container through a pause_turn continuation and keeps the latest id", async () => {
+    const paused: Round = {
+      events: [],
+      final: { stop_reason: "pause_turn", usage: {}, content: [] },
+    };
+    const f = scripted([
+      withContainer(paused, "cont_1"),
+      paused,
+      withContainer(paused, "cont_2"),
+      answer("ok"),
+    ]);
+    await run(make(f).assistant);
+    expect(f.calls.map((c) => c.params.container)).toEqual([
+      undefined,
+      "cont_1",
+      "cont_1",
+      "cont_2",
+    ]);
+  });
+
+  it("never carries a container into the next question", async () => {
+    const f = scripted([
+      withContainer(toolRound([search("1", "a")]), "cont_1"),
+      answer("first"),
+      answer("second"),
+    ]);
+    const { assistant } = make(f);
+    await run(assistant);
+    await run(assistant);
+    expect(f.calls).toHaveLength(3);
+    expect(f.calls[2]!.params).not.toHaveProperty("container");
+  });
+
+  it("sends no container when no round reports one", async () => {
+    const f = scripted([toolRound([search("1", "a")]), answer("ok")]);
+    await run(make(f).assistant);
+    expect(f.calls[1]!.params).not.toHaveProperty("container");
   });
 });
