@@ -674,6 +674,31 @@ describe("display settings", () => {
     expect(gotIt.getAttribute("type")).toBe("button");
   });
 
+  it.each([
+    ["hidden", true],
+    ["prompt", false],
+    ["apple", false],
+  ] as const)(
+    "shows the card's install line only while the Install row shows (install %s)",
+    (installState, lineHidden) => {
+      const { picker } = make();
+      picker.setSettings({ ...all, install: installState });
+      const lines = [...card(picker).querySelectorAll<HTMLElement>(".setup-card-line")];
+      expect(lines[0]?.textContent).toBe("Install the app (see Install below).");
+      expect(lines.map((l) => l.hidden)).toEqual([lineHidden, false, false]);
+      expect(install(picker).hidden).toBe(lineHidden);
+    },
+  );
+
+  it("brings the card's install line back when the browser offers an install", () => {
+    const { picker } = make();
+    picker.setSettings({ ...all, install: "hidden" });
+    const first = card(picker).querySelector(".setup-card-line") as HTMLElement;
+    expect(first.hidden).toBe(true);
+    picker.setSettings({ ...all, install: "prompt" });
+    expect(first.hidden).toBe(false);
+  });
+
   it("reports Got it, leaves the picker open, and hides the card once dismissed", () => {
     const { picker, handlers } = make();
     picker.setSettings(all);

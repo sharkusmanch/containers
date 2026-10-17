@@ -678,10 +678,32 @@ export function startApp(opts: AppOptions): App {
     showToast(unlockText(fresh.map((a) => a.name)), 10_000);
   }
 
+  // Whether `node` is somewhere to type text: a text-like input, a textarea, or an editable region.
+  const NON_TEXT_INPUTS = /^(button|checkbox|color|file|image|radio|range|reset|submit)$/i;
+  const isTextEntry = (node: unknown): boolean => {
+    if (node === null || typeof node !== "object" || !("matches" in node)) return false;
+    const element = node as Element;
+    if (element.matches("textarea, [contenteditable='' i], [contenteditable='true' i]"))
+      return true;
+    return element.matches("input") && !NON_TEXT_INPUTS.test(element.getAttribute("type") ?? "");
+  };
+
   // Picks the arrangement from the window size and the person's choice, and marks #app with it.
-  const applyLayoutMode = (): void => {
+  // With `resized`, a window that only got shorter while a text field has focus is the on-screen
+  // keyboard, not a new shape of screen: the arrangement stays until focus leaves or the width moves.
+  const applyLayoutMode = (resized = false): void => {
     const size = (value: unknown): number => (typeof value === "number" ? value : 0);
+    const previous = windowSize;
     windowSize = { width: size(opts.win?.innerWidth), height: size(opts.win?.innerHeight) };
+    if (
+      resized &&
+      windowSize.width > 0 &&
+      windowSize.width === previous.width &&
+      windowSize.height <= previous.height &&
+      isTextEntry(doc.activeElement)
+    ) {
+      return;
+    }
     const before = layoutMode;
     layoutMode = chooseLayout({ ...windowSize, override: settings.layoutMode });
     for (const mode of ["single", "tabs", "split"] as const) {
@@ -1299,6 +1321,12 @@ export function startApp(opts: AppOptions): App {
   doc.addEventListener("fullscreenchange", showSettings);
   opts.install?.onChange(showSettings);
   opts.win?.addEventListener?.("resize", () => {
+    applyLayoutMode(true);
+    showSettings();
+  });
+  // Putting the keyboard away (focus leaving every text field) settles the arrangement it held.
+  doc.addEventListener("focusout", (event) => {
+    if (isTextEntry(event.relatedTarget)) return;
     applyLayoutMode();
     showSettings();
   });

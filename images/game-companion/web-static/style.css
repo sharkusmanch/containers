@@ -903,6 +903,14 @@ button {
   color: var(--text-dim);
 }
 
+.setting-layout-readout {
+  margin: 0;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
 /* ---- Ask panel: same place and stacking as .ach; the input row stays at the bottom ---- */
 
 .ask {

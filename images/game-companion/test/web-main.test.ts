@@ -2965,6 +2965,94 @@ describe("display settings", () => {
       expect($(".stage")).toBe(stage);
     });
 
+    describe("with the on-screen keyboard up", () => {
+      // The Ask panel is hidden until the assistant is on; jsdom will not focus inside a hidden one.
+      const askInput = (): HTMLTextAreaElement => {
+        ($(".ask") as HTMLElement).hidden = false;
+        return $(".ask-input") as HTMLTextAreaElement;
+      };
+
+      it("keeps the layout while a text field has focus and the window only got shorter", async () => {
+        const { win, resize } = sized(412, 915);
+        await start(memory(), { win });
+        expect(appClasses()).toEqual(["layout-tabs"]);
+        askInput().focus();
+        resize(412, 500);
+        expect(appClasses()).toEqual(["layout-tabs"]);
+        resize(412, 480);
+        expect(appClasses()).toEqual(["layout-tabs"]);
+        askInput().blur();
+      });
+
+      it("re-evaluates when focus leaves, and when the window grows back", async () => {
+        const { win, resize } = sized(412, 915);
+        await start(memory(), { win });
+        askInput().focus();
+        resize(412, 500);
+        expect(appClasses()).toEqual(["layout-tabs"]);
+        askInput().blur();
+        expect(appClasses()).toEqual(["layout-single"]);
+        askInput().focus();
+        resize(412, 915);
+        expect(appClasses()).toEqual(["layout-tabs"]);
+        askInput().blur();
+        expect(appClasses()).toEqual(["layout-tabs"]);
+      });
+
+      it("keeps the layout when focus moves from one text field to another", async () => {
+        const { win, resize } = sized(412, 915);
+        await start(memory(), { win });
+        const other = document.createElement("input");
+        document.body.append(other);
+        askInput().focus();
+        resize(412, 500);
+        other.focus();
+        expect(appClasses()).toEqual(["layout-tabs"]);
+        other.remove();
+      });
+
+      it("re-evaluates on a change of width even with a text field focused", async () => {
+        const { win, resize } = sized(412, 915);
+        await start(memory(), { win });
+        askInput().focus();
+        resize(884, 500);
+        expect(appClasses()).toEqual(["layout-split"]);
+        askInput().blur();
+      });
+
+      it("re-evaluates a shorter window when no text field has focus", async () => {
+        const { win, resize } = sized(412, 915);
+        await start(memory(), { win });
+        resize(412, 500);
+        expect(appClasses()).toEqual(["layout-single"]);
+      });
+
+      it("does not count a button or a checkbox as a text field", async () => {
+        const { win, resize } = sized(412, 915);
+        await start(memory(), { win });
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        document.body.append(box);
+        box.focus();
+        resize(412, 500);
+        expect(appClasses()).toEqual(["layout-single"]);
+        box.remove();
+      });
+
+      it("counts a contenteditable element as a text field", async () => {
+        const { win, resize } = sized(412, 915);
+        await start(memory(), { win });
+        const editor = document.createElement("div");
+        editor.setAttribute("contenteditable", "true");
+        editor.tabIndex = 0;
+        document.body.append(editor);
+        editor.focus();
+        resize(412, 500);
+        expect(appClasses()).toEqual(["layout-tabs"]);
+        editor.remove();
+      });
+    });
+
     it("cycles the Display row, saves the choice and applies it at once", async () => {
       const { win } = sized(1440, 900);
       const { storage } = await start(memory(), { win });

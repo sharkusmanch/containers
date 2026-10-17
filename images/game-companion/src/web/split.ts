@@ -91,6 +91,8 @@ export function createDivider(
   });
   element.addEventListener("pointermove", (event) => {
     if (drag === null || event.pointerId !== drag.pointerId) return;
+    // A mouse button let go outside the window sends no pointerup; moves without it are not a drag.
+    if (event.pointerType === "mouse" && event.buttons === 0) return;
     const area = options.measure();
     const next = fractionAt(event.clientX, area.left, area.width);
     if (next === null || next === fraction) return;
@@ -112,10 +114,13 @@ export function createDivider(
     lastRelease = at;
     if (ended.moved) options.onCommit(fraction);
   });
-  element.addEventListener("pointercancel", (event) => {
-    const ended = end(event);
-    if (ended?.moved === true) options.onCommit(fraction);
-  });
+  // A lost capture (the page lost focus, the element was hidden) ends the drag like a cancel.
+  for (const type of ["pointercancel", "lostpointercapture"]) {
+    element.addEventListener(type, (event) => {
+      const ended = end(event as PointerEvent);
+      if (ended?.moved === true) options.onCommit(fraction);
+    });
+  }
 
   return { element };
 }

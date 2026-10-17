@@ -112,6 +112,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   setupTitle.classList.add("setup-card-title");
   setupTitle.textContent = "Set up this device";
   setupCard.append(setupTitle);
+  const setupLines: HTMLElement[] = [];
   for (const text of [
     "Install the app (see Install below).",
     "Sign in to Outline once inside the installed app; guide pages stay blank until you do.",
@@ -121,6 +122,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     line.classList.add("setup-card-line");
     line.textContent = text;
     setupCard.append(line);
+    setupLines.push(line);
   }
   const gotIt = doc.createElement("button");
   gotIt.setAttribute("type", "button");
@@ -419,6 +421,9 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
       }
       setupCard.hidden = state.setupDismissed;
       installRow.hidden = state.install === "hidden";
+      // The first line points at the Install row, so it goes when the row does.
+      const installLine = setupLines[0];
+      if (installLine !== undefined) installLine.hidden = state.install === "hidden";
       installButton.hidden = state.install !== "prompt";
       installApple.hidden = state.install !== "apple";
       readout.textContent = windowReadout(

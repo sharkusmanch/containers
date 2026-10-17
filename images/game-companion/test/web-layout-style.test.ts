@@ -69,6 +69,14 @@ describe("the layout stylesheet rules", () => {
     expect(picker?.body).toContain("inset: 0;");
   });
 
+  it("styles the window readout as a quiet text row level with the other rows", () => {
+    const rule = rules.find((r) => r.selectors.includes(".setting-layout-readout"));
+    expect(rule?.body).toContain("margin: 0;");
+    expect(rule?.body).toContain("padding: 4px 12px;");
+    expect(rule?.body).toContain("font-size: 13px;");
+    expect(rule?.body).toContain("color: var(--text-dim);");
+  });
+
   it("pads the bottom tab bar by the bottom safe area", () => {
     const rule = /\.layout-tabs \.rail \{([^}]*)\}/.exec(css)?.[1] ?? "";
     expect(rule).toContain("padding-bottom: env(safe-area-inset-bottom");

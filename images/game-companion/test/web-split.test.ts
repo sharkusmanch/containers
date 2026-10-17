@@ -92,9 +92,9 @@ describe("createDivider", () => {
       setPointerCapture: capture,
       releasePointerCapture: release,
     });
-    const fire = (type: string, clientX = 0, pointerId = 1): void => {
+    const fire = (type: string, clientX = 0, pointerId = 1, extra: PointerEventInit = {}): void => {
       divider.element.dispatchEvent(
-        new PointerEvent(type, { bubbles: true, cancelable: true, clientX, pointerId }),
+        new PointerEvent(type, { bubbles: true, cancelable: true, clientX, pointerId, ...extra }),
       );
     };
     const advance = (ms: number): void => {
@@ -177,5 +177,47 @@ describe("createDivider", () => {
     expect(onCommit.mock.calls).toEqual([[0.4]]);
     fire("pointermove", 900);
     expect(onCommit.mock.calls).toEqual([[0.4]]);
+  });
+
+  it("ends a drag when the pointer capture is lost, as it does on cancel", () => {
+    const { onCommit, fire } = setup();
+    fire("pointerdown", 540);
+    fire("pointermove", 420);
+    fire("lostpointercapture", 420);
+    expect(onCommit.mock.calls).toEqual([[0.4]]);
+    fire("pointermove", 900);
+    expect(onCommit.mock.calls).toEqual([[0.4]]);
+  });
+
+  it("saves nothing when capture is lost on a drag that never moved", () => {
+    const { onCommit, fire } = setup();
+    fire("pointerdown", 540);
+    fire("lostpointercapture", 540);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("does not take the capture released by its own pointerup as a second ending", () => {
+    const { onCommit, fire } = setup();
+    fire("pointerdown", 540);
+    fire("pointermove", 420);
+    fire("pointerup", 420);
+    fire("lostpointercapture", 420);
+    expect(onCommit.mock.calls).toEqual([[0.4]]);
+  });
+
+  it("ignores a mouse move with no button held, and follows one with the button down", () => {
+    const { onMove, fire } = setup();
+    fire("pointerdown", 540, 1, { pointerType: "mouse", buttons: 1 });
+    fire("pointermove", 420, 1, { pointerType: "mouse", buttons: 0 });
+    expect(onMove).not.toHaveBeenCalled();
+    fire("pointermove", 420, 1, { pointerType: "mouse", buttons: 1 });
+    expect(onMove.mock.calls).toEqual([[0.4]]);
+  });
+
+  it("still follows a touch or pen move that reports no buttons", () => {
+    const { onMove, fire } = setup();
+    fire("pointerdown", 540, 1, { pointerType: "touch", buttons: 0 });
+    fire("pointermove", 420, 1, { pointerType: "touch", buttons: 0 });
+    expect(onMove.mock.calls).toEqual([[0.4]]);
   });
 });
