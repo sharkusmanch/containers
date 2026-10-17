@@ -279,6 +279,8 @@ export function createAssistantView(
         body.replaceChildren(...answerNodes(doc, received));
       } else if (e.type === "search" && typeof e.query === "string") {
         searches.append(el("p", "ask-search", `Searched the web: ${e.query}`));
+      } else if (e.type === "lookup" && typeof e.label === "string") {
+        searches.append(el("p", "ask-search", e.label));
       } else if (e.type === "done") {
         outcome = "done";
       } else if (e.type === "error") {

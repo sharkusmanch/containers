@@ -180,6 +180,26 @@ describe("assistant view: streaming", () => {
     await answer(fake.calls[0], { type: "done", truncatedGuide: false });
   });
 
+  it("shows guide lookups with web searches in arrival order, as plain text", async () => {
+    starters()[0]?.click();
+    const call = fake.calls[0];
+    call?.emit({ type: "lookup", label: "Searched your guide: <b>lantern</b>" });
+    call?.emit({ type: "search", query: "sample boss weakness" });
+    call?.emit({ type: "lookup", label: "Read guide: Notes › Items" });
+    call?.emit({ type: "lookup" } as unknown as AskEvent);
+    call?.emit({ type: "lookup", label: 5 } as unknown as AskEvent);
+    const searches = lastAnswer().querySelector(".ask-searches");
+    expect(
+      [...(searches?.querySelectorAll(".ask-search") ?? [])].map((s) => s.textContent),
+    ).toEqual([
+      "Searched your guide: <b>lantern</b>",
+      "Searched the web: sample boss weakness",
+      "Read guide: Notes › Items",
+    ]);
+    expect(searches?.querySelector("b")).toBeNull();
+    await answer(call, { type: "done", truncatedGuide: false });
+  });
+
   it("Stop aborts the request, keeps what arrived with (stopped), and saves it", async () => {
     type("Where now?");
     press("Enter");

@@ -1,10 +1,10 @@
 import type { AchievementsResponse, AskRequest, Source } from "../shared/types.js";
 import type { AchievementService } from "./achievements.js";
-import type { Assistant } from "./assistant.js";
+import type { Assistant, GuideToolRunner } from "./assistant.js";
 import { buildContext } from "./assistant-context.js";
 import type { Detector, DetectorSnapshot } from "./detector.js";
 import type { GuideIndex } from "./guide-index.js";
-import { type GuidePageService, missableMarks } from "./guide-pages.js";
+import { type GuidePageService, missableMarks, type PageText } from "./guide-pages.js";
 import { readGuide, searchGuide } from "./guide-tools.js";
 import type { AskLimiter } from "./rate-limit.js";
 import type { RouteDeps } from "./routes.js";
@@ -34,6 +34,24 @@ export interface AppParts {
     guideChars: number;
   };
 }
+
+/** The guide tools over a hub's own pages. */
+const guideRunner = (texts: PageText[]): GuideToolRunner => ({
+  search: (query) => searchGuide(texts, query),
+  read: (page, section) => readGuide(texts, page, section),
+});
+
+const NO_GUIDE = "This game has no guide.";
+
+/** The guide tools for a question about a game with no hub: every lookup reports there is no guide. */
+const noGuide: GuideToolRunner = {
+  search: () => NO_GUIDE,
+  read: (page, section) => ({
+    text: NO_GUIDE,
+    label: `Read guide: ${page}${section === undefined || section.trim() === "" ? "" : ` › ${section}`}`,
+    ok: false,
+  }),
+};
 
 /**
  * Adapts the detector, guide index and achievement service to the request handler.
@@ -184,10 +202,14 @@ export function buildDeps(parts: AppParts): RouteDeps {
                 pinnedTitles: parts.defaultPins,
                 guideChars: askParts.guideChars,
               });
-              return askParts.assistant.ask(ctx, req.history, req.question, req.depth, signal, {
-                search: (query) => searchGuide(texts, query),
-                read: (page, section) => readGuide(texts, page, section),
-              });
+              return askParts.assistant.ask(
+                ctx,
+                req.history,
+                req.question,
+                req.depth,
+                signal,
+                req.hubId === null ? noGuide : guideRunner(texts),
+              );
             },
           },
   };

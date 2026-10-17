@@ -117,10 +117,24 @@ The Outline key needs only these scopes:
 
 `POST /companion/api/ask` takes `{hubId, game, history, question, depth}` (a JSON body of at
 most 32 KiB; `hubId` or `game` may be `null`, not both; the question is 1-1,000 characters, up to
-10 earlier turns) and streams one JSON event per line (`search`, `text`, `done`, `error`) as
-`application/x-ndjson`. The model sees the game's guide (up to `ASSISTANT_GUIDE_CHARS`
-characters, pinned pages first), the play state and the player's achievement progress, and may
-search the web at most twice per question.
+10 earlier turns) and streams one JSON event per line (`search`, `lookup`, `text`, `done`,
+`error`) as `application/x-ndjson`. The model sees the game's guide (up to
+`ASSISTANT_GUIDE_CHARS` characters, pinned pages first, plus an outline of every page), the play
+state and the player's achievement progress.
+
+Tools the model may call while answering:
+
+- `search_guide` finds lines in the game's guide pages (at most 20 matches);
+  `read_guide_page` reads one page or one section of it (at most 30,000 characters). Together
+  they are limited to 6 calls per question. A question about a game with no guide gets
+  "This game has no guide."
+- Web search, at most 3 per question, and web fetch, at most 2 per question (8,000 tokens per
+  page).
+- A question takes at most 8 model rounds.
+
+Each lookup shows above the answer as one line: `Searched your guide: <query>`,
+`Read guide: <page>` (or `Read guide: <page> › <section>`), `Searched the web: <query>` and
+`Opened: <host>`. Lookup lines are not kept in the saved conversation.
 
 Requests are checked in this order, each failing before any later work: `Content-Type` must be
 `application/json` (415); `Origin` must be the origin of `OUTLINE_BASE_URL` (403); the body must
@@ -130,12 +144,14 @@ hub and a game that may be looked up (400); the rate limit must admit it (429, w
 sent with it is ignored. Only these three
 request headers are read, and only by this route.
 
-Cost and limits: every admitted question is billed by Anthropic, including a web search or
-two. The guide is sent as a cached prefix, so repeat questions about one game are cheaper while
+Cost and limits: every admitted question is billed by Anthropic, and each tool round sends the
+conversation again, so a question that looks pages up or researches the web costs more than one
+answered from the guide in the prompt. The guide is sent as a cached prefix, so repeat questions about one game are cheaper while
 the guide is unchanged. The limits are counted in memory for the whole service, not per caller,
 so a restart resets them; set a monthly spend limit in the Anthropic Console as the hard
 backstop. Question and answer text is never logged: the one log line per question carries the
-model, token counts, stop reason, search count and duration.
+model, token counts, stop reason, search count, `rounds`, `lookups` (guide tool calls),
+`fetches` (pages opened) and duration.
 
 RA responses include the configured `accountIdentity` and the last successful upstream
 `fetchedAt` timestamp. Stale cache reads and failed retries preserve that timestamp;

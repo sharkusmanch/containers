@@ -949,6 +949,48 @@ describe("ask", () => {
     );
   });
 
+  it("passes a runner that searches and reads the hub's own pages", async () => {
+    const { d, calls } = setup();
+    await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
+    const runner = calls.ask[0]?.[5] as {
+      search(query: string): string;
+      read(page: string, section?: string): { text: string; label: string; ok: boolean };
+    };
+    expect(runner.search("Golden Lantern")).toContain("Notes");
+    expect(runner.search("Golden Lantern")).toContain("Golden Lantern");
+    expect(runner.read("Walkthrough")).toEqual({
+      text: "walk",
+      label: "Read guide: Walkthrough",
+      ok: true,
+    });
+    expect(runner.read("Missing").ok).toBe(false);
+  });
+
+  it("gives a game-only question a runner that reports there is no guide", async () => {
+    const { d, calls } = setup({ detector: detecting(null, "none"), additionalRaGameIds: ["5"] });
+    await collect(
+      (await d.ask?.start(
+        req({ hubId: null, game: { source: "ra", id: "5" } }),
+        new AbortController().signal,
+      )) ?? null,
+    );
+    const runner = calls.ask[0]?.[5] as {
+      search(query: string): string;
+      read(page: string, section?: string): { text: string; label: string; ok: boolean };
+    };
+    expect(runner.search("Golden Lantern")).toBe("This game has no guide.");
+    expect(runner.read("Walkthrough")).toEqual({
+      text: "This game has no guide.",
+      label: "Read guide: Walkthrough",
+      ok: false,
+    });
+    expect(runner.read("Walkthrough", "Intro")).toEqual({
+      text: "This game has no guide.",
+      label: "Read guide: Walkthrough › Intro",
+      ok: false,
+    });
+  });
+
   it("works from a game alone: no pages, titled from the achievements, labelled by source", async () => {
     const { d, calls } = setup({ detector: detecting(null, "none"), additionalRaGameIds: ["5"] });
     await collect(
