@@ -5136,3 +5136,239 @@ describe("Ask panel", () => {
     expect($(".ach")?.hidden).toBe(false);
   });
 });
+
+describe("two panes", () => {
+  const ACHIEVEMENTS_INDEX = -1;
+  const LAYOUT_KEY = "game-companion:v1:layout:hA";
+  const SETTINGS_KEY = "game-companion:v1:settings";
+  const bothPinned = JSON.stringify({
+    slots: [
+      { title: "Achievement Checklist", url: "/doc/hA-checklist" },
+      { title: "Collectibles", url: "/doc/hA-coll" },
+      null,
+      null,
+    ],
+    active: ACHIEVEMENTS_INDEX,
+  });
+  const sized = (width: number, height: number) => {
+    const target = new EventTarget();
+    const win = {
+      innerWidth: width,
+      innerHeight: height,
+      addEventListener: (type: string, cb: () => void) => target.addEventListener(type, cb),
+    };
+    const resize = (w: number, h: number): void => {
+      win.innerWidth = w;
+      win.innerHeight = h;
+      target.dispatchEvent(new Event("resize"));
+    };
+    return { win, resize };
+  };
+  const start = async (
+    storage = memory(),
+    extra: { width?: number; height?: number; assistant?: boolean; api?: Fake } = {},
+  ) => {
+    const { win, resize } = sized(extra.width ?? 884, extra.height ?? 1004);
+    const api = extra.api ?? fakeApi({ ...playing(hubA), assistant: extra.assistant ?? true });
+    const app = startApp({ doc: document, api, storage, setInterval: noTimers, win });
+    await app.ready;
+    return { app, api, storage, resize };
+  };
+  const shown = (): string | null => $("iframe:not(.inactive)")?.getAttribute("src") ?? null;
+  const right = (): string =>
+    $(".ask")?.hidden === false ? "ask" : $(".ach")?.hidden === false ? "achievements" : "none";
+  const askButton = (): HTMLButtonElement =>
+    document.querySelector('.rail button[aria-label="Ask"]') as HTMLButtonElement;
+  const marked = (): (string | null)[] =>
+    railButtons()
+      .filter((b) => b.classList.contains("active"))
+      .map((b) => b.getAttribute("aria-label"));
+  const twoPanes = (): boolean => $(".stage")?.classList.contains("two-panes") === true;
+  const storedActive = (storage: ReturnType<typeof memory>): unknown =>
+    (JSON.parse(storage.getItem(LAYOUT_KEY) as string) as { active: unknown }).active;
+
+  it("shows the first pinned page on the left and the achievements on the right", async () => {
+    await start();
+    expect(twoPanes()).toBe(true);
+    expect(shown()).toBe("/doc/hA-checklist");
+    expect(right()).toBe("achievements");
+    expect(marked()).toEqual(["Achievements", "Achievement Checklist"]);
+  });
+
+  it("routes a page tap to the left pane and 🏆 / 💬 to the right pane", async () => {
+    const storage = memory();
+    storage.setItem(LAYOUT_KEY, bothPinned);
+    await start(storage);
+    const seen: [string | null, string, (string | null)[]][] = [];
+    const look = (): void => void seen.push([shown(), right(), marked()]);
+    look();
+    railButtons()[2]?.click(); // Collectibles
+    look();
+    expect(storedActive(storage)).toBe(1);
+    askButton().click();
+    look();
+    railButtons()[1]?.click(); // Achievement Checklist
+    look();
+    expect(storedActive(storage)).toBe(0);
+    railButtons()[0]?.click(); // 🏆
+    look();
+    expect(storedActive(storage)).toBe(ACHIEVEMENTS_INDEX);
+    expect(seen).toEqual([
+      ["/doc/hA-checklist", "achievements", ["Achievements", "Achievement Checklist"]],
+      ["/doc/hA-coll", "achievements", ["Achievements", "Collectibles"]],
+      ["/doc/hA-coll", "ask", ["Collectibles", "Ask"]],
+      ["/doc/hA-checklist", "ask", ["Achievement Checklist", "Ask"]],
+      ["/doc/hA-checklist", "achievements", ["Achievements", "Achievement Checklist"]],
+    ]);
+  });
+
+  it("keeps the stored layout format: the same entry a single page writes", async () => {
+    const storage = memory();
+    storage.setItem(LAYOUT_KEY, bothPinned);
+    await start(storage);
+    railButtons()[2]?.click();
+    askButton().click();
+    expect(JSON.parse(storage.getItem(LAYOUT_KEY) as string)).toEqual({
+      ...(JSON.parse(bothPinned) as object),
+      active: 1,
+    });
+  });
+
+  it("behaves like a single page with nothing pinned", async () => {
+    const api = fakeApi({ ...playing(hubA), assistant: true });
+    api.hubTree = async () => ({ ...tree(hubA), defaultPins: [] });
+    await start(memory(), { api });
+    expect(twoPanes()).toBe(false);
+    expect(shown()).toBeNull();
+    expect(right()).toBe("achievements");
+    askButton().click();
+    expect(right()).toBe("ask");
+    expect(marked()).toEqual(["Ask"]);
+    railButtons()[0]?.click();
+    expect(right()).toBe("achievements");
+  });
+
+  it("keeps the Ask panel open when a page is pinned from the picker", async () => {
+    await start();
+    askButton().click();
+    ($(".rail button[aria-label='Pages and games']") as HTMLElement).click();
+    const collectibles = [...document.querySelectorAll<HTMLElement>(".picker-item")].find(
+      (b) => b.textContent?.includes("Collectibles") === true,
+    );
+    collectibles?.click();
+    expect(shown()).toBe("/doc/hA-coll");
+    expect(right()).toBe("ask");
+  });
+
+  it("re-routes on a resize: a single page shows the active item, two panes the last page", async () => {
+    const { resize } = await start(memory(), { width: 411, height: 470 });
+    railButtons()[1]?.click();
+    railButtons()[0]?.click();
+    expect(twoPanes()).toBe(false);
+    expect(shown()).toBeNull();
+    expect(right()).toBe("achievements");
+    resize(884, 1004);
+    expect(twoPanes()).toBe(true);
+    expect(shown()).toBe("/doc/hA-checklist");
+    expect(right()).toBe("achievements");
+    resize(411, 470);
+    expect(twoPanes()).toBe(false);
+    expect(shown()).toBeNull();
+  });
+
+  it("never recreates or re-parents a frame or a panel when the mode changes", async () => {
+    const storage = memory();
+    storage.setItem(LAYOUT_KEY, bothPinned);
+    const { resize } = await start(storage);
+    railButtons()[2]?.click();
+    railButtons()[1]?.click();
+    const frames = [...document.querySelectorAll("iframe")];
+    expect(frames).toHaveLength(2);
+    const parents = frames.map((f) => f.parentElement);
+    const panels = [$(".ach"), $(".ask"), $(".frames")];
+    const panelParents = panels.map((p) => p?.parentElement);
+    for (const [w, h] of [
+      [411, 470],
+      [412, 915],
+      [884, 1004],
+      [411, 470],
+    ] as const) {
+      resize(w, h);
+      expect([...document.querySelectorAll("iframe")]).toEqual(frames);
+      expect(frames.map((f) => f.parentElement)).toEqual(parents);
+      expect([$(".ach"), $(".ask"), $(".frames")]).toEqual(panels);
+      expect(panels.map((p) => p?.parentElement)).toEqual(panelParents);
+    }
+  });
+
+  it("keeps the rail's buttons, in order, as the bottom tab bar", async () => {
+    const { resize } = await start(memory(), { width: 411, height: 470 });
+    const rail = $(".rail");
+    const order = railButtons();
+    const labels = order.map((b) => b.getAttribute("aria-label"));
+    resize(412, 915);
+    expect($("#app")?.classList.contains("layout-tabs")).toBe(true);
+    expect($(".rail")).toBe(rail);
+    expect(railButtons()).toEqual(order);
+    expect(railButtons().map((b) => b.getAttribute("aria-label"))).toEqual(labels);
+    expect(labels[0]).toBe("Achievements");
+    expect(labels.slice(-2)).toEqual(["Ask", "Pages and games"]);
+  });
+
+  describe("divider", () => {
+    const divider = (): HTMLElement => $(".split-divider") as HTMLElement;
+    const splitLeft = (): string =>
+      ($("#app") as HTMLElement).style.getPropertyValue("--split-left");
+    const fire = (type: string, clientX: number): void => {
+      divider().dispatchEvent(
+        new PointerEvent(type, { bubbles: true, cancelable: true, clientX, pointerId: 7 }),
+      );
+    };
+    const savedFraction = (storage: ReturnType<typeof memory>): unknown =>
+      (JSON.parse(storage.getItem(SETTINGS_KEY) ?? "{}") as { splitFraction?: unknown })
+        .splitFraction;
+    const measured = (): void => {
+      ($(".stage") as HTMLElement).getBoundingClientRect = () =>
+        ({ left: 44, width: 800, top: 0, height: 900 }) as DOMRect;
+    };
+
+    it("sits in the stage and starts at the saved fraction", async () => {
+      const storage = memory();
+      storage.setItem(SETTINGS_KEY, JSON.stringify({ splitFraction: 0.4 }));
+      await start(storage);
+      expect(divider().parentElement).toBe($(".stage"));
+      expect(splitLeft()).toBe("0.4");
+    });
+
+    it("starts at 0.55 with nothing saved", async () => {
+      await start();
+      expect(splitLeft()).toBe("0.55");
+    });
+
+    it("moves with a drag, clamped, and saves the fraction when let go", async () => {
+      const { storage } = await start();
+      measured();
+      fire("pointerdown", 484);
+      fire("pointermove", 364);
+      expect(splitLeft()).toBe("0.4");
+      expect(savedFraction(storage)).toBeUndefined();
+      fire("pointermove", 1000);
+      expect(splitLeft()).toBe("0.7");
+      fire("pointerup", 1000);
+      expect(savedFraction(storage)).toBe(0.7);
+    });
+
+    it("resets to 0.55 on a double tap and saves that", async () => {
+      const storage = memory();
+      storage.setItem(SETTINGS_KEY, JSON.stringify({ splitFraction: 0.4 }));
+      await start(storage);
+      measured();
+      fire("pointerdown", 364);
+      fire("pointerup", 364);
+      fire("pointerdown", 364);
+      fire("pointerup", 364);
+      expect(splitLeft()).toBe("0.55");
+      expect(savedFraction(storage)).toBe(0.55);
+    });
+  });
+});

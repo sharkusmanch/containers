@@ -1,3 +1,4 @@
+import type { Panes } from "./split.js";
 import { ACHIEVEMENTS, SLOT_COUNT, slotLabel, type Layout } from "./state.js";
 
 export interface RailHandlers {
@@ -29,6 +30,11 @@ export interface Rail {
   stopPulse(): void;
   /** Shows the Ask button; while `active`, it is the one marked active. */
   setAsk(state: AskState, active: boolean): void;
+  /**
+   * With two panes, marks the left pane's slot and the right pane's choice together, through later
+   * renders too; null goes back to marking the one item on screen.
+   */
+  setPanes(panes: Panes | null): void;
 }
 
 /** `3/12` when that is at most 6 characters, otherwise the whole percent rounded down. */
@@ -87,9 +93,17 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
   let pulseTimer: ReturnType<typeof setTimeout> | undefined;
   let lastActive: number | null = null;
   let askActive = false;
+  let panes: Panes | null = null;
 
   // The open Ask panel covers the stage, so the layout's active item is not marked meanwhile.
   const markActive = (): void => {
+    if (panes !== null) {
+      const { left, right } = panes;
+      achievements.classList.toggle("active", right === "achievements");
+      slotButtons.forEach(({ button: b }, index) => b.classList.toggle("active", left === index));
+      ask.classList.toggle("active", right === "ask");
+      return;
+    }
     const shown = askActive ? null : lastActive;
     achievements.classList.toggle("active", shown === ACHIEVEMENTS);
     slotButtons.forEach(({ button: b }, index) => b.classList.toggle("active", shown === index));
@@ -111,6 +125,10 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
       ask.hidden = state === "hidden";
       ask.disabled = state === "disabled";
       askActive = active;
+      markActive();
+    },
+    setPanes(next) {
+      panes = next;
       markActive();
     },
     render(layout, unlockedCount, progress = []) {

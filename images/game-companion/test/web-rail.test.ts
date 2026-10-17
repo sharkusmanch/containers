@@ -283,3 +283,28 @@ describe("rail Ask button", () => {
     expect(active()).toEqual([true, false, false, false, false, false, false]);
   });
 });
+
+describe("rail in two panes", () => {
+  const active = (rail: { element: HTMLElement }): boolean[] =>
+    [...rail.element.querySelectorAll("button")].map((b) => b.classList.contains("active"));
+
+  it("marks the left pane's page and the right pane's choice together", () => {
+    const rail = createRail(document, handlers());
+    rail.render({ ...layout, active: ACHIEVEMENTS }, 3);
+    rail.setAsk("enabled", false);
+    rail.setPanes({ left: 1, right: "achievements" });
+    expect(active(rail)).toEqual([true, false, true, false, false, false, false]);
+    rail.setPanes({ left: 0, right: "ask" });
+    expect(active(rail)).toEqual([false, true, false, false, false, true, false]);
+    rail.render(layout, 3);
+    expect(active(rail)).toEqual([false, true, false, false, false, true, false]);
+  });
+
+  it("goes back to marking one item when there are no panes", () => {
+    const rail = createRail(document, handlers());
+    rail.render(layout, 3);
+    rail.setPanes({ left: 0, right: "achievements" });
+    rail.setPanes(null);
+    expect(active(rail)).toEqual([false, false, true, false, false, false, false]);
+  });
+});

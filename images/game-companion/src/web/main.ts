@@ -29,6 +29,7 @@ import { chooseLayout, nextLayoutOverride, type LayoutMode } from "./layout-mode
 import type { LocateMode } from "./locate.js";
 import { createPicker } from "./picker.js";
 import { createRail, type PageProgressLabel } from "./rail.js";
+import { choosePanes, createDivider } from "./split.js";
 import {
   ACHIEVEMENTS,
   SLOT_COUNT,
@@ -51,6 +52,7 @@ import {
   LINKS_MAX,
   type GameLink,
   type Layout,
+  type Slot,
   type StorageLike,
 } from "./state.js";
 
@@ -218,7 +220,8 @@ export function startApp(opts: AppOptions): App {
   const rail = createRail(doc, {
     onSelect(index) {
       if (current === null) return;
-      askOpen = false;
+      // With two panes a page opens on the left, beside the Ask panel.
+      if (index === ACHIEVEMENTS || layoutMode !== "split") askOpen = false;
       current.layout = activate(current.layout, index);
       save();
       render();
@@ -238,7 +241,7 @@ export function startApp(opts: AppOptions): App {
   const picker = createPicker(doc, {
     onPage(page) {
       if (current === null || !isSafeDocUrl(page.url)) return;
-      askOpen = false;
+      closeAskForPage();
       current.layout = assignSlot(current.layout, page);
       save();
       render();
@@ -306,7 +309,7 @@ export function startApp(opts: AppOptions): App {
     onLink(link) {
       const c = current;
       if (c === null || !c.links.some((l) => l.url === link.url)) return;
-      askOpen = false;
+      closeAskForPage();
       c.layout = assignSlot(c.layout, link);
       save();
       render();
@@ -402,8 +405,34 @@ export function startApp(opts: AppOptions): App {
   let toastSeq = 0;
   // Whether the server offers the assistant, from the last successful status poll.
   let assistantOn = false;
-  // The Ask panel covers the stage while open. Never part of the layout, so never stored.
+  // The Ask panel covers the stage while open (with two panes, the right pane). Never part of the
+  // layout, so never stored.
   let askOpen = false;
+  // The address of the pinned page shown last, for the left pane while 🏆 or 💬 is chosen.
+  let lastShownUrl: string | null = null;
+
+  // The bar between the two panes; it starts where this device last left it.
+  const setSplitLeft = (fraction: number): void => {
+    root.style.setProperty("--split-left", String(fraction));
+  };
+  const divider = createDivider(doc, {
+    fraction: settings.splitFraction,
+    measure: () => {
+      const area = stage.getBoundingClientRect();
+      return { left: area.left, width: area.width };
+    },
+    onMove: setSplitLeft,
+    onCommit(fraction) {
+      settings = { ...settings, splitFraction: fraction };
+      saveSettings(storage, settings);
+    },
+  });
+  stage.insertBefore(divider.element, toast);
+
+  /** Opening a page closes the Ask panel, except beside it in the second pane. */
+  function closeAskForPage(): void {
+    if (layoutMode !== "split") askOpen = false;
+  }
 
   function showToast(text: string, ms = 6000): void {
     toastSeq += 1;
@@ -596,7 +625,7 @@ export function startApp(opts: AppOptions): App {
       showToast("Could not open that page");
       return;
     }
-    askOpen = false;
+    closeAskForPage();
     c.layout = assignSlot(c.layout, { title: match.pageTitle, url: match.pageUrl });
     save();
     render();
@@ -631,13 +660,17 @@ export function startApp(opts: AppOptions): App {
   const applyLayoutMode = (): void => {
     const size = (value: unknown): number => (typeof value === "number" ? value : 0);
     windowSize = { width: size(opts.win?.innerWidth), height: size(opts.win?.innerHeight) };
+    const before = layoutMode;
     layoutMode = chooseLayout({ ...windowSize, override: settings.layoutMode });
     for (const mode of ["single", "tabs", "split"] as const) {
       root.classList.toggle(`layout-${mode}`, mode === layoutMode);
     }
+    // What the stage shows depends on the arrangement: two panes route pages to the left.
+    if (layoutMode !== before) render();
   };
 
   function applySettings(): void {
+    setSplitLeft(settings.splitFraction);
     applyLayoutMode();
     wakeLock.setEnabled(settings.keepAwake);
     frames.setHideChrome(settings.hideChrome);
@@ -793,9 +826,45 @@ export function startApp(opts: AppOptions): App {
     return assistantOn && current !== null && current.scope !== null;
   }
 
+  // A browser may reset the scroll position of an element that is not rendered, so it is kept.
+  function showAchievementsPanel(shown: boolean): void {
+    if (shown) {
+      if (view.element.hidden) {
+        view.element.hidden = false;
+        view.element.scrollTop = savedScroll;
+      }
+    } else {
+      if (!view.element.hidden) savedScroll = view.element.scrollTop;
+      view.element.hidden = true;
+    }
+  }
+
+  function showSlot(index: number, url: string): void {
+    frames.show(index, url, isLinkUrl(url) ? "link" : "doc");
+    lastShownUrl = url;
+  }
+
   function render(): void {
     if (!canAsk()) askOpen = false;
     const layout = current?.layout ?? emptyLayout();
+    // A slot the frames would refuse (an address that is neither a page nor a listed link) shows
+    // the achievements rather than leaving the stage empty.
+    const showable = (index: number): Slot | null => {
+      const slot = layout.slots[index] ?? null;
+      return slot !== null && (isLinkUrl(slot.url) || isSafeDocUrl(slot.url)) ? slot : null;
+    };
+    const lastSlot = layout.slots.findIndex((s) => s !== null && s.url === lastShownUrl);
+    const panes =
+      layoutMode === "split"
+        ? choosePanes({
+            active: layout.active,
+            usable: layout.slots.map((_, index) => showable(index) !== null),
+            lastSlot: lastSlot < 0 ? null : lastSlot,
+            askOpen,
+          })
+        : null;
+    stage.classList.toggle("two-panes", panes !== null);
+    rail.setPanes(panes);
     renderRail(layout);
     renderHeader();
     const canFind = current !== null && current.hub !== null && current.pages.length > 0;
@@ -803,27 +872,25 @@ export function startApp(opts: AppOptions): App {
       findEnabled = canFind;
       view.setFindEnabled(canFind);
     }
-    const active = layout.active === ACHIEVEMENTS ? null : (layout.slots[layout.active] ?? null);
-    // A slot the frames would refuse (an address that is neither a page nor a listed link) shows
-    // the achievements rather than leaving the stage empty.
-    const slot =
-      active !== null && (isLinkUrl(active.url) || isSafeDocUrl(active.url)) ? active : null;
+    const left = panes === null ? null : showable(panes.left);
+    if (panes !== null && left !== null) {
+      // Two panes: a page on the left, the achievements or the Ask panel on the right.
+      assistant.element.hidden = panes.right !== "ask";
+      showAchievementsPanel(panes.right === "achievements");
+      showSlot(panes.left, left.url);
+      return;
+    }
+    const slot = layout.active === ACHIEVEMENTS ? null : showable(layout.active);
     assistant.element.hidden = !askOpen;
     if (askOpen) {
-      if (!view.element.hidden) savedScroll = view.element.scrollTop;
-      view.element.hidden = true;
+      showAchievementsPanel(false);
       frames.hideAll();
     } else if (slot === null) {
-      if (view.element.hidden) {
-        view.element.hidden = false;
-        view.element.scrollTop = savedScroll;
-      }
+      showAchievementsPanel(true);
       frames.hideAll();
     } else {
-      // A browser may reset the scroll position of an element that is not rendered.
-      if (!view.element.hidden) savedScroll = view.element.scrollTop;
-      view.element.hidden = true;
-      frames.show(layout.active, slot.url, isLinkUrl(slot.url) ? "link" : "doc");
+      showAchievementsPanel(false);
+      showSlot(layout.active, slot.url);
     }
   }
 
@@ -921,6 +988,7 @@ export function startApp(opts: AppOptions): App {
 
   async function load(game: GameRef | null, hub: GuideHub | null): Promise<void> {
     loadCount += 1;
+    lastShownUrl = null;
     progress = new Map();
     progressEpoch += 1;
     freshPending = 0;

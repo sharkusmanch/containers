@@ -56,6 +56,9 @@ button {
   grid-template-rows: auto auto auto 1fr;
   min-width: 0;
   min-height: 0;
+  /* Clear of notches, rounded corners and the home indicator; all zero on a plain screen. */
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
 .rail {
@@ -562,7 +565,8 @@ button {
 
 .picker {
   position: fixed;
-  inset: 0;
+  inset: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
   z-index: 10;
   overflow-y: auto;
   background: var(--bg);
@@ -1006,4 +1010,170 @@ button {
   align-self: center;
   font-size: 12px;
   color: var(--text-dim);
+}
+
+/* ---- Bottom tabs: the rail, same buttons in the same order, as a bar under the stage ---- */
+
+#app.layout-tabs {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto auto 1fr auto;
+  /* The tab bar takes the bottom safe area itself, so its colour reaches the edge. */
+  padding-bottom: 0;
+}
+
+.layout-tabs .topbar,
+.layout-tabs .presence-row,
+.layout-tabs .switch-banner,
+.layout-tabs .stage {
+  grid-column: 1;
+}
+
+.layout-tabs .rail {
+  grid-column: 1;
+  grid-row: 5;
+  flex-direction: row;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  border-right: 0;
+  border-top: 1px solid var(--border);
+}
+
+.layout-tabs .rail button {
+  border-left: 0;
+  border-bottom: 0;
+  border-top: 3px solid transparent;
+  border-right: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.layout-tabs .rail button:last-child {
+  border-right: 0;
+}
+
+.layout-tabs .rail button.active {
+  border-top-color: var(--accent);
+}
+
+.layout-tabs .rail .pulse {
+  border-top-color: var(--warn);
+}
+
+.layout-tabs .rail-icon {
+  font-size: 16px;
+}
+
+.layout-tabs .rail-count {
+  font-size: 10px;
+}
+
+/*
+ * ---- Two panes: the page on the left, the achievements or Ask panel on the right ----
+ * The same elements as with one pane, only placed differently: a frame that moved to another
+ * parent would reload, so nothing moves. main.ts sets --split-left (the left pane's share) on
+ * #app and .two-panes on the stage only while there is a page to show on the left.
+ */
+
+.split-divider {
+  display: none;
+}
+
+.layout-split .stage.two-panes {
+  --divider-width: 12px;
+  --left-width: calc((100% - var(--divider-width)) * var(--split-left, 0.55));
+}
+
+.layout-split .two-panes > .frames {
+  right: auto;
+  width: var(--left-width);
+}
+
+.layout-split .two-panes > .ach,
+.layout-split .two-panes > .ask {
+  left: calc(var(--left-width) + var(--divider-width));
+}
+
+.layout-split .two-panes > .split-divider {
+  display: block;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--left-width);
+  z-index: 1;
+  width: var(--divider-width);
+  background: var(--bg-raised);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* A wider grip for a finger than the bar is to look at. */
+.layout-split .two-panes > .split-divider::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  right: -8px;
+}
+
+.layout-split .two-panes > .split-divider::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 32px;
+  margin: -16px 0 0 -2px;
+  border-radius: 2px;
+  background: var(--text-dim);
+}
+
+/*
+ * Flex mode: a folding screen half-open reports two viewport segments, and the hinge is the
+ * boundary between the panes; there is nothing to drag. The stage's bottom edge is the viewport's
+ * minus the bottom safe area, and its left edge the left safe area plus the rail.
+ */
+
+/* Hinge across: the page above it, the panel below. */
+@media (vertical-viewport-segments: 2) {
+  .layout-split .two-panes > .frames {
+    right: 0;
+    width: auto;
+    bottom: calc(
+      env(viewport-segment-bottom 0 1) - env(safe-area-inset-bottom, 0px) -
+        env(viewport-segment-bottom 0 0)
+    );
+  }
+
+  .layout-split .two-panes > .ach,
+  .layout-split .two-panes > .ask {
+    left: 0;
+    top: auto;
+    height: calc(
+      env(viewport-segment-bottom 0 1) - env(safe-area-inset-bottom, 0px) -
+        env(viewport-segment-top 0 1)
+    );
+  }
+
+  .layout-split .two-panes > .split-divider {
+    display: none;
+  }
+}
+
+/* Hinge upright: the page left of it, the panel right of it. */
+@media (horizontal-viewport-segments: 2) {
+  .layout-split .two-panes > .frames {
+    width: calc(
+      env(viewport-segment-right 0 0) - env(safe-area-inset-left, 0px) - var(--rail-width)
+    );
+  }
+
+  .layout-split .two-panes > .ach,
+  .layout-split .two-panes > .ask {
+    left: calc(env(viewport-segment-left 1 0) - env(safe-area-inset-left, 0px) - var(--rail-width));
+  }
+
+  .layout-split .two-panes > .split-divider {
+    display: none;
+  }
 }
