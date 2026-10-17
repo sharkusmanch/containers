@@ -32,6 +32,8 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     expect(SETTINGS_STORAGE_KEY).toBe("game-companion:v1:settings");
     expect(loadSettings(memory())).toEqual({
@@ -40,6 +42,8 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
   });
 
@@ -60,6 +64,8 @@ describe("settings", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     expect(JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string)).toEqual({
       keepAwake: false,
@@ -67,6 +73,8 @@ describe("settings", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     expect(loadSettings(storage)).toEqual({
       keepAwake: false,
@@ -74,6 +82,8 @@ describe("settings", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     saveSettings(storage, {
       keepAwake: true,
@@ -81,6 +91,8 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     expect(loadSettings(storage)).toEqual({
       keepAwake: true,
@@ -88,6 +100,8 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
   });
 
@@ -101,6 +115,8 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
   });
 
@@ -124,6 +140,8 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     expect(load({ keepAwake: 0, hideChrome: false })).toEqual({
       keepAwake: true,
@@ -131,6 +149,8 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     expect(load({ keepAwake: null, hideChrome: null })).toEqual(DEFAULT_SETTINGS);
     expect(load({ keepAwake: false, hideChrome: false, guideJump: "off" })).toEqual({
@@ -139,6 +159,8 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     expect(load({ guideJump: false })).toEqual({ ...DEFAULT_SETTINGS, guideJump: false });
   });
@@ -195,6 +217,8 @@ describe("guide text size", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
   });
 
@@ -206,6 +230,8 @@ describe("guide text size", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
   });
 
@@ -245,6 +271,8 @@ describe("reader mode setting", () => {
       keepAwake: false,
       guideJump: false,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
   });
 
@@ -261,7 +289,76 @@ describe("reader mode setting", () => {
       guideJump: false,
       guideZoom: 80,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
+  });
+});
+
+describe("layout settings", () => {
+  it("default to automatic with the divider at 0.55", () => {
+    expect(DEFAULT_SETTINGS.layoutMode).toBe("auto");
+    expect(DEFAULT_SETTINGS.splitFraction).toBe(0.55);
+  });
+
+  it.each(["auto", "single", "tabs", "split"] as const)(
+    "round-trips the %s layout through storage",
+    (layoutMode) => {
+      const storage = memory();
+      saveSettings(storage, { ...DEFAULT_SETTINGS, layoutMode });
+      expect(loadSettings(storage).layoutMode).toBe(layoutMode);
+    },
+  );
+
+  it.each([
+    ["a string that is not a mode", "wide"],
+    ["a number", 1],
+    ["null", null],
+    ["an object", {}],
+  ])("falls back to automatic for %s", (_name, value) => {
+    const raw = JSON.stringify({ keepAwake: false, layoutMode: value });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw }))).toEqual({
+      ...DEFAULT_SETTINGS,
+      keepAwake: false,
+    });
+  });
+
+  it("gives an older stored object without the keys the defaults and keeps its other values", () => {
+    const raw = JSON.stringify({ keepAwake: false, hideChrome: true, guideZoom: 80 });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw }))).toEqual({
+      ...DEFAULT_SETTINGS,
+      keepAwake: false,
+      guideZoom: 80,
+    });
+  });
+
+  it.each([
+    [0.4, 0.4],
+    [0.3, 0.3],
+    [0.7, 0.7],
+    [0.05, 0.3],
+    [0.99, 0.7],
+    [-1, 0.3],
+    ["0.4", 0.55],
+    [null, 0.55],
+    [Number.NaN, 0.55],
+  ])("loads a stored divider of %s as %s", (value, expected) => {
+    const raw = JSON.stringify({ splitFraction: value });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw })).splitFraction).toBe(expected);
+  });
+
+  it.each([
+    [0.4, 0.4],
+    [0.1, 0.3],
+    [0.9, 0.7],
+    [Number.NaN, 0.55],
+  ])("saves a divider of %s as %s", (splitFraction, expected) => {
+    const storage = memory();
+    saveSettings(storage, { ...DEFAULT_SETTINGS, splitFraction });
+    const saved = JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string) as {
+      splitFraction: number;
+    };
+    expect(saved.splitFraction).toBe(expected);
   });
 });
 

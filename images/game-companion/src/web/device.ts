@@ -1,3 +1,5 @@
+import { clampSplitFraction, DEFAULT_SPLIT_FRACTION, LAYOUT_OVERRIDES } from "./layout-mode.js";
+import type { LayoutOverride } from "./layout-mode.js";
 import type { StorageLike } from "./state.js";
 
 /** How large the framed wiki pages are drawn, in percent of their normal size. */
@@ -17,6 +19,10 @@ export interface Settings {
   guideZoom: GuideZoom;
   /** Stops the on-screen keyboard coming up for the framed wiki pages that are for reading. */
   readerMode: boolean;
+  /** Which arrangement to use: "auto" follows the window size. */
+  layoutMode: LayoutOverride;
+  /** The share of the width the left pane takes in the two-pane arrangement (0.3 to 0.7). */
+  splitFraction: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -25,6 +31,8 @@ export const DEFAULT_SETTINGS: Settings = {
   guideJump: true,
   guideZoom: 100,
   readerMode: true,
+  layoutMode: "auto",
+  splitFraction: DEFAULT_SPLIT_FRACTION,
 };
 export const SETTINGS_STORAGE_KEY = "game-companion:v1:settings";
 
@@ -40,12 +48,16 @@ export function loadSettings(storage: StorageLike | null | undefined): Settings 
       typeof value === "boolean" ? value : fallback;
     const zoom = (value: unknown): GuideZoom =>
       GUIDE_ZOOM_STEPS.find((step) => step === value) ?? DEFAULT_SETTINGS.guideZoom;
+    const layout = (value: unknown): LayoutOverride =>
+      LAYOUT_OVERRIDES.find((choice) => choice === value) ?? DEFAULT_SETTINGS.layoutMode;
     return {
       keepAwake: flag(parsed["keepAwake"], DEFAULT_SETTINGS.keepAwake),
       hideChrome: flag(parsed["hideChrome"], DEFAULT_SETTINGS.hideChrome),
       guideJump: flag(parsed["guideJump"], DEFAULT_SETTINGS.guideJump),
       guideZoom: zoom(parsed["guideZoom"]),
       readerMode: flag(parsed["readerMode"], DEFAULT_SETTINGS.readerMode),
+      layoutMode: layout(parsed["layoutMode"]),
+      splitFraction: clampSplitFraction(parsed["splitFraction"]),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -62,6 +74,8 @@ export function saveSettings(storage: StorageLike | null | undefined, s: Setting
         guideJump: s.guideJump,
         guideZoom: s.guideZoom,
         readerMode: s.readerMode,
+        layoutMode: s.layoutMode,
+        splitFraction: clampSplitFraction(s.splitFraction),
       }),
     );
   } catch {

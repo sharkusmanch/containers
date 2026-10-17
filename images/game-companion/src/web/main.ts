@@ -25,6 +25,7 @@ import {
   type WakeLockLike,
 } from "./device.js";
 import { createFrames } from "./frames.js";
+import { chooseLayout, nextLayoutOverride, type LayoutMode } from "./layout-mode.js";
 import type { LocateMode } from "./locate.js";
 import { createPicker } from "./picker.js";
 import { createRail, type PageProgressLabel } from "./rail.js";
@@ -66,6 +67,9 @@ export interface AppOptions {
   /** The browser window, to tell whether the page runs as an installed full-screen app. */
   win?: {
     matchMedia?: (query: string) => { matches: boolean };
+    /** The window size in CSS pixels, which picks the layout; unknown counts as zero (single). */
+    innerWidth?: number;
+    innerHeight?: number;
     /** Lets the page refresh when the browser comes back online. */
     addEventListener?: (type: string, listener: () => void) => void;
   };
@@ -262,10 +266,13 @@ export function startApp(opts: AppOptions): App {
         void toggleFullscreen(doc).then(showSettings);
         return;
       }
-      settings =
-        name === "guideZoom"
-          ? { ...settings, guideZoom: nextGuideZoom(settings.guideZoom) }
-          : { ...settings, [name]: !settings[name] };
+      if (name === "guideZoom") {
+        settings = { ...settings, guideZoom: nextGuideZoom(settings.guideZoom) };
+      } else if (name === "layoutMode") {
+        settings = { ...settings, layoutMode: nextLayoutOverride(settings.layoutMode) };
+      } else {
+        settings = { ...settings, [name]: !settings[name] };
+      }
       saveSettings(storage, settings);
       applySettings();
       showSettings();
@@ -368,6 +375,9 @@ export function startApp(opts: AppOptions): App {
   let seenUnlocked: Set<string> | null = null;
   let findEnabled = false;
   let settings = loadSettings(storage);
+  // The window's size and the arrangement chosen for it; kept current on every resize.
+  let windowSize = { width: 0, height: 0 };
+  let layoutMode: LayoutMode = "single";
   // Titles of the open guide's pages that are for typing in; empty without a page tree.
   let editableTitles: readonly string[] = [];
   const wakeLock = createWakeLock(opts.nav ?? {}, doc);
@@ -617,7 +627,18 @@ export function startApp(opts: AppOptions): App {
     showToast(unlockText(fresh.map((a) => a.name)), 10_000);
   }
 
+  // Picks the arrangement from the window size and the person's choice, and marks #app with it.
+  const applyLayoutMode = (): void => {
+    const size = (value: unknown): number => (typeof value === "number" ? value : 0);
+    windowSize = { width: size(opts.win?.innerWidth), height: size(opts.win?.innerHeight) };
+    layoutMode = chooseLayout({ ...windowSize, override: settings.layoutMode });
+    for (const mode of ["single", "tabs", "split"] as const) {
+      root.classList.toggle(`layout-${mode}`, mode === layoutMode);
+    }
+  };
+
   function applySettings(): void {
+    applyLayoutMode();
     wakeLock.setEnabled(settings.keepAwake);
     frames.setHideChrome(settings.hideChrome);
     frames.setZoom(settings.guideZoom);
@@ -648,6 +669,7 @@ export function startApp(opts: AppOptions): App {
       fullscreen: isFullscreen(doc),
       wakeLockSupported: wakeLock.supported,
       fullscreenSupported: fullscreenSupported(doc) && !displayModeFullscreen(opts.win ?? {}),
+      window: { ...windowSize, layout: layoutMode },
     });
   }
 
@@ -1180,6 +1202,10 @@ export function startApp(opts: AppOptions): App {
   applySettings();
   showSettings();
   doc.addEventListener("fullscreenchange", showSettings);
+  opts.win?.addEventListener?.("resize", () => {
+    applyLayoutMode();
+    showSettings();
+  });
 
   render();
 

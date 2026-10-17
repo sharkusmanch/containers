@@ -1,5 +1,7 @@
 import type { FindMatch, GuideHub, GuidePage } from "../shared/types.js";
 import type { GuideZoom } from "./device.js";
+import { LAYOUT_LABELS, windowReadout } from "./layout-mode.js";
+import type { LayoutMode, LayoutOverride } from "./layout-mode.js";
 import type { GameLink, Layout, Slot } from "./state.js";
 
 export interface PickerHandlers {
@@ -18,7 +20,13 @@ export interface PickerHandlers {
 }
 
 export type SettingName =
-  "keepAwake" | "hideChrome" | "guideJump" | "guideZoom" | "readerMode" | "fullscreen";
+  | "keepAwake"
+  | "hideChrome"
+  | "guideJump"
+  | "guideZoom"
+  | "readerMode"
+  | "layoutMode"
+  | "fullscreen";
 
 export interface SettingsState {
   keepAwake: boolean;
@@ -26,6 +34,10 @@ export interface SettingsState {
   guideJump: boolean;
   guideZoom: GuideZoom;
   readerMode: boolean;
+  /** The person's choice; "auto" follows the window. */
+  layoutMode: LayoutOverride;
+  /** The window size and the arrangement in use for it (never "auto"), for the readout line. */
+  window: { width: number; height: number; layout: LayoutMode };
   fullscreen: boolean;
   wakeLockSupported: boolean;
   fullscreenSupported: boolean;
@@ -95,6 +107,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     ["guideJump", "setting-guide-jump"],
     ["guideZoom", "setting-guide-zoom"],
     ["readerMode", "setting-reader-mode"],
+    ["layoutMode", "setting-layout"],
   ] as const) {
     const b = doc.createElement("button");
     b.setAttribute("type", "button");
@@ -103,6 +116,9 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     settingRows.set(name, b);
     settingsList.append(b);
   }
+  const readout = doc.createElement("p");
+  readout.classList.add("setting-layout-readout");
+  settingRows.get("layoutMode")?.after(readout);
   const hint = doc.createElement("p");
   hint.classList.add("setting-hint");
   hint.textContent = "To use it like an app, open the browser menu and choose Add to Home screen.";
@@ -359,6 +375,15 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
       label("readerMode", `Reader mode: ${state.readerMode ? "on" : "off"}`, state.readerMode);
       const zoomRow = settingRows.get("guideZoom");
       if (zoomRow !== undefined) zoomRow.textContent = `Guide text size: ${state.guideZoom}%`;
+      const layoutRow = settingRows.get("layoutMode");
+      if (layoutRow !== undefined) {
+        layoutRow.textContent = `Layout: ${LAYOUT_LABELS[state.layoutMode]}`;
+      }
+      readout.textContent = windowReadout(
+        state.window.width,
+        state.window.height,
+        state.window.layout,
+      );
     },
     showMatches(query, matches, truncated) {
       const title = doc.createElement("h3");

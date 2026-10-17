@@ -473,6 +473,8 @@ describe("display settings", () => {
     guideJump: true,
     guideZoom: 100 as const,
     readerMode: true,
+    layoutMode: "auto" as const,
+    window: { width: 412, height: 915, layout: "tabs" as const },
     fullscreen: false,
     wakeLockSupported: true,
     fullscreenSupported: true,
@@ -506,7 +508,7 @@ describe("display settings", () => {
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
   });
 
-  it("holds six buttons and a hint, reader mode last before the hint", () => {
+  it("holds seven buttons and a hint, layout last before the hint", () => {
     const { picker } = make();
     picker.setSettings(all);
     const list = picker.element.querySelector(".picker-settings") as HTMLElement;
@@ -518,6 +520,7 @@ describe("display settings", () => {
       "setting-guide-jump",
       "setting-guide-zoom",
       "setting-reader-mode",
+      "setting-layout",
     ]);
     expect(list.lastElementChild?.className).toBe("setting-hint");
     expect(rows.every((b) => b.getAttribute("type") === "button")).toBe(true);
@@ -602,6 +605,7 @@ describe("display settings", () => {
     row(picker, "setting-guide-jump").click();
     row(picker, "setting-guide-zoom").click();
     row(picker, "setting-reader-mode").click();
+    row(picker, "setting-layout").click();
     expect(handlers.onSetting.mock.calls).toEqual([
       ["keepAwake"],
       ["hideChrome"],
@@ -609,6 +613,7 @@ describe("display settings", () => {
       ["guideJump"],
       ["guideZoom"],
       ["readerMode"],
+      ["layoutMode"],
     ]);
     expect(picker.element.hidden).toBe(false);
     expect((picker.element.querySelector(".picker-settings") as HTMLElement).hidden).toBe(false);
@@ -625,6 +630,35 @@ describe("display settings", () => {
       expect(row(picker, "setting-guide-zoom").hidden).toBe(false);
     },
   );
+
+  it.each([
+    ["auto", "Layout: Automatic"],
+    ["single", "Layout: Single"],
+    ["tabs", "Layout: Bottom tabs"],
+    ["split", "Layout: Two panes"],
+  ] as const)("labels the layout row for %s", (layoutMode, text) => {
+    const { picker } = make();
+    picker.setSettings({ ...all, layoutMode });
+    expect(row(picker, "setting-layout").textContent).toBe(text);
+    expect(row(picker, "setting-layout").hasAttribute("aria-pressed")).toBe(false);
+    expect(row(picker, "setting-layout").hidden).toBe(false);
+  });
+
+  it("shows the window readout with the resolved layout, never Automatic", () => {
+    const { picker } = make();
+    const readout = (): string | null | undefined =>
+      picker.element.querySelector(".picker-settings .setting-layout-readout")?.textContent;
+    picker.setSettings(all);
+    expect(readout()).toBe("Window 412 \u00d7 915 (2.22) \u00b7 Bottom tabs");
+    picker.setSettings({ ...all, window: { width: 884, height: 1004, layout: "split" } });
+    expect(readout()).toBe("Window 884 \u00d7 1004 (1.14) \u00b7 Two panes");
+    picker.setSettings({
+      ...all,
+      layoutMode: "single",
+      window: { width: 411, height: 470, layout: "single" },
+    });
+    expect(readout()).toBe("Window 411 \u00d7 470 (1.14) \u00b7 Single");
+  });
 
   it("keeps the picker open when the guide text size row is tapped", () => {
     const { picker, handlers } = make();

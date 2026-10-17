@@ -2807,6 +2807,8 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     expect($(".picker")?.hidden).toBe(false);
     row("setting-hide-chrome").click();
@@ -2818,6 +2820,101 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
+    });
+  });
+
+  describe("layout mode", () => {
+    const sized = (width: number, height: number) => {
+      const target = new EventTarget();
+      const win = {
+        innerWidth: width,
+        innerHeight: height,
+        addEventListener: (type: string, cb: () => void) => target.addEventListener(type, cb),
+      };
+      const resize = (w: number, h: number): void => {
+        win.innerWidth = w;
+        win.innerHeight = h;
+        target.dispatchEvent(new Event("resize"));
+      };
+      return { win, resize };
+    };
+    const appClasses = (): string[] =>
+      [...($("#app") as HTMLElement).classList].filter((c) => c.startsWith("layout-"));
+    const readout = (): string => $(".setting-layout-readout")?.textContent ?? "";
+
+    it.each([
+      [411, 470, "layout-single"],
+      [412, 915, "layout-tabs"],
+      [884, 1004, "layout-split"],
+    ])("marks #app for a %i x %i window", async (width, height, expected) => {
+      await start(memory(), { win: sized(width, height).win });
+      expect(appClasses()).toEqual([expected]);
+    });
+
+    it("stays on single when it has no window to measure", async () => {
+      await start();
+      expect(appClasses()).toEqual(["layout-single"]);
+      openDisplay();
+      expect(readout()).toBe("Window 0 \u00d7 0 (0.00) \u00b7 Single");
+    });
+
+    it("switches the class when the window is resized, without rebuilding the page", async () => {
+      const { win, resize } = sized(411, 470);
+      await start(memory(), { win });
+      const stage = $(".stage");
+      expect(appClasses()).toEqual(["layout-single"]);
+      resize(884, 1004);
+      expect(appClasses()).toEqual(["layout-split"]);
+      resize(412, 915);
+      expect(appClasses()).toEqual(["layout-tabs"]);
+      resize(411, 470);
+      expect(appClasses()).toEqual(["layout-single"]);
+      expect($(".stage")).toBe(stage);
+    });
+
+    it("cycles the Display row, saves the choice and applies it at once", async () => {
+      const { win } = sized(1440, 900);
+      const { storage } = await start(memory(), { win });
+      openDisplay();
+      expect(row("setting-layout").textContent).toBe("Layout: Automatic");
+      expect(appClasses()).toEqual(["layout-split"]);
+      const seen: [string, string[]][] = [];
+      for (let i = 0; i < 4; i += 1) {
+        row("setting-layout").click();
+        seen.push([row("setting-layout").textContent ?? "", appClasses()]);
+      }
+      expect(seen).toEqual([
+        ["Layout: Single", ["layout-single"]],
+        ["Layout: Bottom tabs", ["layout-tabs"]],
+        ["Layout: Two panes", ["layout-split"]],
+        ["Layout: Automatic", ["layout-split"]],
+      ]);
+      row("setting-layout").click();
+      expect((stored(storage) as { layoutMode: string }).layoutMode).toBe("single");
+      expect($(".picker")?.hidden).toBe(false);
+    });
+
+    it("starts from a saved choice and keeps it across a resize", async () => {
+      const storage = memory();
+      storage.setItem(KEY, JSON.stringify({ layoutMode: "tabs" }));
+      const { win, resize } = sized(1440, 900);
+      await start(storage, { win });
+      expect(appClasses()).toEqual(["layout-tabs"]);
+      resize(411, 470);
+      expect(appClasses()).toEqual(["layout-tabs"]);
+    });
+
+    it("shows the window readout with the resolved mode and updates it on resize", async () => {
+      const { win, resize } = sized(412, 915);
+      await start(memory(), { win });
+      openDisplay();
+      expect(readout()).toBe("Window 412 \u00d7 915 (2.22) \u00b7 Bottom tabs");
+      resize(884, 1004);
+      expect(readout()).toBe("Window 884 \u00d7 1004 (1.14) \u00b7 Two panes");
+      row("setting-layout").click();
+      expect(readout()).toBe("Window 884 \u00d7 1004 (1.14) \u00b7 Single");
     });
   });
 
@@ -2879,6 +2976,8 @@ describe("display settings", () => {
         guideJump: true,
         guideZoom: 100,
         readerMode: false,
+        layoutMode: "auto",
+        splitFraction: 0.55,
       });
       expect($(".picker")?.hidden).toBe(false);
       row("setting-reader-mode").click();
@@ -3103,6 +3202,8 @@ describe("display settings", () => {
         guideJump: true,
         guideZoom: percent,
         readerMode: true,
+        layoutMode: "auto",
+        splitFraction: 0.55,
       });
       expect($(".picker")?.hidden).toBe(false);
     }
@@ -3126,6 +3227,8 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
     row("setting-keep-awake").click();
     await flush();
@@ -3137,6 +3240,8 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      layoutMode: "auto",
+      splitFraction: 0.55,
     });
   });
 
