@@ -1,8 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runInNewContext } from "node:vm";
 import { inflateSync } from "node:zlib";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const WEB = join(import.meta.dirname, "..", "web-static");
@@ -10,11 +12,14 @@ const SCRIPT = join(import.meta.dirname, "..", "scripts", "make-icons.mjs");
 const SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 interface Manifest {
+  id: string;
   name: string;
   short_name: string;
   start_url: string;
   scope: string;
   display: string;
+  display_override: string[];
+  orientation: string;
   background_color: string;
   theme_color: string;
   icons: { src: string; sizes: string; type: string; purpose: string }[];
@@ -78,14 +83,19 @@ describe("manifest", () => {
     expect(m.short_name).toBe("Companion");
     expect(m.start_url).toBe("./");
     expect(m.scope).toBe("./");
-    expect(m.display).toBe("fullscreen");
+    expect(m.id).toBe("./");
+    expect(m.display).toBe("standalone");
+    expect(m.display_override).toEqual(["fullscreen", "standalone"]);
+    expect(m.orientation).toBe("any");
     expect(m.background_color).toBe("#111418");
     expect(m.theme_color).toBe("#111418");
     expect(m.icons).toEqual([
-      { src: "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
-      { src: "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
+      { src: "icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+      { src: "icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+      { src: "icon-192.png", sizes: "192x192", type: "image/png", purpose: "maskable" },
+      { src: "icon-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
     ]);
-    for (const url of [m.start_url, m.scope, ...m.icons.map((i) => i.src)]) {
+    for (const url of [m.id, m.start_url, m.scope, ...m.icons.map((i) => i.src)]) {
       expect(url.startsWith("/")).toBe(false);
       expect(url).not.toMatch(/^[a-z][a-z0-9+.-]*:/i);
     }
@@ -172,24 +182,86 @@ describe("index.html", () => {
     expect(html).toContain('<meta name="mobile-web-app-capable" content="yes" />');
   });
 
+  it("declares the page an iOS home-screen app with a translucent status bar and a short title", () => {
+    expect(html).toContain('<meta name="apple-mobile-web-app-capable" content="yes" />');
+    expect(html).toContain(
+      '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />',
+    );
+    expect(html).toContain('<meta name="apple-mobile-web-app-title" content="Companion" />');
+  });
+
   it("has no inline script or style", () => {
     expect(html).not.toMatch(/<style|style=|<script(?![^>]*\bsrc=)/);
   });
 });
 
 describe("build", () => {
-  it("copies the manifest, the icons and the page into dist/web", () => {
+  const COPY = join(import.meta.dirname, "..", "scripts", "copy-static.mjs");
+  /** A scratch project holding the static files and the compiled service worker given. */
+  const project = (worker: string | null): string => {
     const work = mkdtempSync(join(tmpdir(), "gc-build-"));
     cpSync(WEB, join(work, "web-static"), { recursive: true });
-    execFileSync(
-      process.execPath,
-      [join(import.meta.dirname, "..", "scripts", "copy-static.mjs")],
+    if (worker !== null) {
+      mkdirSync(join(work, "dist", "web"), { recursive: true });
+      writeFileSync(join(work, "dist", "web", "sw.js"), worker);
+    }
+    return work;
+  };
+  const build = (work: string): void => {
+    execFileSync(process.execPath, [COPY], { cwd: work, stdio: "pipe" });
+  };
+  /** The real service worker source, compiled the way tsc compiles it for the build. */
+  const compiledWorker = (): string =>
+    ts.transpileModule(
+      readFileSync(join(import.meta.dirname, "..", "src", "web", "sw.ts"), "utf8"),
       {
-        cwd: work,
+        compilerOptions: {
+          target: ts.ScriptTarget.ES2023,
+          module: ts.ModuleKind.ES2022,
+          verbatimModuleSyntax: true,
+        },
+        fileName: "sw.ts",
       },
-    );
+    ).outputText;
+
+  it("copies the manifest, the icons and the page into dist/web", () => {
+    const work = project("export function f() {}\n");
+    build(work);
     for (const name of ["manifest.webmanifest", "icon-192.png", "icon-512.png", "index.html"]) {
       expect(existsSync(join(work, "dist", "web", name))).toBe(true);
     }
+  });
+
+  it("turns the compiled service worker into a classic script that installs itself", () => {
+    const work = project(compiledWorker());
+    expect(readFileSync(join(work, "dist", "web", "sw.js"), "utf8")).toMatch(/^export /m);
+    build(work);
+    const script = readFileSync(join(work, "dist", "web", "sw.js"), "utf8");
+    expect(script).not.toMatch(/^\s*(?:import|export)\b/m);
+    const types: string[] = [];
+    const scope = {
+      ServiceWorkerGlobalScope: function ServiceWorkerGlobalScope() {},
+      location: { origin: "https://wiki.example.test" },
+      addEventListener: (type: string) => types.push(type),
+      URL,
+    };
+    runInNewContext(script, scope);
+    expect(types.sort()).toEqual(["activate", "fetch", "install"]);
+  });
+
+  it("installs nothing when loaded outside a service worker", () => {
+    const work = project(compiledWorker());
+    build(work);
+    const types: string[] = [];
+    runInNewContext(readFileSync(join(work, "dist", "web", "sw.js"), "utf8"), {
+      addEventListener: (type: string) => types.push(type),
+    });
+    expect(types).toEqual([]);
+  });
+
+  it("fails the build when the service worker is missing or still has a module statement", () => {
+    expect(() => build(project(null))).toThrow();
+    expect(() => build(project('import { x } from "./x.js";\nx();\n'))).toThrow();
+    expect(() => build(project("const a = 1;\nexport { a };\n"))).toThrow();
   });
 });

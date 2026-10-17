@@ -23,6 +23,8 @@ export interface Settings {
   layoutMode: LayoutOverride;
   /** The share of the width the left pane takes in the two-pane arrangement (0.3 to 0.7). */
   splitFraction: number;
+  /** The "Set up this device" card was put away with Got it. */
+  setupDismissed: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -33,6 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   readerMode: true,
   layoutMode: "auto",
   splitFraction: DEFAULT_SPLIT_FRACTION,
+  setupDismissed: false,
 };
 export const SETTINGS_STORAGE_KEY = "game-companion:v1:settings";
 
@@ -58,6 +61,7 @@ export function loadSettings(storage: StorageLike | null | undefined): Settings 
       readerMode: flag(parsed["readerMode"], DEFAULT_SETTINGS.readerMode),
       layoutMode: layout(parsed["layoutMode"]),
       splitFraction: clampSplitFraction(parsed["splitFraction"]),
+      setupDismissed: flag(parsed["setupDismissed"], DEFAULT_SETTINGS.setupDismissed),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -76,6 +80,7 @@ export function saveSettings(storage: StorageLike | null | undefined, s: Setting
         readerMode: s.readerMode,
         layoutMode: s.layoutMode,
         splitFraction: clampSplitFraction(s.splitFraction),
+        setupDismissed: s.setupDismissed,
       }),
     );
   } catch {
@@ -200,5 +205,95 @@ export async function toggleFullscreen(doc: Document): Promise<void> {
     else await doc.documentElement.requestFullscreen();
   } catch {
     // Refused (no gesture, policy) or unsupported: nothing to do.
+  }
+}
+
+/** Chromium's `beforeinstallprompt` event: the browser's offer to install the page as an app. */
+interface InstallPromptEvent {
+  preventDefault(): void;
+  prompt(): Promise<unknown>;
+}
+
+export interface InstallOffer {
+  /** Whether the browser has offered to install the page and the offer is still unused. */
+  available(): boolean;
+  /** Shows the browser's install prompt. It can be shown once, so the offer is then used up. */
+  prompt(): void;
+  /** Calls `listener` whenever an offer arrives. */
+  onChange(listener: () => void): void;
+}
+
+/**
+ * Keeps the browser's install offer for the Install app button, instead of the browser's own
+ * banner. Listen from the start: the offer can arrive at any time after the page loads.
+ */
+export function captureInstallPrompt(win: {
+  addEventListener(type: string, listener: (event: Event) => void): void;
+}): InstallOffer {
+  let kept: InstallPromptEvent | null = null;
+  const listeners: (() => void)[] = [];
+  win.addEventListener("beforeinstallprompt", (event) => {
+    const offer = event as Event & Partial<InstallPromptEvent>;
+    if (typeof offer.prompt !== "function") return;
+    event.preventDefault();
+    kept = offer as InstallPromptEvent;
+    for (const listener of listeners) listener();
+  });
+  return {
+    available: () => kept !== null,
+    prompt() {
+      const offer = kept;
+      kept = null;
+      if (offer === null) return;
+      try {
+        offer.prompt().catch(() => undefined);
+      } catch {
+        // Refused, for example without a tap: the button just goes away.
+      }
+    },
+    onChange(listener) {
+      listeners.push(listener);
+    },
+  };
+}
+
+/**
+ * True on an iPhone or iPad, where pages are installed from the Share menu rather than a prompt.
+ * iPadOS presents itself as a Mac, so a "Mac" with a touch screen counts too.
+ */
+export function isAppleMobile(nav: {
+  userAgent?: string;
+  maxTouchPoints?: number;
+  standalone?: boolean;
+}): boolean {
+  if (nav.standalone !== undefined) return true;
+  const agent = nav.userAgent ?? "";
+  if (/iPad|iPhone|iPod/.test(agent)) return true;
+  return /Macintosh/.test(agent) && (nav.maxTouchPoints ?? 0) > 1;
+}
+
+/** What the Install row shows: the prompt button, the Share menu instructions, or nothing. */
+export type InstallRow = "prompt" | "apple" | "hidden";
+
+export function installRow(state: {
+  /** Already running as the installed app. */
+  installed: boolean;
+  /** The browser has offered an install prompt. */
+  offered: boolean;
+  apple: boolean;
+}): InstallRow {
+  if (state.installed) return "hidden";
+  if (state.offered) return "prompt";
+  return state.apple ? "apple" : "hidden";
+}
+
+/** Registers the service worker for the page's own directory. Every failure is ignored. */
+export function registerServiceWorker(nav: {
+  serviceWorker?: { register(url: string, options: { scope: string }): Promise<unknown> };
+}): void {
+  try {
+    nav.serviceWorker?.register("sw.js", { scope: "./" }).catch(() => undefined);
+  } catch {
+    // Not allowed here (for example a private window): the page works without it.
   }
 }

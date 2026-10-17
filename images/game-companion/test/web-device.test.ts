@@ -3,8 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SETTINGS,
   SETTINGS_STORAGE_KEY,
+  captureInstallPrompt,
   createWakeLock,
   displayModeFullscreen,
+  installRow,
+  isAppleMobile,
+  registerServiceWorker,
   fullscreenSupported,
   GUIDE_ZOOM_STEPS,
   isFullscreen,
@@ -34,6 +38,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     expect(SETTINGS_STORAGE_KEY).toBe("game-companion:v1:settings");
     expect(loadSettings(memory())).toEqual({
@@ -44,6 +49,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
   });
 
@@ -66,6 +72,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     expect(JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string)).toEqual({
       keepAwake: false,
@@ -75,6 +82,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     expect(loadSettings(storage)).toEqual({
       keepAwake: false,
@@ -84,6 +92,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     saveSettings(storage, {
       keepAwake: true,
@@ -93,6 +102,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     expect(loadSettings(storage)).toEqual({
       keepAwake: true,
@@ -102,6 +112,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
   });
 
@@ -117,6 +128,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
   });
 
@@ -142,6 +154,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     expect(load({ keepAwake: 0, hideChrome: false })).toEqual({
       keepAwake: true,
@@ -151,6 +164,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     expect(load({ keepAwake: null, hideChrome: null })).toEqual(DEFAULT_SETTINGS);
     expect(load({ keepAwake: false, hideChrome: false, guideJump: "off" })).toEqual({
@@ -161,6 +175,7 @@ describe("settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     expect(load({ guideJump: false })).toEqual({ ...DEFAULT_SETTINGS, guideJump: false });
   });
@@ -219,6 +234,7 @@ describe("guide text size", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
   });
 
@@ -232,6 +248,7 @@ describe("guide text size", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
   });
 
@@ -273,6 +290,7 @@ describe("reader mode setting", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
   });
 
@@ -291,6 +309,7 @@ describe("reader mode setting", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
   });
 });
@@ -727,5 +746,153 @@ describe("displayModeFullscreen", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("set-up card setting", () => {
+  it("starts not dismissed, and keeps a dismissal", () => {
+    expect(DEFAULT_SETTINGS.setupDismissed).toBe(false);
+    const storage = memory();
+    saveSettings(storage, { ...DEFAULT_SETTINGS, setupDismissed: true });
+    expect(
+      (JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string) as { setupDismissed: unknown })
+        .setupDismissed,
+    ).toBe(true);
+    expect(loadSettings(storage).setupDismissed).toBe(true);
+  });
+
+  it.each([["yes"], [1], [null]])("reads a stored %j as not dismissed", (value) => {
+    const raw = JSON.stringify({ setupDismissed: value });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw })).setupDismissed).toBe(false);
+  });
+});
+
+describe("captureInstallPrompt", () => {
+  const offerEvent = () => {
+    const event = new Event("beforeinstallprompt", { cancelable: true }) as Event & {
+      prompt: () => Promise<unknown>;
+    };
+    event.prompt = vi.fn(async () => ({ outcome: "accepted" }));
+    return event;
+  };
+
+  it("keeps the browser's offer, stops the browser's own banner, and tells the listener", () => {
+    const target = new EventTarget();
+    const offer = captureInstallPrompt(target);
+    const changed = vi.fn();
+    offer.onChange(changed);
+    expect(offer.available()).toBe(false);
+    const event = offerEvent();
+    target.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(offer.available()).toBe(true);
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the prompt once, then the offer is used up", () => {
+    const target = new EventTarget();
+    const offer = captureInstallPrompt(target);
+    const event = offerEvent();
+    target.dispatchEvent(event);
+    offer.prompt();
+    expect(event.prompt).toHaveBeenCalledTimes(1);
+    expect(offer.available()).toBe(false);
+    offer.prompt();
+    expect(event.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("swallows a prompt that throws or rejects", async () => {
+    const target = new EventTarget();
+    const offer = captureInstallPrompt(target);
+    const sync = offerEvent();
+    sync.prompt = () => {
+      throw new Error("not allowed");
+    };
+    target.dispatchEvent(sync);
+    expect(() => offer.prompt()).not.toThrow();
+    const later = offerEvent();
+    later.prompt = vi.fn(async () => {
+      throw new Error("dismissed");
+    });
+    target.dispatchEvent(later);
+    offer.prompt();
+    await Promise.resolve();
+    expect(offer.available()).toBe(false);
+  });
+
+  it("ignores an event with no prompt to show", () => {
+    const target = new EventTarget();
+    const offer = captureInstallPrompt(target);
+    target.dispatchEvent(new Event("beforeinstallprompt", { cancelable: true }));
+    expect(offer.available()).toBe(false);
+  });
+});
+
+describe("isAppleMobile", () => {
+  const IPHONE =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+  const IPAD_DESKTOP =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+  const ANDROID =
+    "Mozilla/5.0 (Linux; Android 15; SM-F956B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36";
+
+  it("is true for an iPhone or an iPad user agent", () => {
+    expect(isAppleMobile({ userAgent: IPHONE })).toBe(true);
+    expect(isAppleMobile({ userAgent: IPHONE.replace(/iPhone/g, "iPad") })).toBe(true);
+  });
+
+  it("is true for iPadOS presenting as a Mac with a touch screen", () => {
+    expect(isAppleMobile({ userAgent: IPAD_DESKTOP, maxTouchPoints: 5 })).toBe(true);
+    expect(isAppleMobile({ userAgent: IPAD_DESKTOP, maxTouchPoints: 0 })).toBe(false);
+  });
+
+  it("is true wherever navigator.standalone exists", () => {
+    expect(isAppleMobile({ userAgent: "", standalone: false })).toBe(true);
+  });
+
+  it("is false for Android, a desktop, or nothing known", () => {
+    expect(isAppleMobile({ userAgent: ANDROID, maxTouchPoints: 5 })).toBe(false);
+    expect(isAppleMobile({ userAgent: IPAD_DESKTOP })).toBe(false);
+    expect(isAppleMobile({})).toBe(false);
+  });
+});
+
+describe("installRow", () => {
+  it.each([
+    [{ installed: false, offered: true, apple: false }, "prompt"],
+    [{ installed: false, offered: true, apple: true }, "prompt"],
+    [{ installed: false, offered: false, apple: true }, "apple"],
+    [{ installed: false, offered: false, apple: false }, "hidden"],
+    [{ installed: true, offered: true, apple: false }, "hidden"],
+    [{ installed: true, offered: false, apple: true }, "hidden"],
+  ] as const)("%j -> %s", (state, expected) => {
+    expect(installRow(state)).toBe(expected);
+  });
+});
+
+describe("registerServiceWorker", () => {
+  it("registers sw.js for the page's own directory", () => {
+    const register = vi.fn(async () => ({}));
+    registerServiceWorker({ serviceWorker: { register } });
+    expect(register).toHaveBeenCalledWith("sw.js", { scope: "./" });
+  });
+
+  it("does nothing without service workers, and ignores a refusal", async () => {
+    expect(() => registerServiceWorker({})).not.toThrow();
+    const register = vi.fn(async () => {
+      throw new Error("SecurityError");
+    });
+    registerServiceWorker({ serviceWorker: { register } });
+    expect(() =>
+      registerServiceWorker({
+        serviceWorker: {
+          register: () => {
+            throw new Error("sync");
+          },
+        },
+      }),
+    ).not.toThrow();
+    await Promise.resolve();
+    expect(register).toHaveBeenCalledTimes(1);
   });
 });

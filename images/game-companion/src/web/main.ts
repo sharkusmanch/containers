@@ -17,11 +17,14 @@ import {
   createWakeLock,
   displayModeFullscreen,
   fullscreenSupported,
+  installRow,
+  isAppleMobile,
   isFullscreen,
   loadSettings,
   nextGuideZoom,
   saveSettings,
   toggleFullscreen,
+  type InstallOffer,
   type WakeLockLike,
 } from "./device.js";
 import { createFrames } from "./frames.js";
@@ -64,8 +67,18 @@ export interface AppOptions {
   session?: StorageLike;
   setInterval?: typeof setInterval;
   setTimeout?: typeof setTimeout;
-  /** The browser's navigator, for the screen wake lock. Without it the lock is unsupported. */
-  nav?: { wakeLock?: WakeLockLike };
+  /**
+   * The browser's navigator: the screen wake lock (unsupported without it), and what tells an
+   * iPhone or iPad, which installs from the Share menu.
+   */
+  nav?: {
+    wakeLock?: WakeLockLike;
+    userAgent?: string;
+    maxTouchPoints?: number;
+    standalone?: boolean;
+  };
+  /** The browser's install offer, kept since boot; without it there is no Install app button. */
+  install?: InstallOffer;
   /** The browser window, to tell whether the page runs as an installed full-screen app. */
   win?: {
     matchMedia?: (query: string) => { matches: boolean };
@@ -305,6 +318,15 @@ export function startApp(opts: AppOptions): App {
       c.links = next;
       refreshPicker();
       return null;
+    },
+    onInstall() {
+      opts.install?.prompt();
+      showSettings();
+    },
+    onDismissSetup() {
+      settings = { ...settings, setupDismissed: true };
+      saveSettings(storage, settings);
+      showSettings();
     },
     onLink(link) {
       const c = current;
@@ -702,6 +724,11 @@ export function startApp(opts: AppOptions): App {
       fullscreen: isFullscreen(doc),
       wakeLockSupported: wakeLock.supported,
       fullscreenSupported: fullscreenSupported(doc) && !displayModeFullscreen(opts.win ?? {}),
+      install: installRow({
+        installed: displayModeFullscreen(opts.win ?? {}),
+        offered: opts.install?.available() ?? false,
+        apple: isAppleMobile(opts.nav ?? {}),
+      }),
       window: { ...windowSize, layout: layoutMode },
     });
   }
@@ -1270,6 +1297,7 @@ export function startApp(opts: AppOptions): App {
   applySettings();
   showSettings();
   doc.addEventListener("fullscreenchange", showSettings);
+  opts.install?.onChange(showSettings);
   opts.win?.addEventListener?.("resize", () => {
     applyLayoutMode();
     showSettings();

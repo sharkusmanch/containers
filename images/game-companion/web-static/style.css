@@ -869,7 +869,34 @@ button {
   background: var(--bg-active);
 }
 
-.setting-hint {
+.setup-card {
+  padding: 10px 12px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.setup-card-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.setup-card-line {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.picker-settings .setup-card-dismiss {
+  width: auto;
+  padding: 6px 0;
+  border-bottom: none;
+  font-weight: 600;
+}
+
+.setting-install-apple {
   margin: 0;
   padding: 16px 12px;
   font-size: 13px;

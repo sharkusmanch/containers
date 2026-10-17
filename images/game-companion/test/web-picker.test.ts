@@ -44,6 +44,8 @@ function make() {
     onAddLink: vi.fn((): string | null => null),
     onRemoveLink: vi.fn(),
     onLink: vi.fn(),
+    onInstall: vi.fn(),
+    onDismissSetup: vi.fn(),
   };
   const picker = createPicker(document, handlers);
   picker.setPages(pages, defaultLayout(pages, ["Achievement Checklist"]));
@@ -169,6 +171,8 @@ describe("game groups", () => {
       onAddLink: vi.fn(() => null),
       onRemoveLink: vi.fn(),
       onLink: vi.fn(),
+      onInstall: vi.fn(),
+      onDismissSetup: vi.fn(),
     };
     const picker = createPicker(document, handlers);
     picker.setHubs(hubs, available);
@@ -478,6 +482,8 @@ describe("display settings", () => {
     fullscreen: false,
     wakeLockSupported: true,
     fullscreenSupported: true,
+    install: "hidden" as const,
+    setupDismissed: false,
   };
   const row = (picker: { element: HTMLElement }, name: string): HTMLButtonElement =>
     picker.element.querySelector(`.picker-settings .${name}`) as HTMLButtonElement;
@@ -508,11 +514,12 @@ describe("display settings", () => {
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
   });
 
-  it("holds seven buttons and a hint, layout last before the hint", () => {
+  it("holds the set-up card, seven setting buttons, then the readout and the install row", () => {
     const { picker } = make();
     picker.setSettings(all);
     const list = picker.element.querySelector(".picker-settings") as HTMLElement;
-    const rows = [...list.querySelectorAll("button")];
+    expect(list.firstElementChild?.className).toBe("setup-card");
+    const rows = [...list.querySelectorAll(":scope > button")];
     expect(rows.map((b) => b.className)).toEqual([
       "setting-keep-awake",
       "setting-hide-chrome",
@@ -522,12 +529,10 @@ describe("display settings", () => {
       "setting-reader-mode",
       "setting-layout",
     ]);
-    expect(list.lastElementChild?.className).toBe("setting-hint");
     expect(rows.every((b) => b.getAttribute("type") === "button")).toBe(true);
-    const hint = list.querySelector("p.setting-hint");
-    expect(hint?.textContent).toBe(
-      "To use it like an app, open the browser menu and choose Add to Home screen.",
-    );
+    expect(rows.at(-1)?.nextElementSibling?.className).toBe("setting-layout-readout");
+    expect(list.lastElementChild?.className).toBe("setting-install");
+    expect(list.querySelector(".setting-hint")).toBeNull();
   });
 
   it("labels each row for both states, with aria-pressed", () => {
@@ -588,7 +593,6 @@ describe("display settings", () => {
     expect(row(picker, "setting-fullscreen").hidden).toBe(true);
     expect(row(picker, "setting-hide-chrome").hidden).toBe(false);
     expect(row(picker, "setting-guide-jump").hidden).toBe(false);
-    expect(picker.element.querySelector(".setting-hint")).not.toBeNull();
     picker.setSettings(all);
     expect(row(picker, "setting-keep-awake").hidden).toBe(false);
     expect(row(picker, "setting-fullscreen").hidden).toBe(false);
@@ -642,6 +646,80 @@ describe("display settings", () => {
     expect(row(picker, "setting-layout").textContent).toBe(text);
     expect(row(picker, "setting-layout").hasAttribute("aria-pressed")).toBe(false);
     expect(row(picker, "setting-layout").hidden).toBe(false);
+  });
+
+  const card = (picker: { element: HTMLElement }): HTMLElement =>
+    picker.element.querySelector(".picker-settings .setup-card") as HTMLElement;
+  const install = (picker: { element: HTMLElement }): HTMLElement =>
+    picker.element.querySelector(".picker-settings .setting-install") as HTMLElement;
+  const installButton = (picker: { element: HTMLElement }): HTMLButtonElement =>
+    install(picker).querySelector(".setting-install-button") as HTMLButtonElement;
+  const installText = (picker: { element: HTMLElement }): HTMLElement =>
+    install(picker).querySelector(".setting-install-apple") as HTMLElement;
+
+  it("shows the set-up card first, with its three lines and a Got it button", () => {
+    const { picker } = make();
+    picker.setSettings(all);
+    expect(card(picker).hidden).toBe(false);
+    expect(card(picker).querySelector(".setup-card-title")?.textContent).toBe("Set up this device");
+    expect(
+      [...card(picker).querySelectorAll(".setup-card-line")].map((p) => p.textContent),
+    ).toEqual([
+      "Install the app (see Install below).",
+      "Sign in to Outline once inside the installed app; guide pages stay blank until you do.",
+      "Reader mode is for touch screens; turn it off with a keyboard.",
+    ]);
+    const gotIt = card(picker).querySelector("button.setup-card-dismiss") as HTMLButtonElement;
+    expect(gotIt.textContent).toBe("Got it");
+    expect(gotIt.getAttribute("type")).toBe("button");
+  });
+
+  it("reports Got it, leaves the picker open, and hides the card once dismissed", () => {
+    const { picker, handlers } = make();
+    picker.setSettings(all);
+    picker.open("pages");
+    tab(picker).click();
+    (card(picker).querySelector(".setup-card-dismiss") as HTMLButtonElement).click();
+    expect(handlers.onDismissSetup).toHaveBeenCalledTimes(1);
+    expect(handlers.onSetting).not.toHaveBeenCalled();
+    expect(picker.element.hidden).toBe(false);
+    picker.setSettings({ ...all, setupDismissed: true });
+    expect(card(picker).hidden).toBe(true);
+  });
+
+  it("offers an Install app button when the browser has an install prompt", () => {
+    const { picker, handlers } = make();
+    picker.setSettings({ ...all, install: "prompt" });
+    picker.open("pages");
+    tab(picker).click();
+    expect(install(picker).hidden).toBe(false);
+    expect(installButton(picker).hidden).toBe(false);
+    expect(installButton(picker).textContent).toBe("Install app");
+    expect(installButton(picker).getAttribute("type")).toBe("button");
+    expect(installText(picker).hidden).toBe(true);
+    installButton(picker).click();
+    expect(handlers.onInstall).toHaveBeenCalledTimes(1);
+    expect(handlers.onSetting).not.toHaveBeenCalled();
+    expect(picker.element.hidden).toBe(false);
+  });
+
+  it("tells an iPhone or iPad how to add it to the home screen", () => {
+    const { picker } = make();
+    picker.setSettings({ ...all, install: "apple" });
+    expect(install(picker).hidden).toBe(false);
+    expect(installButton(picker).hidden).toBe(true);
+    expect(installText(picker).hidden).toBe(false);
+    expect(installText(picker).textContent).toBe("Install: Share › Add to Home Screen");
+  });
+
+  it("hides the install row when there is nothing to offer, and brings it back", () => {
+    const { picker } = make();
+    picker.setSettings({ ...all, install: "hidden" });
+    expect(install(picker).hidden).toBe(true);
+    picker.setSettings({ ...all, install: "prompt" });
+    expect(install(picker).hidden).toBe(false);
+    picker.setSettings({ ...all, install: "hidden" });
+    expect(install(picker).hidden).toBe(true);
   });
 
   it("shows the window readout with the resolved layout, never Automatic", () => {

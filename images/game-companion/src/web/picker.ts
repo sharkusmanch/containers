@@ -1,5 +1,5 @@
 import type { FindMatch, GuideHub, GuidePage } from "../shared/types.js";
-import type { GuideZoom } from "./device.js";
+import type { GuideZoom, InstallRow } from "./device.js";
 import { LAYOUT_LABELS, windowReadout } from "./layout-mode.js";
 import type { LayoutMode, LayoutOverride } from "./layout-mode.js";
 import type { GameLink, Layout, Slot } from "./state.js";
@@ -17,6 +17,10 @@ export interface PickerHandlers {
   onRemoveLink(url: string): void;
   /** A link row was tapped: pin it and open it. */
   onLink(link: GameLink): void;
+  /** Install app was tapped: show the browser's install prompt. The picker stays open. */
+  onInstall(): void;
+  /** Got it was tapped on the set-up card. The picker stays open. */
+  onDismissSetup(): void;
 }
 
 export type SettingName =
@@ -41,6 +45,9 @@ export interface SettingsState {
   fullscreen: boolean;
   wakeLockSupported: boolean;
   fullscreenSupported: boolean;
+  /** What the Install row offers on this device. */
+  install: InstallRow;
+  setupDismissed: boolean;
 }
 
 export interface Picker {
@@ -99,6 +106,29 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   matchesList.hidden = true;
   const settingsList = doc.createElement("div");
   settingsList.classList.add("picker-settings");
+  const setupCard = doc.createElement("section");
+  setupCard.classList.add("setup-card");
+  const setupTitle = doc.createElement("h3");
+  setupTitle.classList.add("setup-card-title");
+  setupTitle.textContent = "Set up this device";
+  setupCard.append(setupTitle);
+  for (const text of [
+    "Install the app (see Install below).",
+    "Sign in to Outline once inside the installed app; guide pages stay blank until you do.",
+    "Reader mode is for touch screens; turn it off with a keyboard.",
+  ]) {
+    const line = doc.createElement("p");
+    line.classList.add("setup-card-line");
+    line.textContent = text;
+    setupCard.append(line);
+  }
+  const gotIt = doc.createElement("button");
+  gotIt.setAttribute("type", "button");
+  gotIt.classList.add("setup-card-dismiss");
+  gotIt.textContent = "Got it";
+  gotIt.addEventListener("click", () => handlers.onDismissSetup());
+  setupCard.append(gotIt);
+  settingsList.append(setupCard);
   const settingRows = new Map<SettingName, HTMLButtonElement>();
   for (const [name, className] of [
     ["keepAwake", "setting-keep-awake"],
@@ -119,10 +149,18 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   const readout = doc.createElement("p");
   readout.classList.add("setting-layout-readout");
   settingRows.get("layoutMode")?.after(readout);
-  const hint = doc.createElement("p");
-  hint.classList.add("setting-hint");
-  hint.textContent = "To use it like an app, open the browser menu and choose Add to Home screen.";
-  settingsList.append(hint);
+  const installRow = doc.createElement("div");
+  installRow.classList.add("setting-install");
+  const installButton = doc.createElement("button");
+  installButton.setAttribute("type", "button");
+  installButton.classList.add("setting-install-button");
+  installButton.textContent = "Install app";
+  installButton.addEventListener("click", () => handlers.onInstall());
+  const installApple = doc.createElement("p");
+  installApple.classList.add("setting-install-apple");
+  installApple.textContent = "Install: Share › Add to Home Screen";
+  installRow.append(installButton, installApple);
+  settingsList.append(installRow);
   element.append(header, pagesList, gamesList, matchesList, settingsList);
 
   let choosing = false;
@@ -379,6 +417,10 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
       if (layoutRow !== undefined) {
         layoutRow.textContent = `Layout: ${LAYOUT_LABELS[state.layoutMode]}`;
       }
+      setupCard.hidden = state.setupDismissed;
+      installRow.hidden = state.install === "hidden";
+      installButton.hidden = state.install !== "prompt";
+      installApple.hidden = state.install !== "apple";
       readout.textContent = windowReadout(
         state.window.width,
         state.window.height,

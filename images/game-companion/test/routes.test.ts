@@ -74,6 +74,7 @@ beforeAll(async () => {
   const dir = await mkdtemp(join(tmpdir(), "gc-routes-"));
   await writeFile(join(dir, "index.html"), "<p>shell</p>");
   await writeFile(join(dir, "app.js"), "export {}");
+  await writeFile(join(dir, "sw.js"), "self.addEventListener('fetch', () => {});");
   await writeFile(join(dir, "manifest.webmanifest"), '{"name":"Sample"}');
   await writeFile(join(dir, "icon-192.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   const deps: RouteDeps = {
@@ -124,7 +125,7 @@ describe("routes", () => {
     expect(r.headers.get("x-content-type-options")).toBe("nosniff");
   });
 
-  it("lets the page frame an https address and changes no other directive", async () => {
+  it("lets the page frame an https address and run its worker, and changes no other directive", async () => {
     const csp = (await fetch(`${base}/companion/`)).headers.get("content-security-policy") ?? "";
     expect(csp.split("; ")).toEqual([
       "default-src 'none'",
@@ -134,10 +135,27 @@ describe("routes", () => {
       "connect-src 'self'",
       "frame-src 'self' https:",
       "manifest-src 'self'",
+      "worker-src 'self'",
       "base-uri 'none'",
       "form-action 'none'",
       "frame-ancestors 'none'",
     ]);
+  });
+
+  it("lets the page register its own service worker, and nothing else", async () => {
+    const csp = (await fetch(`${base}/companion/`)).headers.get("content-security-policy") ?? "";
+    expect(csp.split("; ").filter((d) => d.startsWith("worker-src "))).toEqual([
+      "worker-src 'self'",
+    ]);
+  });
+
+  it("serves the service worker as JavaScript from the page's own path", async () => {
+    const r = await fetch(`${base}/companion/sw.js`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(r.headers.get("cache-control")).toBe("no-cache");
+    expect(r.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await r.text()).toBe("self.addEventListener('fetch', () => {});");
   });
 
   it("allows the manifest in the content policy, and serves the manifest and icons with their types", async () => {

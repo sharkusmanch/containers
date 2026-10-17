@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { captureInstallPrompt } from "../src/web/device.js";
 import { startApp } from "../src/web/main.js";
 import type { Api } from "../src/web/api.js";
 import type { Layout } from "../src/web/state.js";
@@ -2809,6 +2810,7 @@ describe("display settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     expect($(".picker")?.hidden).toBe(false);
     row("setting-hide-chrome").click();
@@ -2822,6 +2824,95 @@ describe("display settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
+    });
+  });
+
+  describe("install and set-up", () => {
+    const IPHONE =
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+    const ANDROID =
+      "Mozilla/5.0 (Linux; Android 15; SM-F956B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36";
+    /** The browser's install offer, arriving on a stand-in window. */
+    const offering = () => {
+      const target = new EventTarget();
+      const install = captureInstallPrompt(target);
+      const prompt = vi.fn(async () => ({ outcome: "accepted" }));
+      const offer = (): void => {
+        const event = Object.assign(new Event("beforeinstallprompt", { cancelable: true }), {
+          prompt,
+        });
+        target.dispatchEvent(event);
+      };
+      return { install, prompt, offer };
+    };
+    const installRow = (): HTMLElement => $(".picker-settings .setting-install") as HTMLElement;
+    const installButton = (): HTMLButtonElement =>
+      $(".picker-settings .setting-install-button") as HTMLButtonElement;
+    const card = (): HTMLElement => $(".picker-settings .setup-card") as HTMLElement;
+
+    it("offers Install app when the browser has a prompt; a tap shows it once and hides the row", async () => {
+      const { install, prompt, offer } = offering();
+      offer();
+      await start(memory(), { install, nav: { userAgent: ANDROID } });
+      openDisplay();
+      expect(installRow().hidden).toBe(false);
+      expect(installButton().hidden).toBe(false);
+      expect(installButton().textContent).toBe("Install app");
+      installButton().click();
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(installRow().hidden).toBe(true);
+      expect($(".picker")?.hidden).toBe(false);
+    });
+
+    it("shows the row when the browser's offer arrives after the page started", async () => {
+      const { install, offer } = offering();
+      await start(memory(), { install, nav: { userAgent: ANDROID } });
+      openDisplay();
+      expect(installRow().hidden).toBe(true);
+      offer();
+      expect(installRow().hidden).toBe(false);
+      expect(installButton().hidden).toBe(false);
+    });
+
+    it("tells an iPhone how to add it to the home screen when there is no prompt", async () => {
+      await start(memory(), { nav: { userAgent: IPHONE, maxTouchPoints: 5 } });
+      openDisplay();
+      expect(installRow().hidden).toBe(false);
+      expect(installButton().hidden).toBe(true);
+      expect(($(".picker-settings .setting-install-apple") as HTMLElement).textContent).toBe(
+        "Install: Share › Add to Home Screen",
+      );
+    });
+
+    it("hides the row when running as the installed app", async () => {
+      const { install, offer } = offering();
+      offer();
+      const win = { matchMedia: (q: string) => ({ matches: q === "(display-mode: standalone)" }) };
+      await start(memory(), { install, nav: { userAgent: IPHONE }, win });
+      openDisplay();
+      expect(installRow().hidden).toBe(true);
+    });
+
+    it("hides the row with no prompt on a browser that is not an iPhone or iPad", async () => {
+      await start(memory(), { nav: { userAgent: ANDROID } });
+      openDisplay();
+      expect(installRow().hidden).toBe(true);
+    });
+
+    it("shows the set-up card until Got it, and remembers that on this device", async () => {
+      const storage = memory();
+      await start(storage);
+      openDisplay();
+      expect(card().hidden).toBe(false);
+      (card().querySelector(".setup-card-dismiss") as HTMLButtonElement).click();
+      expect(card().hidden).toBe(true);
+      expect($(".picker")?.hidden).toBe(false);
+      expect((stored(storage) as { setupDismissed: boolean }).setupDismissed).toBe(true);
+      document.body.innerHTML = '<main id="app"></main>';
+      await start(storage);
+      openDisplay();
+      expect(card().hidden).toBe(true);
     });
   });
 
@@ -2978,6 +3069,7 @@ describe("display settings", () => {
         readerMode: false,
         layoutMode: "auto",
         splitFraction: 0.55,
+        setupDismissed: false,
       });
       expect($(".picker")?.hidden).toBe(false);
       row("setting-reader-mode").click();
@@ -3204,6 +3296,7 @@ describe("display settings", () => {
         readerMode: true,
         layoutMode: "auto",
         splitFraction: 0.55,
+        setupDismissed: false,
       });
       expect($(".picker")?.hidden).toBe(false);
     }
@@ -3229,6 +3322,7 @@ describe("display settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
     row("setting-keep-awake").click();
     await flush();
@@ -3242,6 +3336,7 @@ describe("display settings", () => {
       readerMode: true,
       layoutMode: "auto",
       splitFraction: 0.55,
+      setupDismissed: false,
     });
   });
 

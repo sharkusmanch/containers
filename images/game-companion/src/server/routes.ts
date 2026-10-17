@@ -89,6 +89,7 @@ const CSP = [
   "connect-src 'self'",
   "frame-src 'self' https:",
   "manifest-src 'self'",
+  "worker-src 'self'",
   "base-uri 'none'",
   "form-action 'none'",
   "frame-ancestors 'none'",
