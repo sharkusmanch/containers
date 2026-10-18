@@ -5,7 +5,7 @@ const base = {
   model: "opus",
   mcpConfigPath: "/tmp/mcp.json",
   allowedTools: ["mcp__companion__search_guide", "mcp__romm__get_rom"],
-  skillsDir: "/agent/skills/redlib",
+  skillsDirs: ["/agent/skills/redlib"],
   prompt: "-Question: starts with a dash",
 };
 
@@ -36,6 +36,18 @@ describe("claudeArgs", () => {
       "--",
       "-Question: starts with a dash",
     ]);
+  });
+
+  it("passes each skills dir as its own --plugin-dir, in order", () => {
+    const args = claudeArgs({
+      ...base,
+      skillsDirs: ["/agent/skills/redlib", "/agent/skills/vibepollo"],
+      appendSystemPrompt: null,
+    });
+    const dirs = args.flatMap((a, i) => (args[i - 1] === "--plugin-dir" ? [a] : []));
+    expect(dirs).toEqual(["/agent/skills/redlib", "/agent/skills/vibepollo"]);
+    expect(args.filter((a) => a === "--plugin-dir")).toHaveLength(2);
+    expect(args.slice(-2)).toEqual(["--", base.prompt]);
   });
 
   it("passes the instructions as an appended system prompt when asked", () => {
@@ -74,7 +86,7 @@ describe("childEnv", () => {
         OUTLINE_API_KEY: "secret",
       },
       "/home/agent/run-1",
-      "/agent/skills/redlib",
+      [],
     );
     expect(env).toEqual({
       PATH: "/usr/bin",
@@ -83,7 +95,6 @@ describe("childEnv", () => {
       CLAUDE_CODE_OAUTH_TOKEN: "oauth",
       REDLIB_URL: "http://redlib.test",
       HOME: "/home/agent/run-1",
-      CLAUDE_PLUGIN_ROOT: "/agent/skills/redlib",
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       DISABLE_AUTOUPDATER: "1",
       ENABLE_TOOL_SEARCH: "false",
@@ -91,8 +102,34 @@ describe("childEnv", () => {
   });
 
   it("keeps MCP tools loaded up front, never deferred behind ToolSearch (not in --tools)", () => {
-    const env = childEnv({ ENABLE_TOOL_SEARCH: "true" }, "/home/agent/run-1", "/agent/skills");
+    const env = childEnv({ ENABLE_TOOL_SEARCH: "true" }, "/home/agent/run-1", []);
     expect(env.ENABLE_TOOL_SEARCH).toBe("false");
     expect(BUILTIN_TOOLS).not.toContain("ToolSearch");
+  });
+
+  it("leaves CLAUDE_PLUGIN_ROOT to Claude Code, which substitutes it per plugin", () => {
+    const env = childEnv({ CLAUDE_PLUGIN_ROOT: "/elsewhere" }, "/home/agent/run-1", []);
+    expect(env.CLAUDE_PLUGIN_ROOT).toBeUndefined();
+  });
+
+  it("copies the extra names that are set and skips those that are not", () => {
+    const env = childEnv(
+      { VIBEPOLLO_TOKEN: "ro-token", AGENT_TOKEN: "secret", PATH: "/usr/bin" },
+      "/home/agent/run-1",
+      ["VIBEPOLLO_TOKEN", "VIBEPOLLO_HOST"],
+    );
+    expect(env.VIBEPOLLO_TOKEN).toBe("ro-token");
+    expect("VIBEPOLLO_HOST" in env).toBe(false);
+    expect(env.AGENT_TOKEN).toBeUndefined();
+  });
+
+  it("never lets an extra name override what the service controls", () => {
+    const env = childEnv(
+      { HOME: "/server-home", ENABLE_TOOL_SEARCH: "true" },
+      "/home/agent/run-1",
+      ["HOME", "ENABLE_TOOL_SEARCH"],
+    );
+    expect(env.HOME).toBe("/home/agent/run-1");
+    expect(env.ENABLE_TOOL_SEARCH).toBe("false");
   });
 });

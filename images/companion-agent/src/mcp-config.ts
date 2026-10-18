@@ -7,6 +7,11 @@ const SERVERS = [
   { key: "outline", urlEnv: "OUTLINE_MCP_URL", tokenEnv: "OUTLINE_API_KEY" },
 ] as const;
 
+/** The env vars holding MCP credentials: they must never reach the claude child. */
+export const MCP_SECRET_ENV: readonly string[] = SERVERS.flatMap((s) =>
+  s.tokenEnv === null ? [] : [s.tokenEnv],
+);
+
 const TOOL_NAME = /^[A-Za-z0-9_-]+$/;
 
 interface HttpServer {

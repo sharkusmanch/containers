@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig } from "./config.js";
+import { loadConfig, skillsStatus } from "./config.js";
 import { buildMcp } from "./mcp-config.js";
 import { AgentServer } from "./server.js";
 
@@ -26,6 +26,7 @@ function main(): void {
     baseEnv: env,
     log,
   });
+  const skills = skillsStatus(config.skillsDirs);
   agent.server.listen(config.port, () =>
     log("listening", {
       port: config.port,
@@ -33,7 +34,8 @@ function main(): void {
       mcpServers: Object.keys(mcp.config.mcpServers),
       mcpTools: mcp.allowedTools.length,
       claudeMd: existsSync(join(config.projectDir, "CLAUDE.md")),
-      skills: existsSync(config.skillsDir),
+      skills: skills.loaded,
+      skillsMissing: skills.missing,
     }),
   );
 

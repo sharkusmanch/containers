@@ -103,7 +103,7 @@ class Run {
       model: config.model,
       mcpConfigPath: this.opts.mcpConfigPath,
       allowedTools: this.opts.allowedTools,
-      skillsDir: config.skillsDir,
+      skillsDirs: config.skillsDirs,
       appendSystemPrompt: hasClaudeMd ? null : req.instructions,
       prompt: buildPrompt(req),
     });
@@ -111,7 +111,7 @@ class Run {
     try {
       child = spawn(config.claudeBin, args, {
         cwd: config.projectDir,
-        env: childEnv(this.opts.baseEnv, home, config.skillsDir),
+        env: childEnv(this.opts.baseEnv, home, config.childEnvNames),
         detached: true,
         stdio: ["ignore", "pipe", "ignore"],
       });

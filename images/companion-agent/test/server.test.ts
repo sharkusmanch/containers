@@ -42,7 +42,8 @@ async function start(overrides: Partial<Config> = {}, claudeMd = true): Promise<
     claudeBin: fakeClaudePath,
     model: "opus",
     projectDir: project,
-    skillsDir: "/agent/skills/redlib",
+    skillsDirs: ["/agent/skills/redlib", "/agent/skills/vibepollo"],
+    childEnvNames: ["VIBEPOLLO_TOKEN", "VIBEPOLLO_HOST"],
     homeDir: home,
     timeoutMs: 10_000,
     killGraceMs: 200,
@@ -62,6 +63,7 @@ async function start(overrides: Partial<Config> = {}, claudeMd = true): Promise<
       CLAUDE_CODE_OAUTH_TOKEN: "oauth-test",
       AGENT_TOKEN: TOKEN,
       COMPANION_MCP_TOKEN: "mcp-secret",
+      VIBEPOLLO_TOKEN: "ro-token-test",
     },
     log: (msg, extra = {}) => logs.push({ msg, extra }),
   });
@@ -254,6 +256,8 @@ describe("answering", () => {
       "user,project",
       "--plugin-dir",
       "/agent/skills/redlib",
+      "--plugin-dir",
+      "/agent/skills/vibepollo",
       "--",
       [
         "Game: STATUS-MARKER",
@@ -266,7 +270,9 @@ describe("answering", () => {
     const runHome = rec.env.HOME ?? "";
     expect(runHome.startsWith(join(h.home, "run-"))).toBe(true);
     expect(rec.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-test");
-    expect(rec.env.CLAUDE_PLUGIN_ROOT).toBe("/agent/skills/redlib");
+    expect(rec.env.CLAUDE_PLUGIN_ROOT).toBeUndefined();
+    expect(rec.env.VIBEPOLLO_TOKEN).toBe("ro-token-test");
+    expect(rec.env.VIBEPOLLO_HOST).toBeUndefined();
     expect(rec.env.AGENT_TOKEN).toBeUndefined();
     expect(rec.env.COMPANION_MCP_TOKEN).toBeUndefined();
     // The run's HOME is removed once claude has exited.
