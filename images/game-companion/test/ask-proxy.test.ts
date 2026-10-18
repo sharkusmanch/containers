@@ -153,6 +153,18 @@ describe("Ask through the agent", () => {
     ]);
   });
 
+  it("delivers a bare done from the agent as done, with no unavailable error", async () => {
+    handle = (_req, res) => {
+      res.writeHead(200, { "content-type": "application/x-ndjson" });
+      res.end('{"type":"text","text":"Go left."}\n{"type":"done"}\n');
+    };
+    const r = await post();
+    expect(lines(await r.text())).toEqual([
+      { type: "text", text: "Go left." },
+      { type: "done", truncatedGuide: false },
+    ]);
+  });
+
   it("turns the agent's 429 into the companion's minute-limit 429", async () => {
     handle = (_req, res) => {
       res.writeHead(429, { "content-type": "application/json" });

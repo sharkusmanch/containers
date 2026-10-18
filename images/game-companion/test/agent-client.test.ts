@@ -161,7 +161,6 @@ describe("AgentClient stream", () => {
         { type: "search" },
         { type: "lookup", label: null },
         { type: "error" },
-        { type: "done", truncatedGuide: "no" },
         { type: "text", text: "Go left.", secret: "dropped" },
         "",
         { type: "done", truncatedGuide: false, extra: 1 },
@@ -170,6 +169,23 @@ describe("AgentClient stream", () => {
       { type: "text", text: "Go left." },
       { type: "done", truncatedGuide: false },
     ]);
+  });
+
+  it("accepts a bare done, so a finished answer ends cleanly", async () => {
+    handle = (_req, res) => ndjson(res, [{ type: "text", text: "Go left." }, { type: "done" }]);
+    expect(await run(client().agent)).toEqual([
+      { type: "text", text: "Go left." },
+      { type: "done", truncatedGuide: false },
+    ]);
+  });
+
+  it("passes truncatedGuide true through, and reads anything but true as false", async () => {
+    handle = (_req, res) => ndjson(res, [{ type: "done", truncatedGuide: true }]);
+    expect(await run(client().agent)).toEqual([{ type: "done", truncatedGuide: true }]);
+    for (const value of ["yes", 1, null, {}]) {
+      handle = (_req, res) => ndjson(res, [{ type: "done", truncatedGuide: value }]);
+      expect(await run(client().agent)).toEqual([{ type: "done", truncatedGuide: false }]);
+    }
   });
 
   it("joins lines split across chunks and reads a last line without a newline", async () => {

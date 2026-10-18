@@ -50,9 +50,8 @@ function parseEvent(line: string): AskEvent | null {
     case "lookup":
       return typeof raw.label === "string" ? { type: "lookup", label: raw.label } : null;
     case "done":
-      return typeof raw.truncatedGuide === "boolean"
-        ? { type: "done", truncatedGuide: raw.truncatedGuide }
-        : null;
+      // The field means nothing now that no guide text is sent; only `true` is kept.
+      return { type: "done", truncatedGuide: raw.truncatedGuide === true };
     case "error":
       return typeof raw.message === "string" ? { type: "error", message: raw.message } : null;
     default:
