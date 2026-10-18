@@ -96,6 +96,8 @@ export const IMAGE_HOSTS = [
   "https://steamcdn-a.akamaihd.net",
   "https://*.steamstatic.com",
   "https://media.retroachievements.org",
+  "https://images-eds-ssl.xboxlive.com",
+  "https://store-images.s-microsoft.com",
 ];
 
 const CSP = [

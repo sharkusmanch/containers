@@ -1,22 +1,10 @@
 import type { Achievement, AchievementsResponse, Source } from "../shared/types.js";
+import { safeIcon } from "./safe-icon.js";
 import { parseRaDate, type RaGameProgress } from "./ra.js";
 import type { SteamGameData } from "./steam.js";
+import { normaliseXbox, type XboxClient } from "./xbox.js";
 
-const ICON_HOSTS = ["steamcdn-a.akamaihd.net", "media.retroachievements.org"];
-const ICON_SUFFIXES = [".steamstatic.com"];
-
-export function safeIcon(url: string | null | undefined): string | null {
-  if (!url) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return null;
-  }
-  if (parsed.protocol !== "https:") return null;
-  const host = parsed.hostname;
-  return ICON_HOSTS.includes(host) || ICON_SUFFIXES.some((s) => host.endsWith(s)) ? url : null;
-}
+export { safeIcon };
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
@@ -89,6 +77,8 @@ export function normaliseRa(gameId: string, data: RaGameProgress): AchievementsR
 export interface AchievementServiceOptions {
   steam: { gameData(appId: string): Promise<SteamGameData | null> };
   ra: { gameProgress(id: string): Promise<RaGameProgress | null> };
+  /** Absent when Xbox is off; an Xbox lookup then finds nothing. */
+  xbox?: Pick<XboxClient, "titleInfo" | "achievements">;
   now?: () => number;
   ttlMs?: number;
   /** How long a failed first fetch is remembered before upstream is tried again. */
@@ -214,6 +204,15 @@ export class AchievementService {
     if (source === "steam") {
       const data = await this.opts.steam.gameData(id);
       return data && normaliseSteam(id, data);
+    }
+    if (source === "xbox") {
+      const xbox = this.opts.xbox;
+      if (!xbox) return null;
+      const [list, info] = await Promise.all([xbox.achievements(id), xbox.titleInfo(id)]);
+      if (!list) return null;
+      const response = normaliseXbox(id, info?.name || `Xbox game ${id}`, list, info);
+      // Like Steam: a game with no achievements at all is "none", not an empty list.
+      return response.total === 0 && !response.noList ? null : response;
     }
     const data = await this.opts.ra.gameProgress(id);
     return data && normaliseRa(id, data);

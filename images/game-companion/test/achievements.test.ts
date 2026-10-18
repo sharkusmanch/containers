@@ -7,6 +7,8 @@ import {
 } from "../src/server/achievements.js";
 import type { RaGameProgress } from "../src/server/ra.js";
 import type { SteamGameData } from "../src/server/steam.js";
+import type { XboxAchievementList, XboxTitleInfo } from "../src/server/xbox.js";
+import { fixture } from "./helpers.js";
 
 const steamData: SteamGameData = {
   title: "Test Game",
@@ -106,6 +108,9 @@ describe("safeIcon", () => {
     ["https://steamcdn-a.akamaihd.net/a.jpg", true],
     ["https://cdn.akamai.steamstatic.com/x/y.jpg", true],
     ["https://media.retroachievements.org/Badge/100.png", true],
+    ["https://images-eds-ssl.xboxlive.com/image?url=a", true],
+    ["https://store-images.s-microsoft.com/image/a", true],
+    ["http://images-eds-ssl.xboxlive.com/image?url=a", false],
     ["http://steamcdn-a.akamaihd.net/a.jpg", false],
     ["https://evil.example/a.jpg", false],
     ["https://steamstatic.com.evil.example/a.jpg", false],
@@ -351,6 +356,114 @@ describe("AchievementService", () => {
     await svc.get("steam", "3");
     await svc.get("steam", "1");
     expect(seen).toEqual(["1", "2", "3", "1"]);
+  });
+
+  describe("xbox", () => {
+    const list = JSON.parse(fixture("xbox-achievements.json")) as XboxAchievementList;
+    const info: XboxTitleInfo = {
+      id: "20",
+      name: "Test Quest: Moon Edition",
+      isXboxLive: true,
+      image: null,
+      totalGamerscore: 1000,
+    };
+    const idle = {
+      steam: { gameData: async () => null },
+      ra: { gameProgress: async () => null },
+    };
+
+    it("achievement service xbox branch caches like steam", async () => {
+      const calls = { list: 0, info: 0 };
+      const clock = { t: NOW };
+      const svc = new AchievementService({
+        ...idle,
+        xbox: {
+          achievements: async () => {
+            calls.list += 1;
+            return list;
+          },
+          titleInfo: async () => {
+            calls.info += 1;
+            return info;
+          },
+        },
+        now: () => clock.t,
+      });
+      const first = await svc.get("xbox", "20");
+      expect(first).toMatchObject({
+        source: "xbox",
+        id: "20",
+        title: "Test Quest: Moon Edition",
+        total: 3,
+        unlocked: 1,
+        stale: false,
+      });
+      await svc.get("xbox", "20");
+      expect(calls).toEqual({ list: 1, info: 1 });
+      clock.t += 46_000;
+      await svc.get("xbox", "20");
+      expect(calls.list).toBe(2);
+    });
+
+    it("serves the last copy marked stale when a refresh fails", async () => {
+      let fail = false;
+      const clock = { t: NOW };
+      const svc = new AchievementService({
+        ...idle,
+        xbox: {
+          achievements: async () => {
+            if (fail) throw new Error("down");
+            return list;
+          },
+          titleInfo: async () => info,
+        },
+        now: () => clock.t,
+      });
+      expect((await svc.get("xbox", "20"))?.stale).toBe(false);
+      fail = true;
+      clock.t += 61_000;
+      expect((await svc.get("xbox", "20"))?.stale).toBe(true);
+    });
+
+    it("is null when Xbox is off, not connected, or the game has no achievements", async () => {
+      expect(await new AchievementService(idle).get("xbox", "20")).toBeNull();
+      const none = new AchievementService({
+        ...idle,
+        xbox: { achievements: async () => null, titleInfo: async () => null },
+      });
+      expect(await none.get("xbox", "20")).toBeNull();
+      const empty = new AchievementService({
+        ...idle,
+        xbox: { achievements: async () => ({ achievements: [] }), titleInfo: async () => null },
+      });
+      expect(await empty.get("xbox", "20")).toBeNull();
+    });
+
+    it("keeps an empty list for a title with Gamerscore, marked noList", async () => {
+      const svc = new AchievementService({
+        ...idle,
+        xbox: { achievements: async () => ({ achievements: [] }), titleInfo: async () => info },
+      });
+      expect(await svc.get("xbox", "20")).toMatchObject({ total: 0, noList: true });
+    });
+
+    it("names an unlisted title by its ID", async () => {
+      const svc = new AchievementService({
+        ...idle,
+        xbox: { achievements: async () => list, titleInfo: async () => null },
+      });
+      expect((await svc.get("xbox", "77"))?.title).toBe("Xbox game 77");
+    });
+
+    it("draws a playing game's fetch from the priority budget", async () => {
+      const svc = new AchievementService({
+        ...idle,
+        xbox: { achievements: async () => list, titleInfo: async () => info },
+        maxFetchesPerMinute: 0,
+      });
+      await expect(svc.get("xbox", "20")).rejects.toThrow("upstream fetch limit reached");
+      expect(await svc.get("xbox", "20", { priority: true })).toMatchObject({ source: "xbox" });
+    });
   });
 
   describe("failures and stale copies", () => {

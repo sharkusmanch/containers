@@ -1,0 +1,42 @@
+{
+  "xuid": "2535000000001",
+  "titles": [
+    {
+      "titleId": "2000000002",
+      "name": "Test Quest: Moon Edition",
+      "devices": ["PC", "XboxSeries"],
+      "displayImage": "https://store-images.s-microsoft.com/image/apps.1.test-quest",
+      "titleHistory": { "lastTimePlayed": "2026-10-18T10:05:00.0000000Z" },
+      "achievement": {
+        "currentAchievements": 2,
+        "currentGamerscore": 25,
+        "totalGamerscore": 1000,
+        "totalAchievements": 0,
+        "progressPercentage": 2
+      }
+    },
+    {
+      "titleId": "2000000003",
+      "name": "Plain Desktop Program",
+      "devices": ["Win32"],
+      "displayImage": "https://evil.example/image.png",
+      "achievement": {
+        "currentAchievements": 0,
+        "currentGamerscore": 0,
+        "totalGamerscore": 0,
+        "totalAchievements": 0,
+        "progressPercentage": 0
+      }
+    },
+    {
+      "titleId": "2000000004",
+      "name": "Console Only Demo",
+      "devices": ["XboxOne"],
+      "achievement": {
+        "currentAchievements": 0,
+        "currentGamerscore": 0,
+        "totalGamerscore": 0
+      }
+    }
+  ]
+}

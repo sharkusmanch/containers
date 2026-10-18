@@ -290,6 +290,13 @@ describe("routes", () => {
       expect((await fetch(`${base}/companion/api/guides/nope/marks`)).status).toBe(404);
     });
 
+    it("CSP img-src includes the Xbox image hosts", async () => {
+      const csp = (await fetch(`${base}/companion/`)).headers.get("content-security-policy") ?? "";
+      const imgSrc = csp.split("; ").find((d) => d.startsWith("img-src ")) ?? "";
+      expect(imgSrc).toContain(" https://images-eds-ssl.xboxlive.com");
+      expect(imgSrc).toContain(" https://store-images.s-microsoft.com");
+    });
+
     it("rejects writes", async () => {
       for (const p of ["h1/find?q=sample", "h1/marks"]) {
         const r = await fetch(`${base}/companion/api/guides/${p}`, { method: "POST" });

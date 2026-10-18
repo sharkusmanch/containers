@@ -1,4 +1,4 @@
-export type Source = "steam" | "ra";
+export type Source = "steam" | "ra" | "xbox";
 
 /** A detected game. `id` is null for a Steam non-Steam shortcut, which has no real app ID. */
 export interface GameRef {
@@ -78,6 +78,10 @@ export interface Achievement {
    * everything else and for every Steam achievement.
    */
   kind: "progression" | "win" | null;
+  /** Xbox only: the Gamerscore this achievement is worth. */
+  gamerscore?: number;
+  /** Xbox only: a counter such as 3/10, null when the achievement has none. */
+  progress?: { current: number; target: number } | null;
 }
 
 export interface AchievementsResponse {
@@ -92,6 +96,10 @@ export interface AchievementsResponse {
   unlocked: number;
   stale: boolean;
   achievements: Achievement[];
+  /** Xbox only: Gamerscore earned and available in this list. */
+  gamerscore?: { current: number; total: number };
+  /** Xbox only: the title has Gamerscore but Xbox returned no list (Xbox 360 back-compat). */
+  noList?: boolean;
 }
 
 /** One place where a guide page mentions the searched text. */

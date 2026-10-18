@@ -1,0 +1,26 @@
+{
+  "xuid": "2535000000001",
+  "state": "Online",
+  "devices": [
+    {
+      "type": "WindowsOneCore",
+      "titles": [
+        {
+          "id": "1000000001",
+          "name": "Xbox App",
+          "placement": "Background",
+          "state": "Active",
+          "lastModified": "2026-10-18T10:00:00.0000000Z"
+        },
+        {
+          "id": "2000000002",
+          "name": "Test Quest: Moon Edition",
+          "placement": "Full",
+          "state": "Active",
+          "lastModified": "2026-10-18T10:05:00.0000000Z",
+          "activity": { "richPresence": "  Exploring the Crater\n  Level 4  " }
+        }
+      ]
+    }
+  ]
+}

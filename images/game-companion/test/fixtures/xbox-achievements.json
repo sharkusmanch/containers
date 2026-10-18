@@ -1,0 +1,62 @@
+{
+  "achievements": [
+    {
+      "id": "1",
+      "name": "First Steps",
+      "description": "Take your first step on the Moon.",
+      "lockedDescription": "Take your first step on the Moon.",
+      "isSecret": false,
+      "progressState": "Achieved",
+      "progression": {
+        "timeUnlocked": "2026-10-12T01:02:03.4567890Z",
+        "requirements": [{ "id": "r1", "current": "1", "target": "1" }]
+      },
+      "rarity": { "currentCategory": "Common", "currentPercentage": 92.74 },
+      "rewards": [{ "type": "Gamerscore", "value": "15", "valueType": "Int" }],
+      "mediaAssets": [
+        {
+          "type": "Icon",
+          "name": "icon",
+          "url": "https://images-eds-ssl.xboxlive.com/image?url=first"
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "name": "Rock Collector",
+      "description": "Collect 10 moon rocks.",
+      "lockedDescription": "Collect 10 moon rocks.",
+      "isSecret": false,
+      "progressState": "NotStarted",
+      "progression": {
+        "timeUnlocked": "0001-01-01T00:00:00.0000000Z",
+        "requirements": [{ "id": "r2", "current": "3", "target": "10" }]
+      },
+      "rarity": { "currentCategory": "Rare", "currentPercentage": 12.25 },
+      "rewards": [{ "type": "Gamerscore", "value": "30", "valueType": "Int" }],
+      "mediaAssets": [
+        {
+          "type": "Icon",
+          "name": "icon",
+          "url": "https://images-eds-ssl.xboxlive.com/image?url=rocks"
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "name": "The Far Side",
+      "description": "Find the hidden base on the far side.",
+      "lockedDescription": "This achievement is a secret.",
+      "isSecret": true,
+      "progressState": "NotStarted",
+      "progression": {
+        "timeUnlocked": "0001-01-01T00:00:00.0000000Z",
+        "requirements": [{ "id": "r3", "current": null, "target": null }]
+      },
+      "rarity": { "currentCategory": "Epic", "currentPercentage": 1.04 },
+      "rewards": [{ "type": "Gamerscore", "value": "50", "valueType": "Int" }],
+      "mediaAssets": [{ "type": "Icon", "name": "icon", "url": "https://evil.example/far.png" }]
+    }
+  ],
+  "pagingInfo": { "continuationToken": null, "totalRecords": 3 }
+}
