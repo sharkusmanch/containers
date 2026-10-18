@@ -555,16 +555,22 @@ button {
 
 .ach-actions {
   display: flex;
+  gap: 8px;
   padding: 0 12px 8px;
 }
 
-.ach-find {
+.ach-find,
+.ach-ask {
   flex: 1 1 auto;
   min-height: 44px;
   padding: 0 12px;
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: 6px;
+}
+
+.ach-ask:disabled {
+  opacity: 0.5;
 }
 
 /* ---- Picker: full-screen list of pages and games ---- */

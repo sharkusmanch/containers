@@ -34,6 +34,8 @@ export interface AssistantView {
     scope: string | null,
     request: { hubId: string | null; game: { source: Source; id: string } | null } | null,
   ): void;
+  /** Sends `text` as a normal turn; false when it cannot be sent now (blank, streaming, no game). */
+  ask(text: string, depth: AskRequest["depth"]): boolean;
 }
 
 const blank = (s: string): boolean => s.trim() === "";
@@ -128,7 +130,12 @@ const requestBytes = (req: AskRequest): number =>
 
 export function createAssistantView(
   doc: Document,
-  opts: { api: Pick<Api, "ask">; storage: StorageLike },
+  opts: {
+    api: Pick<Api, "ask">;
+    storage: StorageLike;
+    /** Called whenever an answer starts or stops streaming. */
+    onBusyChange?: (busy: boolean) => void;
+  },
 ): AssistantView {
   const { api, storage } = opts;
 
@@ -188,9 +195,14 @@ export function createAssistantView(
   let streaming: AbortController | null = null;
   // The last turn on screen, when it is the newest stored answer and that answer was a hint.
   let fullFor: HTMLElement | null = null;
+  let reportedBusy = false;
 
   const refreshControls = (): void => {
     const off = scope === null || streaming !== null;
+    if ((streaming !== null) !== reportedBusy) {
+      reportedBusy = streaming !== null;
+      opts.onBusyChange?.(reportedBusy);
+    }
     input.disabled = off;
     input.placeholder = scope === null ? PICK_A_GAME : "Ask about this game";
     for (const b of [...starters, sendButton, newChat]) b.disabled = off;
@@ -373,6 +385,7 @@ export function createAssistantView(
 
   return {
     element,
+    ask: (text, depth) => send(cut(text.trim(), QUESTION_MAX), depth),
     setScope(next, request) {
       target = next === null ? null : request;
       if (next === scope) {

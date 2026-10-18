@@ -11,7 +11,7 @@ import type {
   WhereMatch,
 } from "../shared/types.js";
 import type { Api } from "./api.js";
-import { createAchievementsView } from "./achievements-view.js";
+import { createAchievementsView, type AskState } from "./achievements-view.js";
 import { createAssistantView } from "./assistant-view.js";
 import {
   createWakeLock,
@@ -219,8 +219,19 @@ export function startApp(opts: AppOptions): App {
     (opts.reload ?? (() => doc.defaultView?.location.reload()))();
   });
 
-  const view = createAchievementsView(doc, { storage, onFind: (a) => void findInGuide(a) });
-  const assistant = createAssistantView(doc, { api, storage: opts.session ?? memoryStorage() });
+  const view = createAchievementsView(doc, {
+    storage,
+    onFind: (a) => void findInGuide(a),
+    onAsk: (a) => askHow(a),
+  });
+  const assistant = createAssistantView(doc, {
+    api,
+    storage: opts.session ?? memoryStorage(),
+    onBusyChange: (busy) => {
+      askBusy = busy;
+      syncAskHow();
+    },
+  });
   const frames = createFrames(doc, SLOT_COUNT, {
     ...(opts.setInterval === undefined ? {} : { setInterval: opts.setInterval }),
     onInteract: () => onGuideInteract(),
@@ -448,6 +459,9 @@ export function startApp(opts: AppOptions): App {
   // The Ask panel covers the stage while open (with two panes, the right pane). Never part of the
   // layout, so never stored.
   let askOpen = false;
+  // Whether an answer is streaming, which disables "Ask how" (no queueing).
+  let askBusy = false;
+  let askHowState: AskState = "hidden";
   // The address of the pinned page shown last, for the left pane while 🏆 or 💬 is chosen.
   let lastShownUrl: string | null = null;
 
@@ -893,6 +907,23 @@ export function startApp(opts: AppOptions): App {
     return assistantOn && current !== null && current.scope !== null;
   }
 
+  function syncAskHow(): void {
+    const state: AskState = !canAsk() ? "hidden" : askBusy ? "disabled" : "enabled";
+    if (state === askHowState) return;
+    askHowState = state;
+    view.setAskState(state);
+  }
+
+  /** Opens Ask exactly as 💬 does, then sends the question for an achievement at once. */
+  function askHow(a: Achievement): void {
+    if (!canAsk()) return;
+    const description = a.description === null ? "" : a.description.trim();
+    const question = `How do I get "${a.name}"?${description === "" ? "" : ` ${description}`}`;
+    askOpen = true;
+    render();
+    assistant.ask(question, "hint");
+  }
+
   // A browser may reset the scroll position of an element that is not rendered, so it is kept.
   function showAchievementsPanel(shown: boolean): void {
     if (shown) {
@@ -939,6 +970,7 @@ export function startApp(opts: AppOptions): App {
       findEnabled = canFind;
       view.setFindEnabled(canFind);
     }
+    syncAskHow();
     const left = panes === null ? null : showable(panes.left);
     if (panes !== null && left !== null) {
       // Two panes: a page on the left, the achievements or the Ask panel on the right.

@@ -5736,3 +5736,159 @@ describe("signed out", () => {
     });
   });
 });
+
+describe("ask how", () => {
+  const withDesc = (id: string, name: string, description: string | null): Achievement => ({
+    ...mk(id, name),
+    description,
+  });
+  const secret: Achievement = { ...withDesc("s1", "Hush", "Find it."), hidden: true };
+  const list = [
+    withDesc("a1", 'The "Gate"', "Open the gate."),
+    withDesc("a2", "Quiet One", null),
+    withDesc("a3", "Blank One", ""),
+    secret,
+  ];
+  const askHow = (): HTMLButtonElement | null => document.querySelector(".ach-ask");
+  const askRail = (): HTMLButtonElement =>
+    document.querySelector('.rail button[aria-label="Ask"]') as HTMLButtonElement;
+  const expand = (id: string): void =>
+    (document.querySelector(`.ach-row[data-id="${id}"]`) as HTMLElement).click();
+  const assistantNow = (hub: GuideHub): NowResponse => ({ ...playing(hub), assistant: true });
+  const start = async (api: Fake, extra: { split?: boolean } = {}) => {
+    api.achievements = async () => board(list);
+    const target = new EventTarget();
+    const win = {
+      innerWidth: extra.split === true ? 884 : 411,
+      innerHeight: extra.split === true ? 1004 : 470,
+      addEventListener: (type: string, cb: () => void) => target.addEventListener(type, cb),
+    };
+    const session = memory();
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      session,
+      setInterval: noTimers,
+      win,
+    });
+    await app.ready;
+    return { app, session };
+  };
+
+  it("is not offered when the assistant is off", async () => {
+    await start(fakeApi(playing(hubA)));
+    expand("a1");
+    expect(askHow()).toBeNull();
+  });
+
+  it("disappears when a later poll says the assistant is gone", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    const { app } = await start(api);
+    expand("a1");
+    expect(askHow()).not.toBeNull();
+    api.nowValue = playing(hubA);
+    await app.tick();
+    expect(askHow()).toBeNull();
+    expect(document.querySelector(".ach-find")).not.toBeNull();
+  });
+
+  it("opens Ask in place of the achievements and sends the question as a hint", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    await start(api);
+    expand("a1");
+    (askHow() as HTMLElement).click();
+    expect($(".ask")?.hidden).toBe(false);
+    expect($(".ach")?.hidden).toBe(true);
+    expect(askRail().classList.contains("active")).toBe(true);
+    expect(api.askCalls).toEqual([
+      {
+        hubId: "hA",
+        game: { source: "ra", id: "20" },
+        history: [],
+        question: 'How do I get "The "Gate""? Open the gate.',
+        depth: "hint",
+      },
+    ]);
+    await flush();
+    expect(document.querySelector(".ask-question")?.textContent).toBe(
+      'How do I get "The "Gate""? Open the gate.',
+    );
+  });
+
+  it("leaves the description out when there is none", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    await start(api);
+    expand("a2");
+    (askHow() as HTMLElement).click();
+    expect(api.askCalls.at(-1)?.question).toBe('How do I get "Quiet One"?');
+    await flush();
+    document.querySelector<HTMLElement>('.rail button[aria-label="Achievements"]')?.click();
+    expand("a3");
+    (
+      document.querySelector('.ach-row[data-id="a3"] + .ach-actions .ach-ask') as HTMLElement
+    ).click();
+    expect(api.askCalls.at(-1)?.question).toBe('How do I get "Blank One"?');
+  });
+
+  it("appears for a hidden achievement only once revealed", async () => {
+    await start(fakeApi(assistantNow(hubA)));
+    expand("s1");
+    expect(askHow()).toBeNull();
+    expand("s1");
+    expect(askHow()).not.toBeNull();
+  });
+
+  it("stores the turn in history and offers Full answer under it", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    api.ask = async (req, _signal, onEvent) => {
+      api.askCalls.push(req);
+      onEvent({ type: "text", text: "Use the lever." });
+      onEvent({ type: "done", truncatedGuide: false });
+    };
+    const { session } = await start(api);
+    expand("a1");
+    (askHow() as HTMLElement).click();
+    await flush();
+    expect(JSON.parse(session.getItem("game-companion:v1:ask:game:ra:20") as string)).toEqual([
+      { question: 'How do I get "The "Gate""? Open the gate.', answer: "Use the lever." },
+    ]);
+    expect(document.querySelector(".ask-turn .ask-full")).not.toBeNull();
+  });
+
+  it("is disabled while an answer streams, and enabled again after", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    let finish = (): void => {};
+    api.ask = (req) => {
+      api.askCalls.push(req);
+      return new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+    };
+    await start(api);
+    (document.querySelector(".ask-starter") as HTMLElement).click();
+    expand("a1");
+    expect(askHow()?.disabled).toBe(true);
+    askHow()?.click();
+    expect(api.askCalls).toHaveLength(1);
+    finish();
+    await flush();
+    expect(askHow()?.disabled).toBe(false);
+  });
+
+  it("in split layout opens Ask on the right and leaves the left pane alone", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    await start(api, { split: true });
+    const left = (): string | null =>
+      document.querySelector("iframe:not(.inactive)")?.getAttribute("src") ?? null;
+    const before = left();
+    expect(before).toBe("/doc/hA-checklist");
+    expand("a1");
+    (askHow() as HTMLElement).click();
+    expect($(".stage")?.classList.contains("two-panes")).toBe(true);
+    expect($(".ask")?.hidden).toBe(false);
+    expect(left()).toBe(before);
+    expect(askRail().classList.contains("active")).toBe(true);
+    expect(api.askCalls).toHaveLength(1);
+  });
+});

@@ -128,7 +128,14 @@ export interface AchievementsView {
   update(data: AchievementsResponse | null, message?: string): void;
   /** Enables or disables the "Find in guide" action (it needs a loaded guide). Default: disabled. */
   setFindEnabled(enabled: boolean): void;
+  /**
+   * The "Ask how" action: hidden (the default; Ask is unavailable), enabled, or disabled
+   * (an answer is already streaming).
+   */
+  setAskState(state: AskState): void;
 }
+
+export type AskState = "hidden" | "enabled" | "disabled";
 
 export function createAchievementsView(
   doc: Document,
@@ -136,10 +143,13 @@ export function createAchievementsView(
     storage?: StorageLike;
     /** Called when the user asks to find an achievement in the guide. */
     onFind?: (achievement: Achievement) => void;
+    /** Called when the user asks the assistant how to get an achievement. */
+    onAsk?: (achievement: Achievement) => void;
   } = {},
 ): AchievementsView {
   const storage = options.storage;
   const onFind = options.onFind;
+  const onAsk = options.onAsk;
   const element = doc.createElement("section");
   element.classList.add("ach");
 
@@ -159,6 +169,8 @@ export function createAchievementsView(
   let kindOnly = false;
   // Set by the page once a guide is loaded; the action needs one.
   let findEnabled = false;
+  // Set by the page from the assistant's availability; the action needs a game to ask about.
+  let askState: AskState = "hidden";
 
   const textEl = (tag: string, className: string, text: string): HTMLElement => {
     const el = doc.createElement(tag);
@@ -195,15 +207,26 @@ export function createAchievementsView(
     return row;
   };
 
-  const renderFindBar = (a: Achievement): HTMLElement => {
+  const renderActionBar = (a: Achievement, find: boolean, ask: boolean): HTMLElement => {
     const bar = doc.createElement("div");
     bar.classList.add("ach-actions");
-    const find = doc.createElement("button");
-    find.setAttribute("type", "button");
-    find.classList.add("ach-find");
-    find.textContent = "Find in guide";
-    find.addEventListener("click", () => onFind?.(a));
-    bar.append(find);
+    if (find) {
+      const button = doc.createElement("button");
+      button.setAttribute("type", "button");
+      button.classList.add("ach-find");
+      button.textContent = "Find in guide";
+      button.addEventListener("click", () => onFind?.(a));
+      bar.append(button);
+    }
+    if (ask) {
+      const button = doc.createElement("button");
+      button.setAttribute("type", "button");
+      button.classList.add("ach-ask");
+      button.textContent = "Ask how";
+      button.disabled = askState === "disabled";
+      button.addEventListener("click", () => onAsk?.(a));
+      bar.append(button);
+    }
     return bar;
   };
 
@@ -211,9 +234,10 @@ export function createAchievementsView(
   const renderRows = (list: Achievement[]): HTMLElement[] =>
     list.flatMap((a) => {
       const row = renderRow(a);
-      const showBar =
-        findEnabled && onFind !== undefined && expanded.has(a.id) && !isMasked(a, revealed);
-      return showBar ? [row, renderFindBar(a)] : [row];
+      if (!expanded.has(a.id) || isMasked(a, revealed)) return [row];
+      const find = findEnabled && onFind !== undefined;
+      const ask = askState !== "hidden" && onAsk !== undefined;
+      return find || ask ? [row, renderActionBar(a, find, ask)] : [row];
     });
 
   const renderList = (className: string, list: Achievement[]): HTMLElement => {
@@ -431,6 +455,11 @@ export function createAchievementsView(
     },
     setFindEnabled(enabled) {
       findEnabled = enabled;
+      if (lastData !== null) render();
+    },
+    setAskState(state) {
+      if (state === askState) return;
+      askState = state;
       if (lastData !== null) render();
     },
   };

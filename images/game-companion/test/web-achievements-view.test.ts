@@ -1225,6 +1225,96 @@ describe("find in guide", () => {
   });
 });
 
+describe("ask how", () => {
+  const rowSel = (id: string): string => `.ach-row[data-id="${id}"]`;
+  const click = (el: HTMLElement, id: string): void =>
+    (el.querySelector(rowSel(id)) as HTMLElement).click();
+  const askBtn = (el: HTMLElement, id: string): HTMLButtonElement | null =>
+    el.querySelector(`${rowSel(id)} + .ach-actions .ach-ask`);
+
+  it("adds an Ask how button next to Find in guide on an expanded row", () => {
+    const view = createAchievementsView(document, { onFind: () => {}, onAsk: () => {} });
+    view.setFindEnabled(true);
+    view.setAskState("enabled");
+    view.update(data);
+    click(view.element, "common");
+    const bar = view.element.querySelector(`${rowSel("common")} + .ach-actions`) as HTMLElement;
+    expect([...bar.children].map((c) => c.textContent)).toEqual(["Find in guide", "Ask how"]);
+    const ask = askBtn(view.element, "common") as HTMLButtonElement;
+    expect(ask.getAttribute("type")).toBe("button");
+    expect(ask.disabled).toBe(false);
+  });
+
+  it("works without Find in guide, and Find without it", () => {
+    const view = createAchievementsView(document, { onFind: () => {}, onAsk: () => {} });
+    view.setAskState("enabled");
+    view.update(data);
+    click(view.element, "common");
+    const bar = view.element.querySelector(`${rowSel("common")} + .ach-actions`) as HTMLElement;
+    expect([...bar.children].map((c) => c.textContent)).toEqual(["Ask how"]);
+    view.setFindEnabled(true);
+    view.setAskState("hidden");
+    const after = view.element.querySelector(`${rowSel("common")} + .ach-actions`) as HTMLElement;
+    expect([...after.children].map((c) => c.textContent)).toEqual(["Find in guide"]);
+  });
+
+  it("is not shown while hidden (default) or without a callback", () => {
+    const off = createAchievementsView(document, { onAsk: () => {} });
+    off.update(data);
+    click(off.element, "common");
+    expect(askBtn(off.element, "common")).toBeNull();
+    const noCallback = createAchievementsView(document);
+    noCallback.setAskState("enabled");
+    noCallback.update(data);
+    click(noCallback.element, "common");
+    expect(noCallback.element.querySelector(".ach-ask")).toBeNull();
+  });
+
+  it("is shown only once a hidden achievement is revealed", () => {
+    const view = createAchievementsView(document, { onAsk: () => {} });
+    view.setAskState("enabled");
+    view.update(data);
+    click(view.element, "secret");
+    expect(view.element.querySelector(".ach-ask")).toBeNull();
+    click(view.element, "secret");
+    expect(askBtn(view.element, "secret")).not.toBeNull();
+  });
+
+  it("is disabled while an answer streams and does not call back", () => {
+    const calls: Achievement[] = [];
+    const view = createAchievementsView(document, { onAsk: (x) => calls.push(x) });
+    view.setAskState("disabled");
+    view.update(data);
+    click(view.element, "common");
+    const ask = askBtn(view.element, "common") as HTMLButtonElement;
+    expect(ask.disabled).toBe(true);
+    ask.click();
+    expect(calls).toHaveLength(0);
+    view.setAskState("enabled");
+    expect((askBtn(view.element, "common") as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("calls back with the achievement and leaves the row expanded", () => {
+    const calls: Achievement[] = [];
+    const view = createAchievementsView(document, { onAsk: (x) => calls.push(x) });
+    view.setAskState("enabled");
+    view.update(data);
+    click(view.element, "rare");
+    (askBtn(view.element, "rare") as HTMLElement).click();
+    expect(calls).toEqual([list[0]]);
+    expect(view.element.querySelector(rowSel("rare"))?.classList.contains("expanded")).toBe(true);
+  });
+
+  it("never nests a button in a button", () => {
+    const view = createAchievementsView(document, { onFind: () => {}, onAsk: () => {} });
+    view.setFindEnabled(true);
+    view.setAskState("enabled");
+    view.update(data);
+    click(view.element, "common");
+    expect(view.element.querySelectorAll("button button")).toHaveLength(0);
+  });
+});
+
 describe("kind chips", () => {
   const storyList: Achievement[] = [
     a({ id: "s-open", kind: "progression", unlockPercent: 40 }),

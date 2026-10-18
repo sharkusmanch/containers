@@ -511,3 +511,59 @@ describe("assistant view: full answer and history", () => {
     expect(fake.calls).toHaveLength(0);
   });
 });
+
+describe("assistant view: ask()", () => {
+  it("sends the text as a normal hint turn, stored with Full answer offered", async () => {
+    expect(view.ask('How do I get "Gate"? Open it.', "hint")).toBe(true);
+    expect(fake.calls[0]?.req).toEqual({
+      hubId: "hA",
+      game: { source: "ra", id: "20" },
+      history: [],
+      question: 'How do I get "Gate"? Open it.',
+      depth: "hint",
+    });
+    expect(turns()).toHaveLength(1);
+    await answer(
+      fake.calls[0],
+      { type: "text", text: "Use the key." },
+      { type: "done", truncatedGuide: false },
+    );
+    expect(stored()).toEqual([
+      { question: 'How do I get "Gate"? Open it.', answer: "Use the key." },
+    ]);
+    expect(q(".ask-full")).not.toBeNull();
+  });
+
+  it("returns false and sends nothing while streaming, blank, or with no game", () => {
+    expect(view.ask("   ", "hint")).toBe(false);
+    expect(view.ask("First", "hint")).toBe(true);
+    expect(view.ask("Second", "hint")).toBe(false);
+    expect(fake.calls).toHaveLength(1);
+    view.setScope(null, null);
+    expect(view.ask("Third", "hint")).toBe(false);
+  });
+
+  it("cuts a question over the 1,000-character limit", () => {
+    expect(view.ask("a".repeat(1200), "hint")).toBe(true);
+    expect(fake.calls[0]?.req.question).toHaveLength(1000);
+  });
+
+  it("reports busy changes: true when a stream starts, false when it ends", async () => {
+    const seen: boolean[] = [];
+    const own = createAssistantView(document, {
+      api: fake.api,
+      storage,
+      onBusyChange: (busy) => seen.push(busy),
+    });
+    own.setScope("game:ra:20", target);
+    expect(seen).toEqual([]);
+    own.ask("Where?", "hint");
+    expect(seen).toEqual([true]);
+    await answer(
+      fake.calls[0],
+      { type: "text", text: "There." },
+      { type: "done", truncatedGuide: false },
+    );
+    expect(seen).toEqual([true, false]);
+  });
+});
