@@ -25,6 +25,10 @@ export interface Config {
   assistantPerDay: number;
   /** Bearer token for the MCP endpoint; null keeps the endpoint off (404). */
   mcpToken: string | null;
+  /** Entra app (client) ID for Xbox sign-in; null keeps Xbox off entirely. */
+  xboxClientId: string | null;
+  /** Directory holding the Xbox refresh-token file (the only persistent state). */
+  xboxStateDir: string;
 }
 
 const REQUIRED = [
@@ -63,6 +67,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     assistantPerMinute: positiveInt(env, "ASSISTANT_PER_MINUTE", 10),
     assistantPerDay: positiveInt(env, "ASSISTANT_PER_DAY", 150),
     mcpToken: env.COMPANION_MCP_TOKEN || null,
+    xboxClientId: env.XBOX_CLIENT_ID?.trim() || null,
+    xboxStateDir: env.XBOX_STATE_DIR || "/data",
   };
 }
 

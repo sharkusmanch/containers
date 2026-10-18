@@ -36,6 +36,20 @@ describe("loadConfig", () => {
     );
   });
 
+  it("leaves Xbox off unless a client id is configured", () => {
+    expect(loadConfig(base).xboxClientId).toBeNull();
+    expect(loadConfig({ ...base, XBOX_CLIENT_ID: "" }).xboxClientId).toBeNull();
+    expect(loadConfig({ ...base, XBOX_CLIENT_ID: "  " }).xboxClientId).toBeNull();
+    expect(loadConfig({ ...base, XBOX_CLIENT_ID: "sample-client-id" }).xboxClientId).toBe(
+      "sample-client-id",
+    );
+  });
+
+  it("keeps the Xbox token file in /data unless told otherwise", () => {
+    expect(loadConfig(base).xboxStateDir).toBe("/data");
+    expect(loadConfig({ ...base, XBOX_STATE_DIR: "/var/xbox" }).xboxStateDir).toBe("/var/xbox");
+  });
+
   it("applies defaults", () => {
     const c = loadConfig(base);
     expect(c.port).toBe(8080);
