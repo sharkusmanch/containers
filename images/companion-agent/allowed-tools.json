@@ -1,0 +1,73 @@
+{
+  "companion": [
+    "companion_status",
+    "list_guides",
+    "guide_outline",
+    "search_guide",
+    "read_guide_page"
+  ],
+  "retroachievements": [
+    "get_user_profile",
+    "get_user_unlocks",
+    "get_user_games",
+    "get_user_game_progress",
+    "get_user_social",
+    "list_consoles",
+    "find_games",
+    "get_game",
+    "get_game_rankings",
+    "get_leaderboards",
+    "get_achievement_unlocks",
+    "get_feed",
+    "get_comments",
+    "get_tickets",
+    "ra_api_raw"
+  ],
+  "romm": [
+    "list_platforms",
+    "search_roms",
+    "get_rom",
+    "list_collections",
+    "get_collection",
+    "romm_api_list",
+    "romm_api_describe",
+    "romm_api_read"
+  ],
+  "syncthing": [
+    "syncthing_overview",
+    "syncthing_folders",
+    "syncthing_folder_status",
+    "syncthing_folder_completion",
+    "syncthing_folder_errors",
+    "syncthing_folder_statistics",
+    "syncthing_devices",
+    "syncthing_device_statistics",
+    "syncthing_system_status",
+    "syncthing_system_connections",
+    "syncthing_system_errors",
+    "syncthing_system_health",
+    "syncthing_file_versions",
+    "syncthing_file_metadata",
+    "syncthing_needed_files",
+    "syncthing_remote_needed_files",
+    "syncthing_local_changes",
+    "syncthing_folder_browse",
+    "syncthing_pending_devices",
+    "syncthing_pending_folders",
+    "syncthing_events",
+    "syncthing_disk_events",
+    "syncthing_upgrade_available",
+    "syncthing_restart_required",
+    "syncthing_system_version",
+    "syncthing_instances"
+  ],
+  "outline": [
+    "list_collections",
+    "list_comments",
+    "list_documents",
+    "list_collection_documents",
+    "fetch",
+    "list_templates",
+    "list_users"
+  ]
+}
