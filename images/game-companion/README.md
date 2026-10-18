@@ -9,13 +9,14 @@ serves a read-only JSON API together with a static front end. The front end is a
 sidebar that frames real Outline pages and shows an achievements panel.
 
 From an achievement, **Find in guide** searches the game's guide pages and opens the page at
-that line. Achievements the guide marks as missable can be shown on their own, and a notice
-appears when an achievement unlocks while the page is open. While a RetroAchievements game is
-being played, a row under the title shows the status line the game reports (its rich
-presence); a tap on it shows a long line in full. When that line names a place or chapter that
-is also a heading in the guide, a button beside it opens the guide at that section (with
-several matching sections it lists them); **Guide jump from status** under ⋯ › Display turns
-this off. The page can be added to the home screen and then opens full screen; it keeps the
+that line. **Ask how** sends `How do I get "<name>"? <description>` to Ask at hint depth (hidden
+achievements: only once revealed). Achievements the guide marks as missable can be shown on
+their own, and a notice appears when an achievement unlocks while the page is open. While a
+RetroAchievements game is being played, a row under the title shows the status line the game
+reports (its rich presence); a tap on it shows a long line in full. When that line names a place
+or chapter that is also a heading in the guide, a button beside it opens the guide at that
+section (with several matching sections it lists them); **Guide jump from status** under
+⋯ › Display turns this off. The page can be added to the home screen and then opens full screen; it keeps the
 screen on and hides Outline's own sidebar and top bar inside the guide frames. Both can be
 switched off under ⋯ › Display. **Guide text size** there draws the framed guide pages at 90,
 80 or 70 per cent, for a small screen; it enlarges the frame and scales it down, so the guide

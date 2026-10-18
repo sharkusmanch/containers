@@ -5876,6 +5876,73 @@ describe("ask how", () => {
     expect(askHow()?.disabled).toBe(false);
   });
 
+  /** An api whose answer streams until `finish()`. */
+  const streaming = (api: Fake): { finish: () => void } => {
+    const handle = { finish: (): void => {} };
+    api.ask = (req) => {
+      api.askCalls.push(req);
+      return new Promise<void>((resolve) => {
+        handle.finish = resolve;
+      });
+    };
+    return handle;
+  };
+  const achievementsRail = (): HTMLElement =>
+    document.querySelector('.rail button[aria-label="Achievements"]') as HTMLElement;
+
+  it("leaves everything as it is when Ask refuses the question", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    streaming(api);
+    await start(api);
+    askRail().click();
+    ($(".ask-starter") as HTMLElement).click();
+    achievementsRail().click();
+    expand("a1");
+    expect($(".ask")?.hidden).toBe(true);
+    // A click that still reaches the handler (the button is disabled, but the page must not rely on it).
+    askHow()?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(api.askCalls).toHaveLength(1);
+    expect($(".ask")?.hidden).toBe(true);
+    expect($(".ach")?.hidden).toBe(false);
+    expect(askRail().classList.contains("active")).toBe(false);
+  });
+
+  it("is disabled after a question is sent and the user returns to the achievements", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    const stream = streaming(api);
+    await start(api);
+    askRail().click();
+    ($(".ask-starter") as HTMLElement).click();
+    achievementsRail().click();
+    expect($(".ach")?.hidden).toBe(false);
+    expand("a1");
+    expect(askHow()?.disabled).toBe(true);
+    stream.finish();
+    await flush();
+    expect(askHow()?.disabled).toBe(false);
+  });
+
+  it("is enabled again when the game changes mid-stream", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    streaming(api);
+    const { app } = await start(api);
+    askRail().click();
+    ($(".ask-starter") as HTMLElement).click();
+    achievementsRail().click();
+    expand("a1");
+    expect(askHow()?.disabled).toBe(true);
+    api.nowValue = assistantNow(hubZ);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    await flush();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    // The fake board carries the same game id for both, so the row may still be open.
+    if (askHow() === null) expand("a1");
+    expect(askHow()).not.toBeNull();
+    expect(askHow()?.disabled).toBe(false);
+  });
+
   it("in split layout opens Ask on the right and leaves the left pane alone", async () => {
     const api = fakeApi(assistantNow(hubA));
     await start(api, { split: true });

@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { basename } from "node:path";
-import { CONTROLLED_ENV } from "./argv.js";
-import { MCP_SECRET_ENV } from "./mcp-config.js";
+import { CONTROLLED_ENV, SECRET_ENV } from "./argv.js";
 
 export interface Config {
   port: number;
@@ -40,7 +39,6 @@ function required(env: Record<string, string | undefined>, key: string): string 
 }
 
 const ENV_NAME = /^[A-Z][A-Z0-9_]*$/;
-const NEVER_PASSED: ReadonlySet<string> = new Set(["AGENT_TOKEN", ...MCP_SECRET_ENV]);
 
 function list(raw: string | undefined): string[] {
   return (raw ?? "")
@@ -63,7 +61,7 @@ function childEnvNames(env: Record<string, string | undefined>): string[] {
     if (!ENV_NAME.test(name)) {
       throw new Error(`AGENT_CHILD_ENV: "${name}" is not a valid variable name (A-Z, 0-9, _)`);
     }
-    if (CONTROLLED_ENV.has(name) || NEVER_PASSED.has(name)) {
+    if (CONTROLLED_ENV.has(name) || SECRET_ENV.has(name)) {
       throw new Error(`AGENT_CHILD_ENV: ${name} is controlled by the service and cannot be listed`);
     }
   }

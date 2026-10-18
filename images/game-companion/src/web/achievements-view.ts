@@ -459,8 +459,16 @@ export function createAchievementsView(
     },
     setAskState(state) {
       if (state === askState) return;
+      const presenceChanged = (state === "hidden") !== (askState === "hidden");
       askState = state;
-      if (lastData !== null) render();
+      if (presenceChanged) {
+        if (lastData !== null) render();
+        return;
+      }
+      // Only enabled <-> disabled: update the buttons in place so a focused one keeps its identity.
+      for (const button of element.querySelectorAll<HTMLButtonElement>(".ach-ask")) {
+        button.disabled = state === "disabled";
+      }
     },
   };
 }

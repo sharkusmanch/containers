@@ -57,8 +57,8 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="companion-agent" \
       org.opencontainers.image.description="Answers the game companion's Ask questions with a locked-down Claude Code"
 
-# bash and curl for the agent's shell, python3 for the redlib skill's script; tini is PID 1 so
-# SIGTERM reaches node and orphans of killed claude runs are reaped.
+# bash and curl for the agent's shell, python3 for the skill plugins' scripts (redlib, vibepollo);
+# tini is PID 1 so SIGTERM reaches node and orphans of killed claude runs are reaped.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates curl python3 tini \
     && rm -rf /var/lib/apt/lists/*
@@ -67,7 +67,8 @@ COPY --from=claude /opt/claude /opt/claude
 RUN ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude
 
 # HOME is an emptyDir at deploy; the directories exist here so the image also runs without one.
-# /agent/skills/redlib is where the redlib plugin is mounted read-only.
+# /agent/skills/redlib is the default plugin directory (the redlib plugin, mounted read-only); the
+# deploy mounts the other skill plugins beside it.
 RUN groupadd -g 10000 agent \
     && useradd -u 10000 -g 10000 -d /home/agent -s /usr/sbin/nologin agent \
     && mkdir -p /home/agent /agent/skills/redlib \

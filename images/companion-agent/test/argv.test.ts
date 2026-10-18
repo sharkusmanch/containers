@@ -108,19 +108,31 @@ describe("childEnv", () => {
   });
 
   it("leaves CLAUDE_PLUGIN_ROOT to Claude Code, which substitutes it per plugin", () => {
-    const env = childEnv({ CLAUDE_PLUGIN_ROOT: "/elsewhere" }, "/home/agent/run-1", []);
+    const env = childEnv({ CLAUDE_PLUGIN_ROOT: "/elsewhere" }, "/home/agent/run-1", [
+      "CLAUDE_PLUGIN_ROOT",
+    ]);
     expect(env.CLAUDE_PLUGIN_ROOT).toBeUndefined();
   });
 
-  it("copies the extra names that are set and skips those that are not", () => {
+  it("refuses the service's secrets even when they are listed as extra names", () => {
     const env = childEnv(
-      { VIBEPOLLO_TOKEN: "ro-token", AGENT_TOKEN: "secret", PATH: "/usr/bin" },
+      { AGENT_TOKEN: "secret", COMPANION_MCP_TOKEN: "secret", VIBEPOLLO_TOKEN: "ro-token" },
       "/home/agent/run-1",
-      ["VIBEPOLLO_TOKEN", "VIBEPOLLO_HOST"],
+      ["AGENT_TOKEN", "COMPANION_MCP_TOKEN", "VIBEPOLLO_TOKEN"],
     );
+    expect("AGENT_TOKEN" in env).toBe(false);
+    expect("COMPANION_MCP_TOKEN" in env).toBe(false);
+    expect(env.VIBEPOLLO_TOKEN).toBe("ro-token");
+    expect(Object.values(env)).not.toContain("secret");
+  });
+
+  it("copies the extra names that are set and skips those that are not", () => {
+    const env = childEnv({ VIBEPOLLO_TOKEN: "ro-token", PATH: "/usr/bin" }, "/home/agent/run-1", [
+      "VIBEPOLLO_TOKEN",
+      "VIBEPOLLO_HOST",
+    ]);
     expect(env.VIBEPOLLO_TOKEN).toBe("ro-token");
     expect("VIBEPOLLO_HOST" in env).toBe(false);
-    expect(env.AGENT_TOKEN).toBeUndefined();
   });
 
   it("never lets an extra name override what the service controls", () => {

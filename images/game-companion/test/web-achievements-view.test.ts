@@ -1294,6 +1294,22 @@ describe("ask how", () => {
     expect((askBtn(view.element, "common") as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it("keeps the same button element across a busy toggle, with the state updated", () => {
+    const view = createAchievementsView(document, { onAsk: () => {} });
+    view.setAskState("enabled");
+    view.update(data);
+    click(view.element, "common");
+    const before = askBtn(view.element, "common") as HTMLButtonElement;
+    const row = view.element.querySelector(rowSel("common"));
+    view.setAskState("disabled");
+    expect(askBtn(view.element, "common")).toBe(before);
+    expect(view.element.querySelector(rowSel("common"))).toBe(row);
+    expect(before.disabled).toBe(true);
+    view.setAskState("enabled");
+    expect(askBtn(view.element, "common")).toBe(before);
+    expect(before.disabled).toBe(false);
+  });
+
   it("calls back with the achievement and leaves the row expanded", () => {
     const calls: Achievement[] = [];
     const view = createAchievementsView(document, { onAsk: (x) => calls.push(x) });

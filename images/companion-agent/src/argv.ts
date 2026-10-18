@@ -1,3 +1,5 @@
+import { MCP_SECRET_ENV } from "./mcp-config.js";
+
 /**
  * The built-in tools the agent gets, and no others: never Agent/Task (sub-agents get their own
  * tool policy), Write, Edit or NotebookEdit. `Skill` is what shows the model the skill list
@@ -75,6 +77,9 @@ const SET = [
 /** Names AGENT_CHILD_ENV may not list: the service controls them. */
 export const CONTROLLED_ENV: ReadonlySet<string> = new Set([...PASSED, ...SET]);
 
+/** Secrets the claude child must never get, whatever AGENT_CHILD_ENV says. */
+export const SECRET_ENV: ReadonlySet<string> = new Set(["AGENT_TOKEN", ...MCP_SECRET_ENV]);
+
 /** The environment of one claude run, built as an allowlist. */
 export function childEnv(
   base: Record<string, string | undefined>,
@@ -82,7 +87,10 @@ export function childEnv(
   extraNames: readonly string[],
 ): Record<string, string> {
   const env: Record<string, string> = {};
-  for (const key of [...PASSED, ...extraNames]) {
+  // The extra names are refused here too, not only in loadConfig: a name the service controls or a
+  // secret is never copied.
+  const extra = extraNames.filter((name) => !CONTROLLED_ENV.has(name) && !SECRET_ENV.has(name));
+  for (const key of [...PASSED, ...extra]) {
     const value = base[key];
     if (value !== undefined) env[key] = value;
   }
@@ -92,7 +100,7 @@ export function childEnv(
   // MCP tools stay loaded up front: deferred behind ToolSearch (not in --tools) they would be
   // unreachable.
   env.ENABLE_TOOL_SEARCH = "false";
-  // CLAUDE_PLUGIN_ROOT is never copied or set: Claude Code expands it per plugin in skill text.
-  delete env.CLAUDE_PLUGIN_ROOT;
+  // CLAUDE_PLUGIN_ROOT is never copied or set (it is in CONTROLLED_ENV, so no extra name copies
+  // it): Claude Code expands it per plugin in skill text.
   return env;
 }

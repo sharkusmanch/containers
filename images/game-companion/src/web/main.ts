@@ -914,14 +914,14 @@ export function startApp(opts: AppOptions): App {
     view.setAskState(state);
   }
 
-  /** Opens Ask exactly as 💬 does, then sends the question for an achievement at once. */
+  /** Sends the question for an achievement at once, then opens Ask as 💬 does; nothing changes if refused. */
   function askHow(a: Achievement): void {
     if (!canAsk()) return;
     const description = a.description === null ? "" : a.description.trim();
     const question = `How do I get "${a.name}"?${description === "" ? "" : ` ${description}`}`;
+    if (!assistant.ask(question, "hint")) return;
     askOpen = true;
     render();
-    assistant.ask(question, "hint");
   }
 
   // A browser may reset the scroll position of an element that is not rendered, so it is kept.
