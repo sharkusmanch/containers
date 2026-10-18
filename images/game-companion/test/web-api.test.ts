@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, REQUEST_TIMEOUT_MS, createApi } from "../src/web/api.js";
+import { AUTH_RETRY_MS, ApiError, REQUEST_TIMEOUT_MS, createApi } from "../src/web/api.js";
 import type { AskEvent, AskRequest } from "../src/shared/types.js";
 
 function fake(status: number, body: unknown): { fn: typeof fetch; urls: string[] } {
@@ -255,6 +255,8 @@ describe("api sign-in state", () => {
   const ask = (api: ReturnType<typeof createApi>) =>
     api.ask(request, new AbortController().signal, () => undefined).catch((e: unknown) => e);
 
+  const noWait = async (): Promise<void> => undefined;
+
   /** Every kind of call, each run once against the given fetch. */
   const everyCall = (api: ReturnType<typeof createApi>): Promise<unknown>[] => [
     api.now().catch((e: unknown) => e),
@@ -269,7 +271,12 @@ describe("api sign-in state", () => {
   ];
 
   it("reports signed out for a 401 from any call, the ask call included", async () => {
-    const api = createApi(fake(401, { error: "unauthorized" }).fn);
+    const api = createApi(
+      fake(401, { error: "unauthorized" }).fn,
+      "api",
+      REQUEST_TIMEOUT_MS,
+      noWait,
+    );
     const seen: boolean[] = [];
     api.onAuth?.((signedIn) => seen.push(signedIn));
     const results = await Promise.all(everyCall(api));
@@ -303,7 +310,7 @@ describe("api sign-in state", () => {
   });
 
   it("tells every listener", async () => {
-    const api = createApi(fake(401, {}).fn);
+    const api = createApi(fake(401, {}).fn, "api", REQUEST_TIMEOUT_MS, noWait);
     const a: boolean[] = [];
     const b: boolean[] = [];
     api.onAuth?.((s) => a.push(s));
@@ -315,5 +322,75 @@ describe("api sign-in state", () => {
 
   it("offers the listener hook on every api it creates", () => {
     expect(typeof createApi(fake(200, {}).fn).onAuth).toBe("function");
+  });
+
+  /** A fetch answering each request with the next status in turn, recording method and URL. */
+  const sequence = (statuses: number[], body: unknown = { ok: 1 }) => {
+    const calls: string[] = [];
+    const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      calls.push(`${init?.method ?? "GET"} ${url}`);
+      return new Response(JSON.stringify(body), { status: statuses.shift() ?? 200 });
+    }) as typeof fetch;
+    return { fn, calls };
+  };
+  /** A wait that resolves at once, recording each delay asked for. */
+  const recordWaits = () => {
+    const waits: number[] = [];
+    const wait = async (ms: number): Promise<void> => void waits.push(ms);
+    return { wait, waits };
+  };
+
+  it("retries a GET once after 2 s on a 401, uses the second answer and reports signed in", async () => {
+    expect(AUTH_RETRY_MS).toBe(2000);
+    const f = sequence([401, 200], { available: true, hubs: [] });
+    const w = recordWaits();
+    const api = createApi(f.fn, "api", REQUEST_TIMEOUT_MS, w.wait);
+    const seen: boolean[] = [];
+    api.onAuth?.((signedIn) => seen.push(signedIn));
+    expect(await api.guides()).toEqual({ available: true, hubs: [] });
+    expect(f.calls).toEqual(["GET api/guides", "GET api/guides"]);
+    expect(w.waits).toEqual([2000]);
+    expect(seen).toEqual([true]);
+  });
+
+  it("reports signed out only when the retried GET answers 401 again", async () => {
+    const f = sequence([401, 401]);
+    const w = recordWaits();
+    const api = createApi(f.fn, "api", REQUEST_TIMEOUT_MS, w.wait);
+    const seen: boolean[] = [];
+    api.onAuth?.((signedIn) => seen.push(signedIn));
+    const err = await api.marks("h1").catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 401 });
+    expect(f.calls).toEqual(["GET api/guides/h1/marks", "GET api/guides/h1/marks"]);
+    expect(w.waits).toEqual([2000]);
+    expect(seen).toEqual([false]);
+  });
+
+  it("never re-sends a question refused with 401: it checks the sign-in with a GET of now", async () => {
+    const f = sequence([401, 200]);
+    const w = recordWaits();
+    const api = createApi(f.fn, "api", REQUEST_TIMEOUT_MS, w.wait);
+    const seen: boolean[] = [];
+    api.onAuth?.((signedIn) => seen.push(signedIn));
+    const err = await ask(api);
+    expect(f.calls).toEqual(["POST api/ask", "GET api/now"]);
+    expect(w.waits).toEqual([2000]);
+    expect(seen).toEqual([true]);
+    // Still signed in: the question failed for some other reason, told as unavailable.
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toMatchObject({ status: 401 });
+  });
+
+  it("reports signed out when the question's 401 is confirmed by now answering 401", async () => {
+    const f = sequence([401, 401]);
+    const api = createApi(f.fn, "api", REQUEST_TIMEOUT_MS, recordWaits().wait);
+    const seen: boolean[] = [];
+    api.onAuth?.((signedIn) => seen.push(signedIn));
+    const err = await ask(api);
+    expect(f.calls).toEqual(["POST api/ask", "GET api/now"]);
+    expect(seen).toEqual([false]);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 401 });
   });
 });

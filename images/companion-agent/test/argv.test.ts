@@ -86,6 +86,13 @@ describe("childEnv", () => {
       CLAUDE_PLUGIN_ROOT: "/agent/skills/redlib",
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
       DISABLE_AUTOUPDATER: "1",
+      ENABLE_TOOL_SEARCH: "false",
     });
+  });
+
+  it("keeps MCP tools loaded up front, never deferred behind ToolSearch (not in --tools)", () => {
+    const env = childEnv({ ENABLE_TOOL_SEARCH: "true" }, "/home/agent/run-1", "/agent/skills");
+    expect(env.ENABLE_TOOL_SEARCH).toBe("false");
+    expect(BUILTIN_TOOLS).not.toContain("ToolSearch");
   });
 });

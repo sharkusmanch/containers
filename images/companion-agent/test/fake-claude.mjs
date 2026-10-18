@@ -6,6 +6,7 @@
 //   sleep:<ms>        print an init line, wait, exit 0 without a result
 //   hang              ignore SIGTERM, start a grandchild, never exit
 //   hang-stubborn     the same, and the grandchild ignores SIGTERM too
+//   exit-held         print an init line and exit 0, leaving a grandchild holding stdout open
 // Grandchildren run in their own session, as claude 2.1.302 runs its Bash commands, so a
 // signal to this process group does not reach them.
 import { spawn } from "node:child_process";
@@ -25,10 +26,11 @@ save();
 
 const init = JSON.stringify({ type: "system", subtype: "init", tools: [] });
 
-/** Starts a grandchild in its own session and records its pid. */
-function grandchild(ignoreTerm) {
+/** Starts a grandchild in its own session and records its pid; `holdStdout` shares stdout. */
+function grandchild(ignoreTerm, holdStdout = false) {
   const code = (ignoreTerm ? "process.on('SIGTERM',()=>{});" : "") + "setInterval(()=>{},1000)";
-  const child = spawn(process.execPath, ["-e", code], { stdio: "ignore", detached: true });
+  const stdio = holdStdout ? ["ignore", "inherit", "ignore"] : "ignore";
+  const child = spawn(process.execPath, ["-e", code], { stdio, detached: true });
   child.unref();
   record.grandchild = child.pid;
   save();
@@ -45,6 +47,9 @@ if (mode === "replay" || mode === "replay-bg") {
   grandchild(mode === "hang-stubborn");
   process.stdout.write(init + "\n");
   setInterval(() => {}, 1000);
+} else if (mode === "exit-held") {
+  grandchild(false, true);
+  process.stdout.write(init + "\n", () => process.exit(0));
 } else {
   process.exit(3);
 }

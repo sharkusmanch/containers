@@ -55,6 +55,8 @@ class Run {
   private pingTimer: NodeJS.Timeout | undefined;
   private timeoutTimer: NodeJS.Timeout | undefined;
   private killTimer: NodeJS.Timeout | undefined;
+  /** Started when claude exits; finishes the run if its stdout never closes. */
+  private exitTimer: NodeJS.Timeout | undefined;
   private terminating = false;
   private finalized = false;
   private markExited!: () => void;
@@ -123,8 +125,16 @@ class Run {
       // Spawning failed (no such binary): there is no process to wait for.
       if (child.pid === undefined) this.finalize();
     });
-    // Anything the leader left behind in its group goes with it.
-    child.on("exit", () => signalGroup(child.pid, "SIGKILL"));
+    child.on("exit", () => {
+      // Anything the leader left behind in its group goes with it.
+      signalGroup(child.pid, "SIGKILL");
+      // A process that left the group can still hold stdout open, and then "close" never comes:
+      // after the grace period the run is finished anyway (finalize's cleanUp sweeps its HOME).
+      this.exitTimer = setTimeout(() => {
+        child.stdout.destroy();
+        this.finalize();
+      }, this.opts.config.killGraceMs);
+    });
     child.on("close", () => this.finalize());
     const lines = createInterface({ input: child.stdout });
     lines.on("line", (line) => {
@@ -188,6 +198,7 @@ class Run {
     this.endResponse();
     clearTimeout(this.timeoutTimer);
     clearTimeout(this.killTimer);
+    clearTimeout(this.exitTimer);
     const s = this.translator.summary();
     this.opts.log("ask", {
       outcome: this.outcome,

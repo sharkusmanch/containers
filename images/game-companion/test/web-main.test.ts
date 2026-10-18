@@ -5690,12 +5690,49 @@ describe("signed out", () => {
       new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 })) as typeof fetch;
     const app = startApp({
       doc: document,
-      api: createApi(fetchFn),
+      api: createApi(fetchFn, "api", 8000, async () => undefined),
       storage: memory(),
       setInterval: noTimers,
     });
     await app.ready;
     expect(banner()?.hidden).toBe(false);
     expect($(".switch-banner")?.hidden).toBe(true);
+  });
+
+  describe("a question refused with 401", () => {
+    const withAssistant: NowResponse = { ...playing(hubA), assistant: true };
+    /** The fake api with ask and the sign-in hook from a real api: ask 401s, now answers `nowStatus`. */
+    const askingApi = (nowStatus: number) => {
+      const fetchFn = (async (input: RequestInfo | URL) =>
+        input === "api/now"
+          ? new Response(JSON.stringify(withAssistant), { status: nowStatus })
+          : new Response(JSON.stringify({ error: "unauthorized" }), {
+              status: 401,
+            })) as typeof fetch;
+      const real = createApi(fetchFn, "api", 8000, async () => undefined);
+      const api = fakeApi(withAssistant);
+      api.ask = (req, signal, onEvent) => real.ask(req, signal, onEvent);
+      api.onAuth = (listener) => real.onAuth?.(listener);
+      return api;
+    };
+    const askOnce = async (api: Fake): Promise<void> => {
+      const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+      await app.ready;
+      ($('.rail button[aria-label="Ask"]') as HTMLButtonElement).click();
+      ($(".ask-starter") as HTMLElement).click();
+      for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+    };
+
+    it("shows no banner and says unavailable inline while now still answers", async () => {
+      await askOnce(askingApi(200));
+      expect(banner()?.hidden).toBe(true);
+      expect($(".ask-error")?.textContent).toBe("The assistant is unavailable right now.");
+    });
+
+    it("shows the banner, not an inline error, when now answers 401 too", async () => {
+      await askOnce(askingApi(401));
+      expect(banner()?.hidden).toBe(false);
+      expect($(".ask-error")).toBeNull();
+    });
   });
 });

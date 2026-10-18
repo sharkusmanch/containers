@@ -396,6 +396,23 @@ describe("limits and killing", () => {
     expect(alive(rec?.grandchild ?? 0)).toBe(false);
   });
 
+  it("finishes a run whose claude exited while a grandchild keeps its stdout open", async () => {
+    await restart({ timeoutMs: 2500 });
+    const started = Date.now();
+    const list = await events(await ask(body("exit-held")));
+    // Ended by the grace period after claude's exit, not by the 2.5 s timeout.
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(list[list.length - 1]).toEqual({ type: "error", message: UNAVAILABLE });
+    const [rec] = records();
+    expect(rec?.grandchild).toBeDefined();
+    await until(() => h.agent.running === 0);
+    expect(alive(rec?.grandchild ?? 0)).toBe(false);
+    expect(readdirSync(h.home)).toEqual([]);
+    const lines = h.logs.filter((l) => l.msg === "ask");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.extra.outcome).toBe("no_result");
+  });
+
   it("kills the process group when the client disconnects", async () => {
     const controller = new AbortController();
     const res = await ask(body("hang"), { signal: controller.signal });

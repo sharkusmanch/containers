@@ -76,5 +76,8 @@ export function childEnv(
   env.CLAUDE_PLUGIN_ROOT = skillsDir;
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   env.DISABLE_AUTOUPDATER = "1";
+  // MCP tools stay loaded up front: deferred behind ToolSearch (not in --tools) they would be
+  // unreachable.
+  env.ENABLE_TOOL_SEARCH = "false";
   return env;
 }

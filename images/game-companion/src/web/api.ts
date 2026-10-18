@@ -13,6 +13,11 @@ import type {
 } from "../shared/types.js";
 
 export const REQUEST_TIMEOUT_MS = 8000;
+/**
+ * How long to wait before checking a 401 again. Sign-ins are refreshed hourly and a request
+ * racing a refresh can get one 401, so only a second one in a row means the sign-in has lapsed.
+ */
+export const AUTH_RETRY_MS = 2000;
 
 export class ApiError extends Error {
   constructor(
@@ -43,12 +48,15 @@ export interface Api {
   progress(hubId: string, refresh?: boolean): Promise<GuideProgressResponse | null>;
   /**
    * Asks the assistant and hands each streamed event to `onEvent`; resolves when the stream ends.
-   * Only `signal` cuts it short: an answer may take a while.
+   * Only `signal` cuts it short: an answer may take a while. A refused question is never re-sent:
+   * after a 401 it rejects with that ApiError only when a GET of now answers 401 too, and with a
+   * plain Error (unavailable) otherwise.
    */
   ask(req: AskRequest, signal: AbortSignal, onEvent: (e: AskEvent) => void): Promise<void>;
   /**
-   * Adds a listener told false whenever a response is a 401 (the sign-in has lapsed) and true
-   * whenever one succeeds. Network failures and other statuses tell it nothing.
+   * Adds a listener told false whenever a 401 is confirmed by a second one (the sign-in has
+   * lapsed) and true whenever a response succeeds. Network failures and other statuses tell it
+   * nothing.
    */
   onAuth?(listener: (signedIn: boolean) => void): void;
 }
@@ -85,6 +93,7 @@ export function createApi(
   fetchFn: typeof fetch = (input, init) => fetch(input, init),
   base = "api",
   timeoutMs = REQUEST_TIMEOUT_MS,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 ): Api {
   const authListeners: ((signedIn: boolean) => void)[] = [];
   /** Tells the listeners what a response says about the sign-in. */
@@ -94,13 +103,18 @@ export function createApi(
     return res;
   }
 
+  const getOnce = (path: string): Promise<Response> =>
+    fetchFn(`${base}/${path}`, {
+      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+
+  /** A GET, retried once after a 401: only a second 401 in a row is told as signed out. */
   async function get(path: string): Promise<Response> {
-    return noteAuth(
-      await fetchFn(`${base}/${path}`, {
-        headers: { accept: "application/json" },
-        signal: AbortSignal.timeout(timeoutMs),
-      }),
-    );
+    const res = await getOnce(path);
+    if (res.status !== 401) return noteAuth(res);
+    await wait(AUTH_RETRY_MS);
+    return noteAuth(await getOnce(path));
   }
 
   async function getJson<T>(path: string): Promise<T> {
@@ -121,14 +135,19 @@ export function createApi(
     signal: AbortSignal,
     onEvent: (e: AskEvent) => void,
   ): Promise<void> {
-    const res = noteAuth(
-      await fetchFn(`${base}/ask`, {
-        method: "POST",
-        headers: { "content-type": "application/json", accept: "application/x-ndjson" },
-        body: JSON.stringify(req),
-        signal,
-      }),
-    );
+    const res = await fetchFn(`${base}/ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/x-ndjson" },
+      body: JSON.stringify(req),
+      signal,
+    });
+    if (res.status === 401) {
+      // A question is never sent twice: the sign-in is checked with a GET of now instead.
+      await wait(AUTH_RETRY_MS);
+      if (noteAuth(await getOnce("now")).status === 401) throw new ApiError(401);
+      throw new Error("question refused with 401 while signed in");
+    }
+    noteAuth(res);
     if (!res.ok) throw await askError(res);
     if (res.body === null) return;
     const reader = res.body.getReader();
