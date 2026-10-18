@@ -1,13 +1,15 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import type { Readable } from "node:stream";
 import { childEnv, claudeArgs } from "./argv.js";
 import type { Config } from "./config.js";
 import { buildPrompt, parseAskRequest, type AskRequest } from "./prompt.js";
+import { signalByHome } from "./reap.js";
 import { REFUSED, Translator, UNAVAILABLE, type AskEvent } from "./translate.js";
 
 export type Log = (msg: string, extra?: Record<string, unknown>) => void;
@@ -47,6 +49,8 @@ class Run {
   readonly exited: Promise<void>;
   private outcome: Outcome | null = null;
   private child: ChildProcess | null = null;
+  /** This run's HOME, once created: every process of the run carries it. */
+  private home: string | null = null;
   private readonly translator = new Translator();
   private pingTimer: NodeJS.Timeout | undefined;
   private timeoutTimer: NodeJS.Timeout | undefined;
@@ -84,11 +88,12 @@ class Run {
       home = await mkdtemp(join(config.homeDir, "run-"));
     } catch {
       this.stop("error");
-      this.finalize(null);
+      this.finalize();
       return;
     }
+    this.home = home;
     if (this.outcome !== null) {
-      this.finalize(home);
+      this.finalize();
       return;
     }
     const hasClaudeMd = existsSync(join(config.projectDir, "CLAUDE.md"));
@@ -100,20 +105,27 @@ class Run {
       appendSystemPrompt: hasClaudeMd ? null : req.instructions,
       prompt: buildPrompt(req),
     });
-    const child = spawn(config.claudeBin, args, {
-      cwd: config.projectDir,
-      env: childEnv(this.opts.baseEnv, home, config.skillsDir),
-      detached: true,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    let child: ChildProcessByStdio<null, Readable, null>;
+    try {
+      child = spawn(config.claudeBin, args, {
+        cwd: config.projectDir,
+        env: childEnv(this.opts.baseEnv, home, config.skillsDir),
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      // Invalid arguments throw instead of emitting "error": nothing was started.
+      this.finalize();
+      return;
+    }
     this.child = child;
     child.on("error", () => {
       // Spawning failed (no such binary): there is no process to wait for.
-      if (child.pid === undefined) this.finalize(home);
+      if (child.pid === undefined) this.finalize();
     });
     // Anything the leader left behind in its group goes with it.
     child.on("exit", () => signalGroup(child.pid, "SIGKILL"));
-    child.on("close", () => this.finalize(home));
+    child.on("close", () => this.finalize());
     const lines = createInterface({ input: child.stdout });
     lines.on("line", (line) => {
       for (const e of this.translator.line(line)) this.write(e);
@@ -135,8 +147,14 @@ class Run {
     const pid = this.child?.pid;
     if (this.terminating || pid === undefined || this.child?.exitCode !== null) return;
     this.terminating = true;
-    signalGroup(pid, "SIGTERM");
-    this.killTimer = setTimeout(() => signalGroup(pid, "SIGKILL"), this.opts.config.killGraceMs);
+    this.signalAll(pid, "SIGTERM");
+    this.killTimer = setTimeout(() => this.signalAll(pid, "SIGKILL"), this.opts.config.killGraceMs);
+  }
+
+  /** claude's process group, and every process of the run that left it (Bash commands). */
+  private signalAll(pid: number, signal: NodeJS.Signals): void {
+    signalGroup(pid, signal);
+    if (this.home !== null) signalByHome(this.home, signal);
   }
 
   private write(e: AskEvent): void {
@@ -161,7 +179,7 @@ class Run {
   }
 
   /** claude has exited (or never started): end the answer, log, clean up, free the slot. */
-  private finalize(home: string | null): void {
+  private finalize(): void {
     if (this.finalized) return;
     this.finalized = true;
     const ending = this.translator.finish();
@@ -180,13 +198,24 @@ class Run {
       costUsd: s.costUsd,
       usage: s.usage,
     });
-    const removed = home === null ? Promise.resolve() : rm(home, { recursive: true, force: true });
-    void removed
-      .catch(() => undefined)
-      .then(() => {
-        this.onExit(this);
-        this.markExited();
-      });
+    void this.cleanUp().then(() => {
+      this.onExit(this);
+      this.markExited();
+    });
+  }
+
+  /**
+   * Kills whatever the run left running (SIGTERM, then SIGKILL after the grace period when
+   * anything was found), then removes its HOME. The slot stays taken until then.
+   */
+  private async cleanUp(): Promise<void> {
+    const home = this.home;
+    if (home === null) return;
+    if (signalByHome(home, "SIGTERM") > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.opts.config.killGraceMs));
+      signalByHome(home, "SIGKILL");
+    }
+    await rm(home, { recursive: true, force: true }).catch(() => undefined);
   }
 }
 

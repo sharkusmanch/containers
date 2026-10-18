@@ -12,6 +12,9 @@ export interface AskRequest {
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
+// A NUL byte cannot be passed in a process argument.
+const hasNul = (s: string): boolean => s.includes("\u0000");
+
 /** The companion's `/ask` body with only its known fields, or null when it is not one. */
 export function parseAskRequest(body: unknown): AskRequest | null {
   if (!isRecord(body)) return null;
@@ -32,6 +35,14 @@ export function parseAskRequest(body: unknown): AskRequest | null {
     }
     pairs.push({ question: entry.question, answer: entry.answer });
   }
+  const texts = [
+    instructions,
+    statusBlock,
+    question,
+    hub ?? "",
+    ...pairs.flatMap((p) => [p.question, p.answer]),
+  ];
+  if (texts.some(hasNul)) return null;
   return { instructions, statusBlock, history: pairs, question, depth, hub };
 }
 

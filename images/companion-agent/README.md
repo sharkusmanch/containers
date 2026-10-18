@@ -95,9 +95,13 @@ claude -p --output-format stream-json --verbose --include-partial-messages
   `Guide hub id: <hub or none>`, then `Question: <question>`.
 - **Process.** stdin is `/dev/null`; claude runs in its own process group with an allowlisted
   environment (`PATH`, `LANG`, `TZ`, `CLAUDE_CODE_OAUTH_TOKEN`, `REDLIB_URL`, its own `HOME`;
-  never `AGENT_TOKEN` or the MCP tokens). The group is killed (SIGTERM, then SIGKILL after 3 s)
-  when the client disconnects, the question times out, or the service shuts down; the run's HOME
-  is removed afterwards.
+  never `AGENT_TOKEN` or the MCP tokens). Claude Code runs each Bash command in a session of its
+  own, which a process-group kill does not reach, so the run's processes are found by their
+  `HOME` (unique per run, read from `/proc/<pid>/environ`). When the client disconnects, the
+  question times out or the service shuts down, the group and every process with that `HOME` get
+  SIGTERM, then SIGKILL after 3 s. After claude exits, anything still running with that `HOME`
+  (a background command) is killed the same way; then the run's HOME is removed and its slot
+  freed.
 - **What the screen shows.** Text streams as it arrives, except a short text block (280
   characters or less) followed by a tool call, which is narration and dropped. Tool calls show
   as: `Searched your guide: …`, `Read guide: page › section`, `Checked your guide` (other

@@ -199,6 +199,13 @@ describe("requests", () => {
     expect(res.status).toBe(400);
   });
 
+  it("refuses a NUL byte in the body with 400 and starts nothing", async () => {
+    const res = await ask(body("q\u0000"));
+    expect(res.status).toBe(400);
+    expect(h.agent.running).toBe(0);
+    expect(records()).toEqual([]);
+  });
+
   it("answers other paths and methods with 404 and 405", async () => {
     expect((await fetch(`${h.url}/other`)).status).toBe(404);
     expect((await fetch(`${h.url}/ask`)).status).toBe(405);
@@ -321,6 +328,16 @@ describe("answering", () => {
     expect(h.logs.find((l) => l.msg === "ask")?.extra.outcome).toBe("no_result");
   });
 
+  it("frees the slot, removes the run HOME and logs once when spawn throws", async () => {
+    // A NUL in the executable path makes spawn() throw synchronously.
+    await restart({ claudeBin: "/bin/claude\u0000" });
+    expect(await events(await ask(body("q")))).toEqual([{ type: "error", message: UNAVAILABLE }]);
+    await until(() => h.agent.running === 0);
+    expect(readdirSync(h.home)).toEqual([]);
+    expect(h.logs.filter((l) => l.msg === "ask")).toHaveLength(1);
+    await h.agent.shutdown();
+  });
+
   it("sends pings while claude is silent", async () => {
     await restart({ pingMs: 40 });
     const list = await events(await ask(body("sleep:300")));
@@ -353,10 +370,30 @@ describe("limits and killing", () => {
     await until(() => records()[0]?.grandchild !== undefined);
     const [rec] = records();
     if (!rec?.grandchild) throw new Error("no record");
-    // Both ignore SIGTERM: only the SIGKILL after the grace period stops them.
+    // claude ignores SIGTERM (only the SIGKILL after the grace period stops it); its grandchild
+    // is in another session, out of reach of the group kill.
     await until(() => !alive(rec.pid) && !alive(rec.grandchild ?? 0));
     await until(() => h.agent.running === 0);
     expect(h.logs.find((l) => l.msg === "ask")?.extra.outcome).toBe("timeout");
+  });
+
+  it("kills a grandchild that ignores SIGTERM, in its own session, on timeout", async () => {
+    await restart({ timeoutMs: 300 });
+    const list = await events(await ask(body("hang-stubborn")));
+    expect(list[list.length - 1]).toEqual({ type: "error", message: UNAVAILABLE });
+    await until(() => records()[0]?.grandchild !== undefined);
+    const [rec] = records();
+    await until(() => !alive(rec?.pid ?? 0) && !alive(rec?.grandchild ?? 0));
+    await until(() => h.agent.running === 0);
+  });
+
+  it("kills what a finished run left running in the background", async () => {
+    const list = await events(await ask(body(`replay-bg:${fixturePath("websearch.jsonl")}`)));
+    expect(list[list.length - 1]).toEqual({ type: "done", truncatedGuide: false });
+    const [rec] = records();
+    expect(rec?.grandchild).toBeDefined();
+    await until(() => h.agent.running === 0);
+    expect(alive(rec?.grandchild ?? 0)).toBe(false);
   });
 
   it("kills the process group when the client disconnects", async () => {

@@ -33,6 +33,11 @@ describe("parseAskRequest", () => {
     ["non-string instructions", { ...valid, instructions: 1 }],
     ["history not an array", { ...valid, history: {} }],
     ["a bad history entry", { ...valid, history: [{ question: "q" }] }],
+    ["a NUL in the question", { ...valid, question: "q\u0000" }],
+    ["a NUL in the instructions", { ...valid, instructions: "a\u0000b" }],
+    ["a NUL in the status block", { ...valid, statusBlock: "\u0000" }],
+    ["a NUL in the hub", { ...valid, hub: "h\u0000" }],
+    ["a NUL in history", { ...valid, history: [{ question: "q", answer: "a\u0000" }] }],
   ])("rejects %s", (_name, body) => {
     expect(parseAskRequest(body)).toBeNull();
   });
