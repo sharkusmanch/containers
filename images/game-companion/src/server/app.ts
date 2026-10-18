@@ -1,13 +1,16 @@
-import type { AchievementsResponse, AskRequest, Source } from "../shared/types.js";
+import type { AchievementsResponse, AskRequest, GuideHub, Source } from "../shared/types.js";
 import type { AchievementService } from "./achievements.js";
 import type { Assistant, GuideToolRunner } from "./assistant.js";
-import { buildContext } from "./assistant-context.js";
+import { buildContext, type ContextInput } from "./assistant-context.js";
 import type { Detector, DetectorSnapshot } from "./detector.js";
 import type { GuideIndex } from "./guide-index.js";
 import { type GuidePageService, missableMarks, type PageText } from "./guide-pages.js";
-import { readGuide, searchGuide } from "./guide-tools.js";
+import { guideOutline, readGuide, searchGuide } from "./guide-tools.js";
+import type { McpTools, ToolResult } from "./mcp.js";
 import type { AskLimiter } from "./rate-limit.js";
 import type { RouteDeps } from "./routes.js";
+
+type GameRef = NonNullable<AskRequest["game"]>;
 
 /** How many games the detector has reported that stay eligible for achievement lookups. */
 const DETECTED_MAX = 20;
@@ -33,6 +36,8 @@ export interface AppParts {
     /** Character budget for the guide text sent with each question. */
     guideChars: number;
   };
+  /** Absent or null when no MCP token is configured; the MCP endpoint is then off. */
+  mcp?: null | { token: string; version: string };
 }
 
 /** The guide tools over a hub's own pages. */
@@ -51,10 +56,18 @@ const unavailableGuide = (message: string): GuideToolRunner => ({
   }),
 });
 
+const UNLOADED = "The guide could not be loaded right now.";
 /** For a question about a game with no hub. */
 const noGuide = unavailableGuide("This game has no guide.");
 /** For a hub whose pages could not be loaded. */
-const unloadedGuide = unavailableGuide("The guide could not be loaded right now.");
+const unloadedGuide = unavailableGuide(UNLOADED);
+
+const NO_CURRENT_GUIDE = "No guide for the current game. Call list_guides and pass hub.";
+const NO_GAME = "No game is detected right now. Call list_guides and pass hub.";
+const unknownGuide = (hubId: string): ToolResult => ({
+  text: `Unknown guide "${hubId}". Call list_guides for the guide ids.`,
+  isError: true,
+});
 
 /**
  * Adapts the detector, guide index and achievement service to the request handler.
@@ -118,6 +131,113 @@ export function buildDeps(parts: AppParts): RouteDeps {
     return { hub, target };
   };
 
+  /**
+   * What a status block (and the Ask context) is built from, for a hub (or none) and the game it
+   * is about (or none). The target must already be allowed. Rejects when the hub's pages fail to
+   * load.
+   */
+  const gatherContext = async (
+    hub: GuideHub | null,
+    target: GameRef | null,
+  ): Promise<Omit<ContextInput, "guideChars">> => {
+    const snap = snapshot();
+    const detectedGame = snap.game;
+    const isDetected =
+      target !== null &&
+      detectedGame !== null &&
+      detectedGame.source === target.source &&
+      detectedGame.id === target.id;
+    const playing = isDetected && snap.state === "playing";
+
+    let ach: AchievementsResponse | null = null;
+    if (target !== null) {
+      ach = await achievements
+        .get(target.source, target.id, { priority: isDetected })
+        .catch(() => null);
+    }
+
+    const texts = hub === null ? [] : ((await pages.texts(hub.hubId)) ?? []);
+    const match = playing && hub !== null ? (await whereFor(hub.hubId))?.matches[0] : undefined;
+    return {
+      gameTitle: hub?.title ?? ach?.title ?? (isDetected ? detectedGame.title : "Unknown game"),
+      platformLabel:
+        hub?.platformLabel ?? (target?.source === "ra" ? "RetroAchievements" : "Steam"),
+      playState: !isDetected
+        ? "not detected"
+        : snap.state === "playing"
+          ? "playing"
+          : snap.state === "last-played"
+            ? "last-played"
+            : "not detected",
+      presence: playing ? snap.presence : null,
+      achievements: ach,
+      missableNames: missableMarks(texts).map((n) => n.toLowerCase()),
+      where: match ? { pageTitle: match.pageTitle, heading: match.heading } : null,
+      pages: texts,
+      pinnedTitles: parts.defaultPins,
+    };
+  };
+
+  /** The current game, when the detector reports one with an id. */
+  const currentGame = (): GameRef | null => {
+    const game = snapshot().game;
+    return game !== null && game.id !== null ? { source: game.source, id: game.id } : null;
+  };
+
+  /** The hub a tool names, else the current game's; a tool error when there is none. */
+  const toolHub = (hubId: string | undefined): GuideHub | ToolResult => {
+    if (hubId !== undefined) return index.tree(hubId)?.hub ?? unknownGuide(hubId);
+    const game = currentGame();
+    const hub = game === null ? undefined : index.lookup(game.source, game.id)[0];
+    return hub ?? { text: NO_CURRENT_GUIDE, isError: true };
+  };
+
+  /** Runs `fn` over the pages of the hub a guide tool names (or the current game's). */
+  const withGuide = async (
+    hubId: string | undefined,
+    fn: (texts: PageText[]) => ToolResult,
+  ): Promise<ToolResult> => {
+    const hub = toolHub(hubId);
+    if ("text" in hub) return hub;
+    const texts = await pages.texts(hub.hubId).catch(() => null);
+    if (texts === null || texts.length === 0) return { text: UNLOADED, isError: true };
+    return fn(texts);
+  };
+
+  const mcpTools: McpTools = {
+    status: async (hubId) => {
+      const named = hubId === undefined ? null : toolHub(hubId);
+      if (named !== null && "text" in named) return named;
+      const game = currentGame();
+      const hub = named ?? (game === null ? null : (index.lookup(game.source, game.id)[0] ?? null));
+      // A hub's own game when it names one; otherwise only the current game, without a hub.
+      const target =
+        hub === null
+          ? game
+          : hub.source !== null && hub.gameId !== null
+            ? { source: hub.source, id: hub.gameId }
+            : null;
+      if (hub === null && target === null) return { text: NO_GAME, isError: true };
+      const input = await gatherContext(hub, target);
+      return { text: buildContext({ ...input, pinnedTitles: [], guideChars: 0 }).statusBlock };
+    },
+    listGuides: async () => {
+      if (!index.available()) {
+        return { text: "The guide list is not available right now.", isError: true };
+      }
+      const hubs = index.hubs();
+      if (hubs.length === 0) return { text: "There are no guides." };
+      return { text: hubs.map((h) => `- ${h.title} (${h.platformLabel}): ${h.hubId}`).join("\n") };
+    },
+    outline: (hubId) => withGuide(hubId, (texts) => ({ text: guideOutline(texts) })),
+    search: (query, hubId) => withGuide(hubId, (texts) => ({ text: searchGuide(texts, query) })),
+    read: (page, section, hubId) =>
+      withGuide(hubId, (texts) => {
+        const read = readGuide(texts, page, section);
+        return read.ok ? { text: read.text } : { text: read.text, isError: true };
+      }),
+  };
+
   const askParts = parts.ask;
   return {
     staticDir: parts.staticDir,
@@ -163,48 +283,11 @@ export function buildDeps(parts: AppParts): RouteDeps {
             admit: () => askParts.limiter.admit(),
             allowed: (req) => resolveAsk(req) !== null,
             start: async (req, signal) => {
-              const snap = snapshot();
               const resolved = resolveAsk(req);
               if (resolved === null) return null;
-              const { hub, target } = resolved;
-              const detectedGame = snap.game;
-              const isDetected =
-                target !== null &&
-                detectedGame !== null &&
-                detectedGame.source === target.source &&
-                detectedGame.id === target.id;
-              const playing = isDetected && snap.state === "playing";
-
-              let ach: AchievementsResponse | null = null;
-              if (target !== null) {
-                ach = await achievements
-                  .get(target.source, target.id, { priority: isDetected })
-                  .catch(() => null);
-              }
-
-              const texts = req.hubId === null ? [] : ((await pages.texts(req.hubId)) ?? []);
-              const match =
-                playing && req.hubId !== null ? (await whereFor(req.hubId))?.matches[0] : undefined;
-              const ctx = buildContext({
-                gameTitle:
-                  hub?.title ?? ach?.title ?? (isDetected ? detectedGame.title : "Unknown game"),
-                platformLabel:
-                  hub?.platformLabel ?? (target?.source === "ra" ? "RetroAchievements" : "Steam"),
-                playState: !isDetected
-                  ? "not detected"
-                  : snap.state === "playing"
-                    ? "playing"
-                    : snap.state === "last-played"
-                      ? "last-played"
-                      : "not detected",
-                presence: playing ? snap.presence : null,
-                achievements: ach,
-                missableNames: missableMarks(texts).map((n) => n.toLowerCase()),
-                where: match ? { pageTitle: match.pageTitle, heading: match.heading } : null,
-                pages: texts,
-                pinnedTitles: parts.defaultPins,
-                guideChars: askParts.guideChars,
-              });
+              const input = await gatherContext(resolved.hub, resolved.target);
+              const ctx = buildContext({ ...input, guideChars: askParts.guideChars });
+              const texts = input.pages;
               return askParts.assistant.ask(
                 ctx,
                 req.history,
@@ -219,5 +302,6 @@ export function buildDeps(parts: AppParts): RouteDeps {
               );
             },
           },
+    mcp: parts.mcp ? { ...parts.mcp, tools: mcpTools } : null,
   };
 }

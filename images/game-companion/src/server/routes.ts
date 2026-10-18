@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { handleMessage, type McpTools, protocolVersionOk, tokenMatches } from "./mcp.js";
 import type { Admission } from "./rate-limit.js";
 import type {
   AchievementsResponse,
@@ -45,6 +46,14 @@ export interface RouteDeps {
     /** Null when `allowed` would refuse; kept as a defence against a change between the calls. */
     start(req: AskRequest, signal: AbortSignal): Promise<AsyncGenerator<AskEvent> | null>;
   };
+  /** Absent or null while no MCP token is configured: the MCP endpoint then answers 404. */
+  mcp?: null | {
+    /** The bearer token the MCP endpoint requires. */
+    token: string;
+    /** Reported as the server version on `initialize`. */
+    version: string;
+    tools: McpTools;
+  };
   /** Starts a timer and returns a function that cancels it. Defaults to `setTimeout`. */
   setTimer?: (fn: () => void, ms: number) => () => void;
 }
@@ -55,9 +64,12 @@ const FIND_MAX = 100;
 
 const BASE = "/companion";
 const ASK_PATH = `${BASE}/api/ask`;
+const MCP_PATH = `${BASE}/mcp`;
 
 /** Largest request body the ask route reads, in bytes. */
 const ASK_BODY_MAX = 32768;
+/** Largest request body the MCP route reads, in bytes. */
+const MCP_BODY_MAX = 65536;
 const QUESTION_MAX = 1000;
 const ANSWER_MAX = 8000;
 const HISTORY_MAX = 10;
@@ -186,9 +198,75 @@ function parseAsk(raw: unknown): AskRequest | null {
   return { hubId, game: gameRef, history: turns, question: trimmed, depth };
 }
 
+const mediaType = (req: IncomingMessage): string | undefined =>
+  (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
+
 /**
- * The one POST route. Checks run in a fixed order and each fails before any later work. This is
- * the only code that reads request headers, and only content-type, content-length and origin.
+ * The MCP endpoint, for the agent pod only (not for browsers). Checks run in a fixed order and
+ * each fails before any later work. Reads only the authorization, content-type, content-length
+ * and mcp-protocol-version headers.
+ */
+async function handleMcp(
+  deps: RouteDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const mcp = deps.mcp;
+  const early = (status: number, body: unknown, extra: Record<string, string> = {}): void =>
+    send(res, status, "application/json; charset=utf-8", JSON.stringify(body), {
+      "cache-control": "no-store",
+      connection: "close",
+      ...extra,
+    });
+  if (!mcp) return early(404, { error: "not found" });
+  if (req.method !== "POST") {
+    return send(res, 405, "text/plain; charset=utf-8", "Method Not Allowed", {
+      allow: "POST",
+      connection: "close",
+    });
+  }
+  if (!tokenMatches(req.headers.authorization, mcp.token)) {
+    return early(401, { error: "unauthorized" });
+  }
+  if (mediaType(req) !== "application/json") return early(415, { error: "unsupported media type" });
+  const version = req.headers["mcp-protocol-version"];
+  if (!protocolVersionOk(typeof version === "string" ? version : undefined)) {
+    return early(400, {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32600, message: "Unsupported protocol version" },
+    });
+  }
+  const declared = req.headers["content-length"];
+  if (declared !== undefined && Number(declared) > MCP_BODY_MAX) {
+    return early(413, { error: "too large" });
+  }
+  const body = await readBody(req, MCP_BODY_MAX);
+  if (body === null) return early(413, { error: "too large" });
+
+  let msg: unknown;
+  try {
+    msg = JSON.parse(body.toString("utf8"));
+  } catch {
+    return json(res, 200, {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32700, message: "Parse error" },
+    });
+  }
+  const reply = await handleMessage(msg, { tools: mcp.tools, version: mcp.version });
+  if (reply === null) {
+    res.writeHead(202, { "x-content-type-options": "nosniff", "cache-control": "no-store" });
+    res.end();
+    return;
+  }
+  return json(res, 200, reply);
+}
+
+/**
+ * The browser's POST route. Checks run in a fixed order and each fails before any later work. Apart
+ * from the MCP route, this is the only code that reads request headers, and only content-type,
+ * content-length and origin.
  */
 async function handleAsk(
   deps: RouteDeps,
@@ -206,8 +284,7 @@ async function handleAsk(
       connection: "close",
     });
 
-  const type = (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
-  if (type !== "application/json") return early(415, "unsupported media type");
+  if (mediaType(req) !== "application/json") return early(415, "unsupported media type");
   const ask = deps.ask;
   // Without a configured assistant there is no origin to compare against and nothing to spend.
   if (ask !== null && req.headers.origin !== ask.origin) return early(403, "forbidden");
@@ -290,6 +367,7 @@ export function createHandler(
       const q = raw.indexOf("?");
       const path = q === -1 ? raw : raw.slice(0, q);
       if (path === ASK_PATH) return await handleAsk(deps, req, res);
+      if (path === MCP_PATH) return await handleMcp(deps, req, res);
       if (req.method !== "GET" && req.method !== "HEAD") {
         return send(res, 405, "text/plain; charset=utf-8", "Method Not Allowed", {
           allow: "GET, HEAD",

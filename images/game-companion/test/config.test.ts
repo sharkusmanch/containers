@@ -28,6 +28,14 @@ describe("loadConfig", () => {
       );
     },
   );
+  it("leaves the MCP endpoint off unless a token is configured", () => {
+    expect(loadConfig(base).mcpToken).toBeNull();
+    expect(loadConfig({ ...base, COMPANION_MCP_TOKEN: "" }).mcpToken).toBeNull();
+    expect(loadConfig({ ...base, COMPANION_MCP_TOKEN: "sample-mcp-token" }).mcpToken).toBe(
+      "sample-mcp-token",
+    );
+  });
+
   it("applies defaults", () => {
     const c = loadConfig(base);
     expect(c.port).toBe(8080);

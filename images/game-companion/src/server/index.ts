@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { AchievementService } from "./achievements.js";
 import { buildDeps } from "./app.js";
@@ -56,6 +57,13 @@ const ask = config.anthropicApiKey
   : null;
 log(ask ? "assistant enabled" : "assistant disabled (no key)");
 
+// package.json sits two levels above dist/server in the image and in a local build.
+const { version } = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+) as { version: string };
+const mcp = config.mcpToken ? { token: config.mcpToken, version } : null;
+log(mcp ? "mcp endpoint enabled" : "mcp endpoint disabled (no token)");
+
 detector.start();
 // While Outline stays unreachable the index retries every few seconds; log only the first
 // failure of a run, not every retry.
@@ -78,6 +86,7 @@ const handler = createHandler(
     achievements,
     pages,
     ask,
+    mcp,
   }),
 );
 const server = createServer((req, res) => void handler(req, res));

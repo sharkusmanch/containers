@@ -25,6 +25,8 @@ export interface Config {
   assistantPerDay: number;
   /** Character budget for the guide text sent with each question. */
   assistantGuideChars: number;
+  /** Bearer token for the MCP endpoint; null keeps the endpoint off (404). */
+  mcpToken: string | null;
 }
 
 const REQUIRED = [
@@ -64,6 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     assistantPerMinute: positiveInt(env, "ASSISTANT_PER_MINUTE", 10),
     assistantPerDay: positiveInt(env, "ASSISTANT_PER_DAY", 150),
     assistantGuideChars: positiveInt(env, "ASSISTANT_GUIDE_CHARS", 120000),
+    mcpToken: env.COMPANION_MCP_TOKEN || null,
   };
 }
 

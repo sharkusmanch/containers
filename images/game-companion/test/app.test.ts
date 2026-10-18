@@ -1025,3 +1025,283 @@ describe("ask", () => {
     expect(ctx.statusBlock.split("\n")[0]).toBe("Game: Zeta Achievements (RetroAchievements)");
   });
 });
+
+describe("mcp tools", () => {
+  const other: GuideHub = {
+    hubId: "h2",
+    title: "Omega",
+    url: "/doc/o",
+    source: "ra",
+    gameId: "20",
+    platformLabel: "RA · GC",
+    nowPlaying: false,
+  };
+  const loose: GuideHub = { ...other, hubId: "h3", title: "Loose", source: null, gameId: null };
+  const page = (title: string, body: string): PageText => ({
+    id: title,
+    title,
+    url: `/doc/${title}`,
+    text: body,
+  });
+  const zetaPages = [
+    page(
+      "Walkthrough",
+      "# Mock Village\nTalk to the sample smith.\n## Mock Caves\nFind the lantern.",
+    ),
+    page("Notes", "- [ ] ⚠ **Golden Lantern**"),
+  ];
+  const zetaAch: AchievementsResponse = {
+    source: "steam",
+    id: "10",
+    title: "Zeta Achievements",
+    total: 4,
+    unlocked: 1,
+    stale: false,
+    achievements: [
+      {
+        id: "A",
+        name: "Golden Lantern",
+        description: "Find it",
+        icon: null,
+        unlocked: false,
+        unlockedAt: null,
+        unlockPercent: null,
+        hidden: false,
+        missable: false,
+        kind: null,
+      },
+    ],
+  };
+  const playing = (game: { source: "steam" | "ra"; id: string | null } | null, presence = "") => ({
+    current: () => ({
+      game: game && { ...game, title: "Detected Title" },
+      state: game ? ("playing" as const) : ("none" as const),
+      observedAt: 1,
+      presence: presence === "" ? null : presence,
+      stale: false,
+    }),
+  });
+
+  function setup(over: Record<string, unknown> = {}) {
+    const calls = { texts: [] as string[], get: [] as unknown[][], where: [] as unknown[][] };
+    const hubs = [hub, other, loose];
+    const base = parts();
+    const d = buildDeps(
+      parts({
+        defaultPins: ["Notes"],
+        index: {
+          ...base.index,
+          hubs: () => hubs,
+          lookup: (s: string, id: string) => hubs.filter((h) => h.source === s && h.gameId === id),
+          tree: (id: string) => {
+            const found = hubs.find((h) => h.hubId === id);
+            return found ? { hub: found, pages: [] } : null;
+          },
+        },
+        achievements: {
+          get: async (...args: unknown[]) => {
+            calls.get.push(args);
+            return args[0] === "steam" && args[1] === "10" ? zetaAch : null;
+          },
+        },
+        pages: {
+          ...base.pages,
+          texts: async (id: string) => {
+            calls.texts.push(id);
+            if (id === "h1") return zetaPages;
+            if (id === "h2") return [page("Omega Guide", "# Start\nOmega text.")];
+            if (id === "h3") return [];
+            return null;
+          },
+          where: async (...args: unknown[]) => {
+            calls.where.push(args);
+            return {
+              matches: [
+                {
+                  pageTitle: "Walkthrough",
+                  pageUrl: "/doc/w",
+                  heading: "Mock Village",
+                  phrase: "x",
+                },
+              ],
+            };
+          },
+        },
+        mcp: { token: "sample-token", version: "9.9.9" },
+        ...over,
+      }),
+    );
+    const tools = d.mcp?.tools;
+    if (!tools) throw new Error("mcp tools missing");
+    return { calls, d, tools };
+  }
+
+  const NO_CURRENT = {
+    text: "No guide for the current game. Call list_guides and pass hub.",
+    isError: true,
+  };
+  const unknown = (id: string) => ({
+    text: `Unknown guide "${id}". Call list_guides for the guide ids.`,
+    isError: true,
+  });
+  const UNLOADED = { text: "The guide could not be loaded right now.", isError: true };
+
+  it("is off without a token, and carries the token and version with one", () => {
+    expect(buildDeps(parts()).mcp).toBeNull();
+    const { d } = setup();
+    expect(d.mcp?.token).toBe("sample-token");
+    expect(d.mcp?.version).toBe("9.9.9");
+  });
+
+  it("lists every guide with its platform and hub id", async () => {
+    const { tools } = setup();
+    expect(await tools.listGuides()).toEqual({
+      text: ["- Zeta (Steam): h1", "- Omega (RA · GC): h2", "- Loose (RA · GC): h3"].join("\n"),
+    });
+  });
+
+  it("reports an unavailable or empty guide list", async () => {
+    const off = setup({ index: { ...parts().index, available: () => false } });
+    expect(await off.tools.listGuides()).toEqual({
+      text: "The guide list is not available right now.",
+      isError: true,
+    });
+    const none = setup({ index: { ...parts().index, hubs: () => [] } });
+    expect(await none.tools.listGuides()).toEqual({ text: "There are no guides." });
+  });
+
+  it("defaults the guide tools to the current game's guide", async () => {
+    const { tools, calls } = setup({ detector: playing({ source: "steam", id: "10" }) });
+    const outline = await tools.outline(undefined);
+    expect(outline).toEqual({
+      text: [
+        "## Walkthrough (72 chars)",
+        "  - Mock Village",
+        "    - Mock Caves",
+        "## Notes (26 chars)",
+      ].join("\n"),
+    });
+    expect(await tools.search("lantern", undefined)).toEqual({
+      text: ["- Walkthrough › Mock Caves: Find the lantern.", "- Notes: ⚠ Golden Lantern"].join(
+        "\n",
+      ),
+    });
+    expect(await tools.read("walkthrough", "mock caves", undefined)).toEqual({
+      text: "## Mock Caves\nFind the lantern.",
+    });
+    expect(calls.texts).toEqual(["h1", "h1", "h1"]);
+  });
+
+  it("uses a named guide over the current game's", async () => {
+    const { tools, calls } = setup({ detector: playing({ source: "steam", id: "10" }) });
+    expect(await tools.read("Omega Guide", undefined, "h2")).toEqual({
+      text: "# Start\nOmega text.",
+    });
+    expect(calls.texts).toEqual(["h2"]);
+  });
+
+  it("errors when no guide is named and the current game has none", async () => {
+    for (const detector of [
+      playing(null),
+      playing({ source: "steam", id: null }),
+      playing({ source: "steam", id: "99" }),
+    ]) {
+      const { tools, calls } = setup({ detector });
+      expect(await tools.outline(undefined)).toEqual(NO_CURRENT);
+      expect(await tools.search("lantern", undefined)).toEqual(NO_CURRENT);
+      expect(await tools.read("Walkthrough", undefined, undefined)).toEqual(NO_CURRENT);
+      expect(calls.texts).toEqual([]);
+    }
+  });
+
+  it("errors on an unknown guide id", async () => {
+    const { tools, calls } = setup();
+    expect(await tools.outline("zz")).toEqual(unknown("zz"));
+    expect(await tools.search("lantern", "zz")).toEqual(unknown("zz"));
+    expect(await tools.read("Walkthrough", undefined, "zz")).toEqual(unknown("zz"));
+    expect(await tools.status("zz")).toEqual(unknown("zz"));
+    expect(calls.texts).toEqual([]);
+  });
+
+  it("errors on an unknown page or section with the readGuide text", async () => {
+    const { tools } = setup();
+    expect(await tools.read("Missing", undefined, "h1")).toEqual({
+      text: 'No page called "Missing". Pages: Walkthrough; Notes',
+      isError: true,
+    });
+    expect(await tools.read("Walkthrough", "Nowhere", "h1")).toEqual({
+      text: 'No section called "Nowhere" on Walkthrough. Sections: Mock Village; Mock Caves',
+      isError: true,
+    });
+  });
+
+  it("errors when the guide's pages cannot be loaded", async () => {
+    const failing = setup({
+      pages: {
+        ...parts().pages,
+        texts: async () => {
+          throw new Error("limit");
+        },
+      },
+    });
+    expect(await failing.tools.outline("h1")).toEqual(UNLOADED);
+    const { tools } = setup();
+    expect(await tools.outline("h3")).toEqual(UNLOADED);
+    expect(await tools.search("x", "h3")).toEqual(UNLOADED);
+  });
+
+  it("builds the status block for the current game's guide like Ask does", async () => {
+    const { tools, calls } = setup({
+      detector: playing({ source: "steam", id: "10" }, "In Mock Village"),
+    });
+    expect(await tools.status(undefined)).toEqual({
+      text: [
+        "Game: Zeta (Steam)",
+        "State: playing",
+        "Status line: In Mock Village",
+        "Achievements: 1/4 unlocked",
+        "Missables still open:",
+        "- Golden Lantern — Find it",
+        "Guide section matching the status line: Walkthrough › Mock Village",
+      ].join("\n"),
+    });
+    expect(calls.get).toEqual([["steam", "10", { priority: true }]]);
+    expect(calls.where).toEqual([["h1", "In Mock Village"]]);
+  });
+
+  it("reports a named guide's game as not detected while another is played", async () => {
+    const { tools, calls } = setup({
+      detector: playing({ source: "steam", id: "10" }, "In Mock Village"),
+    });
+    expect(await tools.status("h2")).toEqual({
+      text: ["Game: Omega (RA · GC)", "State: not detected", "Achievements: unknown"].join("\n"),
+    });
+    expect(calls.get).toEqual([["ra", "20", { priority: false }]]);
+    expect(calls.where).toEqual([]);
+  });
+
+  it("reports the current game without a guide when it has none", async () => {
+    const { tools, calls } = setup({
+      detector: playing({ source: "ra", id: "55" }, "Somewhere"),
+    });
+    expect(await tools.status(undefined)).toEqual({
+      text: [
+        "Game: Detected Title (RetroAchievements)",
+        "State: playing",
+        "Status line: Somewhere",
+        "Achievements: unknown",
+      ].join("\n"),
+    });
+    expect(calls.texts).toEqual([]);
+  });
+
+  it("errors on status when no game is detected and no guide is named", async () => {
+    for (const detector of [playing(null), playing({ source: "steam", id: null })]) {
+      const { tools } = setup({ detector });
+      expect(await tools.status(undefined)).toEqual({
+        text: "No game is detected right now. Call list_guides and pass hub.",
+        isError: true,
+      });
+    }
+  });
+});
