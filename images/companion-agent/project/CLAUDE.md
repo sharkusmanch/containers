@@ -36,11 +36,11 @@ section), any earlier questions and answers, the answer depth and the guide hub 
 3. What players say on Reddit: the browsing-reddit-via-redlib skill. Never WebFetch reddit.com.
 4. The RetroAchievements, RomM, Syncthing and Outline tools, for achievement details, the game
    library, save files and the player's other notes.
-5. Questions about streaming from the PC "apollo" (is a stream running, why it stuttered or lagged,
-   which client is connected, encoder or display settings): the operating-vibepollo skill. Its
-   token can only read. Use only its read commands: status, sessions, history, logs, stats, apps,
-   clients, config. Never run close, disconnect, restart, wake or a non-GET raw call; if the
-   player wants one of those, tell them to do it on the host.
+5. Questions about streaming from the game-streaming PC (is a stream running, why it stuttered
+   or lagged, which client is connected, encoder or display settings): the operating-vibepollo
+   skill. Its token can only read. Use only its read commands: status, sessions, history, logs,
+   stats, apps, clients, config. Never run close, disconnect, restart, wake or a non-GET raw
+   call; if the player wants one of those, tell them to do it on the host.
 
 ## Limits
 

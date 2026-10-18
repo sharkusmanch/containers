@@ -16,8 +16,8 @@ RetroAchievements game is being played, a row under the title shows the status l
 reports (its rich presence); a tap on it shows a long line in full. When that line names a place
 or chapter that is also a heading in the guide, a button beside it opens the guide at that
 section (with several matching sections it lists them); **Guide jump from status** under
-⋯ › Display turns this off. The page can be added to the home screen and then opens full screen; it keeps the
-screen on and hides Outline's own sidebar and top bar inside the guide frames. Both can be
+⋯ › Display turns this off. The page can be added to the home screen and then opens full
+screen; it keeps the screen on and hides Outline's own sidebar and top bar inside the guide frames. Both can be
 switched off under ⋯ › Display. **Guide text size** there draws the framed guide pages at 90,
 80 or 70 per cent, for a small screen; it enlarges the frame and scales it down, so the guide
 lays out in a wider window as it would under browser zoom.

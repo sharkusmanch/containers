@@ -3,8 +3,8 @@
 Answers the game companion's **Ask** questions with Claude Code. For each question the service
 runs `claude -p` headless in a locked-down process: the player's guide and game status through
 the companion's MCP endpoint, read-only RetroAchievements, RomM, Syncthing and Outline MCP tools,
-web search and fetch, a shell for the skill plugins (redlib, vibepollo), and nothing that writes. The answer streams
-back to the companion as NDJSON events.
+web search and fetch, a shell for the skill plugins (redlib, vibepollo), and nothing that
+writes. The answer streams back to the companion as NDJSON events.
 
 The service is a small Node HTTP server with no runtime dependencies; Claude Code is installed in
 the image at a pinned version.
