@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildDeps } from "../src/server/app.js";
+import { INSTRUCTIONS } from "../src/server/assistant-context.js";
 import type { PageText } from "../src/server/guide-pages.js";
 import type { AchievementsResponse, AskEvent, GuideHub } from "../src/shared/types.js";
 
@@ -676,7 +677,7 @@ describe("ask", () => {
     { type: "done", truncatedGuide: false },
   ];
 
-  function setup(over: Record<string, unknown> = {}, guideChars = 1000) {
+  function setup(over: Record<string, unknown> = {}) {
     const calls = {
       ask: [] as unknown[][],
       texts: [] as string[],
@@ -721,11 +722,12 @@ describe("ask", () => {
       ask: {
         origin: ORIGIN,
         limiter: { admit: () => ({ ok: true }) },
-        guideChars,
-        assistant: {
-          ask: async function* (...args: unknown[]) {
+        agent: {
+          ask: async (...args: unknown[]) => {
             calls.ask.push(args);
-            yield* events;
+            return (async function* () {
+              yield* events;
+            })();
           },
         },
       },
@@ -746,11 +748,13 @@ describe("ask", () => {
       stale: false,
     }),
   });
-  const collect = async (g: AsyncGenerator<AskEvent> | null) => {
+  const collect = async (g: AsyncIterable<AskEvent> | "busy" | null | undefined) => {
     const out: AskEvent[] = [];
+    if (g === "busy") return out;
     for await (const e of g ?? []) out.push(e);
     return out;
   };
+  const sent = (calls: { ask: unknown[][] }) => calls.ask[0]?.[0] as Record<string, unknown>;
 
   it("reports the assistant on now() and exposes the origin and admission", () => {
     const { d } = setup();
@@ -792,8 +796,7 @@ describe("ask", () => {
     });
     expect(
       await collect(
-        (await seen.d.ask?.start(req({ hubId: null, game: { source: "ra", id: "5" } }), signal)) ??
-          null,
+        await seen.d.ask?.start(req({ hubId: null, game: { source: "ra", id: "5" } }), signal),
       ),
     ).toEqual(events);
     expect(seen.d.ask?.allowed(req({ hubId: null, game: { source: "ra", id: "5" } }))).toBe(true);
@@ -828,25 +831,23 @@ describe("ask", () => {
       detector: detecting({ source: "steam", id: "10" }, "playing", "In Mock Village"),
     });
     const ctl = new AbortController();
-    const out = await collect((await d.ask?.start(req(), ctl.signal)) ?? null);
+    const out = await collect(await d.ask?.start(req(), ctl.signal));
     expect(out).toEqual(events);
     expect(calls.texts).toEqual(["h1"]);
     expect(calls.get).toEqual([["steam", "10", { priority: true }]]);
     expect(calls.where).toEqual([["h1", "In Mock Village"]]);
 
-    const [ctx, history, question, depth, signal] = calls.ask[0] as [
-      { system: string; statusBlock: string; truncatedGuide: boolean },
-      unknown,
-      unknown,
-      unknown,
-      AbortSignal,
-    ];
-    // The outline lists every page; only the pinned page's text is sent.
-    expect(ctx.system.indexOf("## Walkthrough (4 chars)")).toBeGreaterThan(-1);
-    expect(ctx.system.indexOf("## Notes (")).toBeGreaterThan(-1);
-    expect(ctx.system.slice(ctx.system.indexOf("# Pinned pages"))).toContain("Golden Lantern");
-    expect(ctx.system).not.toContain("## Walkthrough\n\nwalk");
-    expect(ctx.statusBlock).toBe(
+    const [body, signal] = calls.ask[0] as [Record<string, unknown>, AbortSignal];
+    expect(Object.keys(body).sort()).toEqual([
+      "depth",
+      "history",
+      "hub",
+      "instructions",
+      "question",
+      "statusBlock",
+    ]);
+    expect(body.instructions).toBe(INSTRUCTIONS);
+    expect(body.statusBlock).toBe(
       [
         "Game: Zeta (Steam)",
         "State: playing",
@@ -857,20 +858,33 @@ describe("ask", () => {
         "Guide section matching the status line: Walkthrough \u203A Mock Village",
       ].join("\n"),
     );
-    expect(history).toEqual([{ question: "Q1", answer: "A1" }]);
-    expect(question).toBe("What next?");
-    expect(depth).toBe("hint");
+    expect(body.history).toEqual([{ question: "Q1", answer: "A1" }]);
+    expect(body.question).toBe("What next?");
+    expect(body.depth).toBe("hint");
+    expect(body.hub).toBe("h1");
     expect(signal).toBe(ctl.signal);
   });
 
-  it("applies the configured guide budget and pinned titles", async () => {
-    const { d, calls } = setup({}, 8);
-    await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
-    const ctx = calls.ask[0]?.[0] as { system: string; truncatedGuide: boolean };
-    expect(ctx.truncatedGuide).toBe(true);
-    expect(ctx.system).toContain("## Walkthrough (4 chars)");
-    expect(ctx.system).toContain("[guide cut here]");
-    expect(ctx.system).not.toContain("Golden Lantern");
+  it("sends no guide text: the agent reads pages through its tools", async () => {
+    const { d, calls } = setup({
+      detector: detecting({ source: "steam", id: "10" }, "playing", "In Mock Village"),
+    });
+    await collect(await d.ask?.start(req(), new AbortController().signal));
+    const json = JSON.stringify(sent(calls));
+    expect(json).not.toContain("walk");
+    expect(json).not.toContain("Pinned pages");
+    expect(json).not.toContain("Guide outline");
+  });
+
+  it("hands back the agent's busy answer", async () => {
+    const { d } = setup({
+      ask: {
+        origin: ORIGIN,
+        limiter: { admit: () => ({ ok: true }) },
+        agent: { ask: async () => "busy" as const },
+      },
+    });
+    expect(await d.ask?.start(req(), new AbortController().signal)).toBe("busy");
   });
 
   it("leaves out the status line and the section unless this hub's game is being played", async () => {
@@ -880,8 +894,8 @@ describe("ask", () => {
       detecting(null, "none"),
     ]) {
       const { d, calls } = setup({ detector: snap });
-      await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
-      const status = (calls.ask[0]?.[0] as { statusBlock: string }).statusBlock;
+      await collect(await d.ask?.start(req(), new AbortController().signal));
+      const status = sent(calls).statusBlock as string;
       expect(status).not.toContain("Status line");
       expect(status).not.toContain("Guide section");
       expect(calls.where).toHaveLength(0);
@@ -896,8 +910,8 @@ describe("ask", () => {
     ];
     for (const [snap, line] of states) {
       const { d, calls } = setup({ detector: snap });
-      await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
-      expect((calls.ask[0]?.[0] as { statusBlock: string }).statusBlock).toContain(line);
+      await collect(await d.ask?.start(req(), new AbortController().signal));
+      expect(sent(calls).statusBlock).toContain(line);
     }
   });
 
@@ -915,7 +929,7 @@ describe("ask", () => {
     expect(d.ask?.allowed(hubOnly)).toBe(true);
     await collect((await d.ask?.start(hubOnly, new AbortController().signal)) ?? null);
     expect(calls.get).toEqual([["steam", "10", { priority: true }]]);
-    const status = (calls.ask[0]?.[0] as { statusBlock: string }).statusBlock;
+    const status = sent(calls).statusBlock as string;
     expect(status).toContain("Achievements: 1/4 unlocked");
     expect(status).toContain("- Golden Lantern");
   });
@@ -923,16 +937,16 @@ describe("ask", () => {
   it("builds the whole context from the hub's game when a different game is sent with it", async () => {
     const snap = detecting({ source: "steam", id: "10" }, "playing", "In Mock Village");
     const matched = setup({ detector: snap });
-    await collect((await matched.d.ask?.start(req(), new AbortController().signal)) ?? null);
+    await collect(await matched.d.ask?.start(req(), new AbortController().signal));
 
     const mismatched = setup({ detector: snap });
     const other = req({ game: { source: "ra", id: "5" } });
     // The sent game is ignored, so it need not be allowed.
     expect(mismatched.d.ask?.allowed(other)).toBe(true);
-    await collect((await mismatched.d.ask?.start(other, new AbortController().signal)) ?? null);
+    await collect(await mismatched.d.ask?.start(other, new AbortController().signal));
 
     expect(mismatched.calls.get).toEqual([["steam", "10", { priority: true }]]);
-    expect(mismatched.calls.ask[0]?.[0]).toEqual(matched.calls.ask[0]?.[0]);
+    expect(sent(mismatched.calls)).toEqual(sent(matched.calls));
   });
 
   it("tolerates an achievements failure", async () => {
@@ -943,72 +957,8 @@ describe("ask", () => {
         },
       },
     });
-    await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
-    expect((calls.ask[0]?.[0] as { statusBlock: string }).statusBlock).toContain(
-      "Achievements: unknown",
-    );
-  });
-
-  it("passes a runner that searches and reads the hub's own pages", async () => {
-    const { d, calls } = setup();
-    await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
-    const runner = calls.ask[0]?.[5] as {
-      search(query: string): string;
-      read(page: string, section?: string): { text: string; label: string; ok: boolean };
-    };
-    expect(runner.search("Golden Lantern")).toContain("Notes");
-    expect(runner.search("Golden Lantern")).toContain("Golden Lantern");
-    expect(runner.read("Walkthrough")).toEqual({
-      text: "walk",
-      label: "Read guide: Walkthrough",
-      ok: true,
-    });
-    expect(runner.read("Missing").ok).toBe(false);
-  });
-
-  it("gives a game-only question a runner that reports there is no guide", async () => {
-    const { d, calls } = setup({ detector: detecting(null, "none"), additionalRaGameIds: ["5"] });
-    await collect(
-      (await d.ask?.start(
-        req({ hubId: null, game: { source: "ra", id: "5" } }),
-        new AbortController().signal,
-      )) ?? null,
-    );
-    const runner = calls.ask[0]?.[5] as {
-      search(query: string): string;
-      read(page: string, section?: string): { text: string; label: string; ok: boolean };
-    };
-    expect(runner.search("Golden Lantern")).toBe("This game has no guide.");
-    expect(runner.read("Walkthrough")).toEqual({
-      text: "This game has no guide.",
-      label: "Read guide: Walkthrough",
-      ok: false,
-    });
-    expect(runner.read("Walkthrough", "Intro")).toEqual({
-      text: "This game has no guide.",
-      label: "Read guide: Walkthrough › Intro",
-      ok: false,
-    });
-  });
-
-  it("gives a hub whose pages could not be loaded a runner that says so", async () => {
-    const { d, calls } = setup({ pages: parts().pages });
-    await collect((await d.ask?.start(req(), new AbortController().signal)) ?? null);
-    const runner = calls.ask[0]?.[5] as {
-      search(query: string): string;
-      read(page: string, section?: string): { text: string; label: string; ok: boolean };
-    };
-    expect(runner.search("Golden Lantern")).toBe("The guide could not be loaded right now.");
-    expect(runner.read("Walkthrough")).toEqual({
-      text: "The guide could not be loaded right now.",
-      label: "Read guide: Walkthrough",
-      ok: false,
-    });
-    expect(runner.read("Walkthrough", "Intro")).toEqual({
-      text: "The guide could not be loaded right now.",
-      label: "Read guide: Walkthrough › Intro",
-      ok: false,
-    });
+    await collect(await d.ask?.start(req(), new AbortController().signal));
+    expect(sent(calls).statusBlock).toContain("Achievements: unknown");
   });
 
   it("works from a game alone: no pages, titled from the achievements, labelled by source", async () => {
@@ -1020,9 +970,10 @@ describe("ask", () => {
       )) ?? null,
     );
     expect(calls.texts).toHaveLength(0);
-    const ctx = calls.ask[0]?.[0] as { system: string; statusBlock: string };
-    expect(ctx.system).not.toContain("walk");
-    expect(ctx.statusBlock.split("\n")[0]).toBe("Game: Zeta Achievements (RetroAchievements)");
+    expect((sent(calls).statusBlock as string).split("\n")[0]).toBe(
+      "Game: Zeta Achievements (RetroAchievements)",
+    );
+    expect(sent(calls).hub).toBeNull();
   });
 });
 

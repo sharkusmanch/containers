@@ -38,12 +38,10 @@ RUN addgroup -g 10000 appgroup && \
     adduser -u 10000 -G appgroup -s /bin/false -D appuser
 
 WORKDIR /app
-# Production dependencies only (the Anthropic SDK); dev tooling stays in the builder.
-# package.json also marks the compiled output as ES modules.
-COPY package.json package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --omit=dev --no-audit --no-fund
+# No node_modules: the service has no runtime dependencies. package.json marks the
+# compiled output as ES modules, and the server reads its version from it at startup.
 COPY --from=builder /build/dist ./dist
+COPY package.json ./
 
 ENV NODE_ENV=production \
     PORT=8080 \

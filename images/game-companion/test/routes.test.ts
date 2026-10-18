@@ -519,7 +519,7 @@ describe("POST /companion/api/ask", () => {
   let ask: Ask | null;
   let admission: ReturnType<Ask["admit"]>;
   let startArgs: unknown[][];
-  let startResult: "events" | "null" | "hang" | "silent";
+  let startResult: "events" | "null" | "hang" | "silent" | "busy";
   let signal: AbortSignal | null;
   let admitCalls: number;
   let allowedResult: boolean;
@@ -583,6 +583,7 @@ describe("POST /companion/api/ask", () => {
         startArgs.push(args);
         signal = args[1];
         if (startResult === "null") return null;
+        if (startResult === "busy") return "busy";
         return (async function* () {
           if (startResult === "silent") await new Promise(() => undefined);
           yield { type: "search", query: "sample query" } as const;
@@ -771,6 +772,18 @@ describe("POST /companion/api/ask", () => {
     expect(r.status).toBe(400);
     expect(admitCalls).toBe(0);
     expect(startArgs).toHaveLength(0);
+  });
+
+  it("answers the minute-limit 429 with retry-after 30 when the agent is busy", async () => {
+    startResult = "busy";
+    const r = await post(valid);
+    expect(r.status).toBe(429);
+    expect(r.headers.get("retry-after")).toBe("30");
+    expect(r.headers.get("cache-control")).toBe("no-store");
+    expect(r.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(await r.json()).toEqual({ error: "rate limited", limit: "minute" });
+    expect(startArgs).toHaveLength(1);
+    expect(pending()).toEqual([]);
   });
 
   it("still answers 404 if start refuses after admission", async () => {

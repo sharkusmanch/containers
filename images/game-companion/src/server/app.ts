@@ -1,7 +1,7 @@
 import type { AchievementsResponse, AskRequest, GuideHub, Source } from "../shared/types.js";
 import type { AchievementService } from "./achievements.js";
-import type { Assistant, GuideToolRunner } from "./assistant.js";
-import { buildContext, type ContextInput } from "./assistant-context.js";
+import type { AgentClient } from "./agent-client.js";
+import { buildStatusBlock, type ContextInput, INSTRUCTIONS } from "./assistant-context.js";
 import type { Detector, DetectorSnapshot } from "./detector.js";
 import type { GuideIndex } from "./guide-index.js";
 import { type GuidePageService, missableMarks, type PageText } from "./guide-pages.js";
@@ -27,40 +27,18 @@ export interface AppParts {
   index: Pick<GuideIndex, "available" | "hubs" | "lookup" | "tree" | "requestRefresh">;
   achievements: Pick<AchievementService, "get">;
   pages: Pick<GuidePageService, "find" | "marks" | "where" | "progress" | "texts">;
-  /** Null when no API key is configured. */
+  /** Null when no agent is configured. */
   ask: null | {
     /** Origin of the wiki that frames the page: the one origin allowed to post questions. */
     origin: string;
     limiter: Pick<AskLimiter, "admit">;
-    assistant: Pick<Assistant, "ask">;
-    /** Character budget for the guide text sent with each question. */
-    guideChars: number;
+    agent: Pick<AgentClient, "ask">;
   };
   /** Absent or null when no MCP token is configured; the MCP endpoint is then off. */
   mcp?: null | { token: string; version: string };
 }
 
-/** The guide tools over a hub's own pages. */
-const guideRunner = (texts: PageText[]): GuideToolRunner => ({
-  search: (query) => searchGuide(texts, query),
-  read: (page, section) => readGuide(texts, page, section),
-});
-
-/** Guide tools that answer every lookup with `message`, as a failure. */
-const unavailableGuide = (message: string): GuideToolRunner => ({
-  search: () => message,
-  read: (page, section) => ({
-    text: message,
-    label: `Read guide: ${page}${section === undefined || section.trim() === "" ? "" : ` › ${section}`}`,
-    ok: false,
-  }),
-});
-
 const UNLOADED = "The guide could not be loaded right now.";
-/** For a question about a game with no hub. */
-const noGuide = unavailableGuide("This game has no guide.");
-/** For a hub whose pages could not be loaded. */
-const unloadedGuide = unavailableGuide(UNLOADED);
 
 const NO_CURRENT_GUIDE = "No guide for the current game. Call list_guides and pass hub.";
 const NO_GAME = "No game is detected right now. Call list_guides and pass hub.";
@@ -132,14 +110,13 @@ export function buildDeps(parts: AppParts): RouteDeps {
   };
 
   /**
-   * What a status block (and the Ask context) is built from, for a hub (or none) and the game it
-   * is about (or none). The target must already be allowed. Rejects when the hub's pages fail to
-   * load.
+   * What a status block is built from, for a hub (or none) and the game it is about (or none).
+   * The target must already be allowed. Rejects when the hub's pages fail to load.
    */
   const gatherContext = async (
     hub: GuideHub | null,
     target: GameRef | null,
-  ): Promise<Omit<ContextInput, "guideChars">> => {
+  ): Promise<ContextInput> => {
     const snap = snapshot();
     const detectedGame = snap.game;
     const isDetected =
@@ -173,8 +150,6 @@ export function buildDeps(parts: AppParts): RouteDeps {
       achievements: ach,
       missableNames: missableMarks(texts).map((n) => n.toLowerCase()),
       where: match ? { pageTitle: match.pageTitle, heading: match.heading } : null,
-      pages: texts,
-      pinnedTitles: parts.defaultPins,
     };
   };
 
@@ -218,8 +193,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
             ? { source: hub.source, id: hub.gameId }
             : null;
       if (hub === null && target === null) return { text: NO_GAME, isError: true };
-      const input = await gatherContext(hub, target);
-      return { text: buildContext({ ...input, pinnedTitles: [], guideChars: 0 }).statusBlock };
+      return { text: buildStatusBlock(await gatherContext(hub, target)) };
     },
     listGuides: async () => {
       if (!index.available()) {
@@ -285,20 +259,19 @@ export function buildDeps(parts: AppParts): RouteDeps {
             start: async (req, signal) => {
               const resolved = resolveAsk(req);
               if (resolved === null) return null;
-              const input = await gatherContext(resolved.hub, resolved.target);
-              const ctx = buildContext({ ...input, guideChars: askParts.guideChars });
-              const texts = input.pages;
-              return askParts.assistant.ask(
-                ctx,
-                req.history,
-                req.question,
-                req.depth,
+              const statusBlock = buildStatusBlock(
+                await gatherContext(resolved.hub, resolved.target),
+              );
+              return askParts.agent.ask(
+                {
+                  instructions: INSTRUCTIONS,
+                  statusBlock,
+                  history: req.history,
+                  question: req.question,
+                  depth: req.depth,
+                  hub: resolved.hub?.hubId ?? null,
+                },
                 signal,
-                req.hubId === null
-                  ? noGuide
-                  : texts.length === 0
-                    ? unloadedGuide
-                    : guideRunner(texts),
               );
             },
           },

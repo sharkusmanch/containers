@@ -36,15 +36,18 @@ export interface RouteDeps {
   where(hubId: string): Promise<GuideWhereResponse | null>;
   /** Null for an unknown hub. `refresh` is true only for the fixed flag `?refresh=1`. */
   progress(hubId: string, opts: { refresh: boolean }): Promise<GuideProgressResponse | null>;
-  /** Null when no API key is configured. */
+  /** Null when no agent is configured. */
   ask: null | {
     /** Origin of OUTLINE_BASE_URL: the one page origin allowed to post questions. */
     origin: string;
     /** Whether the hub is known and the game may be looked up (same gating as achievements). */
     allowed(req: AskRequest): boolean;
     admit(): Admission;
-    /** Null when `allowed` would refuse; kept as a defence against a change between the calls. */
-    start(req: AskRequest, signal: AbortSignal): Promise<AsyncGenerator<AskEvent> | null>;
+    /**
+     * The answer's events, or "busy" when the agent refused the question. Null when `allowed`
+     * would refuse; kept as a defence against a change between the calls.
+     */
+    start(req: AskRequest, signal: AbortSignal): Promise<AsyncIterable<AskEvent> | "busy" | null>;
   };
   /** Absent or null while no MCP token is configured: the MCP endpoint then answers 404. */
   mcp?: null | {
@@ -79,6 +82,8 @@ const HISTORY_MAX = 10;
  */
 const KEEPALIVE_MS = 15000;
 const PING = `${JSON.stringify({ type: "ping" } satisfies AskEvent)}\n`;
+/** The Retry-After of a question the agent was too busy to take. */
+const AGENT_BUSY_RETRY_SEC = 30;
 
 const defaultTimer = (fn: () => void, ms: number): (() => void) => {
   const handle = setTimeout(fn, ms);
@@ -303,24 +308,26 @@ async function handleAsk(
   // An unknown hub or a game that may not be looked up is a bad request, and costs no slot.
   if (parsed === null || !ask.allowed(parsed)) return json(res, 400, { error: "bad request" });
 
-  const admission = ask.admit();
-  if (!admission.ok) {
-    return send(
+  const tooMany = (limit: "minute" | "day", retryAfterSec: number): void =>
+    send(
       res,
       429,
       "application/json; charset=utf-8",
-      JSON.stringify({ error: "rate limited", limit: admission.limit }),
-      { "cache-control": "no-store", "retry-after": String(admission.retryAfterSec) },
+      JSON.stringify({ error: "rate limited", limit }),
+      { "cache-control": "no-store", "retry-after": String(retryAfterSec) },
     );
-  }
+  const admission = ask.admit();
+  if (!admission.ok) return tooMany(admission.limit, admission.retryAfterSec);
 
   const controller = new AbortController();
   // `res` closing before it finished is the client leaving; `req` closes once the body is read.
   res.on("close", () => {
     if (!res.writableFinished) controller.abort();
   });
+  // Waits for the agent to take the question, so a busy agent still gets a real 429.
   const events = await ask.start(parsed, controller.signal);
   if (events === null) return json(res, 404, { error: "unknown game" });
+  if (events === "busy") return tooMany("minute", AGENT_BUSY_RETRY_SEC);
 
   res.writeHead(
     200,

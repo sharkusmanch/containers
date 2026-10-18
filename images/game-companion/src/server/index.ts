@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { AchievementService } from "./achievements.js";
+import { AgentClient } from "./agent-client.js";
 import { buildDeps } from "./app.js";
-import { Assistant, sdkStreamClient } from "./assistant.js";
 import { loadConfig } from "./config.js";
 import { Detector } from "./detector.js";
 import { GuideIndex } from "./guide-index.js";
@@ -39,23 +39,18 @@ const index = new GuideIndex({
 const achievements = new AchievementService({ steam, ra });
 const pages = new GuidePageService({ index, source: outline });
 
-const ask = config.anthropicApiKey
-  ? {
-      origin: new URL(config.outlineBaseUrl).origin,
-      limiter: new AskLimiter({
-        perMinute: config.assistantPerMinute,
-        perDay: config.assistantPerDay,
-      }),
-      assistant: new Assistant({
-        client: sdkStreamClient(config.anthropicApiKey),
-        model: config.assistantModel,
-        effort: config.assistantEffort,
-        log,
-      }),
-      guideChars: config.assistantGuideChars,
-    }
-  : null;
-log(ask ? "assistant enabled" : "assistant disabled (no key)");
+const ask =
+  config.agentUrl && config.agentToken
+    ? {
+        origin: new URL(config.outlineBaseUrl).origin,
+        limiter: new AskLimiter({
+          perMinute: config.assistantPerMinute,
+          perDay: config.assistantPerDay,
+        }),
+        agent: new AgentClient({ url: config.agentUrl, token: config.agentToken, log }),
+      }
+    : null;
+log(ask ? "assistant enabled" : "assistant disabled (no agent)");
 
 // package.json sits two levels above dist/server in the image and in a local build.
 const { version } = JSON.parse(

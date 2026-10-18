@@ -83,6 +83,10 @@ export function errorText(err: unknown): string {
   return UNAVAILABLE;
 }
 
+/** Whether a request failed because the sign-in has lapsed (the server's 401). */
+const signedOut = (thrown: { err: unknown } | null): boolean =>
+  thrown !== null && thrown.err instanceof ApiError && thrown.err.status === 401;
+
 /** Plain text as paragraphs (split by blank lines) and bullet lists (lines starting "- "). */
 function answerNodes(doc: Document, text: string): HTMLElement[] {
   const nodes: HTMLElement[] = [];
@@ -311,7 +315,8 @@ export function createAssistantView(
       } else {
         const failed = failure(thrown);
         if (failed === null) kept = received;
-        else if (onScreen) answer.append(el("p", "ask-error", failed));
+        // A lapsed sign-in is told by the page's signed-out banner, not under the answer.
+        else if (onScreen && !signedOut(thrown)) answer.append(el("p", "ask-error", failed));
       }
       if (kept !== null) remember(askedIn, mine, { question, answer: kept });
       if (!onScreen) return;

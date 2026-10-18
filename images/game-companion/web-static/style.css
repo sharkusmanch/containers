@@ -223,7 +223,8 @@ button {
   overflow-wrap: anywhere;
 }
 
-.switch-banner {
+.switch-banner,
+.signout-banner {
   min-width: 0;
   grid-column: 2;
   grid-row: 3;
@@ -233,6 +234,14 @@ button {
   padding: 2px 8px;
   background: #2a2412;
   border-bottom: 1px solid var(--warn);
+}
+
+/* One button across the row: a tap anywhere reloads the page, which signs in again. */
+.signout-banner {
+  width: 100%;
+  min-height: 44px;
+  font-weight: 600;
+  text-align: left;
 }
 
 .switch-label {
@@ -1072,6 +1081,7 @@ button {
 .layout-tabs .topbar,
 .layout-tabs .presence-row,
 .layout-tabs .switch-banner,
+.layout-tabs .signout-banner,
 .layout-tabs .stage {
   grid-column: 1;
 }

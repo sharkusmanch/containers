@@ -258,6 +258,15 @@ describe("assistant view: errors", () => {
     expect(input().disabled).toBe(false);
   });
 
+  it("shows no inline error for a 401 (the signed-out banner says it), saves nothing, re-enables", async () => {
+    starters()[0]?.click();
+    fake.calls[0]?.reject(new ApiError(401));
+    await settle();
+    expect(lastAnswer().querySelector(".ask-error")).toBeNull();
+    expect(storage.getItem(KEY)).toBeNull();
+    expect(input().disabled).toBe(false);
+  });
+
   it("treats a stream that ends without done as unavailable and does not save", async () => {
     starters()[0]?.click();
     await answer(fake.calls[0], { type: "text", text: "Half" });

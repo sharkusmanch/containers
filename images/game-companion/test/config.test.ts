@@ -95,45 +95,67 @@ describe("loadConfig", () => {
 
   it("defaults the assistant settings", () => {
     const c = loadConfig(base);
-    expect(c.anthropicApiKey).toBeNull();
-    expect(c.assistantModel).toBe("claude-opus-5-5");
-    expect(c.assistantEffort).toBe("low");
+    expect(c.agentUrl).toBeNull();
+    expect(c.agentToken).toBeNull();
     expect(c.assistantPerMinute).toBe(10);
     expect(c.assistantPerDay).toBe(150);
-    expect(c.assistantGuideChars).toBe(120000);
   });
 
   it("reads the assistant settings", () => {
     const c = loadConfig({
       ...base,
-      ANTHROPIC_API_KEY: "a",
-      ASSISTANT_MODEL: "some-model",
-      ASSISTANT_EFFORT: "high",
+      AGENT_URL: "http://agent.example.test:8080",
+      AGENT_TOKEN: "t",
       ASSISTANT_PER_MINUTE: "3",
       ASSISTANT_PER_DAY: "20",
-      ASSISTANT_GUIDE_CHARS: "5000",
     });
-    expect(c.anthropicApiKey).toBe("a");
-    expect(c.assistantModel).toBe("some-model");
-    expect(c.assistantEffort).toBe("high");
+    expect(c.agentUrl).toBe("http://agent.example.test:8080");
+    expect(c.agentToken).toBe("t");
     expect(c.assistantPerMinute).toBe(3);
     expect(c.assistantPerDay).toBe(20);
-    expect(c.assistantGuideChars).toBe(5000);
   });
 
-  it("treats an empty ANTHROPIC_API_KEY as absent", () => {
-    expect(loadConfig({ ...base, ANTHROPIC_API_KEY: "" }).anthropicApiKey).toBeNull();
+  it("strips a trailing slash from AGENT_URL", () => {
+    expect(loadConfig({ ...base, AGENT_URL: "http://agent.example.test/" }).agentUrl).toBe(
+      "http://agent.example.test",
+    );
   });
 
-  it("rejects an unknown assistant effort", () => {
-    expect(() => loadConfig({ ...base, ASSISTANT_EFFORT: "extreme" })).toThrow(/ASSISTANT_EFFORT/);
+  it("treats an empty AGENT_URL or AGENT_TOKEN as absent", () => {
+    const c = loadConfig({ ...base, AGENT_URL: "", AGENT_TOKEN: "" });
+    expect(c.agentUrl).toBeNull();
+    expect(c.agentToken).toBeNull();
+  });
+
+  it.each(["not a url", "ftp://agent.example.test"])("rejects AGENT_URL=%j", (raw) => {
+    expect(() => loadConfig({ ...base, AGENT_URL: raw })).toThrow(/AGENT_URL/);
+  });
+
+  it("no longer reads the Anthropic API settings", () => {
+    const c = loadConfig({
+      ...base,
+      ANTHROPIC_API_KEY: "a",
+      ASSISTANT_MODEL: "m",
+      ASSISTANT_EFFORT: "extreme",
+      ASSISTANT_GUIDE_CHARS: "0",
+    }) as unknown as Record<string, unknown>;
+    for (const key of [
+      "anthropicApiKey",
+      "assistantModel",
+      "assistantEffort",
+      "assistantGuideChars",
+    ]) {
+      expect(c).not.toHaveProperty(key);
+    }
   });
 
   it.each(["0", "-1", "1.5", "abc", " "])("rejects ASSISTANT_PER_DAY=%j", (raw) => {
     expect(() => loadConfig({ ...base, ASSISTANT_PER_DAY: raw })).toThrow(/ASSISTANT_PER_DAY/);
   });
 
-  it.each(["ASSISTANT_PER_MINUTE", "ASSISTANT_GUIDE_CHARS"])("rejects a bad %s", (name) => {
-    expect(() => loadConfig({ ...base, [name]: "0" })).toThrow(new RegExp(name));
+  it("rejects a bad ASSISTANT_PER_MINUTE", () => {
+    expect(() => loadConfig({ ...base, ASSISTANT_PER_MINUTE: "0" })).toThrow(
+      /ASSISTANT_PER_MINUTE/,
+    );
   });
 });

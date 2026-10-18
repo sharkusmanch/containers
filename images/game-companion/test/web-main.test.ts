@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { captureInstallPrompt } from "../src/web/device.js";
 import { startApp } from "../src/web/main.js";
-import type { Api } from "../src/web/api.js";
+import { createApi, type Api } from "../src/web/api.js";
 import type { Layout } from "../src/web/state.js";
 import type {
   Achievement,
@@ -5553,5 +5553,149 @@ describe("two panes", () => {
       expect(splitLeft()).toBe("0.55");
       expect(savedFraction(storage)).toBe(0.55);
     });
+  });
+});
+
+describe("signed out", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const SIGNED_OUT = "Signed out \u2014 tap to sign in";
+
+  /** A fake api whose sign-in listeners the test drives, counting every now request. */
+  const authApi = (nowValue: NowResponse) => {
+    const api = fakeApi(nowValue);
+    const listeners: ((signedIn: boolean) => void)[] = [];
+    api.onAuth = (listener) => void listeners.push(listener);
+    const inner = api.now.bind(api);
+    const counts = { now: 0 };
+    api.now = async () => {
+      counts.now += 1;
+      return inner();
+    };
+    const tell = (signedIn: boolean): void => listeners.forEach((l) => l(signedIn));
+    return { api, counts, signOut: () => tell(false), signIn: () => tell(true) };
+  };
+  /** Captures the poll the app schedules, so the test can run it. */
+  const capturePoll = () => {
+    const poll = { fn: null as (() => void) | null, ms: 0 };
+    const setInterval = ((fn: () => void, ms: number) => {
+      poll.fn = fn;
+      poll.ms = ms;
+      return 0;
+    }) as unknown as typeof globalThis.setInterval;
+    return { poll, setInterval };
+  };
+  const banner = () => $(".signout-banner");
+
+  it("is hidden while signed in", async () => {
+    const { api } = authApi(playing(hubA));
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    expect(banner()?.hidden).toBe(true);
+    expect(banner()?.textContent).toBe(SIGNED_OUT);
+  });
+
+  it("shows the banner when the api reports a 401, and hides it after a successful response", async () => {
+    const { api, signOut, signIn } = authApi(playing(hubA));
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    signOut();
+    expect(banner()?.hidden).toBe(false);
+    signIn();
+    expect(banner()?.hidden).toBe(true);
+  });
+
+  it("reloads the page when the banner is tapped", async () => {
+    const { api, signOut } = authApi(playing(hubA));
+    const reload = vi.fn();
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers, reload });
+    await app.ready;
+    signOut();
+    expect(reload).not.toHaveBeenCalled();
+    (banner() as HTMLElement).click();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("pauses polling of now, achievements and progress while signed out, and resumes after", async () => {
+    const { api, counts, signOut, signIn } = authApi(playing(hubA));
+    const { poll, setInterval } = capturePoll();
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval,
+      achievementsPollMs: 0,
+    });
+    await app.ready;
+    await flush();
+    expect(poll.fn).not.toBeNull();
+    signOut();
+    counts.now = 0;
+    api.achCalls.length = 0;
+    api.progressCalls.length = 0;
+    poll.fn?.();
+    await app.tick();
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flush();
+    expect(counts.now).toBe(0);
+    expect(api.achCalls).toEqual([]);
+    expect(api.progressCalls).toEqual([]);
+
+    signIn();
+    poll.fn?.();
+    await flush();
+    await app.tick();
+    expect(counts.now).toBeGreaterThan(0);
+    expect(api.achCalls).toContain("ra:20");
+  });
+
+  it("does not refresh progress after a tap in a guide page while signed out", async () => {
+    const page = new DOMParser().parseFromString(
+      "<!doctype html><body><p>notes</p></body>",
+      "text/html",
+    );
+    vi.spyOn(HTMLIFrameElement.prototype, "contentDocument", "get").mockReturnValue(page);
+    const { api, signOut } = authApi(playing(hubA));
+    const timers: (() => void)[] = [];
+    const setTimeout = ((fn: () => void) => {
+      timers.push(fn);
+      return 0;
+    }) as unknown as typeof globalThis.setTimeout;
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout,
+    });
+    await app.ready;
+    await flush();
+    (document.querySelectorAll(".rail button")[1] as HTMLElement).click();
+    ($("iframe") as HTMLIFrameElement).dispatchEvent(new Event("load"));
+    timers.length = 0;
+    page.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    // The two follow-up reads, 4 and 12 seconds after the tap.
+    expect(timers).toHaveLength(2);
+    signOut();
+    api.progressCalls.length = 0;
+    for (const fn of timers.splice(0)) fn();
+    await flush();
+    expect(api.progressCalls).toEqual([]);
+  });
+
+  it("shows the banner from a real api answering 401, the Ask route included", async () => {
+    const fetchFn = (async () =>
+      new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 })) as typeof fetch;
+    const app = startApp({
+      doc: document,
+      api: createApi(fetchFn),
+      storage: memory(),
+      setInterval: noTimers,
+    });
+    await app.ready;
+    expect(banner()?.hidden).toBe(false);
+    expect($(".switch-banner")?.hidden).toBe(true);
   });
 });

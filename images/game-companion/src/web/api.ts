@@ -46,6 +46,11 @@ export interface Api {
    * Only `signal` cuts it short: an answer may take a while.
    */
   ask(req: AskRequest, signal: AbortSignal, onEvent: (e: AskEvent) => void): Promise<void>;
+  /**
+   * Adds a listener told false whenever a response is a 401 (the sign-in has lapsed) and true
+   * whenever one succeeds. Network failures and other statuses tell it nothing.
+   */
+  onAuth?(listener: (signedIn: boolean) => void): void;
 }
 
 /** The ApiError for a refused question: a 429 carries the limit hit and when to retry. */
@@ -81,11 +86,21 @@ export function createApi(
   base = "api",
   timeoutMs = REQUEST_TIMEOUT_MS,
 ): Api {
+  const authListeners: ((signedIn: boolean) => void)[] = [];
+  /** Tells the listeners what a response says about the sign-in. */
+  function noteAuth(res: Response): Response {
+    const signedIn = res.status === 401 ? false : res.ok ? true : null;
+    if (signedIn !== null) for (const listener of authListeners) listener(signedIn);
+    return res;
+  }
+
   async function get(path: string): Promise<Response> {
-    return fetchFn(`${base}/${path}`, {
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    return noteAuth(
+      await fetchFn(`${base}/${path}`, {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(timeoutMs),
+      }),
+    );
   }
 
   async function getJson<T>(path: string): Promise<T> {
@@ -106,12 +121,14 @@ export function createApi(
     signal: AbortSignal,
     onEvent: (e: AskEvent) => void,
   ): Promise<void> {
-    const res = await fetchFn(`${base}/ask`, {
-      method: "POST",
-      headers: { "content-type": "application/json", accept: "application/x-ndjson" },
-      body: JSON.stringify(req),
-      signal,
-    });
+    const res = noteAuth(
+      await fetchFn(`${base}/ask`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/x-ndjson" },
+        body: JSON.stringify(req),
+        signal,
+      }),
+    );
     if (!res.ok) throw await askError(res);
     if (res.body === null) return;
     const reader = res.body.getReader();
@@ -130,6 +147,7 @@ export function createApi(
 
   return {
     ask,
+    onAuth: (listener) => void authListeners.push(listener),
     now: () => getJson<NowResponse>("now"),
     guides: (refresh = false) => getJson<GuidesResponse>(refresh ? "guides?refresh=1" : "guides"),
     hubTree: (hubId) => getJson<HubTreeResponse>(`guides/${encodeURIComponent(hubId)}`),

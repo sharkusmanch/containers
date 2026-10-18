@@ -17,14 +17,12 @@ export interface Config {
   defaultPinnedPages: string[];
   /** Titles of pages that are for typing in; the web client never applies reader mode to them. */
   editablePages: string[];
-  /** Null until the key is provisioned; the Ask assistant is then unavailable. */
-  anthropicApiKey: string | null;
-  assistantModel: string;
-  assistantEffort: "low" | "medium" | "high";
+  /** Base URL of the Claude Code agent service; Ask is off unless it and the token are set. */
+  agentUrl: string | null;
+  /** Bearer token for the agent service. */
+  agentToken: string | null;
   assistantPerMinute: number;
   assistantPerDay: number;
-  /** Character budget for the guide text sent with each question. */
-  assistantGuideChars: number;
   /** Bearer token for the MCP endpoint; null keeps the endpoint off (404). */
   mcpToken: string | null;
 }
@@ -60,20 +58,26 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     outlineScheduleDocId: env.OUTLINE_SCHEDULE_DOC_ID || null,
     defaultPinnedPages: parseTitles(env.DEFAULT_PINNED_PAGES),
     editablePages: parseTitles(env.EDITABLE_PAGES),
-    anthropicApiKey: env.ANTHROPIC_API_KEY || null,
-    assistantModel: env.ASSISTANT_MODEL || "claude-opus-5-5",
-    assistantEffort: parseEffort(env.ASSISTANT_EFFORT),
+    agentUrl: parseAgentUrl(env.AGENT_URL),
+    agentToken: env.AGENT_TOKEN || null,
     assistantPerMinute: positiveInt(env, "ASSISTANT_PER_MINUTE", 10),
     assistantPerDay: positiveInt(env, "ASSISTANT_PER_DAY", 150),
-    assistantGuideChars: positiveInt(env, "ASSISTANT_GUIDE_CHARS", 120000),
     mcpToken: env.COMPANION_MCP_TOKEN || null,
   };
 }
 
-function parseEffort(raw: string | undefined): "low" | "medium" | "high" {
-  if (raw === undefined || raw === "") return "low";
-  if (raw === "low" || raw === "medium" || raw === "high") return raw;
-  throw new Error("ASSISTANT_EFFORT must be low, medium or high");
+function parseAgentUrl(raw: string | undefined): string | null {
+  if (raw === undefined || raw === "") return null;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("AGENT_URL must be an http(s) URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("AGENT_URL must be an http(s) URL");
+  }
+  return raw.replace(/\/+$/, "");
 }
 
 function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number): number {

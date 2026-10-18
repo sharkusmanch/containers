@@ -40,7 +40,7 @@ export interface NowResponse {
   presence: string | null;
   /** Hubs whose (source, gameId) equals the game. Empty when there is no guide. */
   hubs: GuideHub[];
-  /** True when the server has an Anthropic key, so the Ask panel can be offered. */
+  /** True when the server has an agent to ask, so the Ask panel can be offered. */
   assistant: boolean;
 }
 

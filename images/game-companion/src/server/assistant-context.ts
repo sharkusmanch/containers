@@ -1,11 +1,11 @@
-import type { AchievementsResponse, AskHistoryEntry } from "../shared/types.js";
-import type { PageText } from "./guide-pages.js";
-import { guideOutline } from "./guide-tools.js";
+import type { AchievementsResponse } from "../shared/types.js";
 
 export const INSTRUCTIONS = `You are a game companion shown on a small second screen next to the game. The player asks quick questions while playing.
 - Answer in a few short lines. Plain text only; lines may start with "- " for bullets. No headings, tables, links or bold.
-- For anything about the game itself (locations, items, enemies, progression, requirements), check the player's guide first: the outline and pinned pages below, then the search_guide and read_guide_page tools.
-- If the guide does not cover it, use web search, and open a result page when a snippet is not enough, instead of answering from memory.
+- Start from the status block given with the question: the game, whether it is being played, the status line, achievement progress, missables still open and the matching guide section.
+- For anything about the game itself (locations, items, enemies, progression, requirements), check the player's guide before any other source, with the companion tools: guide_outline, search_guide and read_guide_page. Pass the guide id given with the question as hub; list_guides lists every guide and its id, and companion_status gives the current status again.
+- If the guide does not cover it, use web search, and open a result page with web fetch when a snippet is not enough, instead of answering from memory. For what players say on Reddit, use the redlib skill through the shell.
+- The RetroAchievements, RomM, Syncthing and Outline tools are read-only: use them for achievement details, the game library, save files and the player's other notes. Only look things up; never change anything.
 - Say briefly whether the answer came from the guide, the web, or your own memory. Use memory alone only for general, low-stakes facts.
 - Do not describe your lookups; the screen shows them.
 - Never reveal story events, bosses, characters or places beyond the player's progress (shown in the status) unless the answer depth is full.
@@ -25,53 +25,9 @@ export interface ContextInput {
   /** Lower-cased names from missableMarks(pages). */
   missableNames: string[];
   where: { pageTitle: string; heading: string } | null;
-  /** Hub pages in tree order. */
-  pages: PageText[];
-  /** Default pinned page titles, in order. */
-  pinnedTitles: string[];
-  /** Budget for the rendered pinned pages, in characters. */
-  guideChars: number;
 }
 
-export interface BuiltContext {
-  /** Instructions, guide outline and pinned pages; byte-stable for equal inputs. */
-  system: string;
-  /** Goes into the last user turn. */
-  statusBlock: string;
-  /** True only when pinned pages were cut to fit the budget. */
-  truncatedGuide: boolean;
-}
-
-const CUT_MARKER = "\n[guide cut here]\n";
 const STORY_LIMIT = 5;
-
-/** The pinned pages, in pinned order (the first page of each title not already taken). */
-function pinnedPages(pages: PageText[], pinnedTitles: string[]): PageText[] {
-  const pinned: PageText[] = [];
-  for (const title of pinnedTitles) {
-    const found = pages.find((p) => p.title === title && !pinned.includes(p));
-    if (found) pinned.push(found);
-  }
-  return pinned;
-}
-
-function renderGuide(pages: PageText[], budget: number): { guide: string; truncated: boolean } {
-  let guide = "";
-  for (const p of pages) {
-    const rendered = `## ${p.title}\n\n${p.text}\n\n`;
-    const room = budget - guide.length;
-    if (rendered.length <= room) {
-      guide += rendered;
-      continue;
-    }
-    const cut = rendered.slice(0, Math.max(room, 0)).lastIndexOf("\n");
-    return {
-      guide: guide + (cut === -1 ? "" : rendered.slice(0, cut)) + CUT_MARKER,
-      truncated: true,
-    };
-  }
-  return { guide, truncated: false };
-}
 
 const entry = (name: string, description: string | null): string =>
   description ? `- ${name} — ${description}` : `- ${name}`;
@@ -98,16 +54,8 @@ function achievementLines(a: AchievementsResponse, missableNames: string[]): str
   return out;
 }
 
-export function buildContext(input: ContextInput): BuiltContext {
-  const pinned = pinnedPages(input.pages, input.pinnedTitles);
-  const { guide, truncated } = renderGuide(pinned, input.guideChars);
-  const outline = input.pages.length === 0 ? "This game has no guide." : guideOutline(input.pages);
-  const system =
-    INSTRUCTIONS +
-    (truncated ? "\nThe pinned pages below are incomplete." : "") +
-    `\n\n# Guide outline\n\n${outline}` +
-    (pinned.length === 0 ? "" : `\n\n# Pinned pages\n\n${guide}`);
-
+/** The facts about the game and the player's progress that go with every question. */
+export function buildStatusBlock(input: ContextInput): string {
   const status = [`Game: ${input.gameTitle} (${input.platformLabel})`, `State: ${input.playState}`];
   if (input.presence !== null) status.push(`Status line: ${input.presence}`);
   if (input.achievements === null) status.push("Achievements: unknown");
@@ -117,24 +65,5 @@ export function buildContext(input: ContextInput): BuiltContext {
       `Guide section matching the status line: ${input.where.pageTitle} › ${input.where.heading}`,
     );
   }
-  return { system, statusBlock: status.join("\n"), truncatedGuide: truncated };
-}
-
-export function buildMessages(
-  ctx: BuiltContext,
-  history: AskHistoryEntry[],
-  question: string,
-  depth: "hint" | "full",
-): { role: "user" | "assistant"; content: string }[] {
-  const turns = history.flatMap((h) => [
-    { role: "user" as const, content: h.question },
-    { role: "assistant" as const, content: h.answer },
-  ]);
-  return [
-    ...turns,
-    {
-      role: "user",
-      content: `${ctx.statusBlock}\n\nAnswer depth: ${depth}\n\nQuestion: ${question}`,
-    },
-  ];
+  return status.join("\n");
 }

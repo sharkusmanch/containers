@@ -243,3 +243,77 @@ describe("api.ask", () => {
     }
   });
 });
+
+describe("api sign-in state", () => {
+  const request: AskRequest = {
+    hubId: "h1",
+    game: null,
+    history: [],
+    question: "Where now?",
+    depth: "hint",
+  };
+  const ask = (api: ReturnType<typeof createApi>) =>
+    api.ask(request, new AbortController().signal, () => undefined).catch((e: unknown) => e);
+
+  /** Every kind of call, each run once against the given fetch. */
+  const everyCall = (api: ReturnType<typeof createApi>): Promise<unknown>[] => [
+    api.now().catch((e: unknown) => e),
+    api.guides().catch((e: unknown) => e),
+    api.hubTree("h1").catch((e: unknown) => e),
+    api.achievements("steam", "10").catch((e: unknown) => e),
+    api.find("h1", "ab").catch((e: unknown) => e),
+    api.marks("h1").catch((e: unknown) => e),
+    api.where("h1").catch((e: unknown) => e),
+    api.progress("h1").catch((e: unknown) => e),
+    ask(api),
+  ];
+
+  it("reports signed out for a 401 from any call, the ask call included", async () => {
+    const api = createApi(fake(401, { error: "unauthorized" }).fn);
+    const seen: boolean[] = [];
+    api.onAuth?.((signedIn) => seen.push(signedIn));
+    const results = await Promise.all(everyCall(api));
+    expect(seen).toEqual(Array.from({ length: 9 }, () => false));
+    for (const r of results) expect(r).toMatchObject({ status: 401 });
+  });
+
+  it("reports signed in for every successful response", async () => {
+    const api = createApi(fake(200, { error: "" }).fn);
+    const seen: boolean[] = [];
+    api.onAuth?.((signedIn) => seen.push(signedIn));
+    await api.now();
+    await api.marks("h1");
+    expect(seen).toEqual([true, true]);
+  });
+
+  it("reports nothing for other failures, a 404 or a network error", async () => {
+    const seen: boolean[] = [];
+    for (const status of [404, 403, 500, 503]) {
+      const api = createApi(fake(status, {}).fn);
+      api.onAuth?.((signedIn) => seen.push(signedIn));
+      await Promise.all(everyCall(api));
+    }
+    const failing: typeof fetch = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    const down = createApi(failing);
+    down.onAuth?.((signedIn) => seen.push(signedIn));
+    await Promise.all(everyCall(down));
+    expect(seen).toEqual([]);
+  });
+
+  it("tells every listener", async () => {
+    const api = createApi(fake(401, {}).fn);
+    const a: boolean[] = [];
+    const b: boolean[] = [];
+    api.onAuth?.((s) => a.push(s));
+    api.onAuth?.((s) => b.push(s));
+    await api.now().catch(() => undefined);
+    expect(a).toEqual([false]);
+    expect(b).toEqual([false]);
+  });
+
+  it("offers the listener hook on every api it creates", () => {
+    expect(typeof createApi(fake(200, {}).fn).onAuth).toBe("function");
+  });
+});

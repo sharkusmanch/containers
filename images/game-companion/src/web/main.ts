@@ -90,6 +90,8 @@ export interface AppOptions {
   };
   nowPollMs?: number;
   achievementsPollMs?: number;
+  /** Reloads the page, which signs in again; `location.reload()` by default. */
+  reload?: () => void;
 }
 
 export interface App {
@@ -210,6 +212,12 @@ export function startApp(opts: AppOptions): App {
   banner.classList.add("switch-banner");
   banner.hidden = true;
   banner.append(bannerLabel, accept, dismiss);
+  // Shown while the server answers 401: the sign-in has lapsed. Reloading the page signs in.
+  const signOutBanner = buttonEl("signout-banner", "Signed out \u2014 tap to sign in");
+  signOutBanner.hidden = true;
+  signOutBanner.addEventListener("click", () => {
+    (opts.reload ?? (() => doc.defaultView?.location.reload()))();
+  });
 
   const view = createAchievementsView(doc, { storage, onFind: (a) => void findInGuide(a) });
   const assistant = createAssistantView(doc, { api, storage: opts.session ?? memoryStorage() });
@@ -358,7 +366,15 @@ export function startApp(opts: AppOptions): App {
     },
   });
 
-  root.replaceChildren(rail.element, topbar, presenceRow, banner, stage, picker.element);
+  root.replaceChildren(
+    rail.element,
+    topbar,
+    presenceRow,
+    banner,
+    signOutBanner,
+    stage,
+    picker.element,
+  );
 
   // ---- state ----
   let current: Current | null = null;
@@ -427,6 +443,8 @@ export function startApp(opts: AppOptions): App {
   let toastSeq = 0;
   // Whether the server offers the assistant, from the last successful status poll.
   let assistantOn = false;
+  // Set by a 401 from any request and cleared by any success; polling waits while it is set.
+  let signedOut = false;
   // The Ask panel covers the stage while open (with two panes, the right pane). Never part of the
   // layout, so never stored.
   let askOpen = false;
@@ -997,7 +1015,7 @@ export function startApp(opts: AppOptions): App {
     const mine = interactGen;
     for (const ms of [4000, 12_000]) {
       afterDelay(() => {
-        if (interactGen === mine && current === c) void refreshProgress(c, true);
+        if (interactGen === mine && current === c && !signedOut) void refreshProgress(c, true);
       }, ms);
     }
   }
@@ -1127,6 +1145,8 @@ export function startApp(opts: AppOptions): App {
   }
 
   function showBanner(now: NowResponse): void {
+    // The signed-out banner takes the same place.
+    if (signedOut) return;
     offered = now;
     bannerLabel.textContent = `Switch to ${now.game?.title ?? ""}`;
     banner.hidden = false;
@@ -1164,6 +1184,8 @@ export function startApp(opts: AppOptions): App {
   // failed now request keeps it for the next good one.
   let nowLost = false;
   async function runTick(): Promise<void> {
+    // Nothing is polled while signed out; the next tick after a sign-in catches up.
+    if (signedOut) return;
     const due = refreshDue;
     nowLost = false;
     try {
@@ -1301,6 +1323,14 @@ export function startApp(opts: AppOptions): App {
     chain = run.catch(() => undefined);
     return run;
   }
+
+  function setSignedOut(value: boolean): void {
+    if (signedOut === value) return;
+    signedOut = value;
+    signOutBanner.hidden = !value;
+    if (value) hideBanner();
+  }
+  api.onAuth?.((signedIn) => setSignedOut(!signedIn));
 
   accept.addEventListener("click", () => {
     if (offered === null) return;

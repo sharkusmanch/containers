@@ -61,102 +61,103 @@ The page is served at `/companion/` and must be reached on the **same hostname a
 (route `/companion` on Outline's hostname to this container). Outline only allows itself to
 be framed by its own origin, so the guide frames stay blank on any other hostname.
 
-There is no sign-in. Every endpoint is read-only except `POST /companion/api/ask`, which spends
-money on the Anthropic API (see **Ask assistant**). Put it only where everyone who can reach it
-may see what is being played, achievement progress, checklist counts and the text of the guide
-pages: the guide search returns headings and matching lines from them, although Outline itself
-requires a sign-in. The page's Content-Security-Policy allows frames from itself and from any
-`https` address, so that links added on a device can be shown; nothing but an address typed on
-that device is ever framed.
+The container has no sign-in of its own: put it behind the sign-in proxy of the ingress in
+front of it, which redirects the page to sign in and answers an expired API request with 401.
+When an API request gets a 401, the page shows **Signed out — tap to sign in** across the top
+and stops polling; a tap reloads the page, which goes through the sign-in again. Every endpoint
+is read-only except `POST /companion/api/ask`, which runs a question on the agent (see **Ask
+assistant**), and `POST /companion/mcp`, which only the agent may reach. Put it only where
+everyone who can reach it may see what is being played, achievement progress, checklist counts
+and the text of the guide pages: the guide search returns headings and matching lines from
+them, although Outline itself requires a sign-in. The page's Content-Security-Policy allows
+frames from itself and from any `https` address, so that links added on a device can be shown;
+nothing but an address typed on that device is ever framed.
 
 ## Environment Variables
 
-| Variable                   | Required | Description                                                                                                                                                            |
-| -------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `STEAM_API_KEY`            | Yes      | Steam Web API key                                                                                                                                                      |
-| `STEAM_ID`                 | Yes      | SteamID64 of the account to watch                                                                                                                                      |
-| `RA_API_KEY`               | Yes      | RetroAchievements Web API key                                                                                                                                          |
-| `RA_ADDITIONAL_GAME_IDS`   | No       | Comma-separated positive integer RA game IDs allowed without a guide or detector history; empty by default. For Red: `724,16084,11632`. Uses the general fetch budget. |
-| `RA_USERNAME`              | Yes      | RetroAchievements user to watch                                                                                                                                        |
-| `OUTLINE_BASE_URL`         | Yes      | Base URL of the Outline instance, without a trailing slash                                                                                                             |
-| `OUTLINE_COLLECTION_ID`    | Yes      | ID of the Outline collection that holds the guides                                                                                                                     |
-| `OUTLINE_GUIDES_PARENT_ID` | Yes      | ID of the document whose children are the guide hubs                                                                                                                   |
-| `OUTLINE_API_KEY`          | No       | Read-only Outline API key. Without it the guide index is disabled                                                                                                      |
-| `OUTLINE_SCHEDULE_DOC_ID`  | No       | ID of a document whose `## Now Playing` section lists games to show first                                                                                              |
-| `DEFAULT_PINNED_PAGES`     | No       | Comma-separated guide page titles to pin the first time a game is opened                                                                                               |
-| `EDITABLE_PAGES`           | No       | Comma-separated guide page titles that stay typeable in reader mode (for example a notes page)                                                                         |
-| `ANTHROPIC_API_KEY`        | No       | Anthropic API key. Without it the Ask assistant is off and `/api/now` reports `assistant: false`                                                                       |
-| `ASSISTANT_MODEL`          | No       | Model for Ask (default `claude-opus-5-5`)                                                                                                                              |
-| `ASSISTANT_EFFORT`         | No       | `low`, `medium` or `high` (default `low`)                                                                                                                              |
-| `ASSISTANT_PER_MINUTE`     | No       | Questions admitted per rolling minute, all callers together (default `10`)                                                                                             |
-| `ASSISTANT_PER_DAY`        | No       | Questions admitted per calendar day in `TZ` (default `150`)                                                                                                            |
-| `ASSISTANT_GUIDE_CHARS`    | No       | Character budget for the guide text sent with each question (default `120000`)                                                                                         |
-| `PORT`                     | No       | Listening port (default `8080`)                                                                                                                                        |
-| `STATIC_DIR`               | No       | Directory of the built front end (default `/app/dist/web`)                                                                                                             |
+| Variable                   | Required | Description                                                                                                                                                                                |
+| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `STEAM_API_KEY`            | Yes      | Steam Web API key                                                                                                                                                                          |
+| `STEAM_ID`                 | Yes      | SteamID64 of the account to watch                                                                                                                                                          |
+| `RA_API_KEY`               | Yes      | RetroAchievements Web API key                                                                                                                                                              |
+| `RA_ADDITIONAL_GAME_IDS`   | No       | Comma-separated positive integer RA game IDs allowed without a guide or detector history; empty by default. For Red: `724,16084,11632`. Uses the general fetch budget.                     |
+| `RA_USERNAME`              | Yes      | RetroAchievements user to watch                                                                                                                                                            |
+| `OUTLINE_BASE_URL`         | Yes      | Base URL of the Outline instance, without a trailing slash                                                                                                                                 |
+| `OUTLINE_COLLECTION_ID`    | Yes      | ID of the Outline collection that holds the guides                                                                                                                                         |
+| `OUTLINE_GUIDES_PARENT_ID` | Yes      | ID of the document whose children are the guide hubs                                                                                                                                       |
+| `OUTLINE_API_KEY`          | No       | Read-only Outline API key. Without it the guide index is disabled                                                                                                                          |
+| `OUTLINE_SCHEDULE_DOC_ID`  | No       | ID of a document whose `## Now Playing` section lists games to show first                                                                                                                  |
+| `DEFAULT_PINNED_PAGES`     | No       | Comma-separated guide page titles to pin the first time a game is opened                                                                                                                   |
+| `EDITABLE_PAGES`           | No       | Comma-separated guide page titles that stay typeable in reader mode (for example a notes page)                                                                                             |
+| `AGENT_URL`                | No       | Base URL of the Claude Code agent service (for example `http://companion-agent:8080`). Ask is on only when this and `AGENT_TOKEN` are set; otherwise `/api/now` reports `assistant: false` |
+| `AGENT_TOKEN`              | No       | Bearer token the agent service requires                                                                                                                                                    |
+| `ASSISTANT_PER_MINUTE`     | No       | Questions admitted per rolling minute, all callers together (default `10`)                                                                                                                 |
+| `ASSISTANT_PER_DAY`        | No       | Questions admitted per calendar day in `TZ` (default `150`)                                                                                                                                |
+| `COMPANION_MCP_TOKEN`      | No       | Bearer token for `POST /companion/mcp`, the guide and status tools the agent calls. Without it that endpoint answers 404                                                                   |
+| `PORT`                     | No       | Listening port (default `8080`)                                                                                                                                                            |
+| `STATIC_DIR`               | No       | Directory of the built front end (default `/app/dist/web`)                                                                                                                                 |
 
 The Outline key needs only these scopes:
 `/api/documents.list /api/documents.info /api/collections.documents`.
 
 ## Endpoints
 
-| Path                                            | Returns                                                               |
-| ----------------------------------------------- | --------------------------------------------------------------------- |
-| `GET /companion/`                               | The page                                                              |
-| `GET /companion/healthz`                        | `{"ok":true}`                                                         |
-| `GET /companion/api/now`                        | The current game, its matching guide and its live status line         |
-| `GET /companion/api/guides`                     | Every guide hub with its platform (`?refresh=1` asks for a re-index)  |
-| `GET /companion/api/guides/<hubId>`             | One hub's page tree                                                   |
-| `GET /companion/api/guides/<hubId>/find?q=…`    | Lines in the hub's pages that contain the text (2–100 characters)     |
-| `GET /companion/api/guides/<hubId>/marks`       | Names the hub's pages mark as missable                                |
-| `GET /companion/api/guides/<hubId>/where`       | Guide headings that match the status line of the game being played    |
-| `GET /companion/api/guides/<hubId>/progress`    | Ticked and total checkboxes per page (`?refresh=1` re-reads the wiki) |
-| `GET /companion/api/achievements/<source>/<id>` | Achievements for a game that has a guide or is being played           |
-| `POST /companion/api/ask`                       | Streams an answer to a question about a game (newline-delimited JSON) |
+| Path                                            | Returns                                                                     |
+| ----------------------------------------------- | --------------------------------------------------------------------------- |
+| `GET /companion/`                               | The page                                                                    |
+| `GET /companion/healthz`                        | `{"ok":true}`                                                               |
+| `GET /companion/api/now`                        | The current game, its matching guide and its live status line               |
+| `GET /companion/api/guides`                     | Every guide hub with its platform (`?refresh=1` asks for a re-index)        |
+| `GET /companion/api/guides/<hubId>`             | One hub's page tree                                                         |
+| `GET /companion/api/guides/<hubId>/find?q=…`    | Lines in the hub's pages that contain the text (2–100 characters)           |
+| `GET /companion/api/guides/<hubId>/marks`       | Names the hub's pages mark as missable                                      |
+| `GET /companion/api/guides/<hubId>/where`       | Guide headings that match the status line of the game being played          |
+| `GET /companion/api/guides/<hubId>/progress`    | Ticked and total checkboxes per page (`?refresh=1` re-reads the wiki)       |
+| `GET /companion/api/achievements/<source>/<id>` | Achievements for a game that has a guide or is being played                 |
+| `POST /companion/api/ask`                       | Streams an answer to a question about a game (newline-delimited JSON)       |
+| `POST /companion/mcp`                           | MCP tools for the agent: game status and the player's guides (bearer token) |
 
 ## Ask assistant
 
 `POST /companion/api/ask` takes `{hubId, game, history, question, depth}` (a JSON body of at
 most 32 KiB; `hubId` or `game` may be `null`, not both; the question is 1-1,000 characters, up to
 10 earlier turns) and streams one JSON event per line (`search`, `lookup`, `text`, `done`,
-`error`) as `application/x-ndjson`. The model sees the game's guide (up to
-`ASSISTANT_GUIDE_CHARS` characters, pinned pages first, plus an outline of every page), the play
-state and the player's achievement progress.
+`error`, and `ping` to keep a quiet answer open) as `application/x-ndjson`.
 
-Tools the model may call while answering:
+The question is answered by a separate Claude Code agent service at `AGENT_URL`. The companion
+posts it to `<AGENT_URL>/ask` with `authorization: Bearer <AGENT_TOKEN>` and the JSON body
+`{instructions, statusBlock, history, question, depth, hub}`: the answering rules, a status
+block (the game, the play state, the status line, achievement progress with the missables
+still open and the next story achievements, and the guide section matching the status line),
+the earlier turns, the question, the depth (`hint` or `full`) and the id of the game's guide
+(`null` for a game with no guide). No guide text is sent: the agent reads the guide through the
+companion's MCP endpoint (`companion_status`, `list_guides`, `guide_outline`, `search_guide`,
+`read_guide_page`), and also has read-only RetroAchievements, RomM, Syncthing and Outline
+tools, web search and fetch, and a shell for its skills.
 
-- `search_guide` finds lines in the game's guide pages (at most 20 matches);
-  `read_guide_page` reads one page or one section of it (at most 30,000 characters). Together
-  they are limited to 6 calls per question. A question about a game with no guide gets
-  "This game has no guide.", and one whose guide pages could not be loaded gets "The guide
-  could not be loaded right now."
-- Web search and web fetch (8,000 tokens per page), with a budget of 3 searches and 2 pages per
-  question. The server enforces the budget softly: once it is used up, each later tool round
-  tells the model to answer from the guide and what it already found (the tools stay the same,
-  so the cached prefix is kept). Each single model request is also capped at 3 searches and 2
-  pages.
-- A question takes at most 8 model rounds; an 8th round that asks for more ends with an error.
+The agent's answer streams through as it comes. Only well-formed events of the known types
+pass; anything else, and the agent's own pings, is dropped. A busy agent (its 429) gets the
+browser a 429 with `limit: "minute"` and `Retry-After: 30`. An agent that cannot be reached,
+answers any other error, sends no response headers within 20 seconds, or ends without `done`
+or `error` gets one error event: "The assistant is unavailable right now. Try again in a
+minute." When the browser goes away, the request to the agent is aborted.
 
-Each lookup shows above the answer as one line: `Searched your guide: <query>`,
-`Read guide: <page>` (or `Read guide: <page> › <section>`), `Searched the web: <query>` and
-`Opened: <host>`. Lookup lines are not kept in the saved conversation.
+Each lookup shows above the answer as one line, as the agent labels it (for example
+`Searched your guide: <query>`, `Read guide: <page>`, `Searched the web: <query>` or
+`Opened: <host>`). Lookup lines are not kept in the saved conversation.
 
 Requests are checked in this order, each failing before any later work: `Content-Type` must be
 `application/json` (415); `Origin` must be the origin of `OUTLINE_BASE_URL` (403); the body must
 fit (413); the assistant must be configured (503); the body must validate and name a known
 hub and a game that may be looked up (400); the rate limit must admit it (429, with
 `Retry-After`). A refused question is not counted. When a hub has a game of its own, a `game`
-sent with it is ignored. Only these three
-request headers are read, and only by this route.
+sent with it is ignored. This route reads only those three request headers.
 
-Cost and limits: every admitted question is billed by Anthropic, and each tool round sends the
-conversation again, so a question that looks pages up or researches the web costs more than one
-answered from the guide in the prompt. The guide is sent as a cached prefix, so repeat questions about one game are cheaper while
-the guide is unchanged. The limits are counted in memory for the whole service, not per caller,
-so a restart resets them; set a monthly spend limit in the Anthropic Console as the hard
-backstop. Question and answer text is never logged: the one log line per question carries the
-model, token counts, stop reason (`max_rounds` when the round cap ended it), search count,
-`rounds`, `guideCalls` (guide tool calls asked for, including refused ones), `lookups` (guide
-lookups run), `fetches` (pages opened) and duration.
+Limits: `ASSISTANT_PER_MINUTE` and `ASSISTANT_PER_DAY` are counted in memory for the whole
+service, not per caller, so a restart resets them; the agent also takes only a few questions
+at once. Question and answer text is never logged: the one log line per question carries the
+outcome (`done`, `error`, `busy`, `unavailable` or `aborted`), the agent's HTTP status or the
+failure kind when there is one, and the duration.
 
 RA responses include the configured `accountIdentity` and the last successful upstream
 `fetchedAt` timestamp. Stale cache reads and failed retries preserve that timestamp;

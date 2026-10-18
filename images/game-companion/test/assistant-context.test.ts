@@ -1,19 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildContext,
-  buildMessages,
+  buildStatusBlock,
   type ContextInput,
   INSTRUCTIONS,
 } from "../src/server/assistant-context.js";
-import type { PageText } from "../src/server/guide-pages.js";
 import type { Achievement, AchievementsResponse } from "../src/shared/types.js";
-
-const page = (title: string, text: string): PageText => ({
-  id: title.toLowerCase().replace(/\s+/g, "-"),
-  title,
-  url: `/doc/${title}`,
-  text,
-});
 
 const ach = (id: string, over: Partial<Achievement> = {}): Achievement => ({
   id,
@@ -39,12 +30,6 @@ const response = (achievements: Achievement[], unlocked = 3): AchievementsRespon
   achievements,
 });
 
-const PAGES = [
-  page("Notes", "note text"),
-  page("Achievement Checklist", "check text"),
-  page("Walkthrough", "walk text"),
-];
-
 const input = (over: Partial<ContextInput> = {}): ContextInput => ({
   gameTitle: "Lantern Vale",
   platformLabel: "RA · GC",
@@ -53,135 +38,10 @@ const input = (over: Partial<ContextInput> = {}): ContextInput => ({
   achievements: null,
   missableNames: [],
   where: null,
-  pages: PAGES,
-  pinnedTitles: [],
-  guideChars: 100_000,
   ...over,
 });
 
-const pinnedOf = (system: string): string => system.slice(system.indexOf("# Pinned pages\n\n"));
-const outlineOf = (system: string): string => {
-  const end = system.indexOf("\n\n# Pinned pages");
-  return system.slice(system.indexOf("# Guide outline\n\n"), end === -1 ? undefined : end);
-};
-
-describe("buildContext guide", () => {
-  it("shows the outline of every page and the text of pinned pages only", () => {
-    const { system } = buildContext(input({ pinnedTitles: ["Walkthrough"] }));
-    expect(system).toBe(
-      `${INSTRUCTIONS}\n\n# Guide outline\n\n` +
-        "## Notes (9 chars)\n## Achievement Checklist (10 chars)\n## Walkthrough (9 chars)" +
-        "\n\n# Pinned pages\n\n## Walkthrough\n\nwalk text\n\n",
-    );
-  });
-
-  it("keeps a non-pinned page's body out of the system prompt", () => {
-    const { system } = buildContext(input({ pinnedTitles: ["Walkthrough"] }));
-    expect(system).toContain("## Notes (9 chars)");
-    expect(system).not.toContain("note text");
-    expect(system).not.toContain("check text");
-  });
-
-  it("lists headings in the outline", () => {
-    const pages = [page("Walkthrough", "# Part One\ntext\n## Garden\nmore")];
-    const { system } = buildContext(input({ pages }));
-    expect(outlineOf(system)).toBe(
-      `# Guide outline\n\n## Walkthrough (${pages[0]!.text.length} chars)\n  - Part One\n    - Garden`,
-    );
-  });
-
-  it("renders pinned pages in pinnedTitles order", () => {
-    const { system } = buildContext(
-      input({ pinnedTitles: ["Walkthrough", "Achievement Checklist"] }),
-    );
-    expect(pinnedOf(system)).toBe(
-      "# Pinned pages\n\n## Walkthrough\n\nwalk text\n\n## Achievement Checklist\n\ncheck text\n\n",
-    );
-  });
-
-  it("has no pinned section when no page is pinned", () => {
-    const { system } = buildContext(input());
-    expect(system).not.toContain("# Pinned pages");
-    expect(system).toContain("## Notes (9 chars)");
-  });
-
-  it("says there is no guide, with no pinned section, when there are no pages", () => {
-    const ctx = buildContext(input({ pages: [], pinnedTitles: ["Walkthrough"] }));
-    expect(ctx.system).toBe(`${INSTRUCTIONS}\n\n# Guide outline\n\nThis game has no guide.`);
-    expect(ctx.truncatedGuide).toBe(false);
-  });
-
-  it("starts with the instructions and is byte-stable for equal inputs", () => {
-    const a = buildContext(input({ pinnedTitles: ["Notes"] }));
-    const b = buildContext(input({ pinnedTitles: ["Notes"] }));
-    expect(a.system.startsWith(INSTRUCTIONS)).toBe(true);
-    expect(a.system === b.system).toBe(true);
-  });
-
-  it("changes when a page's text changes", () => {
-    const a = buildContext(input());
-    const b = buildContext(
-      input({ pages: [PAGES[0]!, page("Achievement Checklist", "other"), PAGES[2]!] }),
-    );
-    expect(a.system).not.toBe(b.system);
-  });
-
-  it("does not depend on the status", () => {
-    const a = buildContext(input());
-    const b = buildContext(input({ presence: "Elsewhere", playState: "last-played" }));
-    expect(a.system === b.system).toBe(true);
-  });
-
-  it("is not truncated with a big budget", () => {
-    const ctx = buildContext(input({ pinnedTitles: ["Walkthrough"] }));
-    expect(ctx.truncatedGuide).toBe(false);
-    expect(ctx.system).not.toContain("incomplete");
-    expect(ctx.system).not.toContain("[guide cut here]");
-  });
-
-  it("is not truncated by pages that are not pinned, however small the budget", () => {
-    const ctx = buildContext(input({ guideChars: 0 }));
-    expect(ctx.truncatedGuide).toBe(false);
-    expect(ctx.system).toContain("## Walkthrough (9 chars)");
-  });
-
-  it("cuts the overflowing pinned page at the last newline that fits and drops later pinned pages", () => {
-    const pages = [page("One", "aaa"), page("Two", "line1\nline2\nline3"), page("Three", "zzz")];
-    const first = "## One\n\naaa\n\n";
-    // Room for the second page's heading, "line1" and a few characters of "line2".
-    const budget = first.length + "## Two\n\nline1\nlin".length;
-    const ctx = buildContext(
-      input({ pages, pinnedTitles: ["One", "Two", "Three"], guideChars: budget }),
-    );
-    expect(ctx.truncatedGuide).toBe(true);
-    expect(pinnedOf(ctx.system)).toBe(
-      `# Pinned pages\n\n${first}## Two\n\nline1\n[guide cut here]\n`,
-    );
-    expect(ctx.system).toContain("## Three (3 chars)");
-    expect(ctx.system).not.toContain("zzz");
-    expect(ctx.system).toContain("incomplete");
-  });
-
-  it("cuts a pinned page with no newline that fits down to nothing", () => {
-    const pages = [page("One", "aaa bbb")];
-    const ctx = buildContext(input({ pages, pinnedTitles: ["One"], guideChars: 5 }));
-    expect(ctx.truncatedGuide).toBe(true);
-    expect(pinnedOf(ctx.system)).toBe("# Pinned pages\n\n\n[guide cut here]\n");
-  });
-
-  it("counts only the rendered pinned pages against the budget", () => {
-    const pinnedTitles = PAGES.map((p) => p.title);
-    const rendered = PAGES.map((p) => `## ${p.title}\n\n${p.text}\n\n`).join("");
-    expect(buildContext(input({ pinnedTitles, guideChars: rendered.length })).truncatedGuide).toBe(
-      false,
-    );
-    expect(
-      buildContext(input({ pinnedTitles, guideChars: rendered.length - 1 })).truncatedGuide,
-    ).toBe(true);
-  });
-});
-
-describe("buildContext statusBlock", () => {
+describe("buildStatusBlock", () => {
   const lines = (s: string): string[] => s.split("\n");
   const full = (): ContextInput =>
     input({
@@ -217,7 +77,7 @@ describe("buildContext statusBlock", () => {
     });
 
   it("lists the facts in order", () => {
-    const { statusBlock } = buildContext(full());
+    const statusBlock = buildStatusBlock(full());
     const ls = lines(statusBlock);
     const at = (prefix: string): number => ls.findIndex((l) => l.startsWith(prefix));
     expect(ls[0]).toBe("Game: Lantern Vale (RA · GC)");
@@ -232,14 +92,14 @@ describe("buildContext statusBlock", () => {
   });
 
   it("lists locked missables by flag or by guide mark, with descriptions", () => {
-    const { statusBlock } = buildContext(full());
+    const statusBlock = buildStatusBlock(full());
     expect(statusBlock).toContain(
       "Missables still open:\n- Rare Bloom — Pick the bloom\n- Late Gift — Give the gift\n",
     );
   });
 
   it("lists up to five locked story achievements in array order", () => {
-    const { statusBlock } = buildContext(full());
+    const statusBlock = buildStatusBlock(full());
     const list = statusBlock.slice(statusBlock.indexOf("Next story achievements:"));
     expect(list).toContain(
       "- Gate One — Open gate\n- Gate Two — Open gate two\n- Gate Three\n- Gate Four — Open four\n- Gate Five — Open five\n",
@@ -249,7 +109,7 @@ describe("buildContext statusBlock", () => {
   });
 
   it("never reveals hidden locked achievements, only their count", () => {
-    const { statusBlock } = buildContext(full());
+    const statusBlock = buildStatusBlock(full());
     for (const secret of ["Secret Door", "Find the door", "Hidden Story", "Secret story"]) {
       expect(statusBlock).not.toContain(secret);
     }
@@ -257,20 +117,20 @@ describe("buildContext statusBlock", () => {
   });
 
   it("omits the hidden line when none are locked", () => {
-    const { statusBlock } = buildContext(
+    const statusBlock = buildStatusBlock(
       input({ achievements: response([ach("1", { hidden: true, unlocked: true })]) }),
     );
     expect(statusBlock).not.toContain("Hidden achievements still locked");
   });
 
   it("omits the list headings when there is nothing to list", () => {
-    const { statusBlock } = buildContext(input({ achievements: response([ach("1")]) }));
+    const statusBlock = buildStatusBlock(input({ achievements: response([ach("1")]) }));
     expect(statusBlock).not.toContain("Missables still open:");
     expect(statusBlock).not.toContain("Next story achievements:");
   });
 
   it("says unknown without achievements and lists nothing", () => {
-    const { statusBlock } = buildContext(input({ missableNames: ["late gift"] }));
+    const statusBlock = buildStatusBlock(input({ missableNames: ["late gift"] }));
     expect(statusBlock).toContain("Achievements: unknown");
     expect(statusBlock).not.toContain("Missables still open:");
     expect(statusBlock).not.toContain("Next story achievements:");
@@ -278,48 +138,46 @@ describe("buildContext statusBlock", () => {
   });
 
   it("omits the status line and the guide section when absent", () => {
-    const { statusBlock } = buildContext(input({ presence: null, playState: "last-played" }));
+    const statusBlock = buildStatusBlock(input({ presence: null, playState: "last-played" }));
     expect(statusBlock).toContain("State: last-played");
     expect(statusBlock).not.toContain("Status line:");
     expect(statusBlock).not.toContain("Guide section matching");
   });
 });
 
-describe("buildMessages", () => {
-  it("replays history as plain turns, then the status, depth and question", () => {
-    const ctx = buildContext(input());
-    const msgs = buildMessages(
-      ctx,
-      [
-        { question: "q1", answer: "a1" },
-        { question: "q2", answer: "a2" },
-      ],
-      "q3",
-      "hint",
-    );
-    expect(msgs).toEqual([
-      { role: "user", content: "q1" },
-      { role: "assistant", content: "a1" },
-      { role: "user", content: "q2" },
-      { role: "assistant", content: "a2" },
-      { role: "user", content: `${ctx.statusBlock}\n\nAnswer depth: hint\n\nQuestion: q3` },
-    ]);
-  });
-
-  it("sends only the final turn without history and honours full depth", () => {
-    const ctx = buildContext(input());
-    expect(buildMessages(ctx, [], "where?", "full")).toEqual([
-      { role: "user", content: `${ctx.statusBlock}\n\nAnswer depth: full\n\nQuestion: where?` },
-    ]);
-  });
-});
-
 describe("INSTRUCTIONS", () => {
-  it("points the model at the outline, the guide tools and web search", () => {
-    expect(INSTRUCTIONS).toContain("the outline and pinned pages below");
-    expect(INSTRUCTIONS).toContain("search_guide and read_guide_page");
-    expect(INSTRUCTIONS).toContain("use web search, and open a result page");
-    expect(INSTRUCTIONS).not.toContain("Ground answers");
+  it("sends the agent to the status given, then the player's guide through the companion tools", () => {
+    expect(INSTRUCTIONS).toContain("status block");
+    for (const tool of [
+      "companion_status",
+      "list_guides",
+      "guide_outline",
+      "search_guide",
+      "read_guide_page",
+    ]) {
+      expect(INSTRUCTIONS).toContain(tool);
+    }
+    expect(INSTRUCTIONS).toContain("before any other source");
+    expect(INSTRUCTIONS).toContain("guide id");
+    expect(INSTRUCTIONS).not.toContain("pinned pages below");
+  });
+
+  it("names the other tools: read-only services, the web, and the shell for skills", () => {
+    for (const name of ["RetroAchievements", "RomM", "Syncthing", "Outline", "redlib"]) {
+      expect(INSTRUCTIONS).toContain(name);
+    }
+    expect(INSTRUCTIONS).toContain("web search");
+    expect(INSTRUCTIONS).toContain("web fetch");
+    expect(INSTRUCTIONS).toContain("shell");
+  });
+
+  it("keeps the answer style, sourcing and depth rules", () => {
+    expect(INSTRUCTIONS).toContain("Plain text only");
+    expect(INSTRUCTIONS).toContain("came from the guide, the web, or your own memory");
+    expect(INSTRUCTIONS).toContain("Do not describe your lookups");
+    expect(INSTRUCTIONS).toContain(
+      "Answer depth hint: give the smallest useful nudge and offer more. Answer depth full: answer directly and completely.",
+    );
   });
 
   it("keeps hint-depth lookups to the player's progress, right after the spoiler rule", () => {
