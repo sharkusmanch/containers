@@ -401,14 +401,48 @@ describe("GuideIndex with Xbox", () => {
 
   it("lookup xbox by normalised name", async () => {
     const idx = await built();
-    expect(ids(idx.lookup("xbox", "2000000001", "Gears of War: E-Day™"))).toEqual(["shared"]);
     expect(ids(idx.lookup("xbox", "2000000002", "SAMPLE   racer"))).toEqual(["steam-only"]);
+    expect(ids(idx.lookup("xbox", "2000000002", "Sample Racer™"))).toEqual(["steam-only"]);
     expect(ids(idx.lookup("xbox", "2000000003", "Sample Saga"))).toEqual(["unlabelled"]);
     // A guide that also has an RA row still takes part when it has a Steam row.
     expect(ids(idx.lookup("xbox", "2000000004", "Sample Port"))).toEqual(["ra-and-steam"]);
     expect(idx.lookup("xbox", "2000000005", "Nothing Like It")).toEqual([]);
     expect(idx.lookup("xbox", "2000000006")).toEqual([]);
     expect(idx.lookup("xbox", "2000000007", "™")).toEqual([]);
+  });
+
+  it("a hub with an Xbox Title ID row never name-matches another Xbox title", async () => {
+    const idx = await built();
+    // "shared" names Xbox title 1000000001 in its row; another title of the same name is not it.
+    expect(idx.lookup("xbox", "2000000001", "Gears of War: E-Day™")).toEqual([]);
+  });
+
+  it("an explicit Xbox row, or a hub remembered for another Xbox title, is never overridden by name", async () => {
+    const docs: OutlineDoc[] = [
+      {
+        id: "flight-2024",
+        title: "Microsoft Flight Simulator (2024)",
+        url: "/doc/flight-2024-aaa",
+        text: "| **Steam App ID** | 1000010 |\n| **Xbox Title ID** | 333 |\n",
+      },
+      {
+        id: "remembered",
+        title: "Sample Drift",
+        url: "/doc/drift-bbb",
+        text: "| **Steam App ID** | 1000011 |\n",
+      },
+    ];
+    const idx = new GuideIndex({
+      ...base,
+      scheduleDocId: null,
+      source: source({ listChildren: async () => docs }),
+      memory: memoryFake({ remembered: { last: "xbox", xboxTitleId: "555" } }),
+    });
+    await idx.refresh();
+    expect(idx.lookup("xbox", "444", "Microsoft Flight Simulator")).toEqual([]);
+    expect(ids(idx.lookup("xbox", "333", "Microsoft Flight Simulator"))).toEqual(["flight-2024"]);
+    expect(idx.lookup("xbox", "444", "Sample Drift")).toEqual([]);
+    expect(ids(idx.lookup("xbox", "555", "Sample Drift"))).toEqual(["remembered"]);
   });
 
   it("RA-only hubs never name-match", async () => {

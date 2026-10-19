@@ -5,10 +5,15 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { XboxAuth } from "../src/server/xbox-auth.js";
 
-// The real rename, but with a seam so one test can make it fail.
+// The real rename, rm and writeFile, but with seams so a test can make one fail.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return {
+    ...actual,
+    rename: vi.fn(actual.rename),
+    rm: vi.fn(actual.rm),
+    writeFile: vi.fn(actual.writeFile),
+  };
 });
 const fsp = await import("node:fs/promises");
 
@@ -224,6 +229,36 @@ describe("XboxAuth.load", () => {
       lostSince: null,
     });
     expect(ms.calls).toHaveLength(0);
+  });
+
+  it("says once, in fixed words, when the state directory is not writable", async () => {
+    await seedFile();
+    vi.mocked(fsp.writeFile).mockRejectedValueOnce(
+      Object.assign(new Error(`EROFS: read-only file system, open '${dir}/x'`), {
+        code: "EROFS",
+      }),
+    );
+    const auth = makeAuth();
+    await auth.load();
+    expect(logs).toEqual(["xbox state directory is not writable"]);
+    // The stored sign-in is still read.
+    expect(auth.status()).toMatchObject({ state: "connected", gamertag: GAMERTAG });
+  });
+
+  it("probes a writable state directory silently and leaves nothing behind", async () => {
+    const auth = makeAuth();
+    await auth.load();
+    expect(logs).toEqual([]);
+    await expect(readdir(dir)).resolves.toEqual([]);
+    expect(vi.mocked(fsp.writeFile)).toHaveBeenCalled();
+  });
+
+  it("does not touch the state directory when Xbox is off", async () => {
+    vi.mocked(fsp.writeFile).mockClear();
+    const auth = makeAuth(null);
+    await auth.load();
+    expect(vi.mocked(fsp.writeFile)).not.toHaveBeenCalled();
+    expect(logs).toEqual([]);
   });
 
   it("treats an unreadable token file as disconnected", async () => {
@@ -595,6 +630,53 @@ describe("XboxAuth.session", () => {
     expect(readFileSyncJson().refreshToken).toBe("rt-seed");
   });
 
+  it.each([
+    [400, "invalid_client"],
+    [401, "invalid_client"],
+    [400, "unauthorized_client"],
+    [401, "unauthorized_client"],
+    [400, "interaction_required"],
+  ])("goes lost when Microsoft rejects the refresh (%i %s)", async (status, error) => {
+    const auth = await connectedAuth();
+    ms.refreshOverride = { status, body: { error, error_description: "AADSTS secret detail" } };
+    expect(await auth.session()).toBeNull();
+    expect(auth.status()).toMatchObject({
+      state: "lost",
+      gamertag: GAMERTAG,
+      lostSince: "2030-01-01T00:00:00.000Z",
+    });
+    expect(logs.join("\n")).not.toContain("AADSTS");
+    // lostSince is set once, however often the refresh is rejected afterwards.
+    await advance(60_000);
+    await auth.session();
+    expect(auth.status().lostSince).toBe("2030-01-01T00:00:00.000Z");
+  });
+
+  it.each([
+    [429, { error: "too_many_requests" }],
+    [500, { error: "server_error" }],
+    [503, { error: "temporarily_unavailable" }],
+    [400, {}],
+  ])("stays connected on a refresh answer that is not a rejection (%i)", async (status, body) => {
+    const auth = await connectedAuth();
+    ms.refreshOverride = { status, body };
+    expect(await auth.session()).toBeNull();
+    expect(auth.status()).toMatchObject({ state: "connected", lostSince: null });
+  });
+
+  it("stays connected when the refresh never reaches Microsoft", async () => {
+    await seedFile();
+    const auth = new XboxAuth({
+      clientId: CLIENT_ID,
+      stateDir: dir,
+      fetch: () => Promise.reject(new TypeError("fetch failed")),
+      log: (line) => logs.push(line),
+    });
+    await auth.load();
+    expect(await auth.session()).toBeNull();
+    expect(auth.status()).toMatchObject({ state: "connected", lostSince: null });
+  });
+
   it("sets lostSince once", async () => {
     const auth = await connectedAuth();
     ms.refreshOverride = { status: 400, body: { error: "invalid_grant" } };
@@ -651,6 +733,37 @@ describe("XboxAuth.disconnect", () => {
     });
     expect(await auth.session()).toBeNull();
     await expect(readdir(dir)).resolves.toEqual([]);
+  });
+
+  it("keeps the sign-in, and rejects, when the stored token cannot be deleted", async () => {
+    const auth = await connectedAuth();
+    expect(await auth.session()).not.toBeNull();
+    const before = auth.status();
+    vi.mocked(fsp.rm).mockRejectedValueOnce(
+      Object.assign(new Error("EACCES rt-secret-1"), { code: "EACCES" }),
+    );
+    await expect(auth.disconnect()).rejects.toThrow("Could not remove the stored Xbox sign-in");
+    expect(auth.status()).toEqual(before);
+    expect(auth.status()).toMatchObject({ state: "connected", gamertag: GAMERTAG });
+    expect(await auth.session()).not.toBeNull();
+    expect(await readdir(dir)).toEqual(["xbox-token.json"]);
+    expect(logs).toContain("xbox token file could not be removed (EACCES)");
+    expect(logs.join("\n")).not.toContain("rt-secret");
+    // Trying again works.
+    await auth.disconnect();
+    expect(auth.status().state).toBe("disconnected");
+    await expect(readdir(dir)).resolves.toEqual([]);
+  });
+
+  it("keeps a lost sign-in lost, with its lostSince, when the delete fails", async () => {
+    const auth = await connectedAuth();
+    ms.refreshOverride = { status: 400, body: { error: "invalid_grant" } };
+    await auth.session();
+    const before = auth.status();
+    expect(before.state).toBe("lost");
+    vi.mocked(fsp.rm).mockRejectedValueOnce(Object.assign(new Error("EBUSY"), { code: "EBUSY" }));
+    await expect(auth.disconnect()).rejects.toThrow();
+    expect(auth.status()).toEqual(before);
   });
 
   it("is fine when there is nothing to delete", async () => {

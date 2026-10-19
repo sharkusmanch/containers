@@ -309,7 +309,16 @@ async function handleXboxAction(
   if (!isObject(parsed)) return json(res, 400, { error: "bad request" });
 
   if (action === "cancel") return json(res, 200, xboxBody(xbox.cancel()));
-  if (action === "disconnect") return json(res, 200, xboxBody(await xbox.disconnect()));
+  if (action === "disconnect") {
+    let ended: XboxAuthStatus;
+    try {
+      ended = await xbox.disconnect();
+    } catch {
+      // Fixed text: still signed in, because the stored sign-in could not be removed.
+      return json(res, 500, { error: "xbox disconnect failed" });
+    }
+    return json(res, 200, xboxBody(ended));
+  }
   let started: XboxAuthStatus;
   try {
     started = await xbox.connect();

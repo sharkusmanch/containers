@@ -825,6 +825,34 @@ describe("xbox", () => {
       expect(d.current()).toMatchObject({ state: "last-played", device: null, presence: null });
     });
 
+    it("a lost sign-in leaves the last Xbox game last-played, not stale", async () => {
+      let connected = true;
+      let lost = false;
+      const { d, clock, events } = make({
+        connected: () => connected,
+        // The poll that finds the refresh rejected gets no session; the sign-in is then "lost".
+        presence: async () => (lost ? null : xboxPresence()),
+      });
+      await pollAll(d);
+      expect(d.current()).toMatchObject({ game: xboxGame, state: "playing", stale: false });
+      lost = true;
+      clock.t += MIN;
+      await d.pollXbox();
+      connected = false;
+      clock.t += MIN;
+      await d.pollXbox();
+      expect(d.current()).toMatchObject({ game: xboxGame, state: "last-played", stale: false });
+      // The failure was reported once; leaving it behind on disconnect says nothing more.
+      expect(events).toEqual([["xbox", false]]);
+      // Signing in again and failing reports the failure afresh.
+      connected = true;
+      await d.pollXbox();
+      expect(events).toEqual([
+        ["xbox", false],
+        ["xbox", false],
+      ]);
+    });
+
     it("device and richPresence surface only while xbox is playing", async () => {
       let steam: { appId: string | null; name: string | null } = { appId: "10", name: "Steam" };
       const { d, clock } = make({ steam: async () => steam });

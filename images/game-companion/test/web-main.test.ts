@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { captureInstallPrompt } from "../src/web/device.js";
 import { startApp } from "../src/web/main.js";
-import { createApi, type Api } from "../src/web/api.js";
+import { ApiError, createApi, type Api } from "../src/web/api.js";
 import type { Layout } from "../src/web/state.js";
 import type {
   Achievement,
@@ -6206,7 +6206,7 @@ describe("xbox", () => {
       state: "connecting",
       userCode: "ABCD-EFGH",
       verificationUri: "https://www.microsoft.com/link",
-      expiresAt: "2026-10-18T18:15:00.000Z",
+      expiresAt: new Date(Date.now() + 900_000).toISOString(),
     });
     api.xboxActionValue = connecting;
     api.xboxValue = connecting;
@@ -6266,6 +6266,163 @@ describe("xbox", () => {
     answer.resolve(xboxStatus({ state: "disconnected" }));
     await flush();
     expect(xboxRow().querySelector(".setting-xbox-text")?.textContent).toBe("Xbox: not connected");
+  });
+
+  describe("the connect poll", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const T0 = new Date("2030-01-01T12:00:00.000Z");
+    const connecting = (expiresAt: string | null = "2030-01-01T12:15:00.000Z") =>
+      xboxStatus({
+        state: "connecting",
+        userCode: "ABCD-EFGH",
+        verificationUri: "https://www.microsoft.com/link",
+        expiresAt,
+      });
+    /** An app showing a code being entered, with the test driving the sign-in listeners. */
+    const startConnecting = async (status: XboxAuthStatus) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(T0);
+      const tm = timers();
+      const api = fakeApi(playing(hubZ));
+      const listeners: ((signedIn: boolean) => void)[] = [];
+      api.onAuth = (listener) => void listeners.push(listener);
+      api.xboxValue = status;
+      const app = startApp({
+        doc: document,
+        api,
+        storage: memory(),
+        setInterval: noTimers,
+        setTimeout: tm.set,
+      });
+      await app.ready;
+      await flush();
+      const polls = () => tm.calls.filter((c) => c.ms === 3000);
+      const tell = (signedIn: boolean): void => listeners.forEach((l) => l(signedIn));
+      return { api, polls, signIn: () => tell(true), signOut: () => tell(false) };
+    };
+
+    it("stops on a 401 and resumes, once, when the sign-in comes back", async () => {
+      const { api, polls, signIn, signOut } = await startConnecting(connecting());
+      expect(polls()).toHaveLength(1);
+      api.xbox = async () => {
+        api.xboxCalls.push("status");
+        signOut();
+        throw new ApiError(401);
+      };
+      polls()[0]?.fn();
+      await flush();
+      expect(polls()).toHaveLength(1);
+
+      api.xbox = async () => {
+        api.xboxCalls.push("status");
+        return api.xboxValue;
+      };
+      const before = api.xboxCalls.length;
+      signIn();
+      signIn();
+      await flush();
+      expect(api.xboxCalls.slice(before)).toEqual(["status"]);
+      expect(polls()).toHaveLength(2);
+    });
+
+    it("does not poll while the page is signed out", async () => {
+      const { api, polls, signOut } = await startConnecting(connecting());
+      signOut();
+      const before = api.xboxCalls.length;
+      polls()[0]?.fn();
+      await flush();
+      expect(api.xboxCalls.slice(before)).toEqual([]);
+      expect(polls()).toHaveLength(1);
+    });
+
+    it("stops once the code has expired, even when the status cannot be read", async () => {
+      const { api, polls, signIn } = await startConnecting(connecting());
+      api.xbox = async () => {
+        api.xboxCalls.push("status");
+        throw new Error("down");
+      };
+      polls()[0]?.fn();
+      await flush();
+      expect(polls()).toHaveLength(2);
+      vi.setSystemTime(new Date("2030-01-01T12:15:00.000Z"));
+      polls()[1]?.fn();
+      await flush();
+      expect(polls()).toHaveLength(2);
+      // An expired code is not resumed when the sign-in comes back.
+      const before = api.xboxCalls.length;
+      signIn();
+      await flush();
+      expect(api.xboxCalls.slice(before)).toEqual([]);
+    });
+
+    it("schedules nothing for a code the server reports already expired", async () => {
+      const { polls } = await startConnecting(connecting("2030-01-01T11:59:00.000Z"));
+      expect(polls()).toHaveLength(0);
+    });
+  });
+
+  it("tells a disconnect the server could not complete", async () => {
+    const api = fakeApi(playing(hubZ));
+    api.xboxValue = xboxStatus({ state: "connected", gamertag: "SampleTag" });
+    api.xboxAction = async (action) => {
+      api.xboxCalls.push(action);
+      throw new ApiError(500);
+    };
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    openDisplay();
+    await flush();
+    ($(".setting-xbox-action") as HTMLElement).click();
+    await flush();
+    await flush();
+    expect(api.xboxCalls.filter((c) => c !== "status")).toEqual(["disconnect"]);
+    expect($(".toast-text")?.textContent).toBe("Couldn't disconnect");
+    expect(xboxRow().querySelector(".setting-xbox-text")?.textContent).toBe(
+      "Xbox: connected as SampleTag",
+    );
+  });
+
+  it("picks up an Xbox title found for the open guide, without offering to switch to it", async () => {
+    const hubS: GuideHub = {
+      ...hubX,
+      xboxTitleId: null,
+      platforms: ["steam"],
+      platformLabel: "Steam",
+    };
+    const { api, app } = await start(nowOf(hubS, steamGame, "playing"));
+    expect(api.achCalls).toEqual(["steam:10"]);
+    // The same game, now played on Xbox: the server has linked the guide to it by name.
+    api.nowValue = {
+      ...nowOf(
+        { ...hubS, xboxTitleId: "1000000001", platforms: ["steam", "xbox"], lastPlatform: "xbox" },
+        xboxGame,
+        "playing",
+        "Series X",
+      ),
+      presence: "Act 2: Sample Bridge",
+    };
+    await app.tick();
+    expect($(".switch-banner")?.hidden).toBe(true);
+    expect(api.achCalls).toEqual(["steam:10", "xbox:1000000001"]);
+    expect($(".game-title")?.textContent).toBe("Sample Wars");
+    expect(($(".presence-row") as HTMLElement).hidden).toBe(false);
+    expect($(".game-presence")?.textContent).toBe("Act 2: Sample Bridge");
+    expect(($(".game-device") as HTMLElement).hidden).toBe(false);
+    expect($(".game-device")?.textContent).toBe("Series X");
+    expect(switchShown()).toBe(false);
+    // Once it stops, the guide keeps what it learned: the switch is offered, on Xbox.
+    api.nowValue = nowOf(
+      { ...hubS, xboxTitleId: "1000000001", platforms: ["steam", "xbox"], lastPlatform: "xbox" },
+      xboxGame,
+      "last-played",
+    );
+    await app.tick();
+    expect($(".switch-banner")?.hidden).toBe(true);
+    expect(switchShown()).toBe(true);
+    expect(pressed()).toEqual(["Xbox"]);
   });
 
   it("tells a failed action and shows the status the server holds", async () => {

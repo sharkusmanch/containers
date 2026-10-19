@@ -100,6 +100,7 @@ export class XboxAuth {
 
   async load(): Promise<void> {
     if (this.clientId === null) return;
+    await this.probeStateDir();
     let raw: string;
     try {
       raw = await readFile(this.file, "utf8");
@@ -160,8 +161,21 @@ export class XboxAuth {
     this.endFlow();
   }
 
+  /**
+   * Forgets the sign-in and deletes the token file. If the file cannot be deleted the stored
+   * sign-in would come back on restart, so the previous state is restored and this rejects (a
+   * code being entered stays cancelled).
+   */
   async disconnect(): Promise<void> {
+    const previous = {
+      base: this.base,
+      refreshToken: this.refreshToken,
+      gamertag: this.gamertag,
+      lostSinceMs: this.lostSinceMs,
+      cached: this.cached,
+    };
     this.generation += 1;
+    const generation = this.generation;
     this.endFlow();
     this.cached = null;
     this.refreshToken = null;
@@ -172,6 +186,16 @@ export class XboxAuth {
       await this.enqueue(() => rm(this.file, { force: true }));
     } catch (err) {
       this.log(`xbox token file could not be removed (${errCode(err)})`);
+      // Unless something newer (a sign-in, another disconnect) has taken over meanwhile.
+      if (generation === this.generation) {
+        ({
+          base: this.base,
+          refreshToken: this.refreshToken,
+          gamertag: this.gamertag,
+          lostSinceMs: this.lostSinceMs,
+          cached: this.cached,
+        } = previous);
+      }
       throw new Error("Could not remove the stored Xbox sign-in", { cause: err });
     }
   }
@@ -317,7 +341,12 @@ export class XboxAuth {
 
     const accessToken = reply.status === 200 ? str(reply.json?.access_token) : null;
     if (accessToken === null) {
-      if (str(reply.json?.error) === "invalid_grant") this.markLost();
+      // Any OAuth error on a 400/401 is Microsoft refusing this sign-in (invalid_grant, a
+      // disabled app's invalid_client or unauthorized_client, ...): retrying cannot fix it.
+      // 429, 5xx and network failures are transient.
+      const rejected =
+        (reply.status === 400 || reply.status === 401) && str(reply.json?.error) !== null;
+      if (rejected) this.markLost();
       else this.log(`xbox token refresh failed (${reply.status})`);
       return null;
     }
@@ -425,6 +454,22 @@ export class XboxAuth {
   }
 
   // --- storage and HTTP -----------------------------------------------------------------
+
+  /**
+   * A state directory that cannot be written would lose every rotated token on restart, so it
+   * is said at start-up, once, in fixed words (no path, no error text).
+   */
+  private async probeStateDir(): Promise<void> {
+    const probe = join(this.dir, `.write-probe.${process.pid}.tmp`);
+    try {
+      await mkdir(this.dir, { recursive: true });
+      await writeFile(probe, "", { mode: 0o600 });
+    } catch {
+      this.log("xbox state directory is not writable");
+      return;
+    }
+    await rm(probe, { force: true }).catch(() => {});
+  }
 
   /** Write-then-rename, so a failure at any point leaves the previous file whole. */
   private persist(generation: number): Promise<void> {

@@ -86,7 +86,8 @@ export interface XboxClientOptions {
 
 /**
  * Read-only Xbox Live calls for the signed-in account: presence, title info and achievements.
- * Sign-in is `XboxAuth`'s job; every method answers null when there is no session right now.
+ * Sign-in is `XboxAuth`'s job; presence and title info answer null when there is no session
+ * right now, and achievements rejects.
  * Errors never carry a URL (it holds the XUID) or a header (it holds the token).
  */
 export class XboxClient {
@@ -128,9 +129,13 @@ export class XboxClient {
     return null;
   }
 
-  async achievements(titleId: string): Promise<XboxAchievementList | null> {
+  /**
+   * Rejects when there is no session: a lost sign-in is a failure (the last list is served
+   * stale), never "no achievements".
+   */
+  async achievements(titleId: string): Promise<XboxAchievementList> {
     const session = await this.auth.session();
-    if (!session) return null;
+    if (!session) throw new UpstreamError("xbox is not signed in", null);
     const query = new URLSearchParams({
       titleId,
       maxItems: String(ACHIEVEMENT_ITEMS),
@@ -212,7 +217,8 @@ export class XboxClient {
 }
 
 function parsePresence(body: Rec): XboxPresence {
-  const online = body.state === "Online";
+  // "Away" (idle at the console, a game still running) is online too; only "Offline" is not.
+  const online = str(body.state) !== null && body.state !== "Offline";
   if (!online) return { online: false, device: null, title: null };
   let best: { device: string | null; title: Rec; at: number } | null = null;
   let firstDevice: string | null = null;
@@ -252,10 +258,14 @@ function parseTitle(v: unknown): XboxTitleInfo | null {
   const onXboxDevice = arr(v.devices).some(
     (d) => typeof d === "string" && XBOX_DEVICES.includes(d),
   );
+  // Titlehub says what a title is in `type` ("Game", "App", ...); apps such as media players run
+  // on an Xbox too. `mediaItemType` is no help: games report "Application" there as well.
+  const type = str(v.type);
+  const isGame = type === null || type === "Game";
   return {
     id,
     name: str(v.name) ?? "",
-    isXboxLive: totalGamerscore > 0 || current > 0 || onXboxDevice,
+    isXboxLive: isGame && (totalGamerscore > 0 || current > 0 || onXboxDevice),
     image: safeIcon(str(v.displayImage)),
     totalGamerscore,
   };

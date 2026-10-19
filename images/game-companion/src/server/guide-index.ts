@@ -248,8 +248,9 @@ export class GuideIndex {
 
   /**
    * Hubs for a game. Steam and RA: the hubs whose own game it is. Xbox: hubs whose Xbox Title ID
-   * row names it; else hubs remembered for it; else the one hub, not RetroAchievements-only,
-   * whose normalised title equals the game's. Two or more by name is no match, never a guess.
+   * row names it; else hubs remembered for it; else the one hub, not RetroAchievements-only and
+   * not tied to another Xbox title, whose normalised title equals the game's. Two or more by name
+   * is no match, never a guess.
    */
   lookup(source: Source, gameId: string, title?: string): GuideHub[] {
     if (source !== "xbox") {
@@ -264,8 +265,14 @@ export class GuideIndex {
     if (byMemory.length > 0) return byMemory.map((e) => this.hubOf(e));
     const wanted = title === undefined ? "" : normaliseTitle(title);
     if (wanted === "") return [];
+    // A hub tied to an Xbox title (by its row, or remembered from a detection) is that title's
+    // guide only: a same-named title is a different game (e.g. a newer edition).
     const byName = this.entries.filter(
-      (e) => !raOnly(e.identity) && normaliseTitle(e.title) === wanted,
+      (e) =>
+        !raOnly(e.identity) &&
+        !e.identity?.xbox &&
+        (this.memory?.get(e.hubId)?.xboxTitleId ?? null) === null &&
+        normaliseTitle(e.title) === wanted,
     );
     return byName.length === 1 ? byName.map((e) => this.hubOf(e)) : [];
   }

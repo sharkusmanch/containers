@@ -81,6 +81,23 @@ describe("XboxClient.presence", () => {
     expect((await other.xbox.presence())?.device).toBe("Scarlett");
   });
 
+  it("Away is online: its Full title is the game being played", async () => {
+    const body = { ...presenceFixture(), state: "Away" };
+    const { xbox } = client([["userpresence", { body: JSON.stringify(body) }]]);
+    expect(await xbox.presence()).toMatchObject({
+      online: true,
+      device: "WindowsOneCore",
+      title: { id: "2000000002", name: "Test Quest: Moon Edition" },
+    });
+  });
+
+  it("no state at all is offline", async () => {
+    const body: Record<string, unknown> = { ...presenceFixture() };
+    delete body.state;
+    const { xbox } = client([["userpresence", { body: JSON.stringify(body) }]]);
+    expect(await xbox.presence()).toEqual({ online: false, device: null, title: null });
+  });
+
   it("offline → title null", async () => {
     const { xbox } = client([["userpresence", { body: fixture("xbox-presence-offline.json") }]]);
     expect(await xbox.presence()).toEqual({ online: false, device: null, title: null });
@@ -117,8 +134,15 @@ describe("XboxClient.presence", () => {
   it("is null when not connected, without calling Xbox", async () => {
     const { xbox, calls } = client([["userpresence", presenceOk]], { session: null });
     expect(await xbox.presence()).toBeNull();
-    expect(await xbox.achievements("1")).toBeNull();
     expect(await xbox.titleInfo("1")).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it("fails achievements, rather than answering none, when not signed in", async () => {
+    const { xbox, calls } = client([["achievements", { body: "{}" }]], { session: null });
+    const failure = xbox.achievements("1");
+    await expect(failure).rejects.toBeInstanceOf(UpstreamError);
+    await expect(failure).rejects.toThrow("xbox is not signed in");
     expect(calls).toEqual([]);
   });
 
@@ -182,6 +206,32 @@ describe("XboxClient.titleInfo", () => {
       totalGamerscore: 1000,
       image: "https://store-images.s-microsoft.com/image/apps.1.test-quest",
     });
+  });
+
+  it("an app is not Xbox Live, even on an Xbox", async () => {
+    const { xbox } = client([["titlehub", titlehubOk]]);
+    expect(await xbox.titleInfo("2000000005")).toMatchObject({
+      name: "Sample Media Player",
+      isXboxLive: false,
+    });
+    // `type` decides, not `mediaItemType` (games report "Application" there too).
+    expect((await xbox.titleInfo("2000000002"))?.isXboxLive).toBe(true);
+  });
+
+  it("a type other than Game is not Xbox Live, whatever its achievements", async () => {
+    const body = {
+      titles: [
+        {
+          titleId: "8",
+          name: "Odd App",
+          type: "App",
+          devices: ["XboxSeries"],
+          achievement: { currentAchievements: 3, totalGamerscore: 100 },
+        },
+      ],
+    };
+    const { xbox } = client([["titlehub", { body: JSON.stringify(body) }]]);
+    expect((await xbox.titleInfo("8"))?.isXboxLive).toBe(false);
   });
 
   it("an Xbox device alone is enough", async () => {

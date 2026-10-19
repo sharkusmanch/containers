@@ -11,7 +11,7 @@ import type {
   WhereMatch,
   XboxAuthStatus,
 } from "../shared/types.js";
-import type { Api, XboxAction } from "./api.js";
+import { ApiError, type Api, type XboxAction } from "./api.js";
 import {
   createAchievementsView,
   loadPlatformChoice,
@@ -472,6 +472,8 @@ export function startApp(opts: AppOptions): App {
   let xboxStatus: XboxAuthStatus | null = null;
   let xboxSeq = 0;
   let xboxPollDue = false;
+  /** The code-entry poll stopped while signed out; it resumes once when the sign-in returns. */
+  let xboxPollPaused = false;
   // While an action is on its way no status is read: its own answer is newer.
   let xboxActing = false;
   let unlockedCount: number | null = null;
@@ -1417,6 +1419,15 @@ export function startApp(opts: AppOptions): App {
       }
     }
 
+    // The open guide as the server knows it now: an Xbox title found for it, the platform it was
+    // last detected on.
+    const openHub = current?.hub ?? null;
+    const freshHub = openHub === null ? undefined : now.hubs.find((h) => h.hubId === openHub.hubId);
+    if (current !== null && freshHub !== undefined) current.hub = freshHub;
+    // The detected game is the open guide's own game on another platform (a Steam guide's game
+    // played on Xbox): there is nothing to switch to.
+    const sameGame = current !== null && freshHub !== undefined && isPlayingHere(current, now.game);
+
     const k = gameKey(now.game);
     const currentKey = current?.key ?? "";
     if (k === "") dismissedKey = "";
@@ -1425,7 +1436,7 @@ export function startApp(opts: AppOptions): App {
       await adopt(now);
       return;
     }
-    if (k !== "" && k === currentKey) {
+    if (k !== "" && (k === currentKey || sameGame)) {
       liveNow = now;
       dismissedKey = "";
       hideBanner();
@@ -1473,16 +1484,28 @@ export function startApp(opts: AppOptions): App {
 
   // ---- Xbox sign-in ----
 
+  /** Whether a code waiting to be entered can still be used, as far as this device can tell. */
+  function codeLive(status: XboxAuthStatus | null): boolean {
+    if (status?.state !== "connecting") return false;
+    const expires = status.expiresAt === null ? NaN : Date.parse(status.expiresAt);
+    return Number.isNaN(expires) || Date.now() < expires;
+  }
+
   function applyXbox(status: XboxAuthStatus): void {
     xboxStatus = status;
     picker.setXbox(status);
     // While a code waits to be entered the status is checked every few seconds; one check at a
-    // time, and none once the state moves on.
-    if (status.state === "connecting" && !xboxPollDue) {
+    // time, and none once the state moves on, the code expires or the page is signed out.
+    if (codeLive(status) && !xboxPollDue) {
       xboxPollDue = true;
       afterDelay(() => {
         xboxPollDue = false;
-        if (xboxStatus?.state === "connecting") void refreshXbox();
+        if (!codeLive(xboxStatus)) return;
+        if (signedOut) {
+          xboxPollPaused = true;
+          return;
+        }
+        void refreshXbox();
       }, XBOX_POLL_MS);
     }
   }
@@ -1494,12 +1517,25 @@ export function startApp(opts: AppOptions): App {
     let status: XboxAuthStatus;
     try {
       status = await api.xbox();
-    } catch {
+    } catch (err) {
+      if (mine !== xboxSeq || xboxStatus === null) return;
+      // Signed out: nothing more is asked until the sign-in comes back.
+      if (signedOut || (err instanceof ApiError && err.status === 401)) {
+        xboxPollPaused = codeLive(xboxStatus);
+        return;
+      }
       // Keeps what is showing; a code being entered is checked again.
-      if (mine === xboxSeq && xboxStatus !== null) applyXbox(xboxStatus);
+      applyXbox(xboxStatus);
       return;
     }
     if (mine === xboxSeq) applyXbox(status);
+  }
+
+  /** The sign-in is back: a code-entry poll stopped meanwhile runs once more, if still live. */
+  function resumeXboxPoll(): void {
+    if (!xboxPollPaused) return;
+    xboxPollPaused = false;
+    if (codeLive(xboxStatus) && !xboxPollDue) void refreshXbox();
   }
 
   async function runXboxAction(action: XboxAction): Promise<void> {
@@ -1507,10 +1543,12 @@ export function startApp(opts: AppOptions): App {
     xboxSeq += 1;
     xboxActing = true;
     let status: XboxAuthStatus | null;
+    let failure: unknown = null;
     try {
       status = await api.xboxAction(action);
-    } catch {
+    } catch (err) {
       status = null;
+      failure = err;
     } finally {
       xboxActing = false;
     }
@@ -1518,7 +1556,12 @@ export function startApp(opts: AppOptions): App {
       applyXbox(status);
       return;
     }
-    showToast("Could not reach the Xbox sign-in");
+    // The server answered that removing the stored sign-in failed: it is still connected.
+    showToast(
+      action === "disconnect" && failure instanceof ApiError && failure.status >= 500
+        ? "Couldn't disconnect"
+        : "Could not reach the Xbox sign-in",
+    );
     await refreshXbox();
   }
 
@@ -1569,6 +1612,7 @@ export function startApp(opts: AppOptions): App {
     signedOut = value;
     signOutBanner.hidden = !value;
     if (value) hideBanner();
+    else resumeXboxPoll();
   }
   api.onAuth?.((signedIn) => setSignedOut(!signedIn));
 

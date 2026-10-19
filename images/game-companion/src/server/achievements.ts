@@ -209,7 +209,6 @@ export class AchievementService {
       const xbox = this.opts.xbox;
       if (!xbox) return null;
       const [list, info] = await Promise.all([xbox.achievements(id), xbox.titleInfo(id)]);
-      if (!list) return null;
       const response = normaliseXbox(id, info?.name || `Xbox game ${id}`, list, info);
       // Like Steam: a game with no achievements at all is "none", not an empty list.
       return response.total === 0 && !response.noList ? null : response;

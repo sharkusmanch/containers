@@ -7,7 +7,7 @@ import {
 } from "../src/server/achievements.js";
 import type { RaGameProgress } from "../src/server/ra.js";
 import type { SteamGameData } from "../src/server/steam.js";
-import type { XboxAchievementList, XboxTitleInfo } from "../src/server/xbox.js";
+import { XboxClient, type XboxAchievementList, type XboxTitleInfo } from "../src/server/xbox.js";
 import { fixture } from "./helpers.js";
 
 const steamData: SteamGameData = {
@@ -425,18 +425,44 @@ describe("AchievementService", () => {
       expect((await svc.get("xbox", "20"))?.stale).toBe(true);
     });
 
-    it("is null when Xbox is off, not connected, or the game has no achievements", async () => {
+    it("is null when Xbox is off or the game has no achievements", async () => {
       expect(await new AchievementService(idle).get("xbox", "20")).toBeNull();
-      const none = new AchievementService({
-        ...idle,
-        xbox: { achievements: async () => null, titleInfo: async () => null },
-      });
-      expect(await none.get("xbox", "20")).toBeNull();
       const empty = new AchievementService({
         ...idle,
         xbox: { achievements: async () => ({ achievements: [] }), titleInfo: async () => null },
       });
       expect(await empty.get("xbox", "20")).toBeNull();
+    });
+
+    it("keeps the cached list, marked stale, when the sign-in goes away", async () => {
+      // A real client: the sign-in answers a session, then none (lost or disconnected).
+      let session: { headers: Record<string, string>; xuid: string } | null = {
+        headers: { Authorization: "XBL3.0 x=fake-uhs;fake-xsts" },
+        xuid: "2535000000001",
+      };
+      const fetchFn = (async (url: string | URL | Request) => {
+        const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        if (u.includes("titlehub")) return new Response(fixture("xbox-titlehub.json"));
+        if (u.includes("achievements")) return new Response(fixture("xbox-achievements.json"));
+        return new Response("not routed", { status: 599 });
+      }) as typeof fetch;
+      const xbox = new XboxClient({ auth: { session: async () => session }, fetch: fetchFn });
+      const clock = { t: NOW };
+      const svc = new AchievementService({ ...idle, xbox, now: () => clock.t });
+
+      const fresh = await svc.get("xbox", "2000000002");
+      expect(fresh).toMatchObject({ source: "xbox", total: 3, stale: false });
+      session = null;
+      clock.t += 61_000;
+      const after = await svc.get("xbox", "2000000002");
+      expect(after).toMatchObject({ source: "xbox", total: 3, stale: true });
+      expect(after?.achievements).toEqual(fresh?.achievements);
+    });
+
+    it("reports a game never fetched as unavailable, not as none, when signed out", async () => {
+      const xbox = new XboxClient({ auth: { session: async () => null }, fetch: fetch });
+      const svc = new AchievementService({ ...idle, xbox });
+      await expect(svc.get("xbox", "20")).rejects.toThrow();
     });
 
     it("keeps an empty list for a title with Gamerscore, marked noList", async () => {

@@ -1094,6 +1094,23 @@ describe("xbox routes", () => {
     expect((await post("connect/extra")).status).toBe(404);
   });
 
+  it("answers a disconnect that could not be completed with a fixed 500", async () => {
+    xbox = {
+      ...(xbox as Xbox),
+      disconnect: async () => {
+        calls.push("disconnect");
+        throw new Error(`EACCES ${FAKE_TOKEN}`);
+      },
+    };
+    const r = await post("disconnect");
+    expect(r.status).toBe(500);
+    expect(r.headers.get("cache-control")).toBe("no-store");
+    const text = await r.text();
+    expect(JSON.parse(text)).toEqual({ error: "xbox disconnect failed" });
+    expect(text).not.toContain(FAKE_TOKEN);
+    expect(calls).toContain("disconnect");
+  });
+
   it("xbox achievements route", async () => {
     const r = await fetch(`${root}/achievements/xbox/1000000001`);
     expect(r.status).toBe(200);

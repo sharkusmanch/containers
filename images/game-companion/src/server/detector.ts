@@ -226,6 +226,9 @@ export class Detector {
       this.xbox = null;
       this.xboxPolledAt = null;
       this.xboxDelayMs = this.xboxIntervalMs;
+      // Not polling is not failing: the last Xbox game must not stay marked stale. Cleared
+      // without a "recovered" line, since nothing recovered; the sign-in logs its own loss.
+      this.xboxFailed = false;
       return;
     }
     try {

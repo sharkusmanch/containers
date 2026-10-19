@@ -131,14 +131,16 @@ Xbox reports gets the same guide pages, achievements panel, Missable, Find in gu
 a Steam game. The detection order is Steam (a game with an app ID), then Xbox, then a fresh
 RetroAchievements game, then a Steam non-Steam shortcut, then the last game seen. Only genuine
 Xbox Live games count: a program the Xbox app happens to report (a Steam game, an emulator, a
-launcher) never hides a RetroAchievements game.
+launcher) or an app (titles Xbox lists as anything but a game) never hides a RetroAchievements
+game.
 
 **Setting up.** Register an app in Microsoft Entra under your own account ("Personal Microsoft
 accounts only", public client flows allowed, no secret, no redirect URI) and set its client ID
 as `XBOX_CLIENT_ID`. Then open ⋯ › Display › Xbox and tap **Connect**: the row shows a code to
 enter at `microsoft.com/link` (the link opens in a new tab; the code lasts 15 minutes and
 **Cancel** drops it). The row reads "Xbox: connected as <gamertag>" once you have signed in, and
-**Disconnect** deletes the stored sign-in. "Xbox: connect again" means Microsoft no longer
+**Disconnect** deletes the stored sign-in (if the file cannot be deleted the row stays connected
+and the page says "Couldn't disconnect"). "Xbox: connect again" means Microsoft no longer
 accepts it (revoked, expired or refused); **Connect** signs in again. Steam and
 RetroAchievements keep working throughout. Starting, cancelling or ending a sign-in takes the
 Ask route's checks (`Content-Type: application/json`, `Origin` of `OUTLINE_BASE_URL`, a JSON
@@ -152,12 +154,14 @@ the achievements of the game on screen. Nothing is ever written to Xbox Live. Th
 refresh token in `XBOX_STATE_DIR/xbox-token.json` (mode 0600, replaced atomically each time
 Microsoft rotates it); no token or device code ever reaches the page, a log line or the
 assistant. The page sees only the sign-in state, the code and link to enter it, its expiry and
-the gamertag.
+the gamertag. If `XBOX_STATE_DIR` cannot be written, start-up logs it once as
+`xbox state directory is not writable`.
 
 **Guides.** One guide serves a game on both Steam and Xbox. A guide is linked to an Xbox game by
 an `Xbox Title ID` row, or else by its title matching the game's name (case, punctuation and ™ ®
-© ignored); a guide with only an `RA Game ID` row never matches by name, and two guides with the
-same name link to neither. The guide remembers which platform its game was last detected on (in
+© ignored); a guide with only an `RA Game ID` row never matches by name, nor does a guide already
+tied to another Xbox title (by its row or an earlier detection), and two guides with the same
+name link to neither. The guide remembers which platform its game was last detected on (in
 `XBOX_STATE_DIR/platforms.json`), and the achievements panel shows that platform when the game
 is not being played. When a guide knows both a Steam and an Xbox ID, a **Steam / Xbox** switch
 above its achievements picks the other one; the choice is kept per device. The game list labels
