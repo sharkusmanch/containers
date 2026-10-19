@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { join } from "node:path";
 import { AchievementService } from "./achievements.js";
 import { AgentClient } from "./agent-client.js";
 import { buildDeps } from "./app.js";
@@ -8,10 +9,13 @@ import { Detector } from "./detector.js";
 import { GuideIndex } from "./guide-index.js";
 import { GuidePageService } from "./guide-pages.js";
 import { OutlineClient } from "./outline.js";
+import { PlatformMemory } from "./platform-memory.js";
 import { AskLimiter } from "./rate-limit.js";
 import { RaClient } from "./ra.js";
 import { createHandler } from "./routes.js";
 import { SteamClient } from "./steam.js";
+import { XboxAuth } from "./xbox-auth.js";
+import { XboxClient } from "./xbox.js";
 
 const config = loadConfig(process.env);
 const log = (msg: string, extra: Record<string, unknown> = {}): void =>
@@ -24,10 +28,32 @@ const outline = config.outlineApiKey
   : null;
 if (!outline) log("outline key missing; guide index disabled");
 
+// Xbox exists only with a client ID: no sign-in, polling or memory file without one.
+async function startXbox(clientId: string) {
+  const auth = new XboxAuth({
+    clientId,
+    stateDir: config.xboxStateDir,
+    log: (line) => log(line),
+  });
+  await auth.load();
+  const memory = new PlatformMemory({ file: join(config.xboxStateDir, "platforms.json") });
+  // A broken memory file only loses which platform each guide was last seen on.
+  await memory.load().catch(() => log("platform memory unreadable; starting empty"));
+  return { auth, client: new XboxClient({ auth }), memory };
+}
+const xbox = config.xboxClientId ? await startXbox(config.xboxClientId) : null;
+log(xbox ? "xbox enabled" : "xbox disabled (no client id)");
+
 // Fixed messages only: an upstream error can carry a URL with an API key in it.
 const detector = new Detector({
   steam,
   ra,
+  ...(xbox
+    ? {
+        xbox: xbox.client,
+        xboxConnected: () => xbox.auth.status().state === "connected",
+      }
+    : {}),
   onStatus: (source, ok) => log(`${source} polling ${ok ? "recovered" : "failed"}`),
 });
 const index = new GuideIndex({
@@ -35,8 +61,13 @@ const index = new GuideIndex({
   collectionId: config.outlineCollectionId,
   guidesParentId: config.outlineGuidesParentId,
   scheduleDocId: config.outlineScheduleDocId,
+  memory: xbox?.memory ?? null,
 });
-const achievements = new AchievementService({ steam, ra });
+const achievements = new AchievementService({
+  steam,
+  ra,
+  ...(xbox ? { xbox: xbox.client } : {}),
+});
 const pages = new GuidePageService({ index, source: outline });
 
 const ask =
@@ -82,6 +113,8 @@ const handler = createHandler(
     pages,
     ask,
     mcp,
+    memory: xbox?.memory ?? null,
+    log,
   }),
 );
 const server = createServer((req, res) => void handler(req, res));

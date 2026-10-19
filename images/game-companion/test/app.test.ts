@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDeps } from "../src/server/app.js";
+import { GuideIndex } from "../src/server/guide-index.js";
+import { PlatformMemory } from "../src/server/platform-memory.js";
 import { INSTRUCTIONS } from "../src/server/assistant-context.js";
 import type { PageText } from "../src/server/guide-pages.js";
 import type { AchievementsResponse, AskEvent, GuideHub } from "../src/shared/types.js";
@@ -10,6 +15,9 @@ const hub: GuideHub = {
   url: "/doc/z",
   source: "steam",
   gameId: "10",
+  xboxTitleId: null,
+  platforms: ["steam"],
+  lastPlatform: null,
   platformLabel: "Steam",
   nowPlaying: false,
 };
@@ -26,6 +34,7 @@ function parts(over: Record<string, unknown> = {}) {
         state: "playing" as const,
         observedAt: Date.UTC(2026, 9, 6),
         presence: null,
+        device: null,
         stale: false,
       }),
     },
@@ -90,6 +99,7 @@ describe("buildDeps", () => {
       stale: false,
       observedAt: "2026-10-06T00:00:00.000Z",
       presence: null,
+      device: null,
       hubs: [hub],
       assistant: false,
     });
@@ -104,6 +114,7 @@ describe("buildDeps", () => {
             state: "playing" as const,
             observedAt: 1,
             presence: "Chapter 2: Sample Caves",
+            device: null,
             stale: false,
           }),
         },
@@ -121,6 +132,7 @@ describe("buildDeps", () => {
             state: "playing" as const,
             observedAt: 1,
             presence: null,
+            device: null,
             stale: false,
           }),
         },
@@ -138,6 +150,7 @@ describe("buildDeps", () => {
             state: "none" as const,
             observedAt: null,
             presence: null,
+            device: null,
             stale: false,
           }),
         },
@@ -149,6 +162,7 @@ describe("buildDeps", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     });
@@ -252,6 +266,9 @@ describe("guide where and progress", () => {
     hubId: "h2",
     source: "ra",
     gameId: id,
+    xboxTitleId: null,
+    platforms: ["ra"],
+    lastPlatform: null,
     platformLabel: "RA",
   });
   const detecting = (
@@ -264,6 +281,7 @@ describe("guide where and progress", () => {
       state,
       observedAt: 1,
       presence,
+      device: null,
       stale: false,
     }),
   });
@@ -464,6 +482,7 @@ describe("achievements allowlist", () => {
       state: game ? ("playing" as const) : ("none" as const),
       observedAt: 1,
       presence: null,
+      device: null,
       stale: false,
     }),
   });
@@ -745,6 +764,7 @@ describe("ask", () => {
       state,
       observedAt: 1,
       presence,
+      device: null,
       stale: false,
     }),
   });
@@ -984,6 +1004,9 @@ describe("mcp tools", () => {
     url: "/doc/o",
     source: "ra",
     gameId: "20",
+    xboxTitleId: null,
+    platforms: ["ra"],
+    lastPlatform: null,
     platformLabel: "RA · GC",
     nowPlaying: false,
   };
@@ -1029,6 +1052,7 @@ describe("mcp tools", () => {
       state: game ? ("playing" as const) : ("none" as const),
       observedAt: 1,
       presence: presence === "" ? null : presence,
+      device: null,
       stale: false,
     }),
   });
@@ -1254,5 +1278,217 @@ describe("mcp tools", () => {
         isError: true,
       });
     }
+  });
+});
+
+describe("xbox", () => {
+  const xboxGame = { source: "xbox" as const, id: "1000000001", title: "Sample Wars: E-Day™" };
+  const xboxSnapshot = (state: "playing" | "last-played" = "playing") => ({
+    current: () => ({
+      game: xboxGame,
+      state,
+      observedAt: Date.UTC(2026, 9, 18),
+      presence: state === "playing" ? "Act 2: Sample Bridge" : null,
+      device: state === "playing" ? "Series X" : null,
+      stale: false,
+    }),
+  });
+  const docs = [
+    {
+      id: "hub-wars",
+      title: "Sample Wars: E-Day",
+      url: "/doc/wars-aaa",
+      text: "| **Steam App ID** | 1000001 |\n",
+    },
+    { id: "hub-other", title: "Other Game", url: "/doc/other-bbb", text: "no id" },
+  ];
+  const tree = [
+    {
+      id: "p1",
+      title: "Guides",
+      url: "/doc/guides-ppp",
+      children: docs.map((d) => ({ id: d.id, title: d.title, url: d.url, children: [] })),
+    },
+  ];
+
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "app-xbox-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** The memory file is written in the background; wait for it before the directory goes. */
+  const written = (file: string) => vi.waitFor(() => readFile(file, "utf8"));
+
+  async function realParts(memory: PlatformMemory) {
+    const index = new GuideIndex({
+      source: {
+        listChildren: async () => docs,
+        collectionTree: async () => tree,
+        docText: async () => "",
+      },
+      collectionId: "c",
+      guidesParentId: "p1",
+      scheduleDocId: null,
+      memory,
+    });
+    await index.refresh();
+    return index;
+  }
+
+  it("now for an xbox game returns hubs, device and presence", async () => {
+    const file = join(dir, "platforms.json");
+    const memory = new PlatformMemory({ file });
+    await memory.load();
+    const index = await realParts(memory);
+    const d = buildDeps(parts({ index, detector: xboxSnapshot(), memory }));
+    const now = d.now();
+    await written(file);
+    expect(now).toMatchObject({
+      game: xboxGame,
+      state: "playing",
+      presence: "Act 2: Sample Bridge",
+      device: "Series X",
+    });
+    expect(now.hubs).toEqual([
+      {
+        hubId: "hub-wars",
+        title: "Sample Wars: E-Day",
+        url: "/doc/wars-aaa",
+        source: "steam",
+        gameId: "1000001",
+        xboxTitleId: "1000000001",
+        platforms: ["steam", "xbox"],
+        lastPlatform: "xbox",
+        platformLabel: "Steam + Xbox",
+        nowPlaying: false,
+      },
+    ]);
+  });
+
+  it("name-matched hub is remembered and later found by title id", async () => {
+    const file = join(dir, "platforms.json");
+    const memory = new PlatformMemory({ file });
+    await memory.load();
+    const index = await realParts(memory);
+    const d = buildDeps(parts({ index, detector: xboxSnapshot(), memory }));
+    d.now();
+    await vi.waitFor(async () => {
+      const saved = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+      expect(saved["hub-wars"]).toMatchObject({ last: "xbox", xboxTitleId: "1000000001" });
+    });
+
+    // After a restart, without the title: found by the remembered ID, and allowed for lookups.
+    const reloaded = new PlatformMemory({ file });
+    await reloaded.load();
+    const index2 = await realParts(reloaded);
+    expect(index2.lookup("xbox", "1000000001").map((h) => h.hubId)).toEqual(["hub-wars"]);
+    const got: unknown[] = [];
+    const d2 = buildDeps(
+      parts({
+        index: index2,
+        detector: { current: () => ({ ...xboxSnapshot().current(), game: null, state: "none" }) },
+        achievements: {
+          get: async (...args: unknown[]) => {
+            got.push(args);
+            return null;
+          },
+        },
+      }),
+    );
+    await d2.achievements("xbox", "1000000001");
+    expect(got).toEqual([["xbox", "1000000001", { priority: false }]]);
+    expect(d2.guides().hubs.find((h) => h.hubId === "hub-wars")).toMatchObject({
+      platforms: ["steam", "xbox"],
+      lastPlatform: "xbox",
+      xboxTitleId: "1000000001",
+    });
+  });
+
+  it("records Steam when a Steam game with a guide is being played, and nothing when last played", async () => {
+    const recorded: unknown[][] = [];
+    const memory = {
+      record: async (...args: unknown[]) => {
+        recorded.push(args);
+      },
+    };
+    buildDeps(parts({ memory })).now();
+    expect(recorded).toEqual([["h1", "steam"]]);
+    recorded.length = 0;
+    buildDeps(parts({ memory, detector: xboxSnapshot("last-played") })).now();
+    expect(recorded).toEqual([]);
+  });
+
+  it("logs a failed memory write without failing the answer", async () => {
+    const lines: string[] = [];
+    const memory = {
+      record: async () => {
+        throw new Error("EACCES: /secret/path");
+      },
+    };
+    const d = buildDeps(parts({ memory, log: (line: string) => lines.push(line) }));
+    expect(d.now().hubs).toEqual([hub]);
+    await vi.waitFor(() => expect(lines).toEqual(["platform memory write failed"]));
+  });
+
+  it("offers the status line to a hub found for the Xbox game by name", async () => {
+    const file = join(dir, "platforms.json");
+    const memory = new PlatformMemory({ file });
+    await memory.load();
+    const index = await realParts(memory);
+    const asked: unknown[][] = [];
+    const d = buildDeps(
+      parts({
+        index,
+        memory,
+        detector: xboxSnapshot(),
+        pages: {
+          ...parts().pages,
+          where: async (...args: unknown[]) => {
+            asked.push(args);
+            return { matches: [] };
+          },
+        },
+      }),
+    );
+    d.now();
+    await written(file);
+    await d.where("hub-wars");
+    await d.where("hub-other");
+    expect(asked).toEqual([["hub-wars", "Act 2: Sample Bridge"]]);
+  });
+
+  it("labels an Xbox game without a guide as Xbox for Ask", async () => {
+    const calls: unknown[] = [];
+    const d = buildDeps(
+      parts({
+        detector: xboxSnapshot(),
+        ask: {
+          origin: "https://wiki.example",
+          limiter: { admit: () => ({ ok: true }) },
+          agent: {
+            ask: async (body: unknown) => {
+              calls.push(body);
+              return null;
+            },
+          },
+        },
+      }),
+    );
+    await d.ask?.start(
+      {
+        hubId: null,
+        game: { source: "xbox", id: "1000000001" },
+        history: [],
+        question: "q",
+        depth: "hint",
+      },
+      new AbortController().signal,
+    );
+    expect((calls[0] as { statusBlock: string }).statusBlock.split("\n")[0]).toBe(
+      "Game: Sample Wars: E-Day™ (Xbox)",
+    );
   });
 });

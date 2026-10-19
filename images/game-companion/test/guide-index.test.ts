@@ -10,12 +10,13 @@ import {
   type GuideSource,
 } from "../src/server/guide-index.js";
 import type { OutlineDoc, OutlineNode } from "../src/server/outline.js";
+import type { Source } from "../src/shared/types.js";
 
 const rows = JSON.parse(
   readFileSync(new URL("./fixtures/hub-rows.json", import.meta.url), "utf8"),
 ) as {
   text: string;
-  expect: { source: "steam" | "ra"; gameId: string } | null;
+  expect: { steam: string | null; ra: string | null; xbox: string | null } | null;
 }[];
 
 describe("parseHubIdentity", () => {
@@ -26,18 +27,23 @@ describe("parseHubIdentity", () => {
 
 describe("platformLabel", () => {
   it("labels Steam hubs", () => {
-    expect(platformLabel("Test Game", { source: "steam", gameId: "1" })).toBe("Steam");
+    expect(platformLabel("Test Game", ["steam"])).toBe("Steam");
+  });
+  it("labels Xbox hubs and hubs known on both", () => {
+    expect(platformLabel("Test Game", ["xbox"])).toBe("Xbox");
+    expect(platformLabel("Test Game", ["steam", "xbox"])).toBe("Steam + Xbox");
   });
   it("adds the console from an RA title suffix", () => {
-    expect(
-      platformLabel("Sample Quest (N64 — RetroAchievements)", { source: "ra", gameId: "1" }),
-    ).toBe("RA · N64");
+    expect(platformLabel("Sample Quest (N64 — RetroAchievements)", ["ra"])).toBe("RA · N64");
   });
   it("falls back to plain RA without a suffix", () => {
-    expect(platformLabel("Sample Quest", { source: "ra", gameId: "1" })).toBe("RA");
+    expect(platformLabel("Sample Quest", ["ra"])).toBe("RA");
+  });
+  it("keeps the RA label for a hub that also has a Steam row", () => {
+    expect(platformLabel("Sample Quest (GC — RetroAchievements)", ["steam", "ra"])).toBe("RA · GC");
   });
   it("labels hubs without an ID", () => {
-    expect(platformLabel("Some PS5 Game", null)).toBe("Other");
+    expect(platformLabel("Some PS5 Game", [])).toBe("Other");
   });
 });
 
@@ -55,6 +61,10 @@ describe("parseNowPlaying", () => {
 describe("normaliseTitle", () => {
   it("ignores case, punctuation, accents and a trailing parenthetical", () => {
     expect(normaliseTitle("Pokémon: Let's Go! (GBA — RetroAchievements)")).toBe("pokemon let s go");
+  });
+  it("ignores trade marks, copyright signs and whitespace runs", () => {
+    expect(normaliseTitle("Sample Wars:  E-Day™")).toBe(normaliseTitle("Sample Wars: E-Day"));
+    expect(normaliseTitle("Sample® Racing ©")).toBe("sample racing");
   });
 });
 
@@ -279,6 +289,172 @@ describe("GuideIndex", () => {
     idx.requestRefresh();
     await new Promise((r) => setTimeout(r, 10));
     expect(calls).toBe(2);
+  });
+});
+
+describe("GuideIndex with Xbox", () => {
+  const xdocs: OutlineDoc[] = [
+    {
+      id: "shared",
+      title: "Gears of War: E-Day",
+      url: "/doc/shared-aaa",
+      text: "| **Steam App ID** | 1000001 |\n| **Xbox Title ID** | 1000000001 |\n",
+    },
+    {
+      id: "steam-only",
+      title: "Sample Racer",
+      url: "/doc/racer-bbb",
+      text: "| App ID | 1000002 |\n",
+    },
+    { id: "unlabelled", title: "Sample Saga", url: "/doc/saga-ccc", text: "no id" },
+    {
+      id: "ra-only",
+      title: "Sample Quest (GC — RetroAchievements)",
+      url: "/doc/quest-ddd",
+      text: "| **RA Game ID** | 30001 |\n",
+    },
+    {
+      id: "ra-and-steam",
+      title: "Sample Port",
+      url: "/doc/port-eee",
+      text: "| **RA Game ID** | 30002 |\n| **Steam App ID** | 1000003 |\n",
+    },
+    {
+      id: "xbox-only",
+      title: "Sample Tactics",
+      url: "/doc/tactics-fff",
+      text: "| Xbox Title ID | 1000000004 |\n",
+    },
+    { id: "twin-1", title: "Sample Twins", url: "/doc/twin-ggg", text: "| App ID | 1000005 |\n" },
+    { id: "twin-2", title: "Sample Twins!", url: "/doc/twin-hhh", text: "no id" },
+  ];
+
+  function memoryFake(records: Record<string, { last: Source; xboxTitleId: string | null }>) {
+    return {
+      get: (hubId: string) => {
+        const r = records[hubId];
+        return r ? { ...r, seenAt: "2026-10-18T00:00:00.000Z" } : null;
+      },
+      byXboxTitle: (titleId: string) =>
+        Object.entries(records)
+          .filter(([, r]) => r.xboxTitleId === titleId)
+          .map(([hubId]) => hubId),
+    };
+  }
+
+  async function built(memory?: ReturnType<typeof memoryFake>) {
+    const idx = new GuideIndex({
+      ...base,
+      scheduleDocId: null,
+      source: source({ listChildren: async () => xdocs }),
+      ...(memory ? { memory } : {}),
+    });
+    await idx.refresh();
+    return idx;
+  }
+
+  const ids = (hubs: { hubId: string }[]) => hubs.map((h) => h.hubId);
+
+  it("parses Xbox Title ID bold and plain", () => {
+    expect(parseHubIdentity("| **Xbox Title ID** | 1000000001 |\n")).toEqual({
+      steam: null,
+      ra: null,
+      xbox: "1000000001",
+    });
+    expect(parseHubIdentity("| Xbox Title ID | 1000000002 |\n")).toEqual({
+      steam: null,
+      ra: null,
+      xbox: "1000000002",
+    });
+  });
+
+  it('hub with steam and xbox rows has platforms [steam, xbox] and label "Steam + Xbox"', async () => {
+    const idx = await built();
+    expect(idx.tree("shared")?.hub).toEqual({
+      hubId: "shared",
+      title: "Gears of War: E-Day",
+      url: "/doc/shared-aaa",
+      source: "steam",
+      gameId: "1000001",
+      xboxTitleId: "1000000001",
+      platforms: ["steam", "xbox"],
+      lastPlatform: null,
+      platformLabel: "Steam + Xbox",
+      nowPlaying: false,
+    });
+    expect(idx.tree("xbox-only")?.hub).toMatchObject({
+      source: "xbox",
+      gameId: "1000000004",
+      xboxTitleId: "1000000004",
+      platforms: ["xbox"],
+      platformLabel: "Xbox",
+    });
+    expect(idx.tree("unlabelled")?.hub).toMatchObject({ platforms: [], platformLabel: "Other" });
+    expect(idx.tree("ra-only")?.hub).toMatchObject({ platforms: ["ra"], platformLabel: "RA · GC" });
+  });
+
+  it("lookup xbox by row wins over name", async () => {
+    const idx = await built();
+    expect(ids(idx.lookup("xbox", "1000000004", "Sample Racer"))).toEqual(["xbox-only"]);
+    expect(ids(idx.lookup("xbox", "1000000001"))).toEqual(["shared"]);
+  });
+
+  it("lookup xbox by normalised name", async () => {
+    const idx = await built();
+    expect(ids(idx.lookup("xbox", "2000000001", "Gears of War: E-Day™"))).toEqual(["shared"]);
+    expect(ids(idx.lookup("xbox", "2000000002", "SAMPLE   racer"))).toEqual(["steam-only"]);
+    expect(ids(idx.lookup("xbox", "2000000003", "Sample Saga"))).toEqual(["unlabelled"]);
+    // A guide that also has an RA row still takes part when it has a Steam row.
+    expect(ids(idx.lookup("xbox", "2000000004", "Sample Port"))).toEqual(["ra-and-steam"]);
+    expect(idx.lookup("xbox", "2000000005", "Nothing Like It")).toEqual([]);
+    expect(idx.lookup("xbox", "2000000006")).toEqual([]);
+    expect(idx.lookup("xbox", "2000000007", "™")).toEqual([]);
+  });
+
+  it("RA-only hubs never name-match", async () => {
+    const idx = await built();
+    expect(idx.lookup("xbox", "2000000001", "Sample Quest")).toEqual([]);
+    expect(idx.lookup("xbox", "2000000001", "Sample Quest (GC — RetroAchievements)")).toEqual([]);
+  });
+
+  it("two same-named hubs → []", async () => {
+    const idx = await built();
+    expect(idx.lookup("xbox", "2000000001", "Sample Twins")).toEqual([]);
+  });
+
+  it("steam lookup of a shared hub unchanged", async () => {
+    const idx = await built();
+    expect(ids(idx.lookup("steam", "1000001"))).toEqual(["shared"]);
+    expect(ids(idx.lookup("steam", "1000001", "Unrelated Title"))).toEqual(["shared"]);
+    expect(idx.lookup("steam", "1000000001")).toEqual([]);
+    expect(ids(idx.lookup("ra", "30001"))).toEqual(["ra-only"]);
+    // As before, a hub with an RA row is an RA hub for Steam lookups.
+    expect(idx.lookup("steam", "1000003")).toEqual([]);
+  });
+
+  it("finds a remembered hub by its Xbox title ID and shows what is remembered", async () => {
+    const idx = await built(
+      memoryFake({
+        "steam-only": { last: "xbox", xboxTitleId: "2000000002" },
+        shared: { last: "steam", xboxTitleId: "2000000009" },
+      }),
+    );
+    expect(ids(idx.lookup("xbox", "2000000002"))).toEqual(["steam-only"]);
+    expect(idx.tree("steam-only")?.hub).toMatchObject({
+      source: "steam",
+      gameId: "1000002",
+      xboxTitleId: "2000000002",
+      platforms: ["steam", "xbox"],
+      lastPlatform: "xbox",
+      platformLabel: "Steam + Xbox",
+    });
+    // The row wins over a remembered ID.
+    expect(idx.tree("shared")?.hub).toMatchObject({
+      xboxTitleId: "1000000001",
+      lastPlatform: "steam",
+    });
+    expect(ids(idx.lookup("xbox", "1000000001"))).toEqual(["shared"]);
+    expect(idx.hubs().find((h) => h.hubId === "steam-only")?.platformLabel).toBe("Steam + Xbox");
   });
 });
 

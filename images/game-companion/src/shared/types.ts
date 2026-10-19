@@ -18,9 +18,16 @@ export interface GuideHub {
   hubId: string;
   title: string;
   url: string;
+  /** The hub's own game from its rows: RA first, then Steam, then Xbox; null with no row. */
   source: Source | null;
   gameId: string | null;
-  /** "Steam", "RA · GC", or "Other" when the hub carries no ID row. */
+  /** From the hub's Xbox Title ID row, or remembered from a detection matched by name. */
+  xboxTitleId: string | null;
+  /** Every platform known for the hub, e.g. ["steam", "xbox"]; empty for Other. */
+  platforms: Source[];
+  /** The platform the hub's game was last detected on; null when never detected. */
+  lastPlatform: Source | null;
+  /** "Steam", "Xbox", "Steam + Xbox", "RA · GC", or "Other" when no platform is known. */
   platformLabel: string;
   nowPlaying: boolean;
 }
@@ -34,11 +41,13 @@ export interface NowResponse {
   stale: boolean;
   observedAt: string | null;
   /**
-   * What the game reports the player is doing right now (RetroAchievements rich presence).
-   * Null unless that game is being played now.
+   * What the game reports the player is doing right now (RetroAchievements or Xbox rich
+   * presence). Null unless that game is being played now.
    */
   presence: string | null;
-  /** Hubs whose (source, gameId) equals the game. Empty when there is no guide. */
+  /** The Xbox device ("Series X", "PC") of an Xbox game being played now; null otherwise. */
+  device: string | null;
+  /** The game's guides (for Xbox also by Xbox Title ID or name). Empty when there is no guide. */
   hubs: GuideHub[];
   /** True when the server has an agent to ask, so the Ask panel can be offered. */
   assistant: boolean;

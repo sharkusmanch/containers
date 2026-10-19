@@ -1,9 +1,12 @@
 import type { GuideHub, GuidePage, Source } from "../shared/types.js";
 import type { OutlineDoc, OutlineNode } from "./outline.js";
+import type { PlatformMemory } from "./platform-memory.js";
 
+/** The IDs a hub's own rows name; null for a row it does not have. */
 export interface HubIdentity {
-  source: Source;
-  gameId: string;
+  steam: string | null;
+  ra: string | null;
+  xbox: string | null;
 }
 
 // A table row whose first cell is exactly the label, bold on both sides or on neither
@@ -12,6 +15,7 @@ export interface HubIdentity {
 // Only spaces and tabs may separate the pieces: the label and its cell share one line.
 const RA_ROW = /^\|[ \t]*(?:\*\*RA Game ID\*\*|RA Game ID)[ \t]*\|([^\n]*)$/gm;
 const STEAM_ROW = /^\|[ \t]*(?:\*\*(?:Steam )?App ID\*\*|(?:Steam )?App ID)[ \t]*\|([^\n]*)$/gm;
+const XBOX_ROW = /^\|[ \t]*(?:\*\*Xbox Title ID\*\*|Xbox Title ID)[ \t]*\|([^\n]*)$/gm;
 const RA_LINK = /retroachievements\.org\/game\/(\d{1,10})(?!\d)/;
 const STEAM_LINK = /store\.steampowered\.com\/app\/(\d{1,10})(?!\d)/;
 
@@ -19,12 +23,12 @@ const STEAM_LINK = /store\.steampowered\.com\/app\/(\d{1,10})(?!\d)/;
  * The ID in a cell: the number in the game's own store or RetroAchievements link when there is
  * one, otherwise the first run of 1–10 digits, ignoring digits inside a longer number.
  */
-function cellId(cell: string, link: RegExp): string | null {
-  const m = link.exec(cell) ?? /(?<!\d)(\d{1,10})(?!\d)/.exec(cell);
+function cellId(cell: string, link: RegExp | null): string | null {
+  const m = link?.exec(cell) ?? /(?<!\d)(\d{1,10})(?!\d)/.exec(cell);
   return m ? (m[1] as string) : null;
 }
 
-function firstRowId(text: string, row: RegExp, link: RegExp): string | null {
+function firstRowId(text: string, row: RegExp, link: RegExp | null): string | null {
   for (const m of text.matchAll(row)) {
     const id = cellId(m[1] as string, link);
     if (id) return id;
@@ -34,23 +38,33 @@ function firstRowId(text: string, row: RegExp, link: RegExp): string | null {
 
 export function parseHubIdentity(text: string): HubIdentity | null {
   const unix = text.replace(/\r\n/g, "\n");
-  const ra = firstRowId(unix, RA_ROW, RA_LINK);
-  if (ra) return { source: "ra", gameId: ra };
-  const steam = firstRowId(unix, STEAM_ROW, STEAM_LINK);
-  if (steam) return { source: "steam", gameId: steam };
-  return null;
+  const identity: HubIdentity = {
+    steam: firstRowId(unix, STEAM_ROW, STEAM_LINK),
+    ra: firstRowId(unix, RA_ROW, RA_LINK),
+    xbox: firstRowId(unix, XBOX_ROW, null),
+  };
+  return identity.steam || identity.ra || identity.xbox ? identity : null;
 }
 
-export function platformLabel(title: string, identity: HubIdentity | null): string {
-  if (!identity) return "Other";
-  if (identity.source === "steam") return "Steam";
-  const m = /\(([^()—–-]+?)\s*[—–-]\s*RetroAchievements\)\s*$/.exec(title);
-  return m ? `RA · ${(m[1] as string).trim()}` : "RA";
+/** "Steam", "Xbox", "Steam + Xbox", an RA label from the title, or "Other" with no platform. */
+export function platformLabel(title: string, platforms: readonly Source[]): string {
+  if (platforms.includes("ra")) {
+    const m = /\(([^()—–-]+?)\s*[—–-]\s*RetroAchievements\)\s*$/.exec(title);
+    return m ? `RA · ${(m[1] as string).trim()}` : "RA";
+  }
+  const steam = platforms.includes("steam");
+  const xbox = platforms.includes("xbox");
+  if (steam && xbox) return "Steam + Xbox";
+  if (steam) return "Steam";
+  if (xbox) return "Xbox";
+  return "Other";
 }
 
 export function normaliseTitle(title: string): string {
   return (
     title
+      // Before NFKD, which would turn ™ into the letters "TM".
+      .replace(/[™®©]/g, "")
       .replace(/\([^()]*\)\s*$/, "")
       .normalize("NFKD")
       // Written with escapes on purpose: strips combining marks U+0300 to U+036F.
@@ -87,11 +101,20 @@ export interface PageRef {
   url: string;
 }
 
+/** A hub as its own document describes it; what the platform memory adds is applied on read. */
 interface Entry {
-  hub: GuideHub;
+  hubId: string;
+  title: string;
+  url: string;
+  identity: HubIdentity | null;
+  nowPlaying: boolean;
   pages: GuidePage[];
   refs: PageRef[];
 }
+
+/** A guide that has an RA row and no Steam row is RetroAchievements-only. */
+const raOnly = (identity: HubIdentity | null): boolean =>
+  identity !== null && identity.ra !== null && identity.steam === null;
 
 const SAFE_URL = /^\/doc\/[A-Za-z0-9_-]+$/;
 
@@ -142,6 +165,7 @@ export class GuideIndex {
   private readonly scheduleDocId: string | null;
   private readonly now: () => number;
   private readonly minRefreshMs: number;
+  private readonly memory: Pick<PlatformMemory, "get" | "byXboxTitle"> | null;
   private entries: Entry[] = [];
   private built = false;
   private lastAttempt = Number.NEGATIVE_INFINITY;
@@ -155,6 +179,8 @@ export class GuideIndex {
     scheduleDocId: string | null;
     now?: () => number;
     minRefreshMs?: number;
+    /** What each hub was last detected on; absent when Xbox is off. */
+    memory?: Pick<PlatformMemory, "get" | "byXboxTitle"> | null;
   }) {
     this.source = opts.source;
     this.collectionId = opts.collectionId;
@@ -162,6 +188,7 @@ export class GuideIndex {
     this.scheduleDocId = opts.scheduleDocId;
     this.now = opts.now ?? Date.now;
     this.minRefreshMs = opts.minRefreshMs ?? 60_000;
+    this.memory = opts.memory ?? null;
   }
 
   refresh(): Promise<boolean> {
@@ -213,25 +240,76 @@ export class GuideIndex {
 
   hubs(): GuideHub[] {
     return this.entries
-      .map((e) => e.hub)
+      .map((e) => this.hubOf(e))
       .sort(
         (a, b) => Number(b.nowPlaying) - Number(a.nowPlaying) || a.title.localeCompare(b.title),
       );
   }
 
-  lookup(source: Source, gameId: string): GuideHub[] {
-    return this.entries.map((e) => e.hub).filter((h) => h.source === source && h.gameId === gameId);
+  /**
+   * Hubs for a game. Steam and RA: the hubs whose own game it is. Xbox: hubs whose Xbox Title ID
+   * row names it; else hubs remembered for it; else the one hub, not RetroAchievements-only,
+   * whose normalised title equals the game's. Two or more by name is no match, never a guess.
+   */
+  lookup(source: Source, gameId: string, title?: string): GuideHub[] {
+    if (source !== "xbox") {
+      return this.entries
+        .map((e) => this.hubOf(e))
+        .filter((h) => h.source === source && h.gameId === gameId);
+    }
+    const byRow = this.entries.filter((e) => e.identity?.xbox === gameId);
+    if (byRow.length > 0) return byRow.map((e) => this.hubOf(e));
+    const remembered = new Set(this.memory?.byXboxTitle(gameId) ?? []);
+    const byMemory = this.entries.filter((e) => remembered.has(e.hubId));
+    if (byMemory.length > 0) return byMemory.map((e) => this.hubOf(e));
+    const wanted = title === undefined ? "" : normaliseTitle(title);
+    if (wanted === "") return [];
+    const byName = this.entries.filter(
+      (e) => !raOnly(e.identity) && normaliseTitle(e.title) === wanted,
+    );
+    return byName.length === 1 ? byName.map((e) => this.hubOf(e)) : [];
   }
 
   tree(hubId: string): { hub: GuideHub; pages: GuidePage[] } | null {
-    const entry = this.entries.find((e) => e.hub.hubId === hubId);
-    return entry ? { hub: entry.hub, pages: entry.pages } : null;
+    const entry = this.entries.find((e) => e.hubId === hubId);
+    return entry ? { hub: this.hubOf(entry), pages: entry.pages } : null;
   }
 
   /** The pages `tree(hubId)` returns, flattened depth-first, with their document ids. */
   pageRefs(hubId: string): PageRef[] | null {
-    const entry = this.entries.find((e) => e.hub.hubId === hubId);
+    const entry = this.entries.find((e) => e.hubId === hubId);
     return entry ? [...entry.refs] : null;
+  }
+
+  /** The hub with its platforms: its rows, plus an Xbox title remembered from a detection. */
+  private hubOf(entry: Entry): GuideHub {
+    const identity = entry.identity;
+    const remembered = this.memory?.get(entry.hubId) ?? null;
+    const xboxTitleId = identity?.xbox ?? remembered?.xboxTitleId ?? null;
+    const platforms: Source[] = [];
+    if (identity?.steam) platforms.push("steam");
+    if (xboxTitleId !== null) platforms.push("xbox");
+    if (identity?.ra) platforms.push("ra");
+    // The hub's own game: its RA row first (as before Xbox), then Steam, then Xbox.
+    const own: [Source, string] | null = identity?.ra
+      ? ["ra", identity.ra]
+      : identity?.steam
+        ? ["steam", identity.steam]
+        : identity?.xbox
+          ? ["xbox", identity.xbox]
+          : null;
+    return {
+      hubId: entry.hubId,
+      title: entry.title,
+      url: entry.url,
+      source: own?.[0] ?? null,
+      gameId: own?.[1] ?? null,
+      xboxTitleId,
+      platforms,
+      lastPlatform: remembered?.last ?? null,
+      platformLabel: platformLabel(entry.title, platforms),
+      nowPlaying: entry.nowPlaying,
+    };
   }
 
   private async build(source: GuideSource): Promise<boolean> {
@@ -261,19 +339,13 @@ export class GuideIndex {
     this.entries = docs
       .filter((d) => isSafeGuideUrl(d.url))
       .map((d) => {
-        const identity = parseHubIdentity(d.text);
-        const hub: GuideHub = {
+        const node = children.find((c) => c.id === d.id);
+        return {
           hubId: d.id,
           title: d.title,
           url: d.url,
-          source: identity?.source ?? null,
-          gameId: identity?.gameId ?? null,
-          platformLabel: platformLabel(d.title, identity),
+          identity: parseHubIdentity(d.text),
           nowPlaying: playing.has(normaliseTitle(d.title)),
-        };
-        const node = children.find((c) => c.id === d.id);
-        return {
-          hub,
           pages: node ? toPages(node.children) : [],
           refs: node ? toRefs(node.children) : [],
         };

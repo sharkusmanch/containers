@@ -15,6 +15,9 @@ const hub: GuideHub = {
   url: "/doc/test-game-abc",
   source: "steam",
   gameId: "10",
+  xboxTitleId: null,
+  platforms: ["steam"],
+  lastPlatform: null,
   platformLabel: "Steam",
   nowPlaying: false,
 };
@@ -24,6 +27,7 @@ const now: NowResponse = {
   stale: false,
   observedAt: "2026-10-06T00:00:00.000Z",
   presence: "Chapter 2: Sample Caves",
+  device: null,
   hubs: [hub],
   assistant: false,
 };
@@ -354,6 +358,7 @@ it("serves all configured Red private routes through the RA client, normalizer a
         state: "none",
         observedAt: null,
         presence: null,
+        device: null,
         stale: false,
       }),
     },

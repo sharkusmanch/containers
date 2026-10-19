@@ -1,4 +1,10 @@
-import type { AchievementsResponse, AskRequest, GuideHub, Source } from "../shared/types.js";
+import type {
+  AchievementsResponse,
+  AskRequest,
+  GameRef as DetectedGame,
+  GuideHub,
+  Source,
+} from "../shared/types.js";
 import type { AchievementService } from "./achievements.js";
 import type { AgentClient } from "./agent-client.js";
 import { buildStatusBlock, type ContextInput, INSTRUCTIONS } from "./assistant-context.js";
@@ -7,6 +13,7 @@ import type { GuideIndex } from "./guide-index.js";
 import { type GuidePageService, missableMarks, type PageText } from "./guide-pages.js";
 import { guideOutline, readGuide, searchGuide } from "./guide-tools.js";
 import type { McpTools, ToolResult } from "./mcp.js";
+import type { PlatformMemory } from "./platform-memory.js";
 import type { AskLimiter } from "./rate-limit.js";
 import type { RouteDeps } from "./routes.js";
 
@@ -36,6 +43,10 @@ export interface AppParts {
   };
   /** Absent or null when no MCP token is configured; the MCP endpoint is then off. */
   mcp?: null | { token: string; version: string };
+  /** Remembers the platform each guide was last detected on; absent or null when Xbox is off. */
+  memory?: null | Pick<PlatformMemory, "record">;
+  /** Fixed-text log lines. */
+  log?: (line: string) => void;
 }
 
 const UNLOADED = "The guide could not be loaded right now.";
@@ -74,6 +85,35 @@ export function buildDeps(parts: AppParts): RouteDeps {
     return snap;
   };
 
+  /** The guides for a detected game; an Xbox game is also matched by name. */
+  const hubsFor = (game: DetectedGame): GuideHub[] =>
+    game.id === null ? [] : index.lookup(game.source, game.id, game.title);
+
+  /** Whether the hub is a guide for this game: its own game, or an Xbox title known for it. */
+  const hubHasGame = (hub: GuideHub, game: DetectedGame): boolean =>
+    game.id !== null &&
+    ((hub.source === game.source && hub.gameId === game.id) ||
+      (game.source === "xbox" && hub.xboxTitleId === game.id));
+
+  /**
+   * For a Steam or Xbox game being played, remembers the platform (and the Xbox title ID) on each
+   * of its guides, then answers the guides as they are now. The file write happens in the
+   * background; a failure is logged and changes nothing here.
+   */
+  const rememberPlatform = (game: DetectedGame, hubs: GuideHub[]): GuideHub[] => {
+    const memory = parts.memory;
+    if (!memory || game.id === null || hubs.length === 0) return hubs;
+    if (game.source !== "steam" && game.source !== "xbox") return hubs;
+    for (const hub of hubs) {
+      const write =
+        game.source === "xbox"
+          ? memory.record(hub.hubId, "xbox", game.id)
+          : memory.record(hub.hubId, "steam");
+      write.catch(() => parts.log?.("platform memory write failed"));
+    }
+    return hubsFor(game);
+  };
+
   /** Whether anonymous lookups may name this game: detected lately, in a guide, or allowlisted. */
   const lookupAllowed = (source: Source, id: string): boolean =>
     detected.has(`${source}:${id}`) ||
@@ -89,8 +129,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
     const game = snap.game;
     const status = snap.presence;
     if (snap.state !== "playing" || status === null || game === null) return { matches: [] };
-    if (hub.source === null || hub.gameId === null) return { matches: [] };
-    if (game.source !== hub.source || game.id !== hub.gameId) return { matches: [] };
+    if (!hubHasGame(hub, game)) return { matches: [] };
     return pages.where(hubId, status);
   };
 
@@ -138,7 +177,12 @@ export function buildDeps(parts: AppParts): RouteDeps {
     return {
       gameTitle: hub?.title ?? ach?.title ?? (isDetected ? detectedGame.title : "Unknown game"),
       platformLabel:
-        hub?.platformLabel ?? (target?.source === "ra" ? "RetroAchievements" : "Steam"),
+        hub?.platformLabel ??
+        (target?.source === "ra"
+          ? "RetroAchievements"
+          : target?.source === "xbox"
+            ? "Xbox"
+            : "Steam"),
       playState: !isDetected
         ? "not detected"
         : snap.state === "playing"
@@ -153,18 +197,17 @@ export function buildDeps(parts: AppParts): RouteDeps {
     };
   };
 
-  /** The current game, when the detector reports one with an id. */
-  const currentGame = (): GameRef | null => {
+  /** The current game, when the detector reports one with an id, and its first guide. */
+  const current = (): { game: GameRef | null; hub: GuideHub | null } => {
     const game = snapshot().game;
-    return game !== null && game.id !== null ? { source: game.source, id: game.id } : null;
+    if (game === null || game.id === null) return { game: null, hub: null };
+    return { game: { source: game.source, id: game.id }, hub: hubsFor(game)[0] ?? null };
   };
 
   /** The hub a tool names, else the current game's; a tool error when there is none. */
   const toolHub = (hubId: string | undefined): GuideHub | ToolResult => {
     if (hubId !== undefined) return index.tree(hubId)?.hub ?? unknownGuide(hubId);
-    const game = currentGame();
-    const hub = game === null ? undefined : index.lookup(game.source, game.id)[0];
-    return hub ?? { text: NO_CURRENT_GUIDE, isError: true };
+    return current().hub ?? { text: NO_CURRENT_GUIDE, isError: true };
   };
 
   /** Runs `fn` over the pages of the hub a guide tool names (or the current game's). */
@@ -183,8 +226,8 @@ export function buildDeps(parts: AppParts): RouteDeps {
     status: async (hubId) => {
       const named = hubId === undefined ? null : toolHub(hubId);
       if (named !== null && "text" in named) return named;
-      const game = currentGame();
-      const hub = named ?? (game === null ? null : (index.lookup(game.source, game.id)[0] ?? null));
+      const { game, hub: currentHub } = current();
+      const hub = named ?? currentHub;
       // A hub's own game when it names one; otherwise only the current game, without a hub.
       const target =
         hub === null
@@ -218,13 +261,17 @@ export function buildDeps(parts: AppParts): RouteDeps {
     now: () => {
       const snap = snapshot();
       const game = snap.game;
+      const found = game === null ? [] : hubsFor(game);
+      const hubs =
+        game !== null && snap.state === "playing" ? rememberPlatform(game, found) : found;
       return {
         game,
         state: snap.state,
         stale: snap.stale,
         observedAt: snap.observedAt === null ? null : new Date(snap.observedAt).toISOString(),
         presence: snap.presence,
-        hubs: game && game.id !== null ? index.lookup(game.source, game.id) : [],
+        device: snap.device,
+        hubs,
         assistant: askParts !== null,
       };
     },

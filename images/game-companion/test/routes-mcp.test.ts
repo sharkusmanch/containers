@@ -36,6 +36,7 @@ beforeAll(async () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     }),

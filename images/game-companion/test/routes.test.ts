@@ -21,6 +21,9 @@ const hub: GuideHub = {
   url: "/doc/test-game-abc",
   source: "steam",
   gameId: "10",
+  xboxTitleId: null,
+  platforms: ["steam"],
+  lastPlatform: null,
   platformLabel: "Steam",
   nowPlaying: false,
 };
@@ -30,6 +33,7 @@ const now: NowResponse = {
   stale: false,
   observedAt: null,
   presence: null,
+  device: null,
   hubs: [],
   assistant: false,
 };

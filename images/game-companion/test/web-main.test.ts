@@ -65,6 +65,9 @@ const hubA: GuideHub = {
   url: "/doc/alpha",
   source: "ra",
   gameId: "20",
+  xboxTitleId: null,
+  platforms: ["ra"],
+  lastPlatform: null,
   platformLabel: "RA · PS2",
   nowPlaying: false,
 };
@@ -74,6 +77,9 @@ const hubZ: GuideHub = {
   url: "/doc/zeta",
   source: "steam",
   gameId: "10",
+  xboxTitleId: null,
+  platforms: ["steam"],
+  lastPlatform: null,
   platformLabel: "Steam",
   nowPlaying: false,
 };
@@ -168,6 +174,7 @@ const playing = (hub: GuideHub): NowResponse => ({
   stale: false,
   observedAt: "2026-10-06T18:00:00.000Z",
   presence: null,
+  device: null,
   hubs: [hub],
   assistant: false,
 });
@@ -287,6 +294,7 @@ describe("startApp", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     });
@@ -307,6 +315,7 @@ describe("startApp", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     });
@@ -329,6 +338,7 @@ describe("startApp", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     });
@@ -885,6 +895,7 @@ describe("startApp", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     });
@@ -947,6 +958,7 @@ describe("startApp", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     };
@@ -1166,6 +1178,7 @@ describe("startApp", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     });
@@ -1255,6 +1268,7 @@ describe("startApp", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     };
@@ -4442,6 +4456,7 @@ describe("refresh on wake", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     });
@@ -4793,6 +4808,7 @@ describe("your links", () => {
       stale: false,
       observedAt: null,
       presence: null,
+      device: null,
       hubs: [],
       assistant: false,
     });
@@ -5093,6 +5109,9 @@ describe("your links", () => {
         url: "/doc/quiet",
         source: null,
         gameId: null,
+        xboxTitleId: null,
+        platforms: [],
+        lastPlatform: null,
         platformLabel: "Other",
         nowPlaying: false,
       };
@@ -5104,6 +5123,7 @@ describe("your links", () => {
         stale: false,
         observedAt: null,
         presence: null,
+        device: null,
         hubs: [],
         assistant: false,
       });
@@ -5295,6 +5315,7 @@ describe("Ask panel", () => {
       stale: false,
       observedAt: "2026-10-06T18:00:00.000Z",
       presence: null,
+      device: null,
       hubs: [],
       assistant: true,
     });
