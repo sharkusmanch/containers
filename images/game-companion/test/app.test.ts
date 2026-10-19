@@ -1754,21 +1754,25 @@ describe("xbox MCP tools", () => {
   const TOKEN = "XBL3.0 x=fake-uhs;fake-xsts";
   const GAMERTAG = "SampleGamer";
 
-  function setup(state: XboxAuthState, answers: { titlehub?: number; achievements?: number } = {}) {
+  type Answer = number | (() => Response);
+
+  function setup(
+    state: XboxAuthState,
+    answers: { titlehub?: Answer; achievements?: Answer; now?: () => number } = {},
+  ) {
     const urls: string[] = [];
+    const answer = (a: Answer | undefined, body: string): Response =>
+      typeof a === "function" ? a() : new Response(body, { status: a ?? 200 });
     const fetchFn = (async (url: string | URL | Request) => {
       const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
       urls.push(u);
-      if (u.includes("titlehub")) {
-        return new Response(fixture("xbox-titlehub.json"), { status: answers.titlehub ?? 200 });
-      }
-      return new Response(fixture("xbox-achievements.json"), {
-        status: answers.achievements ?? 200,
-      });
+      if (u.includes("titlehub")) return answer(answers.titlehub, fixture("xbox-titlehub.json"));
+      return answer(answers.achievements, fixture("xbox-achievements.json"));
     }) as typeof fetch;
     const client = new XboxClient({
       auth: { session: async () => ({ headers: { Authorization: TOKEN }, xuid: XUID }) },
       fetch: fetchFn,
+      ...(answers.now ? { now: answers.now } : {}),
     });
     const auth = {
       status: () => ({
@@ -1859,5 +1863,111 @@ describe("xbox MCP tools", () => {
     };
     expect(await down.tools.xboxTitles(undefined)).toEqual(failed);
     expect(await down.tools.xboxAchievements("2000000002")).toEqual(failed);
+  });
+
+  /** The fixture's history with one more game, as titlehub lists it once the game is played. */
+  const withNewGame = (): string => {
+    const history = JSON.parse(fixture("xbox-titlehub.json")) as { titles: unknown[] };
+    history.titles.unshift({
+      titleId: "2000000009",
+      name: "Brand New Racer",
+      type: "Game",
+      devices: ["XboxSeries"],
+      titleHistory: { lastTimePlayed: "2026-10-18T12:00:00.0000000Z" },
+      achievement: { currentGamerscore: 0, totalGamerscore: 1000 },
+    });
+    return JSON.stringify(history);
+  };
+
+  function freshness() {
+    const clock = { t: 1_000_000 };
+    const hub = { body: fixture("xbox-titlehub.json"), status: 200 };
+    const { tools, urls } = setup("connected", {
+      titlehub: () => new Response(hub.body, { status: hub.status }),
+      now: () => clock.t,
+    });
+    const historyCalls = () => urls.filter((u) => u.includes("titlehub")).length;
+    return { tools, clock, hub, historyCalls };
+  }
+
+  const NO_MATCH = { text: "No Xbox titles match that query." };
+
+  it("xbox_titles reloads a history over 5 min old once when a query matches nothing", async () => {
+    const { tools, clock, hub, historyCalls } = freshness();
+    expect(await tools.xboxTitles("brand new")).toEqual(NO_MATCH);
+    expect(historyCalls()).toBe(1);
+    hub.body = withNewGame();
+    // Within 5 min: no reload.
+    clock.t += 4 * 60_000;
+    expect(await tools.xboxTitles("brand new")).toEqual(NO_MATCH);
+    expect(historyCalls()).toBe(1);
+    clock.t += 2 * 60_000;
+    expect((await tools.xboxTitles("brand new")).text).toBe(
+      "2000000009 | Brand New Racer | XboxSeries | last played 2026-10-18T12:00:00.000Z | 0/1000 G",
+    );
+    expect(historyCalls()).toBe(2);
+    // A query that matches does not reload.
+    clock.t += 10 * 60_000;
+    await tools.xboxTitles("moon");
+    expect(historyCalls()).toBe(2);
+  });
+
+  it("xbox_titles without a query reloads a history over 15 min old", async () => {
+    const { tools, clock, hub, historyCalls } = freshness();
+    await tools.xboxTitles(undefined);
+    hub.body = withNewGame();
+    clock.t += 14 * 60_000;
+    expect((await tools.xboxTitles(undefined)).text).not.toContain("Brand New Racer");
+    expect(historyCalls()).toBe(1);
+    clock.t += 2 * 60_000;
+    expect((await tools.xboxTitles(undefined)).text.split("\n")[0]).toMatch(
+      /^2000000009 \| Brand New Racer \|/,
+    );
+    expect(historyCalls()).toBe(2);
+  });
+
+  it("xbox_titles does not reload inside the failure backoff", async () => {
+    const { tools, clock, hub, historyCalls } = freshness();
+    await tools.xboxTitles(undefined);
+    hub.status = 500;
+    clock.t += 6 * 60_000;
+    expect(await tools.xboxTitles("brand new")).toEqual(NO_MATCH);
+    expect(historyCalls()).toBe(2);
+    clock.t += 2 * 60_000;
+    expect(await tools.xboxTitles("brand new")).toEqual(NO_MATCH);
+    expect(historyCalls()).toBe(2);
+  });
+
+  it("both tools say Xbox is busy, with the wait rounded up to whole seconds, on a 429", async () => {
+    const clock = { t: 1_000_000 };
+    const busy = (after: string) => () =>
+      new Response("{}", { status: 429, headers: { "retry-after": after } });
+    const { tools } = setup("connected", {
+      titlehub: busy("30"),
+      achievements: busy("0"),
+      now: () => clock.t,
+    });
+    expect(await tools.xboxTitles(undefined)).toEqual({
+      text: "Xbox is busy; try again in 30 s.",
+      isError: true,
+    });
+    clock.t += 9_500;
+    expect(await tools.xboxTitles("moon")).toEqual({
+      text: "Xbox is busy; try again in 21 s.",
+      isError: true,
+    });
+    expect(await tools.xboxAchievements("2000000002")).toEqual({
+      text: "Xbox is busy; try again in 1 s.",
+      isError: true,
+    });
+  });
+
+  it("xbox_achievements says there is no list for a title with Gamerscore and no achievements", async () => {
+    const { tools } = setup("connected", {
+      achievements: () => new Response(JSON.stringify({ achievements: [] }), { status: 200 }),
+    });
+    expect(await tools.xboxAchievements("2000000002")).toEqual({
+      text: "Xbox has no achievement list for this title (it may be an Xbox 360 game).",
+    });
   });
 });

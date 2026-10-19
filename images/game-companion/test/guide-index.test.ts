@@ -59,6 +59,14 @@ describe("parseHubIdentity Tracked on", () => {
       ),
     ).toBe("xbox");
   });
+
+  it("is kept for a RetroAchievements + Xbox guide with no Steam row", () => {
+    expect(
+      tracked(
+        "| **RA Game ID** | 30002 |\n| **Xbox Title ID** | 1000000001 |\n| Tracked on | Xbox |\n",
+      ),
+    ).toBe("xbox");
+  });
 });
 
 describe("platformLabel", () => {

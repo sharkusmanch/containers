@@ -364,6 +364,59 @@ describe("XboxClient.titles", () => {
     expect(calls).toHaveLength(2);
   });
 
+  it("reloads a history older than maxAgeMs, and not before", async () => {
+    const clock = { t: 1_000_000 };
+    const { xbox, calls } = client([["titlehub", titlehubOk]], { now: () => clock.t });
+    await xbox.titles();
+    clock.t += 4 * 60_000;
+    expect((await xbox.titles({ maxAgeMs: 5 * 60_000 }))?.length).toBe(4);
+    expect(calls).toHaveLength(1);
+    clock.t += 2 * 60_000;
+    expect((await xbox.titles({ maxAgeMs: 5 * 60_000 }))?.length).toBe(4);
+    expect(calls).toHaveLength(2);
+    // Without a max age the 24 h cache stands.
+    clock.t += 60 * 60_000;
+    await xbox.titles();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("serves the history it has when a reload fails, and does not retry inside the backoff", async () => {
+    const clock = { t: 1_000_000 };
+    let status = 200;
+    const { xbox, calls } = client(
+      [["titlehub", () => (status === 200 ? titlehubOk : { status })]],
+      { now: () => clock.t },
+    );
+    await xbox.titles();
+    status = 500;
+    clock.t += 6 * 60_000;
+    expect((await xbox.titles({ maxAgeMs: 5 * 60_000 }))?.length).toBe(4);
+    expect(calls).toHaveLength(2);
+    clock.t += 2 * 60_000;
+    expect((await xbox.titles({ maxAgeMs: 5 * 60_000 }))?.length).toBe(4);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("rejects with the wait Xbox asked for after a 429 with no history, without calling again until then", async () => {
+    const clock = { t: 1_000_000 };
+    let busy = true;
+    const { xbox, calls } = client(
+      [["titlehub", () => (busy ? { status: 429, headers: { "retry-after": "30" } } : titlehubOk)]],
+      { now: () => clock.t },
+    );
+    await expect(xbox.titles()).rejects.toMatchObject({
+      name: "XboxRateLimitError",
+      retryAfterMs: 30_000,
+    });
+    clock.t += 10_000;
+    await expect(xbox.titles()).rejects.toMatchObject({ retryAfterMs: 20_000 });
+    expect(calls).toHaveLength(1);
+    busy = false;
+    clock.t += 21_000;
+    expect((await xbox.titles())?.length).toBe(4);
+    expect(calls).toHaveLength(2);
+  });
+
   it("returns a copy, so a caller cannot reorder the cache", async () => {
     const { xbox } = client([["titlehub", titlehubOk]]);
     (await xbox.titles())?.reverse();

@@ -175,12 +175,17 @@ being played.
 read-only tools that expose the signed-in account's Xbox data to Claude Code skills (no second
 sign-in): `xbox_titles({query?})` lists the games in the title history, newest played first (at
 most 50), as `<titleId> | <name> | <devices> | last played <ISO> | <current>/<total> G`, with
-`query` keeping the titles whose name contains it (case, punctuation and ™ ® © ignored); and
+`query` keeping the titles whose name contains it (case, punctuation and ™ ® © ignored) and a
+last line `(showing 50 of N; pass a query to narrow)` when more match. The history is reloaded
+when it is over 15 minutes old for a call with no query, and once for a query that matches
+nothing when it is over 5 minutes old, so a game played minutes ago is found.
 `xbox_achievements({titleId})` returns the title's name and Gamerscore, then one line per
 achievement with its id, name, unlock time (or `locked`), rarity, Gamerscore, secret flag,
-progress, description and locked description. Both answer the tool error `Xbox is not
-connected.` unless the sign-in is connected, and neither output carries a token, device code,
-XUID or gamertag. The Ask agent is not given them.
+progress, description and locked description; a `|` inside a name or description becomes `/`.
+A title with Gamerscore but no list answers `Xbox has no achievement list for this title (it may
+be an Xbox 360 game).` Both answer the tool error `Xbox is not connected.` unless the sign-in is
+connected, and `Xbox is busy; try again in N s.` when Xbox Live rate-limits them; neither output
+carries a token, device code, XUID or gamertag. The Ask agent is not given them.
 
 **The panel.** Xbox achievements show their Gamerscore, their rarity, and progress counters
 (`3/10`) where the game has them; the header adds Gamerscore earned out of the total. Secret

@@ -52,6 +52,12 @@ describe("formatTitles", () => {
     expect(formatTitles(infos, "™!")).toBe("No Xbox titles match that query.");
   });
 
+  it("puts no pipe inside a field: a | in a name becomes /", () => {
+    expect(formatTitles([title({ id: "1", name: "Left | Right" })], undefined)).toBe(
+      "1 | Left / Right | XboxSeries | last played unknown | 100/1000 G",
+    );
+  });
+
   it("leaves out apps and non-Xbox-Live programs", () => {
     expect(formatTitles([title({ id: "1", isXboxLive: false })], undefined)).toBe(
       "No Xbox titles found.",
@@ -109,8 +115,40 @@ describe("formatAchievements", () => {
   });
 
   it("explains an empty list (a game never launched on the account)", () => {
-    expect(formatAchievements("5", { achievements: [] }, title({ id: "5", name: "Fresh" }))).toBe(
-      "Fresh: no achievements listed. If the game has never been launched on this account, launch it once and try again.",
+    const fresh = title({ id: "5", name: "Fresh", totalGamerscore: 0, currentGamerscore: 0 });
+    const launchOnce =
+      "Fresh: no achievements listed. If the game has never been launched on this account, launch it once and try again.";
+    expect(formatAchievements("5", { achievements: [] }, fresh)).toBe(launchOnce);
+    const noScore: XboxTitleInfo = { id: "5", name: "Fresh", isXboxLive: true, image: null };
+    expect(formatAchievements("5", { achievements: [] }, noScore)).toBe(launchOnce);
+    expect(formatAchievements("5", { achievements: [] }, null)).toBe(
+      "Xbox title 5: no achievements listed. If the game has never been launched on this account, launch it once and try again.",
     );
+  });
+
+  it("says there is no list when the title has Gamerscore but no achievements are listed", () => {
+    expect(formatAchievements("5", { achievements: [] }, title({ id: "5", name: "Old" }))).toBe(
+      "Xbox has no achievement list for this title (it may be an Xbox 360 game).",
+    );
+  });
+
+  it("puts no pipe inside a field: names and descriptions turn | into /", () => {
+    const piped: XboxAchievementList = {
+      achievements: [
+        {
+          id: "4",
+          name: "Either | Or",
+          description: "Pick A | B.",
+          lockedDescription: "Choose | wisely.",
+          progressState: "NotStarted",
+        },
+      ],
+    };
+    expect(
+      formatAchievements("6", piped, title({ id: "6", name: "Pipe | Dream" })).split("\n"),
+    ).toEqual([
+      "Pipe / Dream | 0/0 G",
+      "4 | Either / Or | locked | ?% | 0 G | not secret | no progress | Pick A / B. | locked: Choose / wisely.",
+    ]);
   });
 });

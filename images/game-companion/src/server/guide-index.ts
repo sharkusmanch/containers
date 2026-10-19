@@ -58,7 +58,7 @@ export function parseHubIdentity(text: string): HubIdentity | null {
     trackedOn: null,
   };
   // A RetroAchievements-only guide has no Steam or Xbox list to track.
-  if (!(identity.ra && !identity.steam)) identity.trackedOn = trackedOn(unix);
+  if (!(identity.ra && !identity.steam && !identity.xbox)) identity.trackedOn = trackedOn(unix);
   return identity.steam || identity.ra || identity.xbox ? identity : null;
 }
 

@@ -104,8 +104,11 @@ export class XboxClient {
   private titleLookup: Promise<LookupOutcome> | null = null;
   /** Every title of the last good history call, with when it goes stale. */
   private history: XboxTitleInfo[] | null = null;
+  private historyLoadedAt = 0;
   private historyExpiresAt = 0;
   private historyFailedUntil = 0;
+  /** Set when the last history call was answered 429: the backoff is then Xbox's own wait. */
+  private historyRateLimited = false;
 
   constructor(opts: XboxClientOptions) {
     this.auth = opts.auth;
@@ -141,17 +144,29 @@ export class XboxClient {
 
   /**
    * Every title in the account's history (one cached call, shared with `titleInfo`), in
-   * titlehub's order. Null when there is no session or the call failed; a failure is not
-   * repeated for five minutes.
+   * titlehub's order. `maxAgeMs` asks for a history loaded no longer ago than that; otherwise
+   * the cached one serves for 24 hours. A failed call is not repeated for five minutes (after a
+   * 429, for as long as Xbox asked), and meanwhile the history already held is served. Null when
+   * there is no session or there is no history to serve; rejects with `XboxRateLimitError`
+   * (carrying the wait left) when that is because Xbox answered 429.
    */
-  async titles(): Promise<XboxTitleInfo[] | null> {
-    if (this.history !== null && this.now() < this.historyExpiresAt) return [...this.history];
-    if (this.now() < this.historyFailedUntil) return null;
-    this.titleLookup ??= this.loadTitleHistory().finally(() => {
-      this.titleLookup = null;
-    });
-    const outcome = await this.titleLookup;
-    return outcome === "ok" && this.history !== null ? [...this.history] : null;
+  async titles(opts: { maxAgeMs?: number } = {}): Promise<XboxTitleInfo[] | null> {
+    const held = (): XboxTitleInfo[] | null =>
+      this.history !== null && this.now() < this.historyExpiresAt ? [...this.history] : null;
+    const cached = held();
+    const young = opts.maxAgeMs === undefined || this.now() - this.historyLoadedAt < opts.maxAgeMs;
+    if (cached !== null && young) return cached;
+    if (this.now() >= this.historyFailedUntil) {
+      this.titleLookup ??= this.loadTitleHistory().finally(() => {
+        this.titleLookup = null;
+      });
+      if ((await this.titleLookup) === "no-session") return null;
+    }
+    const served = held();
+    if (served === null && this.historyRateLimited) {
+      throw new XboxRateLimitError(Math.max(0, this.historyFailedUntil - this.now()));
+    }
+    return served;
   }
 
   /**
@@ -203,10 +218,14 @@ export class XboxClient {
         this.titleCache.set(info.id, { info, expiresAt });
       }
       this.history = infos;
+      this.historyLoadedAt = this.now();
       this.historyExpiresAt = expiresAt;
+      this.historyRateLimited = false;
       return "ok";
-    } catch {
-      this.historyFailedUntil = this.now() + TITLE_FAIL_TTL_MS;
+    } catch (err) {
+      this.historyRateLimited = err instanceof XboxRateLimitError;
+      this.historyFailedUntil =
+        this.now() + (err instanceof XboxRateLimitError ? err.retryAfterMs : TITLE_FAIL_TTL_MS);
       return "failed";
     }
   }

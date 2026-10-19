@@ -17,8 +17,15 @@ import type { PlatformMemory } from "./platform-memory.js";
 import type { AskLimiter } from "./rate-limit.js";
 import type { RouteDeps } from "./routes.js";
 import type { XboxAuth } from "./xbox-auth.js";
-import type { XboxClient } from "./xbox.js";
-import { formatAchievements, formatTitles, NOT_CONNECTED, UNREACHABLE } from "./xbox-tools.js";
+import { XboxRateLimitError, type XboxClient } from "./xbox.js";
+import {
+  busy,
+  formatAchievements,
+  formatTitles,
+  NO_MATCH,
+  NOT_CONNECTED,
+  UNREACHABLE,
+} from "./xbox-tools.js";
 
 type GameRef = NonNullable<AskRequest["game"]>;
 
@@ -64,6 +71,10 @@ const UNLOADED = "The guide could not be loaded right now.";
 
 const NO_CURRENT_GUIDE = "No guide for the current game. Call list_guides and pass hub.";
 const NO_GAME = "No game is detected right now. Call list_guides and pass hub.";
+/** How old a title history may be for xbox_titles with no query. */
+const TITLES_LIST_MAX_AGE_MS = 15 * 60_000;
+/** A query that matches nothing reloads a history older than this (a game just played). */
+const TITLES_RELOAD_AFTER_MS = 5 * 60_000;
 const unknownGuide = (hubId: string): ToolResult => ({
   text: `Unknown guide "${hubId}". Call list_guides for the guide ids.`,
   isError: true,
@@ -268,7 +279,8 @@ export function buildDeps(parts: AppParts): RouteDeps {
     }
     try {
       return await run(client);
-    } catch {
+    } catch (err) {
+      if (err instanceof XboxRateLimitError) return { text: busy(err.retryAfterMs), isError: true };
       return { text: UNREACHABLE, isError: true };
     }
   };
@@ -308,10 +320,15 @@ export function buildDeps(parts: AppParts): RouteDeps {
       }),
     xboxTitles: (query) =>
       withXbox(async (client) => {
-        const titles = await client.titles();
-        return titles === null
-          ? { text: UNREACHABLE, isError: true }
-          : { text: formatTitles(titles, query) };
+        const titles = await client.titles(
+          query === undefined ? { maxAgeMs: TITLES_LIST_MAX_AGE_MS } : {},
+        );
+        if (titles === null) return { text: UNREACHABLE, isError: true };
+        const text = formatTitles(titles, query);
+        if (text !== NO_MATCH) return { text };
+        // Maybe a game played since the history was loaded: reload it once if it is not new.
+        const fresher = await client.titles({ maxAgeMs: TITLES_RELOAD_AFTER_MS });
+        return { text: fresher === null ? text : formatTitles(fresher, query) };
       }),
     xboxAchievements: (titleId) =>
       withXbox(async (client) => {

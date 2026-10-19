@@ -4,12 +4,19 @@ import { normaliseXbox, type XboxAchievementList, type XboxTitleInfo } from "./x
 /** What both Xbox tools answer when the sign-in is not working. */
 export const NOT_CONNECTED = "Xbox is not connected.";
 export const UNREACHABLE = "Xbox could not be reached right now. Try again shortly.";
+/** Xbox has no achievement list for a title it scores (often an Xbox 360 game). */
+export const NO_LIST = "Xbox has no achievement list for this title (it may be an Xbox 360 game).";
+export const NO_MATCH = "No Xbox titles match that query.";
+
+/** What both tools answer when Xbox answered 429: the wait in whole seconds, at least 1. */
+export const busy = (retryAfterMs: number): string =>
+  `Xbox is busy; try again in ${Math.max(1, Math.ceil(retryAfterMs / 1000))} s.`;
 
 /** Longest title list returned. */
 export const TITLES_MAX = 50;
 
-/** Text for one line: runs of whitespace (newlines included) become single spaces. */
-const oneLine = (s: string): string => s.replace(/\s+/g, " ").trim();
+/** Text for one field of a line: whitespace runs (newlines included) become one space, `|` a `/`. */
+const oneLine = (s: string): string => s.replace(/\s+/g, " ").replace(/\|/g, "/").trim();
 
 const byNewest = (a: XboxTitleInfo, b: XboxTitleInfo): number =>
   (b.lastPlayed ?? "").localeCompare(a.lastPlayed ?? "");
@@ -27,7 +34,7 @@ export function formatTitles(infos: readonly XboxTitleInfo[], query: string | un
     .filter((t) => wanted === null || (wanted !== "" && normaliseTitle(t.name).includes(wanted)))
     .sort(byNewest);
   if (games.length === 0) {
-    return query === undefined ? "No Xbox titles found." : "No Xbox titles match that query.";
+    return query === undefined ? "No Xbox titles found." : NO_MATCH;
   }
   const lines = games.slice(0, TITLES_MAX).map((t) => {
     const devices = t.devices && t.devices.length > 0 ? t.devices.join(", ") : "unknown devices";
@@ -71,6 +78,7 @@ export function formatAchievements(
 ): string {
   const title = oneLine(info?.name ?? "") || `Xbox title ${titleId}`;
   const shown = normaliseXbox(titleId, title, list, info);
+  if (shown.noList) return NO_LIST;
   if (shown.achievements.length === 0) {
     return `${title}: no achievements listed. If the game has never been launched on this account, launch it once and try again.`;
   }
