@@ -10,6 +10,7 @@ import type {
   HubTreeResponse,
   NowResponse,
   Source,
+  XboxAuthStatus,
 } from "../shared/types.js";
 
 export const REQUEST_TIMEOUT_MS = 8000;
@@ -18,6 +19,10 @@ export const REQUEST_TIMEOUT_MS = 8000;
  * racing a refresh can get one 401, so only a second one in a row means the sign-in has lapsed.
  */
 export const AUTH_RETRY_MS = 2000;
+/** An Xbox sign-in action waits on Microsoft, which the server allows 10 seconds. */
+export const XBOX_ACTION_TIMEOUT_MS = 15_000;
+
+export type XboxAction = "connect" | "cancel" | "disconnect";
 
 export class ApiError extends Error {
   constructor(
@@ -46,6 +51,13 @@ export interface Api {
   where(hubId: string): Promise<GuideWhereResponse | null>;
   /** Null when the guide is unknown (404). `refresh` asks the server for a fresh read. */
   progress(hubId: string, refresh?: boolean): Promise<GuideProgressResponse | null>;
+  /** The Xbox sign-in; state "off" when the server has no Xbox. */
+  xbox(): Promise<XboxAuthStatus>;
+  /**
+   * Starts, cancels or ends the Xbox sign-in and answers the new status. Each action is safe to
+   * repeat, so a 401 is retried once like a GET.
+   */
+  xboxAction(action: XboxAction): Promise<XboxAuthStatus>;
   /**
    * Asks the assistant and hands each streamed event to `onEvent`; resolves when the stream ends.
    * Only `signal` cuts it short: an answer may take a while. A refused question is never re-sent:
@@ -123,6 +135,24 @@ export function createApi(
     return (await res.json()) as T;
   }
 
+  async function xboxAction(action: XboxAction): Promise<XboxAuthStatus> {
+    const postOnce = (): Promise<Response> =>
+      fetchFn(`${base}/xbox/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: "{}",
+        signal: AbortSignal.timeout(XBOX_ACTION_TIMEOUT_MS),
+      });
+    let res = await postOnce();
+    if (res.status === 401) {
+      await wait(AUTH_RETRY_MS);
+      res = await postOnce();
+    }
+    noteAuth(res);
+    if (!res.ok) throw new ApiError(res.status);
+    return (await res.json()) as XboxAuthStatus;
+  }
+
   async function getJsonOrNull<T>(path: string): Promise<T | null> {
     const res = await get(path);
     if (res.status === 404) return null;
@@ -168,6 +198,8 @@ export function createApi(
     ask,
     onAuth: (listener) => void authListeners.push(listener),
     now: () => getJson<NowResponse>("now"),
+    xbox: () => getJson<XboxAuthStatus>("xbox"),
+    xboxAction,
     guides: (refresh = false) => getJson<GuidesResponse>(refresh ? "guides?refresh=1" : "guides"),
     hubTree: (hubId) => getJson<HubTreeResponse>(`guides/${encodeURIComponent(hubId)}`),
     achievements: (source, id) =>

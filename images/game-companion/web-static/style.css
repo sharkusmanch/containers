@@ -148,6 +148,18 @@ button {
   line-height: 28px;
 }
 
+/* The Xbox device of the game being played, beside its title. */
+.game-device {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
 .game-note {
   flex: 0 0 auto;
   min-width: 0;
@@ -365,6 +377,34 @@ button {
   color: var(--warn);
 }
 
+/* The Steam / Xbox switch above a guide's achievements: two halves of one control. */
+.ach-platforms {
+  display: flex;
+  padding: 8px 12px 0;
+}
+
+.ach-platform {
+  flex: 1 1 0;
+  min-height: 44px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+
+.ach-platform:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.ach-platform:last-child {
+  border-left: none;
+  border-radius: 0 6px 6px 0;
+}
+
+.ach-platform[aria-pressed="true"] {
+  background: var(--bg-active);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 .ach-sort {
   display: flex;
   align-items: stretch;
@@ -477,7 +517,8 @@ button {
   grid-template-areas:
     "icon name kind pct"
     "icon desc desc pct"
-    "icon missable missable pct";
+    "icon missable missable pct"
+    "icon progress gs pct";
   column-gap: 8px;
   align-items: center;
   width: 100%;
@@ -543,6 +584,24 @@ button {
 
 .ach-kind-win {
   border-color: var(--accent);
+}
+
+/* Xbox only: a counter such as 3/10, and the Gamerscore under the name line's chip. */
+.ach-progress {
+  grid-area: progress;
+  justify-self: start;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
+.ach-gs {
+  grid-area: gs;
+  justify-self: end;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-dim);
 }
 
 .ach-pct {
@@ -916,6 +975,39 @@ button {
   padding: 16px 12px;
   font-size: 13px;
   color: var(--text-dim);
+}
+
+.setting-xbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-xbox-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.setting-xbox-code {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.05em;
+}
+
+.setting-xbox-link {
+  color: var(--accent);
+}
+
+.picker-settings .setting-xbox-action {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
 .setting-layout-readout {

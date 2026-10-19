@@ -757,6 +757,13 @@ describe("POST /companion/api/ask", () => {
     expect(sent.hubId).toBeNull();
   });
 
+  it("accepts an Xbox game like a Steam or RetroAchievements one", async () => {
+    const r = await post({ ...valid, hubId: null, game: { source: "xbox", id: "1000000001" } });
+    expect(r.status).toBe(200);
+    const sent = startArgs[0]?.[0] as Record<string, unknown>;
+    expect(sent.game).toEqual({ source: "xbox", id: "1000000001" });
+  });
+
   it("passes the trimmed question and the parsed fields to start, and nothing else", async () => {
     const r = await post({ ...valid, question: "  What next?\n" }, { cookie: "session=secret" });
     expect(r.status).toBe(200);
@@ -876,5 +883,227 @@ describe("POST /companion/api/ask", () => {
     // One interval armed at the start and one after each of the three events, all cleared.
     expect(timers.map((t) => t.ms)).toEqual([15000, 15000, 15000, 15000]);
     expect(pending()).toEqual([]);
+  });
+});
+
+describe("xbox routes", () => {
+  const ORIGIN = "https://wiki.example.test";
+  // Invented secrets the fake carries next to its status: none may reach a response.
+  const FAKE_TOKEN = "fake-refresh-token-0000";
+  const FAKE_DEVICE_CODE = "fake-device-code-1111";
+  type Xbox = NonNullable<RouteDeps["xbox"]>;
+  type Status = ReturnType<Xbox["status"]>;
+  const status = (over: Partial<Status>): Status =>
+    ({
+      state: "disconnected",
+      gamertag: null,
+      userCode: null,
+      verificationUri: null,
+      expiresAt: null,
+      lostSince: null,
+      // Extra fields a careless dependency might carry.
+      refreshToken: FAKE_TOKEN,
+      deviceCode: FAKE_DEVICE_CODE,
+      ...over,
+    }) as Status;
+
+  let s: Server;
+  let root: string;
+  let xbox: Xbox | null;
+  let calls: string[];
+  let connectFails: boolean;
+  let achievementCalls: string[];
+
+  beforeAll(async () => {
+    const deps: RouteDeps = {
+      ask: null,
+      staticDir: "/nonexistent",
+      now: () => now,
+      guides: () => ({ available: false, hubs: [] }),
+      hubTree: () => null,
+      refreshGuides: () => {},
+      achievements: async (source, id) => {
+        achievementCalls.push(`${source}:${id}`);
+        return source === "xbox" && id === "1000000001"
+          ? { ...ach, source: "xbox", id, gamerscore: { current: 10, total: 100 } }
+          : null;
+      },
+      find: async () => null,
+      marks: async () => null,
+      where: async () => null,
+      progress: async () => null,
+      get xbox() {
+        return xbox;
+      },
+    };
+    s = createServer((req, res) => void createHandler(deps)(req, res));
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+    root = `http://127.0.0.1:${(s.address() as AddressInfo).port}/companion/api`;
+  });
+  afterAll(() => new Promise<void>((r) => s.close(() => r())));
+
+  beforeEach(() => {
+    calls = [];
+    connectFails = false;
+    achievementCalls = [];
+    xbox = {
+      origin: ORIGIN,
+      status: () => {
+        calls.push("status");
+        return status({ state: "disconnected" });
+      },
+      connect: async () => {
+        calls.push("connect");
+        if (connectFails) throw new Error(`upstream said ${FAKE_DEVICE_CODE}`);
+        return status({
+          state: "connecting",
+          userCode: "ABCD-EFGH",
+          verificationUri: "https://www.microsoft.com/link",
+          expiresAt: "2026-10-18T12:15:00.000Z",
+        });
+      },
+      cancel: () => {
+        calls.push("cancel");
+        return status({ state: "disconnected" });
+      },
+      disconnect: async () => {
+        calls.push("disconnect");
+        return status({ state: "disconnected" });
+      },
+    };
+  });
+
+  const post = (action: string, headers: Record<string, string> = {}, body = "{}") =>
+    fetch(`${root}/xbox/${action}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: ORIGIN, ...headers },
+      body,
+    });
+
+  it("xbox status off without client id", async () => {
+    xbox = null;
+    const r = await fetch(`${root}/xbox`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("cache-control")).toBe("no-store");
+    expect(await r.json()).toEqual({
+      state: "off",
+      gamertag: null,
+      userCode: null,
+      verificationUri: null,
+      expiresAt: null,
+      lostSince: null,
+    });
+    // Off means no other Xbox endpoint at all, whatever the method.
+    for (const action of ["connect", "cancel", "disconnect"]) {
+      expect((await post(action)).status).toBe(404);
+      expect((await fetch(`${root}/xbox/${action}`)).status).toBe(404);
+    }
+  });
+
+  it("reports the status, with only the fields the browser may see", async () => {
+    xbox = {
+      ...(xbox as Xbox),
+      status: () => status({ state: "connected", gamertag: "SampleTag" }),
+    };
+    const r = await fetch(`${root}/xbox`);
+    const text = await r.text();
+    expect(JSON.parse(text)).toEqual({
+      state: "connected",
+      gamertag: "SampleTag",
+      userCode: null,
+      verificationUri: null,
+      expiresAt: null,
+      lostSince: null,
+    });
+    expect(text).not.toContain(FAKE_TOKEN);
+    expect(text).not.toContain(FAKE_DEVICE_CODE);
+    const head = await fetch(`${root}/xbox`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(await head.text()).toBe("");
+  });
+
+  it("connect requires origin and JSON", async () => {
+    for (const type of ["text/plain", "application/x-www-form-urlencoded"]) {
+      expect((await post("connect", { "content-type": type })).status).toBe(415);
+    }
+    expect((await post("connect", { origin: "https://evil.example.test" })).status).toBe(403);
+    expect((await post("connect", { origin: `${ORIGIN}/` })).status).toBe(403);
+    const noOrigin = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest(
+        `${root}/xbox/connect`,
+        { method: "POST", headers: { "content-type": "application/json" } },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on("error", reject);
+      req.end("{}");
+    });
+    expect(noOrigin).toBe(403);
+    for (const body of ["{not json", "[]", "null", '"x"']) {
+      expect((await post("connect", {}, body)).status, body).toBe(400);
+    }
+    expect((await post("connect", {}, `{"pad":"${"x".repeat(2000)}"}`)).status).toBe(413);
+    for (const method of ["GET", "PUT", "DELETE"]) {
+      const r = await fetch(`${root}/xbox/connect`, { method });
+      expect(r.status).toBe(405);
+      expect(r.headers.get("allow")).toBe("POST");
+    }
+    expect(calls.filter((c) => c !== "status")).toEqual([]);
+    expect(
+      (await post("connect", { "content-type": "application/json; charset=utf-8" })).status,
+    ).toBe(200);
+    expect(calls).toContain("connect");
+  });
+
+  it("connect/cancel/disconnect return status only", async () => {
+    const seen: Record<string, unknown> = {};
+    for (const action of ["connect", "cancel", "disconnect"]) {
+      const r = await post(action);
+      expect(r.status, action).toBe(200);
+      expect(r.headers.get("cache-control")).toBe("no-store");
+      const text = await r.text();
+      expect(text).not.toContain(FAKE_TOKEN);
+      expect(text).not.toContain(FAKE_DEVICE_CODE);
+      const body = JSON.parse(text) as Record<string, unknown>;
+      expect(Object.keys(body).sort()).toEqual([
+        "expiresAt",
+        "gamertag",
+        "lostSince",
+        "state",
+        "userCode",
+        "verificationUri",
+      ]);
+      seen[action] = body.state;
+    }
+    expect(seen).toEqual({
+      connect: "connecting",
+      cancel: "disconnected",
+      disconnect: "disconnected",
+    });
+    expect(calls).toEqual(["connect", "cancel", "disconnect"]);
+  });
+
+  it("answers a connect Microsoft refused with a fixed 502, and an unknown action with 404", async () => {
+    connectFails = true;
+    const r = await post("connect");
+    expect(r.status).toBe(502);
+    expect(await r.text()).not.toContain(FAKE_DEVICE_CODE);
+    expect((await post("restart")).status).toBe(404);
+    expect((await post("connect/extra")).status).toBe(404);
+  });
+
+  it("xbox achievements route", async () => {
+    const r = await fetch(`${root}/achievements/xbox/1000000001`);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({
+      source: "xbox",
+      gamerscore: { current: 10, total: 100 },
+    });
+    expect((await fetch(`${root}/achievements/xbox/1000000002`)).status).toBe(404);
+    expect((await fetch(`${root}/achievements/xbox/12345678901`)).status).toBe(400);
+    expect((await fetch(`${root}/achievements/xbox/0x1F`)).status).toBe(400);
+    expect(achievementCalls).toEqual(["xbox:1000000001", "xbox:1000000002"]);
   });
 });

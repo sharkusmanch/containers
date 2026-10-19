@@ -162,6 +162,26 @@ export interface GuideProgressResponse {
   pages: PageProgress[];
 }
 
+export type XboxAuthState = "off" | "disconnected" | "connecting" | "connected" | "lost";
+
+/**
+ * The Xbox sign-in as the browser may see it, from `/api/xbox`: never a token or device code.
+ * "off" when the server has no Xbox client ID.
+ */
+export interface XboxAuthStatus {
+  state: XboxAuthState;
+  /** Connected and lost only. */
+  gamertag: string | null;
+  /** Connecting only: the code to enter at `verificationUri`. */
+  userCode: string | null;
+  /** Connecting only. */
+  verificationUri: string | null;
+  /** Connecting only, ISO. */
+  expiresAt: string | null;
+  /** Lost only, ISO. */
+  lostSince: string | null;
+}
+
 export interface ErrorResponse {
   error: string;
 }

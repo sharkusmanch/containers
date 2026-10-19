@@ -67,7 +67,8 @@ front of it, which redirects the page to sign in and answers an expired API requ
 When an API request gets a 401, the page shows **Signed out — tap to sign in** across the top
 and stops polling; a tap reloads the page, which goes through the sign-in again. Every endpoint
 is read-only except `POST /companion/api/ask`, which runs a question on the agent (see **Ask
-assistant**), and `POST /companion/mcp`, which only the agent may reach. Put it only where
+assistant**), `POST /companion/api/xbox/<action>`, which starts or ends the Xbox sign-in (see
+**Xbox**), and `POST /companion/mcp`, which only the agent may reach. Put it only where
 everyone who can reach it may see what is being played, achievement progress, checklist counts
 and the text of the guide pages: the guide search returns headings and matching lines from
 them, although Outline itself requires a sign-in. The page's Content-Security-Policy allows
@@ -95,6 +96,8 @@ nothing but an address typed on that device is ever framed.
 | `ASSISTANT_PER_MINUTE`     | No       | Questions admitted per rolling minute, all callers together (default `10`)                                                                                                                 |
 | `ASSISTANT_PER_DAY`        | No       | Questions admitted per calendar day in `TZ` (default `150`)                                                                                                                                |
 | `COMPANION_MCP_TOKEN`      | No       | Bearer token for `POST /companion/mcp`, the guide and status tools the agent calls. Without it that endpoint answers 404                                                                   |
+| `XBOX_CLIENT_ID`           | No       | Application (client) ID of your own Microsoft Entra app for Xbox Live (see **Xbox**). Without it Xbox is off                                                                               |
+| `XBOX_STATE_DIR`           | No       | Writable directory for the Xbox sign-in and each guide's last platform (default `/data`); keep it on a persistent volume                                                                   |
 | `PORT`                     | No       | Listening port (default `8080`)                                                                                                                                                            |
 | `STATIC_DIR`               | No       | Directory of the built front end (default `/app/dist/web`)                                                                                                                                 |
 
@@ -115,8 +118,61 @@ The Outline key needs only these scopes:
 | `GET /companion/api/guides/<hubId>/where`       | Guide headings that match the status line of the game being played          |
 | `GET /companion/api/guides/<hubId>/progress`    | Ticked and total checkboxes per page (`?refresh=1` re-reads the wiki)       |
 | `GET /companion/api/achievements/<source>/<id>` | Achievements for a game that has a guide or is being played                 |
+| `GET /companion/api/xbox`                       | The Xbox sign-in: state, and the code, gamertag or expiry that goes with it |
+| `POST /companion/api/xbox/<action>`             | `connect`, `cancel` or `disconnect` the Xbox sign-in; answers the new state |
 | `POST /companion/api/ask`                       | Streams an answer to a question about a game (newline-delimited JSON)       |
 | `POST /companion/mcp`                           | MCP tools for the agent: game status and the player's guides (bearer token) |
+
+## Xbox
+
+Xbox Live is a second source after Steam: games started from the Xbox app on a PC or handheld
+(Game Pass included) and everything on an Xbox console. When Steam reports no game, the game
+Xbox reports gets the same guide pages, achievements panel, Missable, Find in guide and Ask as
+a Steam game. The detection order is Steam (a game with an app ID), then Xbox, then a fresh
+RetroAchievements game, then a Steam non-Steam shortcut, then the last game seen. Only genuine
+Xbox Live games count: a program the Xbox app happens to report (a Steam game, an emulator, a
+launcher) never hides a RetroAchievements game.
+
+**Setting up.** Register an app in Microsoft Entra under your own account ("Personal Microsoft
+accounts only", public client flows allowed, no secret, no redirect URI) and set its client ID
+as `XBOX_CLIENT_ID`. Then open ⋯ › Display › Xbox and tap **Connect**: the row shows a code to
+enter at `microsoft.com/link` (the link opens in a new tab; the code lasts 15 minutes and
+**Cancel** drops it). The row reads "Xbox: connected as <gamertag>" once you have signed in, and
+**Disconnect** deletes the stored sign-in. "Xbox: connect again" means Microsoft no longer
+accepts it (revoked, expired or refused); **Connect** signs in again. Steam and
+RetroAchievements keep working throughout. Starting, cancelling or ending a sign-in takes the
+Ask route's checks (`Content-Type: application/json`, `Origin` of `OUTLINE_BASE_URL`, a JSON
+object body); without `XBOX_CLIENT_ID` those routes answer 404 and `GET /api/xbox` reports
+`off`.
+
+**What is read.** Read only, for the signed-in account: its presence (the game being played,
+on which device, and the game's status line when it sets one) every 30 seconds while connected;
+its title history, once a day per game, to tell an Xbox Live game from a plain PC program; and
+the achievements of the game on screen. Nothing is ever written to Xbox Live. The sign-in is a
+refresh token in `XBOX_STATE_DIR/xbox-token.json` (mode 0600, replaced atomically each time
+Microsoft rotates it); no token or device code ever reaches the page, a log line or the
+assistant. The page sees only the sign-in state, the code and link to enter it, its expiry and
+the gamertag.
+
+**Guides.** One guide serves a game on both Steam and Xbox. A guide is linked to an Xbox game by
+an `Xbox Title ID` row, or else by its title matching the game's name (case, punctuation and ™ ®
+© ignored); a guide with only an `RA Game ID` row never matches by name, and two guides with the
+same name link to neither. The guide remembers which platform its game was last detected on (in
+`XBOX_STATE_DIR/platforms.json`), and the achievements panel shows that platform when the game
+is not being played. When a guide knows both a Steam and an Xbox ID, a **Steam / Xbox** switch
+above its achievements picks the other one; the choice is kept per device. The game list labels
+each guide "Steam", "Xbox" or "Steam + Xbox", and the device ("Series X", "PC") shows beside the
+title while an Xbox game is being played.
+
+**The panel.** Xbox achievements show their Gamerscore, their rarity, and progress counters
+(`3/10`) where the game has them; the header adds Gamerscore earned out of the total. Secret
+achievements stay hidden until tapped, like Steam's. A game with Gamerscore but no list from
+Xbox Live (Xbox 360 back-compat titles) shows "No Xbox achievements list for this game yet."
+
+**Limits.** One Xbox account. A game shows up about a minute after it starts. Xbox 360 back-compat
+achievement lists, friends and Xbox Cloud Gaming are not covered. A rate-limited or failing
+Xbox Live backs off (honouring `Retry-After`) and leaves Steam and RetroAchievements detection as
+it was.
 
 ## Ask assistant
 
@@ -184,7 +240,9 @@ The service finds a game's guide by reading the guide documents themselves. It e
   each with its own sub-pages.
 - A table row in each guide naming the game: `| Steam App ID | 1234 |` or
   `| RA Game ID | 5678 |` (the label may be bold; the number may be a link to the store or
-  RetroAchievements page). A guide with neither row can still be opened by hand.
+  RetroAchievements page). A guide with neither row can still be opened by hand. A guide may
+  also carry `| Xbox Title ID | 1234567890 |` to link it to the Xbox game explicitly (see
+  **Xbox**).
 - Checkbox lines (`- [ ]` / `- [x]`) are what the sidebar counts. Headings are what the status
   line is matched against, so sections named for places or chapters work best.
 - Optionally, a `⚠` on a checklist line (`- [ ] **Name** ⚠ …`) to mark that achievement as

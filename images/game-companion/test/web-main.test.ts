@@ -17,6 +17,7 @@ import type {
   AskRequest,
   NowResponse,
   WhereMatch,
+  XboxAuthStatus,
 } from "../src/shared/types.js";
 
 // Records every call to frames.locate (and still runs it), so tests can pin the exact arguments.
@@ -121,7 +122,21 @@ interface Fake extends Api {
   progressValue: GuideProgressResponse | null;
   failNow: boolean;
   askCalls: AskRequest[];
+  xboxValue: XboxAuthStatus;
+  /** What an Xbox action answers; the current status when null. */
+  xboxActionValue: XboxAuthStatus | null;
+  xboxCalls: string[];
 }
+
+const xboxStatus = (over: Partial<XboxAuthStatus> = {}): XboxAuthStatus => ({
+  state: "off",
+  gamertag: null,
+  userCode: null,
+  verificationUri: null,
+  expiresAt: null,
+  lostSince: null,
+  ...over,
+});
 
 function fakeApi(nowValue: NowResponse): Fake {
   const f: Fake = {
@@ -135,6 +150,17 @@ function fakeApi(nowValue: NowResponse): Fake {
     progressValue: { pages: [] },
     failNow: false,
     askCalls: [],
+    xboxValue: xboxStatus(),
+    xboxActionValue: null,
+    xboxCalls: [],
+    xbox: async () => {
+      f.xboxCalls.push("status");
+      return f.xboxValue;
+    },
+    xboxAction: async (action) => {
+      f.xboxCalls.push(action);
+      return f.xboxActionValue ?? f.xboxValue;
+    },
     ask: async (req) => {
       f.askCalls.push(req);
     },
@@ -469,8 +495,11 @@ describe("startApp", () => {
       await app.ready;
       expect([...document.querySelectorAll(".topbar > *")].map((e) => e.className)).toEqual([
         "game-title",
+        "game-device",
         "game-note",
       ]);
+      // The device tag sits beside the title, empty and hidden until an Xbox game reports one.
+      expect(($(".game-device") as HTMLElement).hidden).toBe(true);
       const row = $(".presence-row") as HTMLElement;
       expect(row.previousElementSibling).toBe($(".topbar"));
       expect(row.nextElementSibling).toBe($(".switch-banner"));
@@ -5978,5 +6007,289 @@ describe("ask how", () => {
     expect(left()).toBe(before);
     expect(askRail().classList.contains("active")).toBe(true);
     expect(api.askCalls).toHaveLength(1);
+  });
+});
+
+describe("xbox", () => {
+  const hubX: GuideHub = {
+    hubId: "hX",
+    title: "Sample Wars",
+    url: "/doc/wars",
+    source: "steam",
+    gameId: "10",
+    xboxTitleId: "1000000001",
+    platforms: ["steam", "xbox"],
+    lastPlatform: null,
+    platformLabel: "Steam + Xbox",
+    nowPlaying: false,
+  };
+  const xboxGame = { source: "xbox" as const, id: "1000000001", title: "Sample Wars" };
+  const steamGame = { source: "steam" as const, id: "10", title: "Sample Wars" };
+  const nowOf = (
+    hub: GuideHub,
+    game: NowResponse["game"],
+    state: NowResponse["state"],
+    device: string | null = null,
+  ): NowResponse => ({
+    game,
+    state,
+    stale: false,
+    observedAt: "2026-10-18T18:00:00.000Z",
+    presence: null,
+    device,
+    hubs: [hub],
+    assistant: false,
+  });
+  const start = async (now: NowResponse, storage = memory(), tm = timers()) => {
+    const api = fakeApi(now);
+    api.hubTree = async (id) => tree(id === hubX.hubId ? hubX : id === "hA" ? hubA : hubZ);
+    const app = startApp({
+      doc: document,
+      api,
+      storage,
+      setInterval: noTimers,
+      setTimeout: tm.set,
+    });
+    await app.ready;
+    return { api, app, storage, tm };
+  };
+  const switchButtons = () => [
+    ...document.querySelectorAll<HTMLButtonElement>(".ach-platforms button"),
+  ];
+  const switchShown = () => !($(".ach-platforms")?.hidden ?? true);
+  const pressed = () =>
+    switchButtons()
+      .filter((b) => b.getAttribute("aria-pressed") === "true")
+      .map((b) => b.textContent);
+  const openDisplay = (): void => {
+    railButtons().at(-1)?.click();
+    ($('[data-tab="settings"]') as HTMLElement).click();
+  };
+  const xboxRow = () => $(".picker-settings .setting-xbox") as HTMLElement;
+
+  describe("achievement source order", () => {
+    it("shows the guide's own row when nothing else is known", async () => {
+      const { api } = await start(nowOf(hubX, steamGame, "last-played"));
+      expect(api.achCalls).toEqual(["steam:10"]);
+    });
+
+    it("prefers the platform the guide was last detected on to its row", async () => {
+      const { api } = await start(
+        nowOf({ ...hubX, lastPlatform: "xbox" }, steamGame, "last-played"),
+      );
+      expect(api.achCalls).toEqual(["xbox:1000000001"]);
+    });
+
+    it("prefers this device's choice to the last platform", async () => {
+      const storage = memory();
+      storage.setItem("game-companion:v1:platform:hX", "xbox");
+      const { api } = await start(
+        nowOf({ ...hubX, lastPlatform: "steam" }, steamGame, "last-played"),
+        storage,
+      );
+      expect(api.achCalls).toEqual(["xbox:1000000001"]);
+    });
+
+    it("prefers the game being played to everything, and hides the switch meanwhile", async () => {
+      const storage = memory();
+      storage.setItem("game-companion:v1:platform:hX", "steam");
+      const { api, app } = await start(
+        nowOf({ ...hubX, lastPlatform: "steam" }, xboxGame, "playing"),
+        storage,
+      );
+      expect(api.achCalls).toEqual(["xbox:1000000001"]);
+      expect(switchShown()).toBe(false);
+      // Once it stops, the device's choice is shown again, and the switch comes back.
+      api.nowValue = nowOf({ ...hubX, lastPlatform: "xbox" }, xboxGame, "last-played");
+      await app.tick();
+      expect(api.achCalls).toEqual(["xbox:1000000001", "steam:10"]);
+      expect(switchShown()).toBe(true);
+      expect(pressed()).toEqual(["Steam"]);
+    });
+  });
+
+  it("switch shows only with both platforms and persists per device", async () => {
+    const storage = memory();
+    const { api, app } = await start(
+      nowOf({ ...hubX, lastPlatform: "xbox" }, steamGame, "last-played"),
+      storage,
+    );
+    expect(switchShown()).toBe(true);
+    expect(switchButtons().map((b) => b.textContent)).toEqual(["Steam", "Xbox"]);
+    expect(pressed()).toEqual(["Xbox"]);
+    switchButtons()[0]?.click();
+    await app.tick();
+    expect(api.achCalls).toEqual(["xbox:1000000001", "steam:10"]);
+    expect(pressed()).toEqual(["Steam"]);
+    expect(storage.getItem("game-companion:v1:platform:hX")).toBe("steam");
+
+    // The same device starts on its choice.
+    document.body.innerHTML = '<main id="app"></main>';
+    const again = await start(
+      nowOf({ ...hubX, lastPlatform: "xbox" }, steamGame, "last-played"),
+      storage,
+    );
+    expect(again.api.achCalls).toEqual(["steam:10"]);
+    expect(pressed()).toEqual(["Steam"]);
+
+    // A guide known on one platform has no switch.
+    document.body.innerHTML = '<main id="app"></main>';
+    await start(playing(hubZ));
+    expect(switchShown()).toBe(false);
+  });
+
+  it("does not announce the other platform's unlocks as new after a switch", async () => {
+    const storage = memory();
+    const tm = timers();
+    const { api, app } = await start(
+      nowOf({ ...hubX, lastPlatform: "xbox" }, steamGame, "last-played"),
+      storage,
+      tm,
+    );
+    api.achievements = async (source, id) => {
+      api.achCalls.push(`${source}:${id}`);
+      return { ...ach(id, 1), source, achievements: [mk(`${source}-1`, `${source} one`, true)] };
+    };
+    switchButtons()[0]?.click();
+    await app.tick();
+    expect(api.achCalls.at(-1)).toBe("steam:10");
+    expect(($(".toast") as HTMLElement).hidden).toBe(true);
+  });
+
+  it("device tag shows only while playing", async () => {
+    const { api, app } = await start(nowOf(hubX, xboxGame, "playing", "Series X"));
+    const tag = () => $(".game-device") as HTMLElement;
+    expect(tag().hidden).toBe(false);
+    expect(tag().textContent).toBe("Series X");
+    api.nowValue = nowOf(hubX, xboxGame, "last-played", null);
+    await app.tick();
+    expect(tag().hidden).toBe(true);
+    expect(tag().textContent).toBe("");
+  });
+
+  it("Display row states: hidden while Xbox is off, shown from the server's status", async () => {
+    await start(playing(hubZ));
+    openDisplay();
+    expect(xboxRow().hidden).toBe(true);
+
+    document.body.innerHTML = '<main id="app"></main>';
+    const api = fakeApi(playing(hubZ));
+    api.xboxValue = xboxStatus({ state: "connected", gamertag: "SampleTag" });
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    openDisplay();
+    expect(xboxRow().hidden).toBe(false);
+    expect(xboxRow().querySelector(".setting-xbox-text")?.textContent).toBe(
+      "Xbox: connected as SampleTag",
+    );
+  });
+
+  it("connect polls until connected then stops", async () => {
+    const tm = timers();
+    const api = fakeApi(playing(hubZ));
+    api.xboxValue = xboxStatus({ state: "disconnected" });
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: tm.set,
+    });
+    await app.ready;
+    openDisplay();
+    await flush();
+    const polls = () => tm.calls.filter((c) => c.ms === 3000);
+    expect(xboxRow().querySelector(".setting-xbox-text")?.textContent).toBe("Xbox: not connected");
+    expect(polls()).toHaveLength(0);
+
+    const connecting = xboxStatus({
+      state: "connecting",
+      userCode: "ABCD-EFGH",
+      verificationUri: "https://www.microsoft.com/link",
+      expiresAt: "2026-10-18T18:15:00.000Z",
+    });
+    api.xboxActionValue = connecting;
+    api.xboxValue = connecting;
+    ($(".setting-xbox-action") as HTMLElement).click();
+    await flush();
+    expect(api.xboxCalls.filter((c) => c !== "status")).toEqual(["connect"]);
+    expect(xboxRow().querySelector(".setting-xbox-text")?.textContent).toBe(
+      "Enter ABCD-EFGH at microsoft.com/link",
+    );
+    expect(polls()).toHaveLength(1);
+
+    const before = api.xboxCalls.length;
+    polls()[0]?.fn();
+    await flush();
+    expect(api.xboxCalls.slice(before)).toEqual(["status"]);
+    expect(polls()).toHaveLength(2);
+
+    api.xboxValue = xboxStatus({ state: "connected", gamertag: "SampleTag" });
+    polls()[1]?.fn();
+    await flush();
+    expect(xboxRow().querySelector(".setting-xbox-text")?.textContent).toBe(
+      "Xbox: connected as SampleTag",
+    );
+    expect(polls()).toHaveLength(2);
+  });
+
+  it("never lets a status read on its way override an action's answer", async () => {
+    const tm = timers();
+    const api = fakeApi(playing(hubZ));
+    const connecting = xboxStatus({
+      state: "connecting",
+      userCode: "ABCD-EFGH",
+      verificationUri: "https://www.microsoft.com/link",
+    });
+    api.xboxValue = connecting;
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: tm.set,
+    });
+    await app.ready;
+    openDisplay();
+    await flush();
+    const answer = deferred<XboxAuthStatus>();
+    api.xboxAction = async (action) => {
+      api.xboxCalls.push(action);
+      return answer.promise;
+    };
+    ($(".setting-xbox-action") as HTMLElement).click();
+    // The poll comes due while the cancel is on its way: it reads nothing.
+    const before = api.xboxCalls.length;
+    for (const t of tm.calls.filter((c) => c.ms === 3000)) t.fn();
+    await flush();
+    expect(api.xboxCalls.slice(before)).toEqual([]);
+    answer.resolve(xboxStatus({ state: "disconnected" }));
+    await flush();
+    expect(xboxRow().querySelector(".setting-xbox-text")?.textContent).toBe("Xbox: not connected");
+  });
+
+  it("tells a failed action and shows the status the server holds", async () => {
+    const tm = timers();
+    const api = fakeApi(playing(hubZ));
+    api.xboxValue = xboxStatus({ state: "disconnected" });
+    api.xboxAction = async (action) => {
+      api.xboxCalls.push(action);
+      throw new Error("down");
+    };
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: tm.set,
+    });
+    await app.ready;
+    openDisplay();
+    ($(".setting-xbox-action") as HTMLElement).click();
+    await flush();
+    await flush();
+    expect($(".toast-text")?.textContent).toBe("Could not reach the Xbox sign-in");
+    expect(($(".setting-xbox-action") as HTMLButtonElement).disabled).toBe(false);
+    expect(api.xboxCalls.at(-1)).toBe("status");
   });
 });

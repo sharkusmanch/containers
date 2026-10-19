@@ -13,6 +13,7 @@ import type {
   HubTreeResponse,
   NowResponse,
   Source,
+  XboxAuthStatus,
 } from "../shared/types.js";
 import { serveStatic } from "./static.js";
 
@@ -57,6 +58,16 @@ export interface RouteDeps {
     version: string;
     tools: McpTools;
   };
+  /** Absent or null without an Xbox client ID: status then reads "off" and nothing else answers. */
+  xbox?: null | {
+    /** The one page origin allowed to start, cancel or end a sign-in (the Ask route's). */
+    origin: string;
+    status(): XboxAuthStatus;
+    /** Rejects when Microsoft would not start a sign-in. */
+    connect(): Promise<XboxAuthStatus>;
+    cancel(): XboxAuthStatus;
+    disconnect(): Promise<XboxAuthStatus>;
+  };
   /** Starts a timer and returns a function that cancels it. Defaults to `setTimeout`. */
   setTimer?: (fn: () => void, ms: number) => () => void;
 }
@@ -68,9 +79,14 @@ const FIND_MAX = 100;
 const BASE = "/companion";
 const ASK_PATH = `${BASE}/api/ask`;
 const MCP_PATH = `${BASE}/mcp`;
+const XBOX_PATH = `${BASE}/api/xbox`;
+const XBOX_ACTIONS = ["connect", "cancel", "disconnect"] as const;
+type XboxAction = (typeof XBOX_ACTIONS)[number];
 
 /** Largest request body the ask route reads, in bytes. */
 const ASK_BODY_MAX = 32768;
+/** Largest request body an Xbox sign-in action reads, in bytes; the body is `{}`. */
+const XBOX_BODY_MAX = 1024;
 /** Largest request body the MCP route reads, in bytes. */
 const MCP_BODY_MAX = 65536;
 const QUESTION_MAX = 1000;
@@ -186,7 +202,12 @@ function parseAsk(raw: unknown): AskRequest | null {
   }
   let gameRef: AskRequest["game"] = null;
   if (game !== null) {
-    if (!isObject(game) || (game.source !== "steam" && game.source !== "ra")) return null;
+    if (
+      !isObject(game) ||
+      (game.source !== "steam" && game.source !== "ra" && game.source !== "xbox")
+    ) {
+      return null;
+    }
     if (typeof game.id !== "string" || !/^\d{1,10}$/.test(game.id)) return null;
     gameRef = { source: game.source, id: game.id };
   }
@@ -207,6 +228,77 @@ function parseAsk(raw: unknown): AskRequest | null {
 
 const mediaType = (req: IncomingMessage): string | undefined =>
   (req.headers["content-type"] ?? "").split(";")[0]?.trim().toLowerCase();
+
+const XBOX_OFF: XboxAuthStatus = {
+  state: "off",
+  gamertag: null,
+  userCode: null,
+  verificationUri: null,
+  expiresAt: null,
+  lostSince: null,
+};
+
+/** Copies only the fields the browser may see, whatever else the object carries. */
+const xboxBody = (s: XboxAuthStatus): XboxAuthStatus => ({
+  state: s.state,
+  gamertag: s.gamertag,
+  userCode: s.userCode,
+  verificationUri: s.verificationUri,
+  expiresAt: s.expiresAt,
+  lostSince: s.lostSince,
+});
+
+/**
+ * Starts, cancels or ends the Xbox sign-in for the browser. Checks run in a fixed order and each
+ * fails before any later work; the origin and content-type checks are the Ask route's. Answers
+ * the sign-in status and nothing else.
+ */
+async function handleXboxAction(
+  deps: RouteDeps,
+  action: XboxAction | null,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const early = (status: number, error: string, extra: Record<string, string> = {}): void =>
+    send(res, status, "application/json; charset=utf-8", JSON.stringify({ error }), {
+      "cache-control": "no-store",
+      connection: "close",
+      ...extra,
+    });
+  const xbox = deps.xbox;
+  // Without a client ID, and for an unknown action, there is no endpoint here at all.
+  if (!xbox || action === null) return early(404, "not found");
+  if (req.method !== "POST") {
+    return send(res, 405, "text/plain; charset=utf-8", "Method Not Allowed", {
+      allow: "POST",
+      connection: "close",
+    });
+  }
+  if (mediaType(req) !== "application/json") return early(415, "unsupported media type");
+  if (req.headers.origin !== xbox.origin) return early(403, "forbidden");
+  const declared = req.headers["content-length"];
+  if (declared !== undefined && Number(declared) > XBOX_BODY_MAX) return early(413, "too large");
+  const body = await readBody(req, XBOX_BODY_MAX);
+  if (body === null) return early(413, "too large");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.toString("utf8"));
+  } catch {
+    parsed = null;
+  }
+  if (!isObject(parsed)) return json(res, 400, { error: "bad request" });
+
+  if (action === "cancel") return json(res, 200, xboxBody(xbox.cancel()));
+  if (action === "disconnect") return json(res, 200, xboxBody(await xbox.disconnect()));
+  let started: XboxAuthStatus;
+  try {
+    started = await xbox.connect();
+  } catch {
+    // Fixed text: the reason may carry what Microsoft said.
+    return json(res, 502, { error: "xbox sign-in could not be started" });
+  }
+  return json(res, 200, xboxBody(started));
+}
 
 /**
  * The MCP endpoint, for the agent pod only (not for browsers). Checks run in a fixed order and
@@ -377,6 +469,11 @@ export function createHandler(
       const path = q === -1 ? raw : raw.slice(0, q);
       if (path === ASK_PATH) return await handleAsk(deps, req, res);
       if (path === MCP_PATH) return await handleMcp(deps, req, res);
+      if (path.startsWith(`${XBOX_PATH}/`)) {
+        const name = path.slice(XBOX_PATH.length + 1);
+        const action = XBOX_ACTIONS.find((a) => a === name) ?? null;
+        return await handleXboxAction(deps, action, req, res);
+      }
       if (req.method !== "GET" && req.method !== "HEAD") {
         return send(res, 405, "text/plain; charset=utf-8", "Method Not Allowed", {
           allow: "GET, HEAD",
@@ -391,6 +488,9 @@ export function createHandler(
 
       if (rest === "healthz") return json(res, 200, { ok: true });
       if (rest === "api/now") return json(res, 200, deps.now());
+      if (rest === "api/xbox") {
+        return json(res, 200, deps.xbox ? xboxBody(deps.xbox.status()) : XBOX_OFF);
+      }
       if (rest === "api/guides") {
         if (query.get("refresh") === "1") deps.refreshGuides();
         return json(res, 200, deps.guides());
@@ -426,7 +526,7 @@ export function createHandler(
         return tree ? json(res, 200, tree) : json(res, 404, { error: "unknown guide" });
       }
       if (rest.startsWith("api/achievements/")) {
-        const m = /^api\/achievements\/(steam|ra)\/(\d{1,10})$/.exec(rest);
+        const m = /^api\/achievements\/(steam|ra|xbox)\/(\d{1,10})$/.exec(rest);
         if (!m) return json(res, 400, { error: "bad request" });
         const data = await deps.achievements(m[1] as Source, m[2] as string);
         return data ? json(res, 200, data) : json(res, 404, { error: "no achievements" });

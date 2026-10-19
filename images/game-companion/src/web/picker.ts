@@ -1,4 +1,5 @@
-import type { FindMatch, GuideHub, GuidePage } from "../shared/types.js";
+import type { FindMatch, GuideHub, GuidePage, XboxAuthStatus } from "../shared/types.js";
+import type { XboxAction } from "./api.js";
 import type { GuideZoom, InstallRow } from "./device.js";
 import { LAYOUT_LABELS, windowReadout } from "./layout-mode.js";
 import type { LayoutMode, LayoutOverride } from "./layout-mode.js";
@@ -21,6 +22,8 @@ export interface PickerHandlers {
   onInstall(): void;
   /** Got it was tapped on the set-up card. The picker stays open. */
   onDismissSetup(): void;
+  /** The Xbox row's button was tapped. The picker stays open. */
+  onXbox(action: XboxAction): void;
 }
 
 export type SettingName =
@@ -64,6 +67,32 @@ export interface Picker {
   showMatches(query: string, matches: FindMatch[], truncated: boolean): void;
   /** Updates the labels of the Display tab. */
   setSettings(state: SettingsState): void;
+  /** The Display tab's Xbox row; hidden for null (not known yet) and while Xbox is off. */
+  setXbox(status: XboxAuthStatus | null): void;
+}
+
+/** Where a sign-in code is entered, shown when no safe address came with it. */
+const XBOX_LINK_TEXT = "microsoft.com/link";
+
+/**
+ * The verification address as a URL, only when it is https on microsoft.com or live.com (or a
+ * subdomain) with no credentials or port: the one kind of address the Xbox row opens.
+ */
+export function safeVerificationUrl(uri: string | null): URL | null {
+  if (uri === null) return null;
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  const allowed = ["microsoft.com", "live.com"].some(
+    (domain) => host === domain || host.endsWith(`.${domain}`),
+  );
+  if (url.protocol !== "https:" || !allowed) return null;
+  if (url.username !== "" || url.password !== "" || url.port !== "") return null;
+  return url;
 }
 
 type Tab = "pages" | "games" | "settings";
@@ -162,7 +191,24 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   installApple.classList.add("setting-install-apple");
   installApple.textContent = "Install: Share › Add to Home Screen";
   installRow.append(installButton, installApple);
-  settingsList.append(installRow);
+  // The Xbox sign-in: text built from spans (never markup), and one button whose job follows it.
+  const xboxRow = doc.createElement("div");
+  xboxRow.classList.add("setting-xbox");
+  xboxRow.hidden = true;
+  const xboxText = doc.createElement("p");
+  xboxText.classList.add("setting-xbox-text");
+  const xboxButton = doc.createElement("button");
+  xboxButton.setAttribute("type", "button");
+  xboxButton.classList.add("setting-xbox-action");
+  let xboxAction: XboxAction | null = null;
+  xboxButton.addEventListener("click", () => {
+    if (xboxAction === null || xboxButton.disabled) return;
+    // One tap per status: the next status from the server enables it again.
+    xboxButton.disabled = true;
+    handlers.onXbox(xboxAction);
+  });
+  xboxRow.append(xboxText, xboxButton);
+  settingsList.append(xboxRow, installRow);
   element.append(header, pagesList, gamesList, matchesList, settingsList);
 
   let choosing = false;
@@ -431,6 +477,58 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
         state.window.height,
         state.window.layout,
       );
+    },
+    setXbox(status) {
+      const state = status?.state ?? "off";
+      xboxRow.hidden = state === "off";
+      xboxButton.disabled = false;
+      const span = (className: string, text: string): HTMLElement => {
+        const e = doc.createElement("span");
+        e.classList.add(className);
+        e.textContent = text;
+        return e;
+      };
+      if (status === null || state === "off") {
+        xboxText.replaceChildren();
+        xboxAction = null;
+        return;
+      }
+      if (state === "connecting") {
+        const url = safeVerificationUrl(status.verificationUri);
+        let where: HTMLElement;
+        if (url === null) {
+          where = span("setting-xbox-where", XBOX_LINK_TEXT);
+        } else {
+          const a = doc.createElement("a");
+          a.classList.add("setting-xbox-link");
+          a.setAttribute("href", url.href);
+          a.setAttribute("target", "_blank");
+          a.setAttribute("rel", "noopener noreferrer");
+          const path = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
+          a.textContent = `${url.hostname.replace(/^www\./, "")}${path}`;
+          where = a;
+        }
+        xboxText.replaceChildren(
+          "Enter ",
+          span("setting-xbox-code", status.userCode ?? ""),
+          " at ",
+          where,
+        );
+        xboxAction = "cancel";
+        xboxButton.textContent = "Cancel";
+        return;
+      }
+      const text =
+        state === "connected"
+          ? status.gamertag === null
+            ? "Xbox: connected"
+            : `Xbox: connected as ${status.gamertag}`
+          : state === "lost"
+            ? "Xbox: connect again"
+            : "Xbox: not connected";
+      xboxText.replaceChildren(text);
+      xboxAction = state === "connected" ? "disconnect" : "connect";
+      xboxButton.textContent = state === "connected" ? "Disconnect" : "Connect";
     },
     showMatches(query, matches, truncated) {
       const title = doc.createElement("h3");

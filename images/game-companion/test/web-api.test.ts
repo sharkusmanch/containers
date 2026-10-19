@@ -36,6 +36,48 @@ describe("createApi", () => {
     expect((err as ApiError).status).toBe(500);
   });
 
+  it("reads the Xbox sign-in and posts each action as an empty JSON object", async () => {
+    const seen: { url: string; init: RequestInit | undefined }[] = [];
+    const body = {
+      state: "connecting",
+      gamertag: null,
+      userCode: "ABCD-EFGH",
+      verificationUri: "https://www.microsoft.com/link",
+      expiresAt: "2026-10-18T12:15:00.000Z",
+      lostSince: null,
+    };
+    const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: input as string, init });
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    const api = createApi(fn);
+    expect(await api.xbox()).toEqual(body);
+    for (const action of ["connect", "cancel", "disconnect"] as const) {
+      expect(await api.xboxAction(action)).toEqual(body);
+    }
+    expect(seen.map((c) => `${c.init?.method ?? "GET"} ${c.url}`)).toEqual([
+      "GET api/xbox",
+      "POST api/xbox/connect",
+      "POST api/xbox/cancel",
+      "POST api/xbox/disconnect",
+    ]);
+    const post = seen[1]?.init as RequestInit;
+    expect(post.headers).toEqual({
+      "content-type": "application/json",
+      accept: "application/json",
+    });
+    expect(post.body).toBe("{}");
+    expect(post.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("throws ApiError for a refused Xbox action", async () => {
+    const err = await createApi(fake(502, { error: "x" }).fn)
+      .xboxAction("connect")
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect((err as ApiError).status).toBe(502);
+  });
+
   it("gives up on a request that never answers once the deadline passes", async () => {
     expect(REQUEST_TIMEOUT_MS).toBe(8000);
     const fn = ((_input: RequestInfo | URL, init?: RequestInit) =>

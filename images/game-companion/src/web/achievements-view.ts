@@ -1,4 +1,4 @@
-import type { Achievement, AchievementsResponse } from "../shared/types.js";
+import type { Achievement, AchievementsResponse, Source } from "../shared/types.js";
 import type { StorageLike } from "./state.js";
 
 export type SortKey = "rarity" | "name" | "order";
@@ -11,6 +11,16 @@ export interface SortPref {
 export const DEFAULT_SORT: SortPref = { key: "rarity", dir: "desc" };
 export const SORT_STORAGE_KEY = "game-companion:v1:sort";
 export const HIDE_UNLOCKED_STORAGE_KEY = "game-companion:v1:hide-unlocked";
+/** Followed by a guide's hub id: the platform this device shows for a Steam + Xbox guide. */
+export const PLATFORM_STORAGE_PREFIX = "game-companion:v1:platform:";
+
+/** A platform the Steam / Xbox switch can choose. */
+export type SwitchPlatform = Extract<Source, "steam" | "xbox">;
+const SWITCH_PLATFORMS: readonly [SwitchPlatform, string][] = [
+  ["steam", "Steam"],
+  ["xbox", "Xbox"],
+];
+const NO_XBOX_LIST = "No Xbox achievements list for this game yet.";
 
 const SORT_KEYS: readonly SortKey[] = ["rarity", "name", "order"];
 const SORT_DIRS: readonly SortDir[] = ["asc", "desc"];
@@ -96,6 +106,31 @@ export function saveHideUnlocked(storage: StorageLike | null | undefined, hide: 
   }
 }
 
+/** This device's choice of platform for a guide; null when none is stored (or it is unreadable). */
+export function loadPlatformChoice(
+  storage: StorageLike | null | undefined,
+  hubId: string,
+): SwitchPlatform | null {
+  try {
+    const raw = storage?.getItem(PLATFORM_STORAGE_PREFIX + hubId);
+    return raw === "steam" || raw === "xbox" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+export function savePlatformChoice(
+  storage: StorageLike | null | undefined,
+  hubId: string,
+  platform: SwitchPlatform,
+): void {
+  try {
+    storage?.setItem(PLATFORM_STORAGE_PREFIX + hubId, platform);
+  } catch {
+    // Storage may be blocked or full; the choice just will not persist.
+  }
+}
+
 export function recentUnlocks(list: Achievement[], count = 3): Achievement[] {
   return list
     .filter((a) => a.unlocked && a.unlockedAt !== null)
@@ -103,9 +138,13 @@ export function recentUnlocks(list: Achievement[], count = 3): Achievement[] {
     .slice(0, count);
 }
 
-export function summaryLine(data: Pick<AchievementsResponse, "total" | "unlocked">): string {
-  if (data.total === 0) return "0 / 0";
-  return `${data.unlocked} / ${data.total} · ${Math.round((data.unlocked / data.total) * 100)}%`;
+export function summaryLine(
+  data: Pick<AchievementsResponse, "total" | "unlocked" | "gamerscore">,
+): string {
+  const gs =
+    data.gamerscore === undefined ? "" : ` · ${data.gamerscore.current}/${data.gamerscore.total} G`;
+  if (data.total === 0) return `0 / 0${gs}`;
+  return `${data.unlocked} / ${data.total} · ${Math.round((data.unlocked / data.total) * 100)}%${gs}`;
 }
 
 export function isMasked(a: Achievement, revealed: ReadonlySet<string>): boolean {
@@ -133,6 +172,8 @@ export interface AchievementsView {
    * (an answer is already streaming).
    */
   setAskState(state: AskState): void;
+  /** The Steam / Xbox switch with the platform shown pressed; null (the default) hides it. */
+  setPlatformSwitch(active: SwitchPlatform | null): void;
 }
 
 export type AskState = "hidden" | "enabled" | "disabled";
@@ -145,6 +186,8 @@ export function createAchievementsView(
     onFind?: (achievement: Achievement) => void;
     /** Called when the user asks the assistant how to get an achievement. */
     onAsk?: (achievement: Achievement) => void;
+    /** Called when the user picks the other platform on the Steam / Xbox switch. */
+    onPlatform?: (platform: SwitchPlatform) => void;
   } = {},
 ): AchievementsView {
   const storage = options.storage;
@@ -203,6 +246,11 @@ export function createAchievementsView(
       chip.classList.add("ach-kind-win");
       row.append(chip);
     }
+    // Xbox only. A counter is part of what a hidden achievement keeps to itself until tapped.
+    if (a.progress && !a.unlocked && !masked) {
+      row.append(textEl("span", "ach-progress", `${a.progress.current}/${a.progress.target}`));
+    }
+    if (a.gamerscore !== undefined) row.append(textEl("span", "ach-gs", `${a.gamerscore} G`));
     row.append(textEl("span", "ach-pct", a.unlockPercent === null ? "" : `${a.unlockPercent}%`));
     return row;
   };
@@ -314,6 +362,23 @@ export function createAchievementsView(
   filterRow.classList.add("ach-filter");
   filterRow.append(filterInput, clearButton, missableButton, kindButton);
 
+  // The Steam / Xbox switch stays above whatever the panel shows, a message included, so a
+  // platform without a list can still be switched away from.
+  const platformRow = doc.createElement("div");
+  platformRow.classList.add("ach-platforms");
+  platformRow.hidden = true;
+  const platformButtons = new Map<SwitchPlatform, HTMLButtonElement>();
+  let activePlatform: SwitchPlatform | null = null;
+  for (const [platform, label] of SWITCH_PLATFORMS) {
+    const button = control("ach-platform", () => {
+      if (platform !== activePlatform) options.onPlatform?.(platform);
+    });
+    button.textContent = label;
+    button.dataset["platform"] = platform;
+    platformButtons.set(platform, button);
+    platformRow.append(button);
+  }
+
   const summaryEl = textEl("div", "ach-summary", "");
   const staleEl = textEl("div", "ach-stale", "Showing older data");
   let listNodes: HTMLElement[] = [];
@@ -347,12 +412,15 @@ export function createAchievementsView(
     unlockedSection = null;
     for (const node of listNodes) node.remove();
     listNodes = [];
-    if (lastData === null) {
-      element.replaceChildren(textEl("p", "ach-message", lastMessage));
+    if (lastData === null || lastData.noList === true) {
+      const text = lastData === null ? lastMessage : NO_XBOX_LIST;
+      element.replaceChildren(platformRow, textEl("p", "ach-message", text));
       return;
     }
     const data = lastData;
-    if (sortRow.parentNode !== element) element.replaceChildren(summaryEl, sortRow, filterRow);
+    if (sortRow.parentNode !== element) {
+      element.replaceChildren(platformRow, summaryEl, sortRow, filterRow);
+    }
     summaryEl.textContent = summaryLine(data);
     if (!data.stale) staleEl.remove();
     else if (staleEl.parentNode !== element) element.insertBefore(staleEl, sortRow);
@@ -456,6 +524,13 @@ export function createAchievementsView(
     setFindEnabled(enabled) {
       findEnabled = enabled;
       if (lastData !== null) render();
+    },
+    setPlatformSwitch(active) {
+      activePlatform = active;
+      platformRow.hidden = active === null;
+      for (const [platform, button] of platformButtons) {
+        button.setAttribute("aria-pressed", platform === active ? "true" : "false");
+      }
     },
     setAskState(state) {
       if (state === askState) return;

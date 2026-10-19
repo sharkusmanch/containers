@@ -1,5 +1,6 @@
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import type { XboxAuthState, XboxAuthStatus } from "../shared/types.js";
 
 const AUTHORITY = "https://login.microsoftonline.com/consumers/oauth2/v2.0";
 const SCOPE = "XboxLive.signin offline_access";
@@ -13,21 +14,8 @@ const XSTS_MARGIN_MS = 5 * 60_000;
 const XSTS_FALLBACK_LIFETIME_MS = 10 * 60_000;
 const SLOW_DOWN_STEP_S = 5;
 
-export type XboxAuthState = "off" | "disconnected" | "connecting" | "connected" | "lost";
-
-export interface XboxAuthStatus {
-  state: XboxAuthState;
-  /** Connected and lost only. */
-  gamertag: string | null;
-  /** Connecting only. */
-  userCode: string | null;
-  /** Connecting only. */
-  verificationUri: string | null;
-  /** Connecting only, ISO. */
-  expiresAt: string | null;
-  /** Lost only, ISO. */
-  lostSince: string | null;
-}
+// The browser's view of the sign-in is shared with the web client.
+export type { XboxAuthState, XboxAuthStatus };
 
 /** Headers for the Xbox Live APIs (Authorization + Accept-Language) and the account's XUID. */
 export interface XboxSession {

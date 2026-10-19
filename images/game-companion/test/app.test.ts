@@ -1492,3 +1492,35 @@ describe("xbox", () => {
     );
   });
 });
+
+describe("xbox sign-in", () => {
+  const states: string[] = [];
+  const auth = {
+    status: () => ({
+      state: "disconnected" as const,
+      gamertag: null,
+      userCode: null,
+      verificationUri: null,
+      expiresAt: null,
+      lostSince: null,
+    }),
+    startConnect: async () => {
+      states.push("connect");
+      return { ...auth.status(), state: "connecting" as const, userCode: "ABCD-EFGH" };
+    },
+    cancelConnect: () => void states.push("cancel"),
+    disconnect: async () => void states.push("disconnect"),
+  };
+
+  it("is absent without Xbox, and hands the routes the sign-in with its origin", async () => {
+    expect(buildDeps(parts()).xbox).toBeNull();
+    const d = buildDeps(parts({ xbox: { origin: "https://wiki.example.test", auth } }));
+    const xbox = d.xbox;
+    expect(xbox?.origin).toBe("https://wiki.example.test");
+    expect(xbox?.status().state).toBe("disconnected");
+    expect((await xbox?.connect())?.userCode).toBe("ABCD-EFGH");
+    expect(xbox?.cancel().state).toBe("disconnected");
+    expect((await xbox?.disconnect())?.state).toBe("disconnected");
+    expect(states).toEqual(["connect", "cancel", "disconnect"]);
+  });
+});

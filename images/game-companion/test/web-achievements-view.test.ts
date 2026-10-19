@@ -3,14 +3,17 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SORT,
   HIDE_UNLOCKED_STORAGE_KEY,
+  PLATFORM_STORAGE_PREFIX,
   SORT_STORAGE_KEY,
   createAchievementsView,
   isMasked,
   loadHideUnlocked,
+  loadPlatformChoice,
   loadSortPref,
   matchesFilter,
   recentUnlocks,
   saveHideUnlocked,
+  savePlatformChoice,
   saveSortPref,
   sortAchievements,
   sortLocked,
@@ -1629,5 +1632,135 @@ describe("story filter", () => {
     expect(toggle(view.element)).toBe(button);
     expect([...s.store.keys()]).toEqual([]);
     view.element.remove();
+  });
+});
+
+describe("xbox achievements", () => {
+  const xbox: AchievementsResponse = {
+    source: "xbox",
+    id: "1000000001",
+    title: "Sample Wars",
+    total: 4,
+    unlocked: 1,
+    stale: false,
+    gamerscore: { current: 15, total: 100 },
+    achievements: [
+      a({
+        id: "x1",
+        name: "First Step",
+        unlocked: true,
+        unlockedAt: "2026-10-18T10:00:00.000Z",
+        unlockPercent: 80.5,
+        gamerscore: 15,
+        progress: null,
+      }),
+      a({
+        id: "x2",
+        name: "Collector",
+        unlockPercent: 12.3,
+        gamerscore: 30,
+        progress: { current: 3, target: 10 },
+      }),
+      a({
+        id: "x3",
+        name: "Secret Ending",
+        description: "Beat the invented boss",
+        unlockPercent: 2,
+        hidden: true,
+        gamerscore: 50,
+        progress: { current: 1, target: 2 },
+      }),
+      a({ id: "x4", name: "Plain", unlockPercent: 40, gamerscore: 5 }),
+    ],
+  };
+  const row = (view: { element: HTMLElement }, id: string) =>
+    view.element.querySelector(`.ach-row[data-id="${id}"]`) as HTMLElement;
+
+  it("gamerscore, progress and noList render", () => {
+    const view = createAchievementsView(document);
+    view.update(xbox);
+    expect(view.element.querySelector(".ach-summary")?.textContent).toBe("1 / 4 · 25% · 15/100 G");
+    expect(row(view, "x2").querySelector(".ach-gs")?.textContent).toBe("30 G");
+    expect(row(view, "x2").querySelector(".ach-progress")?.textContent).toBe("3/10");
+    expect(row(view, "x2").querySelector(".ach-pct")?.textContent).toBe("12.3%");
+    expect(row(view, "x4").querySelector(".ach-progress")).toBeNull();
+    // Steam and RetroAchievements rows carry neither.
+    view.update(data);
+    expect(view.element.querySelector(".ach-gs, .ach-progress")).toBeNull();
+    expect(view.element.querySelector(".ach-summary")?.textContent).toBe("2 / 7 · 29%");
+
+    view.update({ ...xbox, total: 0, unlocked: 0, achievements: [], noList: true });
+    expect(view.element.querySelector(".ach-message")?.textContent).toBe(
+      "No Xbox achievements list for this game yet.",
+    );
+    expect(view.element.querySelector(".ach-summary")).toBeNull();
+  });
+
+  it("locked secret xbox achievement masked until tapped", () => {
+    const view = createAchievementsView(document);
+    view.update(xbox);
+    const masked = row(view, "x3");
+    expect(masked.textContent).toContain("Hidden achievement");
+    expect(masked.textContent).not.toContain("Secret Ending");
+    expect(masked.textContent).not.toContain("invented boss");
+    // The counter says nothing about it either until it is revealed.
+    expect(masked.querySelector(".ach-progress")).toBeNull();
+    masked.click();
+    const shown = row(view, "x3");
+    expect(shown.textContent).toContain("Secret Ending");
+    expect(shown.textContent).toContain("Beat the invented boss");
+    expect(shown.querySelector(".ach-progress")?.textContent).toBe("1/2");
+  });
+
+  it("shows the Steam / Xbox switch only when told, with the active one pressed", () => {
+    const picked: string[] = [];
+    const view = createAchievementsView(document, { onPlatform: (p) => picked.push(p) });
+    view.update(xbox);
+    const sw = () => view.element.querySelector<HTMLElement>(".ach-platforms");
+    expect(sw()?.hidden ?? true).toBe(true);
+    view.setPlatformSwitch("xbox");
+    const buttons = [...(sw()?.querySelectorAll("button") ?? [])];
+    expect(sw()?.hidden).toBe(false);
+    expect(buttons.map((b) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([
+      ["Steam", "false"],
+      ["Xbox", "true"],
+    ]);
+    buttons[0]?.click();
+    buttons[1]?.click();
+    expect(picked).toEqual(["steam"]);
+    // Still there while the other platform has no list, so it can be switched back.
+    view.update(null, "No achievements for this game");
+    expect(sw()?.hidden).toBe(false);
+    view.setPlatformSwitch(null);
+    expect(sw()?.hidden ?? true).toBe(true);
+  });
+});
+
+describe("platform choice storage", () => {
+  it("keeps one choice per guide, and ignores anything but steam and xbox", () => {
+    const data = new Map<string, string>();
+    const storage = {
+      getItem: (k: string) => data.get(k) ?? null,
+      setItem: (k: string, v: string) => void data.set(k, v),
+    };
+    expect(loadPlatformChoice(storage, "h1")).toBeNull();
+    savePlatformChoice(storage, "h1", "xbox");
+    savePlatformChoice(storage, "h2", "steam");
+    expect(loadPlatformChoice(storage, "h1")).toBe("xbox");
+    expect(loadPlatformChoice(storage, "h2")).toBe("steam");
+    expect(data.get(`${PLATFORM_STORAGE_PREFIX}h1`)).toBe("xbox");
+    expect(PLATFORM_STORAGE_PREFIX).toBe("game-companion:v1:platform:");
+    data.set(`${PLATFORM_STORAGE_PREFIX}h3`, "ra");
+    expect(loadPlatformChoice(storage, "h3")).toBeNull();
+    const broken = {
+      getItem: () => {
+        throw new Error("blocked");
+      },
+      setItem: () => {
+        throw new Error("blocked");
+      },
+    };
+    expect(loadPlatformChoice(broken, "h1")).toBeNull();
+    expect(() => savePlatformChoice(broken, "h1", "xbox")).not.toThrow();
   });
 });

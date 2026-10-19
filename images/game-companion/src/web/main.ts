@@ -9,9 +9,16 @@ import type {
   PageProgress,
   Source,
   WhereMatch,
+  XboxAuthStatus,
 } from "../shared/types.js";
-import type { Api } from "./api.js";
-import { createAchievementsView, type AskState } from "./achievements-view.js";
+import type { Api, XboxAction } from "./api.js";
+import {
+  createAchievementsView,
+  loadPlatformChoice,
+  savePlatformChoice,
+  type AskState,
+  type SwitchPlatform,
+} from "./achievements-view.js";
 import { createAssistantView } from "./assistant-view.js";
 import {
   createWakeLock,
@@ -127,6 +134,8 @@ const FIND_MAX = 100;
 const FIND_MIN = 2;
 /** Waking after longer than this since the last refresh refreshes achievements and progress too. */
 const WAKE_REFRESH_MS = 15_000;
+/** How often the Xbox sign-in is checked while a code waits to be entered. */
+const XBOX_POLL_MS = 3000;
 
 /** The text of the notice for achievements that just unlocked. */
 function unlockText(names: string[]): string {
@@ -135,10 +144,13 @@ function unlockText(names: string[]): string {
   return `Unlocked: ${first}, ${second} and ${names.length - 2} more`;
 }
 
-function achievementsSource(c: Pick<Current, "game" | "hub">): {
-  source: Source;
-  id: string;
-} | null {
+type GameId = { source: Source; id: string };
+
+/**
+ * The game a guide's own rows name, else the detected game: what the game's links and Ask
+ * conversation are stored under, so they stay put whichever platform the panel shows.
+ */
+function ownGame(c: Pick<Current, "game" | "hub">): GameId | null {
   const { hub, game } = c;
   if (hub !== null && hub.source !== null && hub.gameId !== null) {
     return { source: hub.source, id: hub.gameId };
@@ -147,13 +159,57 @@ function achievementsSource(c: Pick<Current, "game" | "hub">): {
   return null;
 }
 
+/** The id a guide knows its game by on a platform: its own row's, or its Xbox title. */
+function hubGameId(hub: GuideHub, platform: Source): string | null {
+  if (hub.source === platform && hub.gameId !== null) return hub.gameId;
+  return platform === "xbox" ? hub.xboxTitleId : null;
+}
+
+/** Whether a guide knows both a Steam and an Xbox id, so the panel offers the switch. */
+function switchable(hub: GuideHub): boolean {
+  return hubGameId(hub, "steam") !== null && hubGameId(hub, "xbox") !== null;
+}
+
+/** Whether `playing` (the game being played now, if any) is the game on screen. */
+function isPlayingHere(c: Pick<Current, "game" | "hub">, playing: GameRef | null): boolean {
+  if (playing === null || playing.id === null) return false;
+  const { game, hub } = c;
+  if (game !== null && game.source === playing.source && game.id === playing.id) return true;
+  return hub !== null && hubGameId(hub, playing.source) === playing.id;
+}
+
 /**
- * What a game's links are stored under: the game's own identity (the one the achievements panel
- * uses) so they stay put whichever guide is known; the guide's hub id when it carries no game.
+ * The game whose achievements the panel shows: the game being played, when it is this one; else
+ * this device's choice for the guide; else the platform the guide was last detected on; else
+ * the guide's own row (or the detected game, without a guide).
+ */
+function achievementsSource(
+  c: Pick<Current, "game" | "hub">,
+  playing: GameRef | null,
+  choice: Source | null,
+): GameId | null {
+  if (playing !== null && playing.id !== null && isPlayingHere(c, playing)) {
+    return { source: playing.source, id: playing.id };
+  }
+  const hub = c.hub;
+  if (hub !== null) {
+    for (const platform of [choice, hub.lastPlatform]) {
+      const id = platform === null ? null : hubGameId(hub, platform);
+      if (platform !== null && id !== null) return { source: platform, id };
+    }
+  }
+  return ownGame(c);
+}
+
+const idKey = (g: GameId | null): string | null => (g === null ? null : `${g.source}:${g.id}`);
+
+/**
+ * What a game's links are stored under: the game's own identity so they stay put whichever guide
+ * is known; the guide's hub id when it carries no game.
  */
 function scopeFor(game: GameRef | null, hub: GuideHub | null): string | null {
-  const shown = achievementsSource({ game, hub });
-  if (shown !== null) return `game:${shown.source}:${shown.id}`;
+  const own = ownGame({ game, hub });
+  if (own !== null) return `game:${own.source}:${own.id}`;
   return hub === null ? null : hub.hubId;
 }
 
@@ -188,6 +244,9 @@ export function startApp(opts: AppOptions): App {
 
   // ---- DOM, built once ----
   const title = el("span", "game-title", "Game Companion");
+  // The Xbox device of the game being played ("Series X", "PC"); only live presence knows it.
+  const deviceTag = el("span", "game-device");
+  deviceTag.hidden = true;
   const presence = buttonEl("game-presence", "");
   presence.setAttribute("aria-expanded", "false");
   const presenceRow = doc.createElement("div");
@@ -203,7 +262,7 @@ export function startApp(opts: AppOptions): App {
   const note = el("span", "game-note");
   const topbar = doc.createElement("header");
   topbar.classList.add("topbar");
-  topbar.append(title, note);
+  topbar.append(title, deviceTag, note);
 
   const bannerLabel = el("span", "switch-label");
   const accept = buttonEl("switch-accept", "Switch");
@@ -223,6 +282,7 @@ export function startApp(opts: AppOptions): App {
     storage,
     onFind: (a) => void findInGuide(a),
     onAsk: (a) => askHow(a),
+    onPlatform: (platform) => choosePlatform(platform),
   });
   const assistant = createAssistantView(doc, {
     api,
@@ -263,6 +323,7 @@ export function startApp(opts: AppOptions): App {
       render();
     },
     onMore() {
+      void refreshXbox();
       refreshPicker();
       picker.open(current?.hub ? "pages" : "games");
       // Pick up guides that appeared since the page started; a pending chooser keeps its list.
@@ -347,6 +408,9 @@ export function startApp(opts: AppOptions): App {
       saveSettings(storage, settings);
       showSettings();
     },
+    onXbox(action) {
+      void runXboxAction(action);
+    },
     onLink(link) {
       const c = current;
       if (c === null || !c.links.some((l) => l.url === link.url)) return;
@@ -399,6 +463,17 @@ export function startApp(opts: AppOptions): App {
   let liveNow: NowResponse | null = null;
   // The newest successful answer, whatever game it is about; null after a failed poll.
   let lastNow: NowResponse | null = null;
+  // The game being played as of the last successful poll; kept through a failed one, so an outage
+  // does not switch the panel to another platform.
+  let playingNow: GameRef | null = null;
+  // The game the panel's achievements are for (source:id); null until the first fetch of a game.
+  let shownKey: string | null = null;
+  // The Xbox sign-in as last reported; null until known.
+  let xboxStatus: XboxAuthStatus | null = null;
+  let xboxSeq = 0;
+  let xboxPollDue = false;
+  // While an action is on its way no status is read: its own answer is newer.
+  let xboxActing = false;
   let unlockedCount: number | null = null;
   let lastAchievementsAt = 0;
   // Set when the page wakes and the last refresh is old: the next tick refreshes at once.
@@ -865,6 +940,8 @@ export function startApp(opts: AppOptions): App {
 
   function renderHeader(): void {
     renderPresence();
+    renderDevice();
+    renderSwitch();
     if (loadingLabel !== null) {
       title.textContent = loadingLabel;
       note.textContent = "Loading…";
@@ -874,21 +951,64 @@ export function startApp(opts: AppOptions): App {
     note.textContent = noteText();
   }
 
-  // The game's own status line, only while the game on screen is the one being played now.
-  function renderPresence(): void {
-    const shown = current === null ? null : achievementsSource(current);
+  /** This device's platform choice for the open guide, when it offers the switch. */
+  function platformChoice(c: Current): SwitchPlatform | null {
+    return c.hub === null || !switchable(c.hub) ? null : loadPlatformChoice(storage, c.hub.hubId);
+  }
+
+  function shownFor(c: Current): GameId | null {
+    return achievementsSource(c, playingNow, platformChoice(c));
+  }
+
+  /** Whether the last answer says the game on screen is being played now, on the platform shown. */
+  function playingShown(): boolean {
+    const shown = current === null ? null : shownFor(current);
     const game = lastNow?.game ?? null;
-    const text = lastNow?.presence;
-    // While another game's title is shown as loading, no earlier status line may sit under it.
-    const show =
+    // While another game's title is shown as loading, nothing live may sit under it.
+    return (
       loadingLabel === null &&
-      typeof text === "string" &&
-      text !== "" &&
       lastNow?.state === "playing" &&
       shown !== null &&
       game !== null &&
       game.id === shown.id &&
-      game.source === shown.source;
+      game.source === shown.source
+    );
+  }
+
+  function renderDevice(): void {
+    const device = lastNow?.device;
+    const show = typeof device === "string" && device !== "" && playingShown();
+    deviceTag.textContent = show ? device : "";
+    deviceTag.hidden = !show;
+  }
+
+  /** The switch shows the platform on screen, except while the game is played (that decides). */
+  function renderSwitch(): void {
+    const c = current;
+    const shown = c === null ? null : shownFor(c);
+    const offer =
+      c !== null &&
+      c.hub !== null &&
+      switchable(c.hub) &&
+      !isPlayingHere(c, playingNow) &&
+      shown !== null &&
+      (shown.source === "steam" || shown.source === "xbox");
+    view.setPlatformSwitch(offer ? (shown.source as SwitchPlatform) : null);
+  }
+
+  /** Another platform picked on the switch: remembered on this device, then shown. */
+  function choosePlatform(platform: SwitchPlatform): void {
+    const c = current;
+    if (c === null || c.hub === null || !switchable(c.hub)) return;
+    savePlatformChoice(storage, c.hub.hubId, platform);
+    renderSwitch();
+    if (inflight < 2) void tick();
+  }
+
+  // The game's own status line, only while the game on screen is the one being played now.
+  function renderPresence(): void {
+    const text = lastNow?.presence;
+    const show = typeof text === "string" && text !== "" && playingShown();
     presence.textContent = show ? text : "";
     presenceRow.hidden = !show;
     // Expanded survives new text for the same game, but never a hidden row.
@@ -1055,13 +1175,35 @@ export function startApp(opts: AppOptions): App {
   async function refreshAchievements(first: boolean): Promise<void> {
     if (current === null) return;
     lastAchievementsAt = Date.now();
-    const src = achievementsSource(current);
+    const c = current;
+    const src = shownFor(c);
+    const key = idKey(src);
+    if (key !== shownKey) {
+      if (shownKey !== null) {
+        // The same guide on another platform: another list, so nothing carries over from the last.
+        first = true;
+        seenUnlocked = null;
+        lastAchievements = null;
+        achievementsStale = false;
+        unlockedCount = null;
+        view.update(null, "Loading…");
+      }
+      shownKey = key;
+      assistant.setScope(
+        c.scope,
+        c.scope === null ? null : { hubId: c.hub?.hubId ?? null, game: src },
+      );
+      // The status line and device tag follow the platform shown.
+      renderHeader();
+    }
     if (src === null) {
       view.update(null, "No achievement data for this game");
       unlockedCount = null;
     } else {
       try {
         const data = await api.achievements(src.source, src.id);
+        // A switch to the other platform while this was on its way: its answer is not wanted.
+        if (current !== c || shownKey !== key) return;
         lastAchievements = data;
         achievementsStale = false;
         if (data === null) {
@@ -1069,10 +1211,11 @@ export function startApp(opts: AppOptions): App {
           unlockedCount = null;
         } else {
           showAchievements();
-          unlockedCount = data.unlocked;
+          unlockedCount = data.noList === true ? null : data.unlocked;
           announceUnlocks(data);
         }
       } catch {
+        if (current !== c || shownKey !== key) return;
         if (first) {
           view.update(null, "Achievements unavailable");
           unlockedCount = null;
@@ -1106,6 +1249,7 @@ export function startApp(opts: AppOptions): App {
     marksEpoch += 1;
     if (key !== current?.key) {
       seenUnlocked = null;
+      shownKey = null;
       // The notice is about the game that was on screen; the pulse stops with it.
       toastSeq += 1;
       toast.hidden = true;
@@ -1119,7 +1263,8 @@ export function startApp(opts: AppOptions): App {
     }
     if (key !== declinedKey) declinedKey = "";
     const scope = scopeFor(game, hub);
-    const shown = achievementsSource({ game, hub });
+    const choice = hub !== null && switchable(hub) ? loadPlatformChoice(storage, hub.hubId) : null;
+    const shown = achievementsSource({ game, hub }, playingNow, choice);
     assistant.setScope(scope, scope === null ? null : { hubId: hub?.hubId ?? null, game: shown });
     const waiting: Current = {
       game,
@@ -1239,6 +1384,8 @@ export function startApp(opts: AppOptions): App {
 
     if (!available) await refreshGuides();
     await retryPageTree();
+    // A platform picked on the switch shows at once, whatever the poll below finds.
+    await syncShownSource();
 
     let now: NowResponse;
     try {
@@ -1254,6 +1401,7 @@ export function startApp(opts: AppOptions): App {
     nowFailed = false;
     everReached = true;
     lastNow = now;
+    playingNow = now.state === "playing" ? now.game : null;
     if (assistantOn !== (now.assistant === true)) {
       assistantOn = now.assistant === true;
       render();
@@ -1303,6 +1451,8 @@ export function startApp(opts: AppOptions): App {
       }
     }
 
+    // The game may have started or stopped being played, which can change the platform shown.
+    await syncShownSource();
     if (
       current !== null &&
       doc.visibilityState === "visible" &&
@@ -1312,6 +1462,64 @@ export function startApp(opts: AppOptions): App {
       void refreshProgress(current, due);
       await refreshAchievements(false);
     }
+  }
+
+  /** Fetches the achievements again when the panel's game has changed platform. */
+  async function syncShownSource(): Promise<void> {
+    const c = current;
+    if (c === null || shownKey === null || idKey(shownFor(c)) === shownKey) return;
+    await refreshAchievements(false);
+  }
+
+  // ---- Xbox sign-in ----
+
+  function applyXbox(status: XboxAuthStatus): void {
+    xboxStatus = status;
+    picker.setXbox(status);
+    // While a code waits to be entered the status is checked every few seconds; one check at a
+    // time, and none once the state moves on.
+    if (status.state === "connecting" && !xboxPollDue) {
+      xboxPollDue = true;
+      afterDelay(() => {
+        xboxPollDue = false;
+        if (xboxStatus?.state === "connecting") void refreshXbox();
+      }, XBOX_POLL_MS);
+    }
+  }
+
+  async function refreshXbox(): Promise<void> {
+    if (xboxActing) return;
+    xboxSeq += 1;
+    const mine = xboxSeq;
+    let status: XboxAuthStatus;
+    try {
+      status = await api.xbox();
+    } catch {
+      // Keeps what is showing; a code being entered is checked again.
+      if (mine === xboxSeq && xboxStatus !== null) applyXbox(xboxStatus);
+      return;
+    }
+    if (mine === xboxSeq) applyXbox(status);
+  }
+
+  async function runXboxAction(action: XboxAction): Promise<void> {
+    // A status read already on its way may predate the action, so its answer is dropped.
+    xboxSeq += 1;
+    xboxActing = true;
+    let status: XboxAuthStatus | null;
+    try {
+      status = await api.xboxAction(action);
+    } catch {
+      status = null;
+    } finally {
+      xboxActing = false;
+    }
+    if (status !== null) {
+      applyXbox(status);
+      return;
+    }
+    showToast("Could not reach the Xbox sign-in");
+    await refreshXbox();
   }
 
   // A page tree that failed to load is retried on every tick until it succeeds.
@@ -1405,6 +1613,8 @@ export function startApp(opts: AppOptions): App {
       available = false;
     }
     picker.setHubs(allHubs, available);
+    // In the background: the first status poll never waits on it.
+    void refreshXbox();
     await tick();
     const schedule = opts.setInterval ?? setInterval;
     schedule(() => {

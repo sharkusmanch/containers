@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPicker } from "../src/web/picker.js";
 import { assignSlot, defaultLayout, type GameLink } from "../src/web/state.js";
-import type { FindMatch, GuideHub, GuidePage } from "../src/shared/types.js";
+import type { FindMatch, GuideHub, GuidePage, XboxAuthStatus } from "../src/shared/types.js";
 
 const pages: GuidePage[] = [
   { title: "Achievement Checklist", url: "/doc/checklist", children: [] },
@@ -52,6 +52,7 @@ function make() {
     onLink: vi.fn(),
     onInstall: vi.fn(),
     onDismissSetup: vi.fn(),
+    onXbox: vi.fn(),
   };
   const picker = createPicker(document, handlers);
   picker.setPages(pages, defaultLayout(pages, ["Achievement Checklist"]));
@@ -182,6 +183,7 @@ describe("game groups", () => {
       onLink: vi.fn(),
       onInstall: vi.fn(),
       onDismissSetup: vi.fn(),
+      onXbox: vi.fn(),
     };
     const picker = createPicker(document, handlers);
     picker.setHubs(hubs, available);
@@ -227,6 +229,33 @@ describe("game groups", () => {
       ["Beta", "Echo"],
       ["Console Thing"],
     ]);
+  });
+
+  it('switcher label "Steam + Xbox" and grouping', () => {
+    const shared = (hubId: string, title: string, platformLabel: string): GuideHub => ({
+      ...hub(hubId, title, "Steam"),
+      xboxTitleId: platformLabel === "Steam" ? null : `100000000${hubId}`,
+      platforms: platformLabel === "Steam + Xbox" ? ["steam", "xbox"] : ["xbox"],
+      source: platformLabel === "Xbox" ? null : "steam",
+      platformLabel,
+    });
+    const { picker } = build([
+      shared("1", "Golf", "Steam + Xbox"),
+      hub("2", "Beta", "Steam"),
+      shared("3", "Hotel", "Xbox"),
+      shared("4", "India", "Steam + Xbox"),
+    ]);
+    const gs = groups(picker.element);
+    expect(gs.map((g) => g.querySelector(".picker-group-name")?.textContent)).toEqual([
+      "Steam",
+      "Steam + Xbox",
+      "Xbox",
+    ]);
+    expect(gs.map(titlesIn)).toEqual([["Beta"], ["Golf", "India"], ["Hotel"]]);
+    const labels = [...picker.element.querySelectorAll(".picker-item .picker-platform")].map(
+      (p) => p.textContent,
+    );
+    expect(labels).toEqual(["Steam", "Steam + Xbox", "Steam + Xbox", "Xbox"]);
   });
 
   it("does not repeat a now-playing game in its platform group", () => {
@@ -1032,5 +1061,122 @@ describe("your links", () => {
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
     picker.showMatches("sample", [], false);
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(true);
+  });
+});
+
+describe("Xbox row", () => {
+  const status = (over: Partial<XboxAuthStatus>): XboxAuthStatus => ({
+    state: "disconnected",
+    gamertag: null,
+    userCode: null,
+    verificationUri: null,
+    expiresAt: null,
+    lostSince: null,
+    ...over,
+  });
+  const xboxRow = (picker: { element: HTMLElement }) =>
+    picker.element.querySelector(".picker-settings .setting-xbox") as HTMLElement;
+  const text = (picker: { element: HTMLElement }) =>
+    xboxRow(picker).querySelector(".setting-xbox-text")?.textContent;
+  const action = (picker: { element: HTMLElement }) =>
+    xboxRow(picker).querySelector(".setting-xbox-action") as HTMLButtonElement;
+  const link = (picker: { element: HTMLElement }) => xboxRow(picker).querySelector("a");
+
+  it("Display row states", () => {
+    const { picker, handlers } = make();
+    // Hidden until the status is known, and while Xbox is off.
+    expect(xboxRow(picker).hidden).toBe(true);
+    picker.setXbox(status({ state: "off" }));
+    expect(xboxRow(picker).hidden).toBe(true);
+    // The row sits with the other settings, before the install row.
+    expect(xboxRow(picker).nextElementSibling?.className).toBe("setting-install");
+
+    picker.setXbox(status({ state: "disconnected" }));
+    expect(xboxRow(picker).hidden).toBe(false);
+    expect(text(picker)).toBe("Xbox: not connected");
+    expect(action(picker).textContent).toBe("Connect");
+    expect(action(picker).getAttribute("type")).toBe("button");
+    action(picker).click();
+    expect(handlers.onXbox).toHaveBeenLastCalledWith("connect");
+
+    picker.setXbox(
+      status({
+        state: "connecting",
+        userCode: "ABCD-EFGH",
+        verificationUri: "https://www.microsoft.com/link",
+        expiresAt: "2026-10-18T12:15:00.000Z",
+      }),
+    );
+    expect(text(picker)).toBe("Enter ABCD-EFGH at microsoft.com/link");
+    expect(xboxRow(picker).querySelector(".setting-xbox-code")?.textContent).toBe("ABCD-EFGH");
+    expect(link(picker)?.getAttribute("href")).toBe("https://www.microsoft.com/link");
+    expect(link(picker)?.getAttribute("target")).toBe("_blank");
+    expect(link(picker)?.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(link(picker)?.textContent).toBe("microsoft.com/link");
+    expect(action(picker).textContent).toBe("Cancel");
+    action(picker).click();
+    expect(handlers.onXbox).toHaveBeenLastCalledWith("cancel");
+
+    picker.setXbox(status({ state: "connected", gamertag: "<b>Sample Tag</b>" }));
+    expect(text(picker)).toBe("Xbox: connected as <b>Sample Tag</b>");
+    expect(xboxRow(picker).querySelector("b")).toBeNull();
+    expect(link(picker)).toBeNull();
+    expect(action(picker).textContent).toBe("Disconnect");
+    action(picker).click();
+    expect(handlers.onXbox).toHaveBeenLastCalledWith("disconnect");
+
+    picker.setXbox(status({ state: "connected" }));
+    expect(text(picker)).toBe("Xbox: connected");
+
+    picker.setXbox(
+      status({ state: "lost", gamertag: "Sample Tag", lostSince: "2026-10-18T11:00:00.000Z" }),
+    );
+    expect(text(picker)).toBe("Xbox: connect again");
+    expect(action(picker).textContent).toBe("Connect");
+    action(picker).click();
+    expect(handlers.onXbox).toHaveBeenLastCalledWith("connect");
+
+    picker.setXbox(null);
+    expect(xboxRow(picker).hidden).toBe(true);
+  });
+
+  it("disables the button once tapped, until the next status", () => {
+    const { picker, handlers } = make();
+    picker.setXbox(status({ state: "disconnected" }));
+    action(picker).click();
+    expect(action(picker).disabled).toBe(true);
+    action(picker).click();
+    expect(handlers.onXbox).toHaveBeenCalledTimes(1);
+    picker.setXbox(status({ state: "disconnected" }));
+    expect(action(picker).disabled).toBe(false);
+  });
+
+  it.each([
+    "http://www.microsoft.com/link",
+    "https://microsoft.com.example.test/link",
+    "https://evil.example.test/?u=microsoft.com",
+    "https://user@www.microsoft.com/link",
+    "javascript:alert(1)",
+    "not a url",
+  ])("never links to an address off microsoft.com or live.com: %s", (uri) => {
+    const { picker } = make();
+    picker.setXbox(status({ state: "connecting", userCode: "ABCD-EFGH", verificationUri: uri }));
+    expect(link(picker)).toBeNull();
+    expect(text(picker)).toBe("Enter ABCD-EFGH at microsoft.com/link");
+  });
+
+  it("links to a live.com address under its own name", () => {
+    const { picker } = make();
+    picker.setXbox(
+      status({
+        state: "connecting",
+        userCode: "ABCD-EFGH",
+        verificationUri: "https://login.live.com/oauth20_remoteconnect.srf",
+      }),
+    );
+    expect(link(picker)?.getAttribute("href")).toBe(
+      "https://login.live.com/oauth20_remoteconnect.srf",
+    );
+    expect(text(picker)).toBe("Enter ABCD-EFGH at login.live.com/oauth20_remoteconnect.srf");
   });
 });

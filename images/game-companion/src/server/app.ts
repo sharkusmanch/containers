@@ -16,6 +16,7 @@ import type { McpTools, ToolResult } from "./mcp.js";
 import type { PlatformMemory } from "./platform-memory.js";
 import type { AskLimiter } from "./rate-limit.js";
 import type { RouteDeps } from "./routes.js";
+import type { XboxAuth } from "./xbox-auth.js";
 
 type GameRef = NonNullable<AskRequest["game"]>;
 
@@ -45,6 +46,12 @@ export interface AppParts {
   mcp?: null | { token: string; version: string };
   /** Remembers the platform each guide was last detected on; absent or null when Xbox is off. */
   memory?: null | Pick<PlatformMemory, "record">;
+  /** The Xbox sign-in; absent or null when Xbox is off (no client ID). */
+  xbox?: null | {
+    /** Origin of the wiki that frames the page: the one origin allowed to change the sign-in. */
+    origin: string;
+    auth: Pick<XboxAuth, "status" | "startConnect" | "cancelConnect" | "disconnect">;
+  };
   /** Fixed-text log lines. */
   log?: (line: string) => void;
 }
@@ -256,6 +263,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
   };
 
   const askParts = parts.ask;
+  const xboxParts = parts.xbox ?? null;
   return {
     staticDir: parts.staticDir,
     now: () => {
@@ -323,5 +331,21 @@ export function buildDeps(parts: AppParts): RouteDeps {
             },
           },
     mcp: parts.mcp ? { ...parts.mcp, tools: mcpTools } : null,
+    xbox:
+      xboxParts === null
+        ? null
+        : {
+            origin: xboxParts.origin,
+            status: () => xboxParts.auth.status(),
+            connect: () => xboxParts.auth.startConnect(),
+            cancel: () => {
+              xboxParts.auth.cancelConnect();
+              return xboxParts.auth.status();
+            },
+            disconnect: async () => {
+              await xboxParts.auth.disconnect();
+              return xboxParts.auth.status();
+            },
+          },
   };
 }
