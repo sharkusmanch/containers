@@ -103,6 +103,23 @@ export function buildDeps(parts: AppParts): RouteDeps {
       (game.source === "xbox" && hub.xboxTitleId === game.id));
 
   /**
+   * The Xbox game a guide is being asked about when the guide's own game is another platform's: the
+   * Xbox game played now that this guide covers, or the one a request names with this guide's
+   * Xbox title ID. Null otherwise, and then the guide's own game is the target.
+   */
+  const xboxTargetFor = (hub: GuideHub | null, requested: GameRef | null): GameRef | null => {
+    if (hub === null) return null;
+    const game = snapshot().game;
+    if (game !== null && game.id !== null && game.source === "xbox" && hubHasGame(hub, game)) {
+      return { source: "xbox", id: game.id };
+    }
+    if (requested?.source === "xbox" && hub.xboxTitleId === requested.id) {
+      return { source: "xbox", id: requested.id };
+    }
+    return null;
+  };
+
+  /**
    * For a Steam or Xbox game being played, remembers the platform (and the Xbox title ID) on each
    * of its guides, then answers the guides as they are now. The file write happens in the
    * background; a failure is logged and changes nothing here.
@@ -149,9 +166,16 @@ export function buildDeps(parts: AppParts): RouteDeps {
     snapshot();
     const hub = req.hubId === null ? null : (index.tree(req.hubId)?.hub ?? null);
     if (req.hubId !== null && hub === null) return null;
+    // The guide itself vouches for its own Xbox title ID, so that target needs no further check.
+    const viaGuide = xboxTargetFor(hub, req.game);
     const target =
-      hub?.source != null && hub.gameId != null ? { source: hub.source, id: hub.gameId } : req.game;
-    if (target !== null && !lookupAllowed(target.source, target.id)) return null;
+      viaGuide ??
+      (hub?.source != null && hub.gameId != null
+        ? { source: hub.source, id: hub.gameId }
+        : req.game);
+    if (viaGuide === null && target !== null && !lookupAllowed(target.source, target.id)) {
+      return null;
+    }
     return { hub, target };
   };
 
@@ -190,6 +214,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
           : target?.source === "xbox"
             ? "Xbox"
             : "Steam"),
+      ...(target?.source === "xbox" ? { xbox: { device: isDetected ? snap.device : null } } : {}),
       playState: !isDetected
         ? "not detected"
         : snap.state === "playing"
@@ -235,13 +260,15 @@ export function buildDeps(parts: AppParts): RouteDeps {
       if (named !== null && "text" in named) return named;
       const { game, hub: currentHub } = current();
       const hub = named ?? currentHub;
-      // A hub's own game when it names one; otherwise only the current game, without a hub.
+      // The Xbox game played now when the guide covers it; else the hub's own game when it names
+      // one; otherwise only the current game, without a hub.
       const target =
         hub === null
           ? game
-          : hub.source !== null && hub.gameId !== null
-            ? { source: hub.source, id: hub.gameId }
-            : null;
+          : (xboxTargetFor(hub, null) ??
+            (hub.source !== null && hub.gameId !== null
+              ? { source: hub.source, id: hub.gameId }
+              : null));
       if (hub === null && target === null) return { text: NO_GAME, isError: true };
       return { text: buildStatusBlock(await gatherContext(hub, target)) };
     },

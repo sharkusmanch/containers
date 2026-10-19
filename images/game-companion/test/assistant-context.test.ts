@@ -188,4 +188,52 @@ describe("INSTRUCTIONS", () => {
       "- At answer depth hint, keep guide searches and the sections you read to the player's current progress where you can, because the screen shows them.",
     );
   });
+
+  it("names the Xbox source and device, with Gamerscore after the achievements", () => {
+    const xbox = {
+      ...response([ach("1")], 1),
+      source: "xbox" as const,
+      gamerscore: { current: 25, total: 150 },
+    };
+    const ls = buildStatusBlock(
+      input({ platformLabel: "Xbox", xbox: { device: "Series X" }, achievements: xbox }),
+    ).split("\n");
+    expect(ls.slice(0, 5)).toEqual([
+      "Game: Lantern Vale (Xbox)",
+      "Source: Xbox (Series X)",
+      "State: playing",
+      "Status line: In the Glass Garden",
+      "Achievements: 1/10 unlocked",
+    ]);
+    expect(ls[5]).toBe("Gamerscore: 25/150");
+  });
+
+  it("leaves out the device when unknown and the Gamerscore when not given", () => {
+    const statusBlock = buildStatusBlock(
+      input({ xbox: { device: null }, achievements: response([ach("1")]) }),
+    );
+    expect(statusBlock).toContain("Source: Xbox\n");
+    expect(statusBlock).not.toContain("Gamerscore");
+    expect(buildStatusBlock(input())).not.toContain("Source:");
+  });
+
+  it("counts locked secret Xbox achievements without naming them", () => {
+    const statusBlock = buildStatusBlock(
+      input({
+        xbox: { device: "PC" },
+        achievements: {
+          ...response([
+            ach("1", { name: "Quiet Moon", description: "Find the moon", hidden: true }),
+            ach("2", { name: "Open Gate", description: "Open it", kind: "progression" }),
+          ]),
+          source: "xbox",
+          gamerscore: { current: 0, total: 30 },
+        },
+      }),
+    );
+    expect(statusBlock).not.toContain("Quiet Moon");
+    expect(statusBlock).not.toContain("Find the moon");
+    expect(statusBlock).toContain("Hidden achievements still locked: 1");
+    expect(statusBlock).toContain("- Open Gate — Open it");
+  });
 });

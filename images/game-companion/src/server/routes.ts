@@ -13,6 +13,7 @@ import type {
   HubTreeResponse,
   NowResponse,
   Source,
+  XboxAuthState,
   XboxAuthStatus,
 } from "../shared/types.js";
 import { serveStatic } from "./static.js";
@@ -80,6 +81,7 @@ const BASE = "/companion";
 const ASK_PATH = `${BASE}/api/ask`;
 const MCP_PATH = `${BASE}/mcp`;
 const XBOX_PATH = `${BASE}/api/xbox`;
+const METRICS_PATH = `${BASE}/metrics`;
 const XBOX_ACTIONS = ["connect", "cancel", "disconnect"] as const;
 type XboxAction = (typeof XBOX_ACTIONS)[number];
 
@@ -237,6 +239,24 @@ const XBOX_OFF: XboxAuthStatus = {
   expiresAt: null,
   lostSince: null,
 };
+
+/**
+ * Prometheus text for the Xbox sign-in: three gauges from the state alone, no labels. Never
+ * carries the gamertag or anything else personal.
+ */
+function xboxMetrics(state: XboxAuthState): string {
+  const gauge = (name: string, help: string, on: boolean): string =>
+    `# HELP ${name} ${help}\n# TYPE ${name} gauge\n${name} ${on ? 1 : 0}\n`;
+  return (
+    gauge("game_companion_xbox_configured", "1 when Xbox is enabled.", state !== "off") +
+    gauge(
+      "game_companion_xbox_connected",
+      "1 when the Xbox sign-in works.",
+      state === "connected",
+    ) +
+    gauge("game_companion_xbox_signin_lost", "1 when the Xbox sign-in was lost.", state === "lost")
+  );
+}
 
 /** Copies only the fields the browser may see, whatever else the object carries. */
 const xboxBody = (s: XboxAuthStatus): XboxAuthStatus => ({
@@ -469,6 +489,17 @@ export function createHandler(
       const path = q === -1 ? raw : raw.slice(0, q);
       if (path === ASK_PATH) return await handleAsk(deps, req, res);
       if (path === MCP_PATH) return await handleMcp(deps, req, res);
+      if (path === METRICS_PATH) {
+        if (req.method !== "GET") {
+          return send(res, 405, "text/plain; charset=utf-8", "Method Not Allowed", {
+            allow: "GET",
+          });
+        }
+        const state = deps.xbox ? deps.xbox.status().state : "off";
+        return send(res, 200, "text/plain; version=0.0.4; charset=utf-8", xboxMetrics(state), {
+          "cache-control": "no-store",
+        });
+      }
       if (path.startsWith(`${XBOX_PATH}/`)) {
         const name = path.slice(XBOX_PATH.length + 1);
         const action = XBOX_ACTIONS.find((a) => a === name) ?? null;

@@ -1524,3 +1524,218 @@ describe("xbox sign-in", () => {
     expect(states).toEqual(["connect", "cancel", "disconnect"]);
   });
 });
+
+describe("xbox in Ask and companion_status", () => {
+  const shared: GuideHub = {
+    hubId: "shared",
+    title: "Sample Wars",
+    url: "/doc/wars",
+    source: "steam",
+    gameId: "10",
+    xboxTitleId: "1000000001",
+    platforms: ["steam", "xbox"],
+    lastPlatform: "xbox",
+    platformLabel: "Steam + Xbox",
+    nowPlaying: false,
+  };
+  const steamAch: AchievementsResponse = {
+    source: "steam",
+    id: "10",
+    title: "Sample Wars",
+    total: 2,
+    unlocked: 0,
+    stale: false,
+    achievements: [
+      {
+        id: "S1",
+        name: "Steam Medal",
+        description: "Steam only",
+        icon: null,
+        unlocked: false,
+        unlockedAt: null,
+        unlockPercent: null,
+        hidden: false,
+        missable: false,
+        kind: null,
+      },
+    ],
+  };
+  const xboxAch: AchievementsResponse = {
+    source: "xbox",
+    id: "1000000001",
+    title: "Sample Wars",
+    total: 3,
+    unlocked: 1,
+    stale: false,
+    gamerscore: { current: 25, total: 150 },
+    achievements: [
+      {
+        id: "X1",
+        name: "Bridge Builder",
+        description: "Cross the bridge",
+        icon: null,
+        unlocked: false,
+        unlockedAt: null,
+        unlockPercent: null,
+        hidden: false,
+        missable: false,
+        kind: "progression",
+        gamerscore: 25,
+      },
+      {
+        id: "X2",
+        name: "Moonlit Secret",
+        description: "Find the buried moon",
+        icon: null,
+        unlocked: false,
+        unlockedAt: null,
+        unlockPercent: null,
+        hidden: true,
+        missable: false,
+        kind: null,
+        gamerscore: 50,
+      },
+    ],
+  };
+  const detecting = (
+    game: { source: "steam" | "xbox"; id: string } | null,
+    state: "playing" | "last-played" = "playing",
+  ) => ({
+    current: () => ({
+      game: game && { ...game, title: "Detected Title" },
+      state: game ? state : ("none" as const),
+      observedAt: 1,
+      presence: game && state === "playing" ? "Act 2: Sample Bridge" : null,
+      device: game?.source === "xbox" && state === "playing" ? "Series X" : null,
+      stale: false,
+    }),
+  });
+
+  function setup(detector: unknown) {
+    const gets: unknown[][] = [];
+    const wheres: unknown[][] = [];
+    const asked: { statusBlock: string }[] = [];
+    const base = parts();
+    const d = buildDeps(
+      parts({
+        detector,
+        index: {
+          ...base.index,
+          hubs: () => [shared],
+          lookup: (s: string, id: string) =>
+            (s === "steam" && id === "10") || (s === "xbox" && id === "1000000001") ? [shared] : [],
+          tree: (id: string) => (id === "shared" ? { hub: shared, pages: [] } : null),
+        },
+        achievements: {
+          get: async (...args: unknown[]) => {
+            gets.push(args);
+            return args[0] === "xbox" ? xboxAch : args[0] === "steam" ? steamAch : null;
+          },
+        },
+        pages: {
+          ...base.pages,
+          texts: async () => [],
+          where: async (...args: unknown[]) => {
+            wheres.push(args);
+            return {
+              matches: [
+                { pageTitle: "Walkthrough", pageUrl: "/w", heading: "Bridge", phrase: "x" },
+              ],
+            };
+          },
+        },
+        mcp: { token: "t", version: "1" },
+        ask: {
+          origin: "https://wiki.example",
+          limiter: { admit: () => ({ ok: true }) },
+          agent: {
+            ask: async (body: { statusBlock: string }) => {
+              asked.push(body);
+              return null;
+            },
+          },
+        },
+      }),
+    );
+    const ask = async (game: { source: "steam" | "xbox"; id: string } | null) => {
+      await d.ask?.start(
+        { hubId: "shared", game, history: [], question: "q", depth: "hint" },
+        new AbortController().signal,
+      );
+      return asked[asked.length - 1]?.statusBlock ?? null;
+    };
+    return { d, gets, wheres, ask, status: () => d.mcp?.tools.status("shared") };
+  }
+  const xboxPlaying = { source: "xbox" as const, id: "1000000001" };
+
+  it("status block names xbox source, device and gamerscore for a shared guide", async () => {
+    const { ask, status, gets, wheres } = setup(detecting(xboxPlaying));
+    const expected = [
+      "Game: Sample Wars (Steam + Xbox)",
+      "Source: Xbox (Series X)",
+      "State: playing",
+      "Status line: Act 2: Sample Bridge",
+      "Achievements: 1/3 unlocked",
+      "Gamerscore: 25/150",
+      "Next story achievements:",
+      "- Bridge Builder — Cross the bridge",
+      "Hidden achievements still locked: 1",
+      "Guide section matching the status line: Walkthrough › Bridge",
+    ].join("\n");
+    expect(await ask(null)).toBe(expected);
+    expect((await status())?.text).toBe(expected);
+    expect(gets).toEqual([
+      ["xbox", "1000000001", { priority: true }],
+      ["xbox", "1000000001", { priority: true }],
+    ]);
+    expect(wheres.length).toBe(2);
+  });
+
+  it("locked secret xbox achievements are counted, not named", async () => {
+    const { ask, status } = setup(detecting(xboxPlaying));
+    for (const text of [await ask(null), (await status())?.text ?? ""]) {
+      expect(text).not.toContain("Moonlit Secret");
+      expect(text).not.toContain("buried moon");
+      expect(text).toContain("Hidden achievements still locked: 1");
+    }
+  });
+
+  it("the same shared guide with a Steam detection is unchanged", async () => {
+    const { ask, status, gets } = setup(detecting({ source: "steam", id: "10" }));
+    const expected = [
+      "Game: Sample Wars (Steam + Xbox)",
+      "State: playing",
+      "Status line: Act 2: Sample Bridge",
+      "Achievements: 0/2 unlocked",
+      "Guide section matching the status line: Walkthrough › Bridge",
+    ].join("\n");
+    expect(await ask(null)).toBe(expected);
+    expect((await status())?.text).toBe(expected);
+    expect(gets.every((g) => g[0] === "steam" && g[1] === "10")).toBe(true);
+  });
+
+  it("names Xbox for a request carrying the guide's Xbox title ID when it is not played", async () => {
+    const { ask, gets } = setup(detecting(null));
+    const block = await ask(xboxPlaying);
+    expect(block).toContain("Source: Xbox\n");
+    expect(block).toContain("State: not detected");
+    expect(block).toContain("Gamerscore: 25/150");
+    expect(gets).toEqual([["xbox", "1000000001", { priority: false }]]);
+  });
+
+  it("ignores an Xbox request that does not carry the guide's title ID", async () => {
+    const { ask, gets } = setup(detecting(null));
+    const block = await ask({ source: "xbox", id: "2000000002" });
+    expect(block).not.toContain("Source: Xbox");
+    expect(block).toContain("Achievements: 0/2 unlocked");
+    expect(gets).toEqual([["steam", "10", { priority: false }]]);
+  });
+
+  it("keeps the Xbox last-played state without a device", async () => {
+    const { status } = setup(detecting(xboxPlaying, "last-played"));
+    const text = (await status())?.text ?? "";
+    expect(text).toContain("Source: Xbox\n");
+    expect(text).toContain("State: last-played");
+    expect(text).not.toContain("Series X");
+  });
+});

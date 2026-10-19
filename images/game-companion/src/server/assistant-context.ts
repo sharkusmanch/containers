@@ -16,9 +16,11 @@ export const INSTRUCTIONS = `You are a game companion shown on a small second sc
 export interface ContextInput {
   /** Hub title, else the detected game title. */
   gameTitle: string;
-  /** hub.platformLabel, else "Steam" / "RetroAchievements". */
+  /** hub.platformLabel, else "Steam" / "RetroAchievements" / "Xbox". */
   platformLabel: string;
   playState: "playing" | "last-played" | "not detected";
+  /** Set for an Xbox game: the device it is played on now ("Series X", "PC"), else null. */
+  xbox?: { device: string | null };
   /** Only when playing this game. */
   presence: string | null;
   achievements: AchievementsResponse | null;
@@ -34,6 +36,7 @@ const entry = (name: string, description: string | null): string =>
 
 function achievementLines(a: AchievementsResponse, missableNames: string[]): string[] {
   const out = [`Achievements: ${a.unlocked}/${a.total} unlocked`];
+  if (a.gamerscore) out.push(`Gamerscore: ${a.gamerscore.current}/${a.gamerscore.total}`);
   const marked = new Set(missableNames);
   const locked = a.achievements.filter((x) => !x.unlocked);
   // A hidden achievement's name and description are spoilers; only how many remain is shown.
@@ -56,7 +59,11 @@ function achievementLines(a: AchievementsResponse, missableNames: string[]): str
 
 /** The facts about the game and the player's progress that go with every question. */
 export function buildStatusBlock(input: ContextInput): string {
-  const status = [`Game: ${input.gameTitle} (${input.platformLabel})`, `State: ${input.playState}`];
+  const status = [`Game: ${input.gameTitle} (${input.platformLabel})`];
+  if (input.xbox) {
+    status.push(`Source: Xbox${input.xbox.device === null ? "" : ` (${input.xbox.device})`}`);
+  }
+  status.push(`State: ${input.playState}`);
   if (input.presence !== null) status.push(`Status line: ${input.presence}`);
   if (input.achievements === null) status.push("Achievements: unknown");
   else status.push(...achievementLines(input.achievements, input.missableNames));

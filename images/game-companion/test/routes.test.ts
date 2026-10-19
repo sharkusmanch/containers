@@ -1107,3 +1107,99 @@ describe("xbox routes", () => {
     expect(achievementCalls).toEqual(["xbox:1000000001", "xbox:1000000002"]);
   });
 });
+
+describe("metrics", () => {
+  const SECRET_TAG = "FakeGamertag99";
+  type Xbox = NonNullable<RouteDeps["xbox"]>;
+  let state: "off" | "disconnected" | "connecting" | "connected" | "lost";
+  let s: Server;
+  let url: string;
+  let withXbox: boolean;
+
+  beforeAll(async () => {
+    const deps: RouteDeps = {
+      ask: null,
+      staticDir: "/nonexistent",
+      now: () => now,
+      guides: () => ({ available: false, hubs: [] }),
+      hubTree: () => null,
+      refreshGuides: () => {},
+      achievements: async () => null,
+      find: async () => null,
+      marks: async () => null,
+      where: async () => null,
+      progress: async () => null,
+      get xbox(): Xbox | null {
+        return withXbox
+          ? ({
+              origin: "https://wiki.example.test",
+              status: () => ({
+                state,
+                gamertag: state === "connected" || state === "lost" ? SECRET_TAG : null,
+                userCode: null,
+                verificationUri: null,
+                expiresAt: null,
+                lostSince: null,
+              }),
+            } as unknown as Xbox)
+          : null;
+      },
+    };
+    s = createServer((req, res) => void createHandler(deps)(req, res));
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+    url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/companion/metrics`;
+  });
+  afterAll(() => new Promise<void>((r) => s.close(() => r())));
+
+  const values = (text: string): Record<string, string> =>
+    Object.fromEntries(
+      text
+        .split("\n")
+        .filter((l) => l !== "" && !l.startsWith("#"))
+        .map((l) => l.split(" ") as [string, string]),
+    );
+
+  it("metrics reflect each auth state", async () => {
+    const expected = {
+      off: [0, 0, 0],
+      disconnected: [1, 0, 0],
+      connecting: [1, 0, 0],
+      connected: [1, 1, 0],
+      lost: [1, 0, 1],
+    } as const;
+    for (const [name, [configured, connected, lost]] of Object.entries(expected)) {
+      state = name as typeof state;
+      withXbox = state !== "off";
+      const r = await fetch(url);
+      expect(r.status).toBe(200);
+      expect(r.headers.get("content-type")).toBe("text/plain; version=0.0.4; charset=utf-8");
+      expect(r.headers.get("cache-control")).toBe("no-store");
+      expect(values(await r.text())).toEqual({
+        game_companion_xbox_configured: String(configured),
+        game_companion_xbox_connected: String(connected),
+        game_companion_xbox_signin_lost: String(lost),
+      });
+    }
+  });
+
+  it("metrics carry no gamertag or labels", async () => {
+    withXbox = true;
+    for (const name of ["connected", "lost"] as const) {
+      state = name;
+      const text = await (await fetch(url)).text();
+      expect(text).not.toContain(SECRET_TAG);
+      expect(text).not.toMatch(/[{}"]/);
+    }
+  });
+
+  it("needs no auth headers and answers GET only", async () => {
+    withXbox = true;
+    state = "connected";
+    expect((await fetch(url, { headers: {} })).status).toBe(200);
+    for (const method of ["POST", "PUT", "DELETE", "HEAD"]) {
+      const r = await fetch(url, { method });
+      expect(r.status, method).toBe(405);
+      expect(r.headers.get("allow")).toBe("GET");
+    }
+  });
+});
