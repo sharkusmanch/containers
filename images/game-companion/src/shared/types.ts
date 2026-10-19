@@ -27,6 +27,8 @@ export interface GuideHub {
   platforms: Source[];
   /** The platform the hub's game was last detected on; null when never detected. */
   lastPlatform: Source | null;
+  /** The platform the guide's `Tracked on` row names; null with no row, and for RA-only guides. */
+  trackedOn: "steam" | "xbox" | null;
   /** "Steam", "Xbox", "Steam + Xbox", "RA · GC", or "Other" when no platform is known. */
   platformLabel: string;
   nowPlaying: boolean;

@@ -180,8 +180,9 @@ function isPlayingHere(c: Pick<Current, "game" | "hub">, playing: GameRef | null
 
 /**
  * The game whose achievements the panel shows: the game being played, when it is this one; else
- * this device's choice for the guide; else the platform the guide was last detected on; else
- * the guide's own row (or the detected game, without a guide).
+ * this device's choice for the guide; else the platform the guide's `Tracked on` row names; else
+ * the platform the guide was last detected on; else the guide's own row (or the detected game,
+ * without a guide). A platform the guide has no id for is skipped.
  */
 function achievementsSource(
   c: Pick<Current, "game" | "hub">,
@@ -193,7 +194,7 @@ function achievementsSource(
   }
   const hub = c.hub;
   if (hub !== null) {
-    for (const platform of [choice, hub.lastPlatform]) {
+    for (const platform of [choice, hub.trackedOn, hub.lastPlatform]) {
       const id = platform === null ? null : hubGameId(hub, platform);
       if (platform !== null && id !== null) return { source: platform, id };
     }

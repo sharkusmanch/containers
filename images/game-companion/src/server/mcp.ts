@@ -20,6 +20,8 @@ export interface McpTools {
   outline(hub: string | undefined): Promise<ToolResult>;
   search(query: string, hub: string | undefined): Promise<ToolResult>;
   read(page: string, section: string | undefined, hub: string | undefined): Promise<ToolResult>;
+  xboxTitles(query: string | undefined): Promise<ToolResult>;
+  xboxAchievements(titleId: string): Promise<ToolResult>;
 }
 
 type Id = string | number;
@@ -30,6 +32,8 @@ export type JsonRpcResponse =
 
 const HUB_PATTERN = "^[A-Za-z0-9-]{1,64}$";
 const HUB_RE = new RegExp(HUB_PATTERN);
+const TITLE_ID_PATTERN = "^[0-9]{1,20}$";
+const TITLE_ID_RE = new RegExp(TITLE_ID_PATTERN);
 /** Longest query, page or section name accepted, in characters (code points). */
 const TEXT_MAX = 200;
 
@@ -44,6 +48,11 @@ const textProp = (description: string) => ({
   maxLength: TEXT_MAX,
   description,
 });
+const titleIdProp = {
+  type: "string",
+  pattern: TITLE_ID_PATTERN,
+  description: "Xbox title id from xbox_titles.",
+};
 const schema = (properties: Record<string, object>, required: string[]) => ({
   type: "object",
   properties,
@@ -89,6 +98,18 @@ export const TOOLS = [
       ["page"],
     ),
   },
+  {
+    name: "xbox_titles",
+    description:
+      "List the player's Xbox title history, newest first, with title ids, devices, last played times and Gamerscore, optionally only titles whose name contains the query.",
+    inputSchema: schema({ query: textProp("Part of a game name to filter by.") }, []),
+  },
+  {
+    name: "xbox_achievements",
+    description:
+      "Get every achievement of one Xbox title with its description, locked description, secret flag, unlock time, rarity, Gamerscore and progress.",
+    inputSchema: schema({ titleId: titleIdProp }, ["titleId"]),
+  },
 ];
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
@@ -127,6 +148,8 @@ function checkArgs(
     if (typeof v !== "string") return { error: `Argument "${key}" must be a string.` };
     if (key === "hub") {
       if (!HUB_RE.test(v)) return { error: 'Argument "hub" must be a guide id from list_guides.' };
+    } else if (key === "titleId") {
+      if (!TITLE_ID_RE.test(v)) return { error: 'Argument "titleId" must be an Xbox title id.' };
     } else {
       if (v.trim() === "") return { error: `Argument "${key}" must not be empty.` };
       if ([...v].length > TEXT_MAX) {
@@ -152,6 +175,10 @@ function runTool(
       return tools.outline(v.hub);
     case "search_guide":
       return tools.search(v.query as string, v.hub);
+    case "xbox_titles":
+      return tools.xboxTitles(v.query);
+    case "xbox_achievements":
+      return tools.xboxAchievements(v.titleId as string);
     default:
       return tools.read(v.page as string, v.section, v.hub);
   }

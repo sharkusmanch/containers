@@ -21,6 +21,8 @@ const tools: McpTools = {
   outline: async () => ({ text: "## Walkthrough (4 chars)" }),
   search: async () => ({ text: "No matches." }),
   read: async () => ({ text: "walk" }),
+  xboxTitles: async () => ({ text: "No Xbox titles found." }),
+  xboxAchievements: async () => ({ text: "Sample Quest | 0/0 G" }),
 };
 
 beforeAll(async () => {

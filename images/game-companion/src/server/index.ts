@@ -115,7 +115,9 @@ const handler = createHandler(
     mcp,
     memory: xbox?.memory ?? null,
     // Starting a sign-in takes the Ask route's origin check: only the page itself may.
-    xbox: xbox ? { origin: new URL(config.outlineBaseUrl).origin, auth: xbox.auth } : null,
+    xbox: xbox
+      ? { origin: new URL(config.outlineBaseUrl).origin, auth: xbox.auth, client: xbox.client }
+      : null,
     log,
   }),
 );

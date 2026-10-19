@@ -24,6 +24,7 @@ const hub: GuideHub = {
   xboxTitleId: null,
   platforms: ["steam"],
   lastPlatform: null,
+  trackedOn: null,
   platformLabel: "Steam",
   nowPlaying: false,
 };

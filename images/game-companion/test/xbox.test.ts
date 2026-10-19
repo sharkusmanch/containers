@@ -313,6 +313,64 @@ describe("XboxClient.titleInfo", () => {
   });
 });
 
+describe("XboxClient.titles", () => {
+  it("lists every title from the one history call, with devices, last played and Gamerscore", async () => {
+    const { xbox, calls } = client([["titlehub", titlehubOk]]);
+    const all = await xbox.titles();
+    expect(all?.map((t) => t.id)).toEqual(["2000000002", "2000000003", "2000000005", "2000000004"]);
+    expect(all?.[0]).toMatchObject({
+      id: "2000000002",
+      name: "Test Quest: Moon Edition",
+      devices: ["PC", "XboxSeries"],
+      lastPlayed: "2026-10-18T10:05:00.000Z",
+      currentGamerscore: 25,
+      totalGamerscore: 1000,
+    });
+    // No last-played time: the field is simply absent.
+    expect(all?.[1]).not.toHaveProperty("lastPlayed");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("shares its call with titleInfo and is cached 24 h", async () => {
+    const clock = { t: 1_000_000 };
+    const { xbox, calls } = client([["titlehub", titlehubOk]], { now: () => clock.t });
+    await xbox.titleInfo("2000000002");
+    await xbox.titles();
+    await xbox.titles();
+    expect(calls).toHaveLength(1);
+    clock.t += 25 * 3_600_000;
+    await xbox.titles();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("is null without a session or when the call fails, and a failure is not retried for 5 min", async () => {
+    const none = client([["titlehub", titlehubOk]], { session: null });
+    expect(await none.xbox.titles()).toBeNull();
+    expect(none.calls).toEqual([]);
+
+    const clock = { t: 1_000_000 };
+    let status = 500;
+    const { xbox, calls } = client(
+      [["titlehub", () => (status === 200 ? titlehubOk : { status })]],
+      { now: () => clock.t },
+    );
+    expect(await xbox.titles()).toBeNull();
+    clock.t += 4 * 60_000;
+    expect(await xbox.titles()).toBeNull();
+    expect(calls).toHaveLength(1);
+    status = 200;
+    clock.t += 2 * 60_000;
+    expect((await xbox.titles())?.length).toBe(4);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("returns a copy, so a caller cannot reorder the cache", async () => {
+    const { xbox } = client([["titlehub", titlehubOk]]);
+    (await xbox.titles())?.reverse();
+    expect((await xbox.titles())?.[0]?.id).toBe("2000000002");
+  });
+});
+
 describe("XboxClient errors", () => {
   it("429 carries retryAfterMs", async () => {
     const { xbox } = client([

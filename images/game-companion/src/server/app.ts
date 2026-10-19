@@ -17,6 +17,8 @@ import type { PlatformMemory } from "./platform-memory.js";
 import type { AskLimiter } from "./rate-limit.js";
 import type { RouteDeps } from "./routes.js";
 import type { XboxAuth } from "./xbox-auth.js";
+import type { XboxClient } from "./xbox.js";
+import { formatAchievements, formatTitles, NOT_CONNECTED, UNREACHABLE } from "./xbox-tools.js";
 
 type GameRef = NonNullable<AskRequest["game"]>;
 
@@ -51,6 +53,8 @@ export interface AppParts {
     /** Origin of the wiki that frames the page: the one origin allowed to change the sign-in. */
     origin: string;
     auth: Pick<XboxAuth, "status" | "startConnect" | "cancelConnect" | "disconnect">;
+    /** Backs the Xbox MCP tools; without it they answer as if Xbox were not connected. */
+    client?: Pick<XboxClient, "titles" | "titleInfo" | "achievements">;
   };
   /** Fixed-text log lines. */
   log?: (line: string) => void;
@@ -254,6 +258,21 @@ export function buildDeps(parts: AppParts): RouteDeps {
     return fn(texts);
   };
 
+  /** Runs an Xbox tool against the client when the sign-in is connected. */
+  const withXbox = async (
+    run: (client: NonNullable<NonNullable<AppParts["xbox"]>["client"]>) => Promise<ToolResult>,
+  ): Promise<ToolResult> => {
+    const client = parts.xbox?.client;
+    if (!client || parts.xbox?.auth.status().state !== "connected") {
+      return { text: NOT_CONNECTED, isError: true };
+    }
+    try {
+      return await run(client);
+    } catch {
+      return { text: UNREACHABLE, isError: true };
+    }
+  };
+
   const mcpTools: McpTools = {
     status: async (hubId) => {
       const named = hubId === undefined ? null : toolHub(hubId);
@@ -286,6 +305,21 @@ export function buildDeps(parts: AppParts): RouteDeps {
       withGuide(hubId, (texts) => {
         const read = readGuide(texts, page, section);
         return read.ok ? { text: read.text } : { text: read.text, isError: true };
+      }),
+    xboxTitles: (query) =>
+      withXbox(async (client) => {
+        const titles = await client.titles();
+        return titles === null
+          ? { text: UNREACHABLE, isError: true }
+          : { text: formatTitles(titles, query) };
+      }),
+    xboxAchievements: (titleId) =>
+      withXbox(async (client) => {
+        const [list, info] = await Promise.all([
+          client.achievements(titleId),
+          client.titleInfo(titleId),
+        ]);
+        return { text: formatAchievements(titleId, list, info) };
       }),
   };
 

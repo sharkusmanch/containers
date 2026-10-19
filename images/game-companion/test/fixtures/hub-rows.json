@@ -4,7 +4,8 @@
     "expect": {
       "steam": "1000004",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -12,7 +13,8 @@
     "expect": {
       "steam": "1000007",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -20,7 +22,8 @@
     "expect": {
       "steam": "1000001",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -28,7 +31,8 @@
     "expect": {
       "steam": "1000002",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -40,7 +44,8 @@
     "expect": {
       "steam": "1234",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -48,7 +53,8 @@
     "expect": {
       "steam": null,
       "ra": "30001",
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -56,7 +62,8 @@
     "expect": {
       "steam": null,
       "ra": "30002",
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -64,7 +71,8 @@
     "expect": {
       "steam": "5",
       "ra": "30001",
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -92,7 +100,8 @@
     "expect": {
       "steam": "77",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -100,7 +109,8 @@
     "expect": {
       "steam": "42",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -108,7 +118,8 @@
     "expect": {
       "steam": "1000006",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -116,7 +127,8 @@
     "expect": {
       "steam": "1000003",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -124,7 +136,8 @@
     "expect": {
       "steam": "1000005",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -132,7 +145,8 @@
     "expect": {
       "steam": "1000008",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -140,7 +154,8 @@
     "expect": {
       "steam": "1000002",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -148,7 +163,8 @@
     "expect": {
       "steam": null,
       "ra": "30002",
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -160,7 +176,8 @@
     "expect": {
       "steam": "1234",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -184,7 +201,8 @@
     "expect": {
       "steam": null,
       "ra": "30003",
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -192,7 +210,8 @@
     "expect": {
       "steam": "1000010",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -200,7 +219,8 @@
     "expect": {
       "steam": "7",
       "ra": null,
-      "xbox": null
+      "xbox": null,
+      "trackedOn": null
     }
   },
   {
@@ -212,7 +232,8 @@
     "expect": {
       "steam": null,
       "ra": null,
-      "xbox": "1000000001"
+      "xbox": "1000000001",
+      "trackedOn": null
     }
   },
   {
@@ -220,7 +241,8 @@
     "expect": {
       "steam": null,
       "ra": null,
-      "xbox": "1000000002"
+      "xbox": "1000000002",
+      "trackedOn": null
     }
   },
   {
@@ -228,7 +250,8 @@
     "expect": {
       "steam": "1000008",
       "ra": null,
-      "xbox": "1000000003"
+      "xbox": "1000000003",
+      "trackedOn": null
     }
   },
   {

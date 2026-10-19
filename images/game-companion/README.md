@@ -95,7 +95,7 @@ nothing but an address typed on that device is ever framed.
 | `AGENT_TOKEN`              | No       | Bearer token the agent service requires                                                                                                                                                    |
 | `ASSISTANT_PER_MINUTE`     | No       | Questions admitted per rolling minute, all callers together (default `10`)                                                                                                                 |
 | `ASSISTANT_PER_DAY`        | No       | Questions admitted per calendar day in `TZ` (default `150`)                                                                                                                                |
-| `COMPANION_MCP_TOKEN`      | No       | Bearer token for `POST /companion/mcp`, the guide and status tools the agent calls. Without it that endpoint answers 404                                                                   |
+| `COMPANION_MCP_TOKEN`      | No       | Bearer token for `POST /companion/mcp`, the guide, status and Xbox tools it serves. Without it that endpoint answers 404                                                                   |
 | `XBOX_CLIENT_ID`           | No       | Application (client) ID of your own Microsoft Entra app for Xbox Live (see **Xbox**). Without it Xbox is off                                                                               |
 | `XBOX_STATE_DIR`           | No       | Writable directory for the Xbox sign-in and each guide's last platform (default `/data`); keep it on a persistent volume                                                                   |
 | `PORT`                     | No       | Listening port (default `8080`)                                                                                                                                                            |
@@ -121,7 +121,7 @@ The Outline key needs only these scopes:
 | `GET /companion/api/xbox`                       | The Xbox sign-in: state, and the code, gamertag or expiry that goes with it |
 | `POST /companion/api/xbox/<action>`             | `connect`, `cancel` or `disconnect` the Xbox sign-in; answers the new state |
 | `POST /companion/api/ask`                       | Streams an answer to a question about a game (newline-delimited JSON)       |
-| `POST /companion/mcp`                           | MCP tools for the agent: game status and the player's guides (bearer token) |
+| `POST /companion/mcp`                           | MCP tools: game status, the player's guides and Xbox data (bearer token)    |
 
 ## Xbox
 
@@ -162,11 +162,25 @@ an `Xbox Title ID` row, or else by its title matching the game's name (case, pun
 © ignored); a guide with only an `RA Game ID` row never matches by name, nor does a guide already
 tied to another Xbox title (by its row or an earlier detection), and two guides with the same
 name link to neither. The guide remembers which platform its game was last detected on (in
-`XBOX_STATE_DIR/platforms.json`), and the achievements panel shows that platform when the game
-is not being played. When a guide knows both a Steam and an Xbox ID, a **Steam / Xbox** switch
-above its achievements picks the other one; the choice is kept per device. The game list labels
-each guide "Steam", "Xbox" or "Steam + Xbox", and the device ("Series X", "PC") shows beside the
-title while an Xbox game is being played.
+`XBOX_STATE_DIR/platforms.json`). When the game is not being played, the achievements panel
+shows, in order: this device's own Steam / Xbox choice, else the platform the guide's
+`Tracked on` row names (skipped when the guide has no ID for it), else the platform the game
+was last detected on, else the guide's own row. A game being played always wins. When a guide
+knows both a Steam and an Xbox ID, a **Steam / Xbox** switch above its achievements picks the
+other one; the choice is kept per device. The game list labels each guide "Steam", "Xbox" or
+"Steam + Xbox", and the device ("Series X", "PC") shows beside the title while an Xbox game is
+being played.
+
+**Xbox tools on the MCP endpoint.** Besides the guide tools, `POST /companion/mcp` has two
+read-only tools that expose the signed-in account's Xbox data to Claude Code skills (no second
+sign-in): `xbox_titles({query?})` lists the games in the title history, newest played first (at
+most 50), as `<titleId> | <name> | <devices> | last played <ISO> | <current>/<total> G`, with
+`query` keeping the titles whose name contains it (case, punctuation and ™ ® © ignored); and
+`xbox_achievements({titleId})` returns the title's name and Gamerscore, then one line per
+achievement with its id, name, unlock time (or `locked`), rarity, Gamerscore, secret flag,
+progress, description and locked description. Both answer the tool error `Xbox is not
+connected.` unless the sign-in is connected, and neither output carries a token, device code,
+XUID or gamertag. The Ask agent is not given them.
 
 **The panel.** Xbox achievements show their Gamerscore, their rarity, and progress counters
 (`3/10`) where the game has them; the header adds Gamerscore earned out of the total. Secret
@@ -246,7 +260,9 @@ The service finds a game's guide by reading the guide documents themselves. It e
   `| RA Game ID | 5678 |` (the label may be bold; the number may be a link to the store or
   RetroAchievements page). A guide with neither row can still be opened by hand. A guide may
   also carry `| Xbox Title ID | 1234567890 |` to link it to the Xbox game explicitly (see
-  **Xbox**).
+  **Xbox**), and `| Tracked on | Xbox |` (or `Steam`; the label and value may be bold) to say which
+  platform's achievements the guide follows. Without the row the panel falls back to the platform
+  last detected, then the guide's own row; a guide with only an `RA Game ID` row ignores it.
 - Checkbox lines (`- [ ]` / `- [x]`) are what the sidebar counts. Headings are what the status
   line is matched against, so sections named for places or chapters work best.
 - Optionally, a `⚠` on a checklist line (`- [ ] **Name** ⚠ …`) to mark that achievement as

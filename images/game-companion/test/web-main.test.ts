@@ -69,6 +69,7 @@ const hubA: GuideHub = {
   xboxTitleId: null,
   platforms: ["ra"],
   lastPlatform: null,
+  trackedOn: null,
   platformLabel: "RA · PS2",
   nowPlaying: false,
 };
@@ -81,6 +82,7 @@ const hubZ: GuideHub = {
   xboxTitleId: null,
   platforms: ["steam"],
   lastPlatform: null,
+  trackedOn: null,
   platformLabel: "Steam",
   nowPlaying: false,
 };
@@ -5141,6 +5143,7 @@ describe("your links", () => {
         xboxTitleId: null,
         platforms: [],
         lastPlatform: null,
+        trackedOn: null,
         platformLabel: "Other",
         nowPlaying: false,
       };
@@ -6020,6 +6023,7 @@ describe("xbox", () => {
     xboxTitleId: "1000000001",
     platforms: ["steam", "xbox"],
     lastPlatform: null,
+    trackedOn: null,
     platformLabel: "Steam + Xbox",
     nowPlaying: false,
   };
@@ -6089,6 +6093,59 @@ describe("xbox", () => {
       );
       expect(api.achCalls).toEqual(["xbox:1000000001"]);
     });
+
+    it("follows the guide's Tracked on platform before the last detected one", async () => {
+      const { api } = await start(
+        nowOf({ ...hubX, trackedOn: "xbox", lastPlatform: "steam" }, steamGame, "last-played"),
+      );
+      expect(api.achCalls).toEqual(["xbox:1000000001"]);
+      expect(pressed()).toEqual(["Xbox"]);
+    });
+
+    it("lets this device's choice outrank Tracked on, and the game being played outrank both", async () => {
+      const storage = memory();
+      storage.setItem("game-companion:v1:platform:hX", "steam");
+      const first = await start(
+        nowOf({ ...hubX, trackedOn: "xbox", lastPlatform: "xbox" }, xboxGame, "last-played"),
+        storage,
+      );
+      expect(first.api.achCalls).toEqual(["steam:10"]);
+      document.body.innerHTML = '<main id="app"></main>';
+      const playingNow = await start(
+        nowOf({ ...hubX, trackedOn: "steam", lastPlatform: "steam" }, xboxGame, "playing"),
+      );
+      expect(playingNow.api.achCalls).toEqual(["xbox:1000000001"]);
+    });
+
+    it.each([
+      // [trackedOn, lastPlatform, hub overrides, expected panel source]
+      ["xbox", "steam", {}, "xbox:1000000001"],
+      ["steam", "xbox", {}, "steam:10"],
+      [null, "xbox", {}, "xbox:1000000001"],
+      [null, null, {}, "steam:10"],
+      // Tracked on Xbox but the guide knows no Xbox title: fall through to the last platform / row.
+      ["xbox", "steam", { xboxTitleId: null, platforms: ["steam"] }, "steam:10"],
+      ["xbox", null, { xboxTitleId: null, platforms: ["steam"] }, "steam:10"],
+      // Tracked on Steam but the guide has only an Xbox row.
+      [
+        "steam",
+        null,
+        { source: "xbox", gameId: "1000000001", platforms: ["xbox"] },
+        "xbox:1000000001",
+      ],
+    ] as const)(
+      "tracked %s, last %s, %j shows %s",
+      async (trackedOn, lastPlatform, over, expected) => {
+        const { api } = await start(
+          nowOf(
+            { ...hubX, trackedOn, lastPlatform, ...over } as GuideHub,
+            steamGame,
+            "last-played",
+          ),
+        );
+        expect(api.achCalls).toEqual([expected]);
+      },
+    );
 
     it("prefers the game being played to everything, and hides the switch meanwhile", async () => {
       const storage = memory();

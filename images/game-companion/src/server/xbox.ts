@@ -36,6 +36,12 @@ export interface XboxTitleInfo {
   image: string | null;
   /** The title's total Gamerscore, when titlehub reports one. */
   totalGamerscore?: number;
+  /** The Gamerscore earned in the title so far. */
+  currentGamerscore?: number;
+  /** Titlehub's device types for the title, e.g. "XboxSeries", "PC". */
+  devices?: string[];
+  /** When the account last played the title (ISO 8601), when titlehub says. */
+  lastPlayed?: string;
 }
 
 /** The parsed achievements response; each item's fields are read defensively by `normaliseXbox`. */
@@ -94,8 +100,12 @@ export class XboxClient {
   private readonly auth: Pick<XboxAuth, "session">;
   private readonly fetchFn: typeof fetch;
   private readonly now: () => number;
-  private readonly titles = new Map<string, TitleEntry>();
+  private readonly titleCache = new Map<string, TitleEntry>();
   private titleLookup: Promise<LookupOutcome> | null = null;
+  /** Every title of the last good history call, with when it goes stale. */
+  private history: XboxTitleInfo[] | null = null;
+  private historyExpiresAt = 0;
+  private historyFailedUntil = 0;
 
   constructor(opts: XboxClientOptions) {
     this.auth = opts.auth;
@@ -125,8 +135,23 @@ export class XboxClient {
     if (loaded) return loaded.info;
     // Not listed (titlehub may not know a new game yet) or the call failed: ask again later.
     if (outcome !== "no-session")
-      this.titles.set(titleId, { info: null, expiresAt: this.now() + TITLE_FAIL_TTL_MS });
+      this.titleCache.set(titleId, { info: null, expiresAt: this.now() + TITLE_FAIL_TTL_MS });
     return null;
+  }
+
+  /**
+   * Every title in the account's history (one cached call, shared with `titleInfo`), in
+   * titlehub's order. Null when there is no session or the call failed; a failure is not
+   * repeated for five minutes.
+   */
+  async titles(): Promise<XboxTitleInfo[] | null> {
+    if (this.history !== null && this.now() < this.historyExpiresAt) return [...this.history];
+    if (this.now() < this.historyFailedUntil) return null;
+    this.titleLookup ??= this.loadTitleHistory().finally(() => {
+      this.titleLookup = null;
+    });
+    const outcome = await this.titleLookup;
+    return outcome === "ok" && this.history !== null ? [...this.history] : null;
   }
 
   /**
@@ -150,7 +175,7 @@ export class XboxClient {
   }
 
   private fresh(titleId: string): TitleEntry | null {
-    const entry = this.titles.get(titleId);
+    const entry = this.titleCache.get(titleId);
     return entry && this.now() < entry.expiresAt ? entry : null;
   }
 
@@ -170,12 +195,18 @@ export class XboxClient {
       );
       if (!isRec(body) || !Array.isArray(body.titles)) throw badShape();
       const expiresAt = this.now() + TITLE_TTL_MS;
+      const infos: XboxTitleInfo[] = [];
       for (const item of body.titles) {
         const info = parseTitle(item);
-        if (info) this.titles.set(info.id, { info, expiresAt });
+        if (!info) continue;
+        infos.push(info);
+        this.titleCache.set(info.id, { info, expiresAt });
       }
+      this.history = infos;
+      this.historyExpiresAt = expiresAt;
       return "ok";
     } catch {
+      this.historyFailedUntil = this.now() + TITLE_FAIL_TTL_MS;
       return "failed";
     }
   }
@@ -262,12 +293,16 @@ function parseTitle(v: unknown): XboxTitleInfo | null {
   // on an Xbox too. `mediaItemType` is no help: games report "Application" there as well.
   const type = str(v.type);
   const isGame = type === null || type === "Game";
+  const lastPlayed = unlockTime(isRec(v.titleHistory) ? v.titleHistory.lastTimePlayed : null);
   return {
     id,
     name: str(v.name) ?? "",
     isXboxLive: isGame && (totalGamerscore > 0 || current > 0 || onXboxDevice),
     image: safeIcon(str(v.displayImage)),
     totalGamerscore,
+    currentGamerscore: num(achievement.currentGamerscore) ?? 0,
+    devices: arr(v.devices).filter((d): d is string => typeof d === "string"),
+    ...(lastPlayed === null ? {} : { lastPlayed }),
   };
 }
 

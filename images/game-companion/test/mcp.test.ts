@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
   handleMessage,
@@ -36,6 +37,14 @@ function fakeTools(over: Partial<McpTools> = {}) {
     read: async (...args) => {
       calls.push(["read", ...args]);
       return { text: "# Walkthrough" };
+    },
+    xboxTitles: async (...args) => {
+      calls.push(["xboxTitles", ...args]);
+      return { text: "1000000001 | Sample Quest" };
+    },
+    xboxAchievements: async (...args) => {
+      calls.push(["xboxAchievements", ...args]);
+      return { text: "Sample Quest | 0/100 G" };
     },
     ...over,
   };
@@ -160,7 +169,7 @@ describe("messages", () => {
 });
 
 describe("tools/list", () => {
-  it("lists exactly the five read-only tools with closed input schemas", async () => {
+  it("lists exactly the seven read-only tools with closed input schemas", async () => {
     const r = await send({ jsonrpc: "2.0", id: 6, method: "tools/list", params: {} });
     expect(r).toEqual({ jsonrpc: "2.0", id: 6, result: { tools: TOOLS } });
     expect(TOOLS.map((t) => t.name)).toEqual([
@@ -169,6 +178,8 @@ describe("tools/list", () => {
       "guide_outline",
       "search_guide",
       "read_guide_page",
+      "xbox_titles",
+      "xbox_achievements",
     ]);
     const hub = {
       type: "string",
@@ -208,11 +219,45 @@ describe("tools/list", () => {
         required: ["page"],
         additionalProperties: false,
       },
+      xbox_titles: {
+        type: "object",
+        properties: { query: text },
+        required: [],
+        additionalProperties: false,
+      },
+      xbox_achievements: {
+        type: "object",
+        properties: {
+          titleId: {
+            type: "string",
+            pattern: "^[0-9]{1,20}$",
+            description: expect.any(String) as unknown,
+          },
+        },
+        required: ["titleId"],
+        additionalProperties: false,
+      },
     });
     for (const t of TOOLS) {
       expect(t.description).toMatch(/^[A-Z][^\n]+\.$/);
       expect(t.description.split(". ")).toHaveLength(1);
     }
+  });
+});
+
+describe("the Ask agent", () => {
+  it("is not given the Xbox tools: its allowlist names the five guide tools only", () => {
+    const allowed = JSON.parse(
+      readFileSync(new URL("../../companion-agent/allowed-tools.json", import.meta.url), "utf8"),
+    ) as { companion: string[] };
+    expect(allowed.companion).toEqual([
+      "companion_status",
+      "list_guides",
+      "guide_outline",
+      "search_guide",
+      "read_guide_page",
+    ]);
+    expect(TOOLS.map((t) => t.name)).toEqual(expect.arrayContaining(allowed.companion));
   });
 });
 
@@ -236,6 +281,9 @@ describe("tools/call", () => {
       { page: "Walkthrough", section: "Mock Village", hub: "h1" },
       tools,
     );
+    await call("xbox_titles", undefined, tools);
+    await call("xbox_titles", { query: "wars" }, tools);
+    await call("xbox_achievements", { titleId: "1000000001" }, tools);
     expect(calls).toEqual([
       ["status", undefined],
       ["status", "h-2"],
@@ -246,6 +294,9 @@ describe("tools/call", () => {
       ["search", "lantern", "h1"],
       ["read", "Walkthrough", undefined, undefined],
       ["read", "Walkthrough", "Mock Village", "h1"],
+      ["xboxTitles", undefined],
+      ["xboxTitles", "wars"],
+      ["xboxAchievements", "1000000001"],
     ]);
   });
 
@@ -323,6 +374,16 @@ describe("tools/call", () => {
       ],
       ["read_guide_page", { section: "A" }, 'Missing argument "page".'],
       ["read_guide_page", { page: "A", section: 1 }, 'Argument "section" must be a string.'],
+      ["xbox_titles", { hub: "h1" }, 'Unknown argument "hub".'],
+      ["xbox_titles", { query: " " }, 'Argument "query" must not be empty.'],
+      ["xbox_achievements", {}, 'Missing argument "titleId".'],
+      ["xbox_achievements", { titleId: 5 }, 'Argument "titleId" must be a string.'],
+      ["xbox_achievements", { titleId: "../1" }, 'Argument "titleId" must be an Xbox title id.'],
+      [
+        "xbox_achievements",
+        { titleId: "1".repeat(21) },
+        'Argument "titleId" must be an Xbox title id.',
+      ],
     ];
     for (const [name, args, text] of cases) {
       expect(await call(name, args, tools)).toEqual({

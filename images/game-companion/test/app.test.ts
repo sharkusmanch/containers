@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDeps } from "../src/server/app.js";
 import { GuideIndex } from "../src/server/guide-index.js";
 import { PlatformMemory } from "../src/server/platform-memory.js";
+import { XboxClient } from "../src/server/xbox.js";
+import type { XboxAuthState } from "../src/shared/types.js";
+import { fixture } from "./helpers.js";
 import { INSTRUCTIONS } from "../src/server/assistant-context.js";
 import type { PageText } from "../src/server/guide-pages.js";
 import type { AchievementsResponse, AskEvent, GuideHub } from "../src/shared/types.js";
@@ -18,6 +21,7 @@ const hub: GuideHub = {
   xboxTitleId: null,
   platforms: ["steam"],
   lastPlatform: null,
+  trackedOn: null,
   platformLabel: "Steam",
   nowPlaying: false,
 };
@@ -269,6 +273,7 @@ describe("guide where and progress", () => {
     xboxTitleId: null,
     platforms: ["ra"],
     lastPlatform: null,
+    trackedOn: null,
     platformLabel: "RA",
   });
   const detecting = (
@@ -1007,6 +1012,7 @@ describe("mcp tools", () => {
     xboxTitleId: null,
     platforms: ["ra"],
     lastPlatform: null,
+    trackedOn: null,
     platformLabel: "RA · GC",
     nowPlaying: false,
   };
@@ -1362,6 +1368,7 @@ describe("xbox", () => {
         xboxTitleId: "1000000001",
         platforms: ["steam", "xbox"],
         lastPlatform: "xbox",
+        trackedOn: null,
         platformLabel: "Steam + Xbox",
         nowPlaying: false,
       },
@@ -1403,6 +1410,7 @@ describe("xbox", () => {
     expect(d2.guides().hubs.find((h) => h.hubId === "hub-wars")).toMatchObject({
       platforms: ["steam", "xbox"],
       lastPlatform: "xbox",
+      trackedOn: null,
       xboxTitleId: "1000000001",
     });
   });
@@ -1535,6 +1543,7 @@ describe("xbox in Ask and companion_status", () => {
     xboxTitleId: "1000000001",
     platforms: ["steam", "xbox"],
     lastPlatform: "xbox",
+    trackedOn: null,
     platformLabel: "Steam + Xbox",
     nowPlaying: false,
   };
@@ -1737,5 +1746,118 @@ describe("xbox in Ask and companion_status", () => {
     expect(text).toContain("Source: Xbox\n");
     expect(text).toContain("State: last-played");
     expect(text).not.toContain("Series X");
+  });
+});
+
+describe("xbox MCP tools", () => {
+  const XUID = "2535000000001";
+  const TOKEN = "XBL3.0 x=fake-uhs;fake-xsts";
+  const GAMERTAG = "SampleGamer";
+
+  function setup(state: XboxAuthState, answers: { titlehub?: number; achievements?: number } = {}) {
+    const urls: string[] = [];
+    const fetchFn = (async (url: string | URL | Request) => {
+      const u = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+      urls.push(u);
+      if (u.includes("titlehub")) {
+        return new Response(fixture("xbox-titlehub.json"), { status: answers.titlehub ?? 200 });
+      }
+      return new Response(fixture("xbox-achievements.json"), {
+        status: answers.achievements ?? 200,
+      });
+    }) as typeof fetch;
+    const client = new XboxClient({
+      auth: { session: async () => ({ headers: { Authorization: TOKEN }, xuid: XUID }) },
+      fetch: fetchFn,
+    });
+    const auth = {
+      status: () => ({
+        state,
+        gamertag: state === "connected" ? GAMERTAG : null,
+        userCode: state === "connecting" ? "ABCD-EFGH" : null,
+        verificationUri: null,
+        expiresAt: null,
+        lostSince: null,
+      }),
+      startConnect: async () => auth.status(),
+      cancelConnect: () => {},
+      disconnect: async () => {},
+    };
+    const d = buildDeps(
+      parts({
+        mcp: { token: "sample-token", version: "9.9.9" },
+        xbox: { origin: "https://wiki.example.test", auth, client },
+      }),
+    );
+    const tools = d.mcp?.tools;
+    if (!tools) throw new Error("mcp tools missing");
+    return { tools, urls };
+  }
+
+  const NOT_CONNECTED = { text: "Xbox is not connected.", isError: true };
+
+  it("xbox_titles lists the games newest first and filters by name", async () => {
+    const { tools } = setup("connected");
+    const all = await tools.xboxTitles(undefined);
+    expect(all.isError).toBeUndefined();
+    expect(all.text.split("\n")).toEqual([
+      "2000000002 | Test Quest: Moon Edition | PC, XboxSeries | last played 2026-10-18T10:05:00.000Z | 25/1000 G",
+      "2000000004 | Console Only Demo | XboxOne | last played unknown | 0/0 G",
+    ]);
+    expect((await tools.xboxTitles("QUEST: moon")).text).toMatch(/^2000000002 \|/);
+    expect(await tools.xboxTitles("nothing")).toEqual({ text: "No Xbox titles match that query." });
+  });
+
+  it("xbox_achievements lists every field, secret ones included, with the title's name", async () => {
+    const { tools, urls } = setup("connected");
+    const r = await tools.xboxAchievements("2000000002");
+    const lines = r.text.split("\n");
+    expect(lines[0]).toBe("Test Quest: Moon Edition | 15/95 G");
+    expect(lines).toHaveLength(4);
+    expect(lines[3]).toBe(
+      "3 | The Far Side | locked | 1% | 50 G | secret | no progress | Find the hidden base on the far side. | locked: This achievement is a secret.",
+    );
+    expect(urls.some((u) => u.includes("titleId=2000000002"))).toBe(true);
+  });
+
+  it("neither tool puts the token, the XUID or the gamertag in its output", async () => {
+    const { tools } = setup("connected");
+    for (const r of [
+      await tools.xboxTitles(undefined),
+      await tools.xboxAchievements("2000000002"),
+    ]) {
+      expect(r.text).not.toContain(XUID);
+      expect(r.text).not.toContain("fake-xsts");
+      expect(r.text).not.toContain("fake-uhs");
+      expect(r.text).not.toContain(GAMERTAG);
+    }
+  });
+
+  it.each(["off", "disconnected", "connecting", "lost"] as const)(
+    "both tools answer 'Xbox is not connected.' when the sign-in is %s, calling nothing",
+    async (state) => {
+      const { tools, urls } = setup(state);
+      expect(await tools.xboxTitles(undefined)).toEqual(NOT_CONNECTED);
+      expect(await tools.xboxAchievements("2000000002")).toEqual(NOT_CONNECTED);
+      expect(urls).toEqual([]);
+    },
+  );
+
+  it("answers as not connected when Xbox is off in the deployment or has no client", async () => {
+    for (const over of [{}, { xbox: null }]) {
+      const tools = buildDeps(parts({ mcp: { token: "t", version: "1" }, ...over })).mcp?.tools;
+      expect(await tools?.xboxTitles(undefined)).toEqual(NOT_CONNECTED);
+      expect(await tools?.xboxAchievements("1")).toEqual(NOT_CONNECTED);
+    }
+  });
+
+  it("answers a fixed error, never a URL or token, when Xbox fails", async () => {
+    const down = setup("connected", { titlehub: 500, achievements: 500 });
+    const failed = {
+      text: "Xbox could not be reached right now. Try again shortly.",
+      isError: true,
+    };
+    expect(await down.tools.xboxTitles(undefined)).toEqual(failed);
+    expect(await down.tools.xboxAchievements("2000000002")).toEqual(failed);
   });
 });

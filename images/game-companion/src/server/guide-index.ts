@@ -7,6 +7,8 @@ export interface HubIdentity {
   steam: string | null;
   ra: string | null;
   xbox: string | null;
+  /** The platform the `Tracked on` row names; null with no row or an unknown value. */
+  trackedOn: "steam" | "xbox" | null;
 }
 
 // A table row whose first cell is exactly the label, bold on both sides or on neither
@@ -16,6 +18,7 @@ export interface HubIdentity {
 const RA_ROW = /^\|[ \t]*(?:\*\*RA Game ID\*\*|RA Game ID)[ \t]*\|([^\n]*)$/gm;
 const STEAM_ROW = /^\|[ \t]*(?:\*\*(?:Steam )?App ID\*\*|(?:Steam )?App ID)[ \t]*\|([^\n]*)$/gm;
 const XBOX_ROW = /^\|[ \t]*(?:\*\*Xbox Title ID\*\*|Xbox Title ID)[ \t]*\|([^\n]*)$/gm;
+const TRACKED_ROW = /^\|[ \t]*(?:\*\*Tracked on\*\*|Tracked on)[ \t]*\|([^\n]*)$/gm;
 const RA_LINK = /retroachievements\.org\/game\/(\d{1,10})(?!\d)/;
 const STEAM_LINK = /store\.steampowered\.com\/app\/(\d{1,10})(?!\d)/;
 
@@ -36,13 +39,26 @@ function firstRowId(text: string, row: RegExp, link: RegExp | null): string | nu
   return null;
 }
 
+/** The first `Tracked on` row whose cell is exactly Steam or Xbox (bold or not, any case). */
+function trackedOn(text: string): "steam" | "xbox" | null {
+  for (const m of text.matchAll(TRACKED_ROW)) {
+    const cell = (m[1] as string).split("|")[0] as string;
+    const value = cell.replace(/\*\*/g, "").trim().toLowerCase();
+    if (value === "steam" || value === "xbox") return value;
+  }
+  return null;
+}
+
 export function parseHubIdentity(text: string): HubIdentity | null {
   const unix = text.replace(/\r\n/g, "\n");
   const identity: HubIdentity = {
     steam: firstRowId(unix, STEAM_ROW, STEAM_LINK),
     ra: firstRowId(unix, RA_ROW, RA_LINK),
     xbox: firstRowId(unix, XBOX_ROW, null),
+    trackedOn: null,
   };
+  // A RetroAchievements-only guide has no Steam or Xbox list to track.
+  if (!(identity.ra && !identity.steam)) identity.trackedOn = trackedOn(unix);
   return identity.steam || identity.ra || identity.xbox ? identity : null;
 }
 
@@ -314,6 +330,7 @@ export class GuideIndex {
       xboxTitleId,
       platforms,
       lastPlatform: remembered?.last ?? null,
+      trackedOn: identity?.trackedOn ?? null,
       platformLabel: platformLabel(entry.title, platforms),
       nowPlaying: entry.nowPlaying,
     };

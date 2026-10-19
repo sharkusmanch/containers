@@ -22,6 +22,7 @@ const hubs: GuideHub[] = [
     xboxTitleId: null,
     platforms: ["ra"],
     lastPlatform: null,
+    trackedOn: null,
     platformLabel: "RA · PS2",
     nowPlaying: true,
   },
@@ -34,6 +35,7 @@ const hubs: GuideHub[] = [
     xboxTitleId: null,
     platforms: ["steam"],
     lastPlatform: null,
+    trackedOn: null,
     platformLabel: "Steam",
     nowPlaying: false,
   },
@@ -158,6 +160,7 @@ describe("game groups", () => {
     xboxTitleId: null,
     platforms: platformLabel === "Other" ? [] : platformLabel === "Steam" ? ["steam"] : ["ra"],
     lastPlatform: null,
+    trackedOn: null,
     platformLabel,
     nowPlaying,
   });

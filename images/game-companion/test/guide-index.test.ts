@@ -25,6 +25,42 @@ describe("parseHubIdentity", () => {
   });
 });
 
+describe("parseHubIdentity Tracked on", () => {
+  const tracked = (text: string) => parseHubIdentity(text)?.trackedOn;
+  const ids = "| **Steam App ID** | 1000004 |\n| **Xbox Title ID** | 1000000001 |\n";
+
+  it("reads Xbox and Steam, bold or plain label and value", () => {
+    expect(tracked(`${ids}| **Tracked on** | Xbox |\n`)).toBe("xbox");
+    expect(tracked(`${ids}| Tracked on | Xbox |\n`)).toBe("xbox");
+    expect(tracked(`${ids}| **Tracked on** | **Steam** |\n`)).toBe("steam");
+    expect(tracked(`${ids}| Tracked on |   steam   |\n`)).toBe("steam");
+    expect(tracked(`${ids}| Tracked on | XBOX\r\n`)).toBe("xbox");
+  });
+
+  it("is null when the row is absent, unknown, or only half-bold", () => {
+    expect(tracked(ids)).toBeNull();
+    expect(tracked(`${ids}| Tracked on | Switch |\n`)).toBeNull();
+    expect(tracked(`${ids}| Tracked on | Xbox Series |\n`)).toBeNull();
+    expect(tracked(`${ids}| **Tracked on | Xbox |\n`)).toBeNull();
+    expect(tracked(`${ids}| Tracked on: Xbox |\n`)).toBeNull();
+    expect(tracked(`${ids}Tracked on | Xbox |\n`)).toBeNull();
+  });
+
+  it("takes the first valid row, and needs a game id row to make an identity", () => {
+    expect(tracked(`${ids}| Tracked on | Nope |\n| Tracked on | Xbox |\n`)).toBe("xbox");
+    expect(parseHubIdentity("| Tracked on | Xbox |\n")).toBeNull();
+  });
+
+  it("is ignored for a RetroAchievements-only guide", () => {
+    expect(tracked("| **RA Game ID** | 30002 |\n| Tracked on | Xbox |\n")).toBeNull();
+    expect(
+      tracked(
+        "| **RA Game ID** | 30002 |\n| **Steam App ID** | 1000004 |\n| Tracked on | Xbox |\n",
+      ),
+    ).toBe("xbox");
+  });
+});
+
 describe("platformLabel", () => {
   it("labels Steam hubs", () => {
     expect(platformLabel("Test Game", ["steam"])).toBe("Steam");
@@ -360,11 +396,13 @@ describe("GuideIndex with Xbox", () => {
       steam: null,
       ra: null,
       xbox: "1000000001",
+      trackedOn: null,
     });
     expect(parseHubIdentity("| Xbox Title ID | 1000000002 |\n")).toEqual({
       steam: null,
       ra: null,
       xbox: "1000000002",
+      trackedOn: null,
     });
   });
 
@@ -379,6 +417,7 @@ describe("GuideIndex with Xbox", () => {
       xboxTitleId: "1000000001",
       platforms: ["steam", "xbox"],
       lastPlatform: null,
+      trackedOn: null,
       platformLabel: "Steam + Xbox",
       nowPlaying: false,
     });
@@ -391,6 +430,33 @@ describe("GuideIndex with Xbox", () => {
     });
     expect(idx.tree("unlabelled")?.hub).toMatchObject({ platforms: [], platformLabel: "Other" });
     expect(idx.tree("ra-only")?.hub).toMatchObject({ platforms: ["ra"], platformLabel: "RA · GC" });
+  });
+
+  it("exposes the Tracked on row on the hub, and none for an RA-only guide", async () => {
+    const docs: OutlineDoc[] = [
+      {
+        id: "tracked",
+        title: "Sample Wars",
+        url: "/doc/wars-aaa",
+        text: "| **Steam App ID** | 1000020 |\n| **Xbox Title ID** | 1000000020 |\n| **Tracked on** | Xbox |\n",
+      },
+      { id: "plain", title: "Sample Plain", url: "/doc/plain-bbb", text: "| App ID | 1000021 |\n" },
+      {
+        id: "ra",
+        title: "Sample RA (GC — RetroAchievements)",
+        url: "/doc/ra-ccc",
+        text: "| **RA Game ID** | 30010 |\n| Tracked on | Xbox |\n",
+      },
+    ];
+    const idx = new GuideIndex({
+      ...base,
+      scheduleDocId: null,
+      source: source({ listChildren: async () => docs }),
+    });
+    await idx.refresh();
+    expect(idx.tree("tracked")?.hub.trackedOn).toBe("xbox");
+    expect(idx.tree("plain")?.hub.trackedOn).toBeNull();
+    expect(idx.tree("ra")?.hub.trackedOn).toBeNull();
   });
 
   it("lookup xbox by row wins over name", async () => {
@@ -480,12 +546,14 @@ describe("GuideIndex with Xbox", () => {
       xboxTitleId: "2000000002",
       platforms: ["steam", "xbox"],
       lastPlatform: "xbox",
+      trackedOn: null,
       platformLabel: "Steam + Xbox",
     });
     // The row wins over a remembered ID.
     expect(idx.tree("shared")?.hub).toMatchObject({
       xboxTitleId: "1000000001",
       lastPlatform: "steam",
+      trackedOn: null,
     });
     expect(ids(idx.lookup("xbox", "1000000001"))).toEqual(["shared"]);
     expect(idx.hubs().find((h) => h.hubId === "steam-only")?.platformLabel).toBe("Steam + Xbox");
