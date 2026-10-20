@@ -40,7 +40,6 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [redlib](./images/redlib/) | Private Reddit frontend | [redlib-org/redlib](https://github.com/redlib-org/redlib) (PR #509) |
 | [rss-youtube-downloader](./images/rss-youtube-downloader/) | RSS feed YouTube video downloader with series routing | Original |
 | [steam-wishlist-calendar](./images/steam-wishlist-calendar/) | ICS calendar from Steam wishlist release dates | [icue/SteamWishlistCalendar](https://github.com/icue/SteamWishlistCalendar) |
-| [tachyon](./images/tachyon/) | Tachyon webmail (SnappyMail fork), unprivileged, with gpg for server-side PGP | [kimusan/Tachyon](https://github.com/kimusan/Tachyon) |
 | [tailscale-hosts-sync](./images/tailscale-hosts-sync/) | Sync Tailscale devices to hosts file for DNS | Original |
 | [twitch-drops-miner](./images/twitch-drops-miner/) | Twitch drops miner web UI (self-maintained: upstream release + PR #62 and a local GQL retry-budget patch; no browser stack) | [rangermix/TwitchDropsMiner](https://github.com/rangermix/TwitchDropsMiner) |
 | [vikunja-mcp-sse](./images/vikunja-mcp-sse/) | Vikunja task-manager MCP server with SSE transport (k8s) | [democratize-technology/vikunja-mcp](https://github.com/democratize-technology/vikunja-mcp) |
