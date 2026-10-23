@@ -19,7 +19,7 @@ ARG KUBECTL_VERSION=v1.37.1
 ARG HELM_VERSION=v4.3.1
 
 # renovate: datasource=github-releases depName=sigstore/cosign
-ARG COSIGN_VERSION=v3.1.3
+ARG COSIGN_VERSION=v3.1.4
 
 # renovate: datasource=github-releases depName=fluxcd/flux2
 ARG FLUX_VERSION=v2.9.6
