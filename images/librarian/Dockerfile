@@ -4,7 +4,7 @@
 ARG PYTHON_VERSION=3.15-slim
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_VERSION=2.1.306
+ARG CLAUDE_VERSION=2.1.309
 
 # librarian: BookOrbit intake service. A Python staging core (intake scan,
 # hashing, dossiers, guards, dry-run plans) plus a sandboxed `claude -p` run
