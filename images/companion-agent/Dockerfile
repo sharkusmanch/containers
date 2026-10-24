@@ -8,7 +8,7 @@ ARG COMPANION_AGENT_VERSION=v0.2.0
 ARG NODE_VERSION=24.22.1
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
-ARG CLAUDE_VERSION=2.1.309
+ARG CLAUDE_VERSION=2.1.310
 
 # companion-agent: answers the game companion's Ask questions with a locked-down `claude -p`.
 #
