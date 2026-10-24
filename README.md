@@ -37,7 +37,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [pod-reaper](./images/pod-reaper/) | Rule-based Kubernetes pod cleanup controller | [target/pod-reaper](https://github.com/target/pod-reaper) |
 | [podcast-feed-filter](./images/podcast-feed-filter/) | Podcast RSS feed filter preserving enclosures | Original |
 | [pokemon-red-mastery-companion](./images/pokemon-red-mastery-companion/) | Pokémon Red mastery guide with read-only save and scoped progress feeds | Original |
-| [redlib](./images/redlib/) | Private Reddit frontend | [redlib-org/redlib](https://github.com/redlib-org/redlib) (PR #509) |
+| [redlib](./images/redlib/) | Private Reddit frontend | [redlib-org/redlib](https://github.com/redlib-org/redlib) |
 | [rss-youtube-downloader](./images/rss-youtube-downloader/) | RSS feed YouTube video downloader with series routing | Original |
 | [steam-wishlist-calendar](./images/steam-wishlist-calendar/) | ICS calendar from Steam wishlist release dates | [icue/SteamWishlistCalendar](https://github.com/icue/SteamWishlistCalendar) |
 | [tailscale-hosts-sync](./images/tailscale-hosts-sync/) | Sync Tailscale devices to hosts file for DNS | Original |

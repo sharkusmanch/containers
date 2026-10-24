@@ -1,40 +1,39 @@
 # syntax=docker/dockerfile:1
 
-# Using PR #509 (hyper-tls) to evade Reddit rate limiting
-# See: https://github.com/redlib-org/redlib/issues/446
-# renovate: datasource=github-commits depName=chowder/redlib branch=feature/tls-openssl
-ARG REDLIB_COMMIT=42fe41bc4c64690aa91cd1cfecec3bad3438354f
+# Upstream redlib's official static release binary (x86_64 musl). See README.md.
+#
+# This image used to build chowder/redlib PR #509 (hyper-tls/OpenSSL) to dodge
+# Reddit's TLS fingerprinting. From 2026-10-20 Reddit answered every request from
+# that build with 403 "blocked by network security" -- listings included -- while
+# byte-identical requests from curl on the same IP still got 200. Upstream v0.40.0
+# replaced the HTTP client with wreq, which emulates a real browser's TLS
+# fingerprint, and works from the same IP. So the fork is no longer needed.
 
-# renovate: datasource=docker depName=rust versioning=docker
-ARG RUST_VERSION=1.99
+# The release tarball and its checksum are bumped together by Renovate.
+# renovate: datasource=github-release-attachments depName=redlib-org/redlib
+ARG REDLIB_VERSION=v0.40.0
+ARG REDLIB_SHA256=1eb009a0f5079183bdd8f47832f491b9fc87c4e50214ff145371357f58934c7e
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
 
 # ============================================================================
-# Builder stage
+# Builder stage: fetch and verify the release binary
 # ============================================================================
-FROM rust:${RUST_VERSION}-alpine${ALPINE_VERSION} AS builder
+FROM alpine:${ALPINE_VERSION} AS builder
 
-ARG REDLIB_COMMIT
+ARG REDLIB_VERSION
+ARG REDLIB_SHA256
 
-# Install build dependencies
-# - musl-dev: C standard library for static linking
-# - perl, make: Required for OpenSSL build (vendored)
-# - git: Clone source and stamp commit info
-RUN apk add --no-cache musl-dev perl make git
+RUN apk add --no-cache curl
 
 WORKDIR /build
-
-# Clone specific commit from PR #509 branch
-RUN git clone https://github.com/chowder/redlib.git . && \
-    git checkout ${REDLIB_COMMIT}
-
-# Build with caching for faster rebuilds
-RUN --mount=type=cache,target=/build/target \
-    --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release && \
-    cp /build/target/release/redlib /redlib
+RUN set -eux; \
+    curl -fsSL -o redlib.tar.gz \
+      "https://github.com/redlib-org/redlib/releases/download/${REDLIB_VERSION}/redlib-x86_64-unknown-linux-musl.tar.gz"; \
+    echo "${REDLIB_SHA256}  redlib.tar.gz" | sha256sum -c -; \
+    tar -xzf redlib.tar.gz redlib; \
+    chmod 0755 redlib
 
 # ============================================================================
 # Runtime stage
@@ -44,15 +43,14 @@ FROM alpine:${ALPINE_VERSION} AS runtime
 # Labels
 ARG BUILD_DATE
 ARG VCS_REF
-ARG REDLIB_COMMIT
+ARG REDLIB_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.version="${REDLIB_COMMIT}" \
+      org.opencontainers.image.version="${REDLIB_VERSION}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/redlib-org/redlib" \
-      org.opencontainers.image.upstream-ref="https://github.com/redlib-org/redlib/pull/509" \
       org.opencontainers.image.title="redlib" \
-      org.opencontainers.image.description="Private Reddit frontend (hyper-tls build)"
+      org.opencontainers.image.description="Private Reddit frontend (upstream release binary)"
 
 # Install runtime dependencies
 # - ca-certificates: TLS certificate validation
@@ -62,8 +60,8 @@ RUN apk add --no-cache ca-certificates
 RUN addgroup -g 10000 appgroup && \
     adduser -u 10000 -G appgroup -s /bin/false -D -H appuser
 
-# Copy binary from builder
-COPY --from=builder /redlib /usr/local/bin/redlib
+# Copy binary from builder (static-pie: needs no loader or libc at runtime)
+COPY --from=builder /build/redlib /usr/local/bin/redlib
 
 # Switch to non-root user
 USER appuser

@@ -4,79 +4,70 @@ Private front-end for Reddit. No JavaScript, no ads, no tracking.
 
 ## Upstream
 
-- **Repository:** [redlib-org/redlib](https://github.com/redlib-org/redlib)
-- **Branch:** [PR #509](https://github.com/redlib-org/redlib/pull/509) (feature/tls-openssl)
-- **Tracking:** Commit SHA via Renovate
+- **Repository**: [redlib-org/redlib](https://github.com/redlib-org/redlib)
+- **Version**: v0.40.0 (official release binary, tracked by Renovate)
 
-## Why PR #509?
+## Why not the hyper-tls fork any more?
 
-Reddit actively fingerprints and blocks redlib instances based on TLS characteristics. The main branch uses `hyper-rustls`, which has a distinctive TLS fingerprint that Reddit has learned to block.
+Until v0.40.0 this image built [PR #509](https://github.com/redlib-org/redlib/pull/509)
+(chowder/redlib `feature/tls-openssl`), which swapped `hyper-rustls` for `hyper-tls`
+because Reddit fingerprints and blocks the TLS stacks redlib uses
+([#446](https://github.com/redlib-org/redlib/issues/446)).
 
-PR #509 switches to `hyper-tls` (OpenSSL-based), which:
-- Has a different TLS fingerprint
-- Currently evades Reddit's blocking
-- Is reported to work better for private instances
-
-See [Issue #446](https://github.com/redlib-org/redlib/issues/446) for the ongoing cat-and-mouse game with Reddit.
-
-## Modifications
-
-- **TLS backend:** Uses hyper-tls/OpenSSL instead of hyper-rustls (via PR #509)
-- **Security hardening:** Non-root user, minimal base image
-
-## Configuration
-
-| Environment Variable | Description | Default |
-|---------------------|-------------|----------|
-| `REDLIB_DEFAULT_THEME` | Default theme (system/light/dark) | system |
-| `REDLIB_DEFAULT_FRONT_PAGE` | Default front page (default/popular/all) | default |
-| `REDLIB_DEFAULT_LAYOUT` | Layout (card/clean/compact) | card |
-| `REDLIB_DEFAULT_WIDE` | Wide mode | off |
-| `REDLIB_DEFAULT_SHOW_NSFW` | Show NSFW content | off |
-| `REDLIB_DEFAULT_BLUR_NSFW` | Blur NSFW content | off |
-| `REDLIB_DEFAULT_HIDE_HLS_NOTIFICATION` | Hide HLS notification | off |
-| `REDLIB_DEFAULT_USE_HLS` | Use HLS for video | off |
-| `REDLIB_DEFAULT_AUTOPLAY_VIDEOS` | Autoplay videos | off |
-| `REDLIB_SFW_ONLY` | SFW only mode (hides NSFW entirely) | off |
-| `REDLIB_BANNER` | Custom banner message | |
-| `REDLIB_ROBOTS_DISABLE_INDEXING` | Disable search engine indexing | off |
-| `REDLIB_PUSHSHIFT_FRONTEND` | Alternative frontend for removed content | undelete.pullpush.io |
+From 2026-10-20 Reddit blocked that build too. Every listing request got
+`403 Forbidden` (the HTML "blocked by network security" page). Requests from curl
+on the same IP still got `200`, with redlib's exact headers, path and token, over
+HTTP/1.1 without ALPN as hyper-tls sends them. So the TLS fingerprint was the
+remaining difference. Upstream v0.40.0 replaced the HTTP client with
+[wreq](https://github.com/0x676e67/wreq), which emulates a real browser's TLS
+fingerprint, and its listings work from the same IP. The fork was last updated in
+December 2025.
 
 ## Usage
 
-```yaml
-# Example k8s deployment
-apiVersion: apps/v1
-kind: Deployment
-spec:
-  template:
-    spec:
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 10000
-        runAsGroup: 10000
-      containers:
-        - name: redlib
-          image: ghcr.io/sharkusmanch/containers/redlib:latest
-          securityContext:
-            readOnlyRootFilesystem: true
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-                - ALL
-          env:
-            - name: REDLIB_DEFAULT_SHOW_NSFW
-              value: "on"
-          ports:
-            - containerPort: 8080
+```bash
+docker run -p 8080:8080 ghcr.io/sharkusmanch/containers/redlib:v0.40.0
 ```
 
-## Ports
+## Environment Variables
 
-- `8080` - HTTP server
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `REDLIB_DEFAULT_THEME` | No | Default theme (system/light/dark) |
+| `REDLIB_DEFAULT_FRONT_PAGE` | No | Default front page (default/popular/all) |
+| `REDLIB_DEFAULT_LAYOUT` | No | Layout (card/clean/compact) |
+| `REDLIB_DEFAULT_WIDE` | No | Wide mode (`on`/`off`) |
+| `REDLIB_DEFAULT_SHOW_NSFW` | No | Show NSFW content |
+| `REDLIB_DEFAULT_BLUR_NSFW` | No | Blur NSFW content |
+| `REDLIB_DEFAULT_USE_HLS` | No | Use HLS for video |
+| `REDLIB_DEFAULT_HIDE_HLS_NOTIFICATION` | No | Hide HLS notification |
+| `REDLIB_DEFAULT_AUTOPLAY_VIDEOS` | No | Autoplay videos |
+| `REDLIB_ENABLE_RSS` | No | Serve RSS feeds (`on`/`off`) |
+| `REDLIB_SFW_ONLY` | No | SFW only mode (hides NSFW entirely) |
+| `REDLIB_BANNER` | No | Custom banner message |
+| `REDLIB_ROBOTS_DISABLE_INDEXING` | No | Disable search engine indexing |
+
+Listens on port `8080`.
+
+## Modifications from Upstream
+
+- Same release binary upstream's own image ships, verified against a pinned SHA256
+- Current Alpine runtime (upstream's image is on Alpine 3.19) with only `ca-certificates`
+- Non-root user `10000:10000` with a numeric UID (upstream uses a named user)
+- `linux/amd64` only (see `.platforms`), since the checksum pin covers one asset
+
+## Egress
+
+v0.40.0 resolves `www.reddit.com` through `dualstack.reddit.map.fastly.net`,
+keeping `www.reddit.com` as the TLS SNI and Host. FQDN egress allowlists need that
+name as well as the Reddit hosts.
 
 ## Known Issues
 
-- Reddit may still rate limit or block based on IP, traffic patterns, or other fingerprinting
-- For high-traffic instances, consider routing through Tor or a VPN
-- The TLS evasion is a cat-and-mouse game; future Reddit changes may require different workarounds
+- **Comment threads fail with 403 on every redlib instance** (since 2026-10-20).
+  Reddit's edge now refuses the comments endpoints for logged-out tokens, so this
+  is a Reddit policy change, not fingerprinting. Upstream's `%2f` path-encoding
+  workaround in v0.40.0 was blocked again within a day. Fixes are in progress
+  upstream (GraphQL in #603, shreddit HTML in #599).
+- Reddit may still rate-limit or block by IP, traffic pattern or fingerprint. This
+  is an ongoing cat-and-mouse game.
