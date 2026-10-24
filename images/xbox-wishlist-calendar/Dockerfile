@@ -5,7 +5,7 @@
 ARG XWC_COMMIT=86bc1719ce733b1952aa24699e9f2c61bab2a058
 
 # renovate: datasource=docker depName=python versioning=docker
-ARG PYTHON_VERSION=3.14
+ARG PYTHON_VERSION=3.15
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
