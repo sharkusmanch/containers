@@ -1696,6 +1696,17 @@ describe("xbox achievements", () => {
     expect(view.element.querySelector(".ach-summary")).toBeNull();
   });
 
+  it("marks only rows that carry a Gamerscore for the Xbox layout", () => {
+    const view = createAchievementsView(document);
+    view.update(xbox);
+    for (const id of ["x1", "x2", "x3", "x4"]) {
+      expect(row(view, id).classList.contains("ach-row-xbox")).toBe(true);
+    }
+    view.update(data);
+    expect(view.element.querySelectorAll(".ach-row").length).toBeGreaterThan(0);
+    expect(view.element.querySelector(".ach-row-xbox")).toBeNull();
+  });
+
   it("locked secret xbox achievement masked until tapped", () => {
     const view = createAchievementsView(document);
     view.update(xbox);

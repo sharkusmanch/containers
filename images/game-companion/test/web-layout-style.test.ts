@@ -98,4 +98,64 @@ describe("the layout stylesheet rules", () => {
     expect(css).toMatch(/\.split-divider \{[^}]*display: none;/);
     expect(css).toMatch(/\.layout-split \.two-panes > \.split-divider \{[^}]*display: block;/);
   });
+
+  // The quoted rows of a rule's `grid-template-areas`, as lists of area names.
+  const areas = (selector: string): string[][] => {
+    const rule = rules.find((r) => r.selectors.join() === selector);
+    const decl = /grid-template-areas:([^;]*);/.exec(rule?.body ?? "")?.[1] ?? "";
+    return [...decl.matchAll(/"([^"]*)"/g)].map((m) => (m[1] ?? "").trim().split(/\s+/));
+  };
+
+  it("leaves the base achievement row template as it was for Steam and RetroAchievements", () => {
+    expect(areas(".ach-row")).toEqual([
+      ["icon", "name", "kind", "pct"],
+      ["icon", "desc", "desc", "pct"],
+      ["icon", "missable", "missable", "pct"],
+      ["icon", "progress", "gs", "pct"],
+    ]);
+  });
+
+  it("puts an Xbox row's percentage and Gamerscore in one column on consecutive lines", () => {
+    const grid = areas(".ach-row.ach-row-xbox");
+    expect(grid.length).toBeGreaterThan(0);
+    const at = (name: string): [number, number] => {
+      const row = grid.findIndex((cells) => cells.includes(name));
+      return [row, grid[row]?.indexOf(name) ?? -1];
+    };
+    const [pctRow, pctCol] = at("pct");
+    const [gsRow, gsCol] = at("gs");
+    expect(pctRow).toBeGreaterThanOrEqual(0);
+    expect(gsCol).toBe(pctCol);
+    expect(gsRow).toBe(pctRow + 1);
+    // Each of them in a single cell, on the name line and the description line.
+    expect(grid.flat().filter((n) => n === "pct")).toHaveLength(1);
+    expect(grid.flat().filter((n) => n === "gs")).toHaveLength(1);
+    expect(grid[pctRow]).toContain("name");
+    expect(grid[pctRow]?.indexOf("kind")).toBeLessThan(pctCol);
+    expect(grid[gsRow]).toContain("desc");
+    // Missable and the counter keep a line of their own, each below the description.
+    for (const own of ["missable", "progress"]) {
+      const row = grid.findIndex((cells) => cells.includes(own));
+      expect(row).toBeGreaterThan(gsRow);
+      expect(grid[row]?.filter((n) => n !== own && n !== "icon" && n !== ".")).toEqual([]);
+    }
+    const body = rules.find((r) => r.selectors.join() === ".ach-row.ach-row-xbox")?.body ?? "";
+    expect(body).not.toContain("min-height");
+  });
+
+  it("right-aligns the Gamerscore on the percentage's edge", () => {
+    const align = (selector: string) =>
+      rules.find((r) => r.selectors.join() === selector)?.body ?? "";
+    expect(align(".ach-pct")).toContain("justify-self: end;");
+    expect(align(".ach-gs")).toContain("justify-self: end;");
+  });
+
+  // WebKit bug 301108 (iOS 26): in a Home Screen web app with viewport-fit=cover and a
+  // black-translucent status bar, 100% / 100dvh / 100svh come up short by the top inset.
+  it("uses the large viewport height in the installed app only", () => {
+    const block = mediaBlock("(display-mode: standalone)");
+    expect(block).not.toBe("");
+    expect(block).toMatch(/html,\s*body\s*\{[^}]*height:\s*100lvh;/);
+    expect(css).toMatch(/html,\s*body,\s*#app\s*\{[^}]*height:\s*100%;/);
+  });
 });

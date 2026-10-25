@@ -21,6 +21,17 @@ body,
   height: 100%;
 }
 
+/* WebKit bug 301108 (iOS 26): in a Home Screen web app with viewport-fit=cover and the
+   black-translucent status bar, 100%, 100dvh and 100svh all come up short by the top safe-area
+   inset, leaving a blank band under the bottom tab bar. 100lvh is the full screen there. Only the
+   installed app: browser tabs (where lvh would run under the toolbars) and the Thor keep 100%. */
+@media (display-mode: standalone) {
+  html,
+  body {
+    height: 100lvh;
+  }
+}
+
 html,
 body {
   margin: 0;
@@ -610,6 +621,17 @@ button {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
+}
+
+/* Xbox rows (those with a Gamerscore): the percentage on the name line and the Gamerscore right
+   under it, on the description line, in one right-aligned column. The missable label and the
+   counter each take a line only when present; a grid row with no items collapses. */
+.ach-row.ach-row-xbox {
+  grid-template-areas:
+    "icon name kind pct"
+    "icon desc desc gs"
+    "icon missable missable ."
+    "icon progress progress .";
 }
 
 .ach-actions {

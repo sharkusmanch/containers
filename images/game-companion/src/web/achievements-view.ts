@@ -227,6 +227,8 @@ export function createAchievementsView(
     const row = doc.createElement("button");
     row.setAttribute("type", "button");
     row.classList.add("ach-row");
+    // Xbox rows line the percentage and the Gamerscore up in one column.
+    if (a.gamerscore !== undefined) row.classList.add("ach-row-xbox");
     if (expanded.has(a.id)) row.classList.add("expanded");
     row.dataset["id"] = a.id;
     if (!masked && a.icon !== null && a.icon.startsWith("https://")) {
