@@ -5,7 +5,7 @@
  */
 import { checkboxItems } from "./guide-checkbox.js";
 import { renderGuide } from "./guide-render.js";
-import { tick } from "./guide-tick.js";
+import { tick, type TickResult } from "./guide-tick.js";
 import { locateInElement, type LocateMode } from "./locate.js";
 import { OutlineError, type GuideDocument, type OutlineApi } from "./outline-api.js";
 import { docId } from "./state.js";
@@ -57,6 +57,16 @@ interface Tap {
 /** Reading positions by page id, shared by every reader for the session. */
 const positions = new Map<string, number>();
 
+/** A heading hash the reader follows: what the renderer puts in `data-hash`. */
+const HASH = /^[A-Za-z0-9_-]+$/;
+/**
+ * The heading a link on another page asked for, by page id, until a reader shows that page:
+ * the page may open in this reader, in another slot's, or be on screen already.
+ */
+const wantedHashes = new Map<string, string>();
+/** Each live reader's check for a wanted heading on the page it shows. */
+const hashWatchers = new Set<() => void>();
+
 export function createReader(deps: ReaderDeps, url: string): Reader {
   const { doc } = deps;
   const element = doc.createElement("div");
@@ -107,6 +117,27 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     box.setAttribute("aria-checked", String(checked));
     if (busy) box.setAttribute("aria-busy", "true");
     else box.removeAttribute("aria-busy");
+  }
+
+  /** Scrolls to the element with id `hash` in the page, opening any toggle it is folded in. */
+  function scrollToHash(hash: string): void {
+    if (!HASH.test(hash)) return;
+    const target = body.querySelector(`[id="${hash}"]`);
+    if (target === null) return;
+    for (let up = target.parentElement; up !== null && up !== body; up = up.parentElement) {
+      if (up.tagName === "DETAILS") up.setAttribute("open", "");
+    }
+    if (typeof target.scrollIntoView === "function") target.scrollIntoView({ block: "start" });
+  }
+
+  /** Follows the heading a link asked for on the page shown, once. */
+  function followWanted(): void {
+    if (shown === null) return;
+    const id = docId(current);
+    const hash = wantedHashes.get(id);
+    if (hash === undefined) return;
+    wantedHashes.delete(id);
+    scrollToHash(hash);
   }
 
   /** Shows `next`, or says it can't be shown. True when it rendered. */
@@ -162,13 +193,17 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
         if (!render(answer)) return;
         setStatus("");
         element.scrollTop = positions.get(id) ?? 0;
+        followWanted();
       },
       (err: unknown) => {
         if (loadCtl !== ctl) return;
         loadCtl = null;
+        wantedHashes.delete(id);
         const kind = err instanceof OutlineError ? err.kind : "other";
         if (kind === "signed-out") setStatus(SIGN_IN_READ, true);
-        else setStatus(kind === "not-found" ? NOT_FOUND : LOAD_FAILED);
+        else if (kind === "not-found") setStatus(NOT_FOUND);
+        // An answer that arrived but could not be read is the page, not the connection.
+        else setStatus(err instanceof OutlineError && err.status === 200 ? CANT_SHOW : LOAD_FAILED);
       },
     );
   }
@@ -200,7 +235,13 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
       if (gen === generation) conflict(fresh);
       return;
     }
-    const result = await tick(deps.outline, shown, index, checked);
+    let result: TickResult;
+    try {
+      result = await tick(deps.outline, shown, index, checked);
+    } catch {
+      // tick never throws by contract; if it does, the box must not stay busy.
+      result = { kind: "failed", doc: null };
+    }
     if (gen !== generation) {
       // The page was left or the reader disposed: nothing to redraw, but progress moved on.
       if (result.kind === "saved") deps.onSaved();
@@ -259,13 +300,26 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
       tap(box);
       return;
     }
-    const link = target.closest("a[data-doc]");
-    if (
-      link !== null &&
-      body.contains(link) &&
-      deps.openPage(link.getAttribute("data-doc") ?? "")
-    ) {
+    const link = target.closest("a[data-doc], a[data-hash]");
+    if (link === null || !body.contains(link)) return;
+    const path = link.getAttribute("data-doc");
+    const raw = link.getAttribute("data-hash");
+    const hash = raw !== null && HASH.test(raw) ? raw : null;
+    // A bare #hash, or a hash on the page shown: scroll here.
+    if (path === null || (hash !== null && docId(path) === docId(current))) {
       event.preventDefault();
+      if (hash !== null) scrollToHash(hash);
+      return;
+    }
+    const id = docId(path);
+    if (hash === null) wantedHashes.delete(id);
+    else wantedHashes.set(id, hash);
+    if (deps.openPage(path)) {
+      event.preventDefault();
+      // The page may be on screen already, in this reader or another.
+      for (const watch of hashWatchers) watch();
+    } else {
+      wantedHashes.delete(id);
     }
   }
 
@@ -284,6 +338,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
 
   body.addEventListener("click", onBodyClick);
   outlineButton.addEventListener("click", onOutlineClick);
+  hashWatchers.add(followWanted);
   load(url);
 
   return {
@@ -315,6 +370,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
       disposed = true;
       body.removeEventListener("click", onBodyClick);
       outlineButton.removeEventListener("click", onOutlineClick);
+      hashWatchers.delete(followWanted);
     },
   };
 }

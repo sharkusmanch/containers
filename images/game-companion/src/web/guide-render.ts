@@ -23,6 +23,8 @@ const EMOJI: Record<string, string> = {
 const NOTICE_STYLES = new Set(["info", "warning", "tip", "success"]);
 const LABEL_LIMIT = 80;
 const EXTERNAL = 'target="_blank" rel="noopener noreferrer"';
+/** A link hash the reader can follow: a heading id such as `h-area-two`, nothing else. */
+const HASH = /^[A-Za-z0-9_-]+$/;
 
 function escape(value: string): string {
   return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
@@ -165,11 +167,13 @@ class Renderer {
 
   private checkboxItem(node: PMNode): string {
     const checked = attr(node, "checked") === true;
-    const index = this.checkboxIndex.get(node) ?? 0;
+    // An item the numbering never saw gets no index: a tap on it must not tick another item.
+    const index = this.checkboxIndex.get(node);
+    const cb = index === undefined ? "" : ` data-cb="${index}"`;
     return (
       `<li class="cb-item${checked ? " checked" : ""}">` +
       `<button type="button" class="cb" role="checkbox" aria-checked="${checked}" ` +
-      `aria-label="${escape(checkboxLabel(node))}" data-cb="${index}"></button>` +
+      `aria-label="${escape(checkboxLabel(node))}"${cb}></button>` +
       `<div class="cb-body">${this.children(node)}</div></li>`
     );
   }
@@ -247,17 +251,30 @@ class Renderer {
     return html;
   }
 
+  /**
+   * A link to a guide page carries its path in `data-doc` and a heading hash in `data-hash`; a
+   * bare `#hash` is an in-page link the reader scrolls to. Hashes are heading ids only.
+   */
   private link(address: unknown, inner: string): string {
     if (typeof address !== "string" || address.trim() === "") return inner;
+    const trimmed = address.trim();
+    if (trimmed.startsWith("#")) {
+      const hash = trimmed.slice(1);
+      if (!HASH.test(hash)) return inner;
+      return `<a href="#${escape(hash)}" data-hash="${escape(hash)}">${inner}</a>`;
+    }
     let parsed: URL;
     try {
-      parsed = new URL(address.trim(), this.origin);
+      parsed = new URL(trimmed, this.origin);
     } catch {
       return inner;
     }
     if (parsed.origin === new URL(this.origin).origin && isSafeDocUrl(parsed.pathname)) {
       const path = escape(parsed.pathname);
-      return `<a href="${path}" data-doc="${path}" ${EXTERNAL}>${inner}</a>`;
+      const raw = parsed.hash.slice(1);
+      if (!HASH.test(raw)) return `<a href="${path}" data-doc="${path}" ${EXTERNAL}>${inner}</a>`;
+      const hash = escape(raw);
+      return `<a href="${path}#${hash}" data-doc="${path}" data-hash="${hash}" ${EXTERNAL}>${inner}</a>`;
     }
     const href = this.externalHref(address);
     return href === null ? inner : `<a href="${escape(href)}" ${EXTERNAL}>${inner}</a>`;

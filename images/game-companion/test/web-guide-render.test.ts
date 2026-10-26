@@ -68,6 +68,20 @@ describe("checkbox_item and checkbox_list", () => {
     expect(other).toContain('data-cb="0"');
     expect(other).not.toContain('data-cb="1"');
   });
+
+  it("omits data-cb for an item the numbering never saw", () => {
+    // A list whose content getter answers new objects on every read: the items rendered are not
+    // the ones numbered, so none of them may claim an index.
+    const shifting: PMNode = { type: "checkbox_list" };
+    Object.defineProperty(shifting, "content", {
+      get: () => [item("Ghost", false)],
+      enumerable: true,
+    });
+    const html = renderGuide(doc(list(item("Real", false)), shifting), ctx);
+    expect(html).toContain('aria-label="Real" data-cb="0"');
+    expect(html).toContain('aria-label="Ghost"></button>');
+    expect([...html.matchAll(/data-cb=/g)]).toHaveLength(1);
+  });
 });
 
 describe("heading", () => {
@@ -107,10 +121,50 @@ describe("link mark", () => {
     );
   });
 
-  it("accepts the Outline origin form and drops the query and hash", () => {
-    expect(render(para(link("https://outline.example/doc/abc?x=1#h")))).toBe(
+  it("accepts the Outline origin form and drops the query", () => {
+    expect(render(para(link("https://outline.example/doc/abc?x=1")))).toBe(
       `<p><a href="/doc/abc" data-doc="/doc/abc" ${A}>go</a></p>`,
     );
+  });
+
+  it("keeps a heading hash on an in-app link", () => {
+    expect(render(para(link("/doc/walk-abc123#h-area-2")))).toBe(
+      `<p><a href="/doc/walk-abc123#h-area-2" data-doc="/doc/walk-abc123" data-hash="h-area-2" ${A}>go</a></p>`,
+    );
+    expect(render(para(link("https://outline.example/doc/abc?x=1#h_A-9")))).toBe(
+      `<p><a href="/doc/abc#h_A-9" data-doc="/doc/abc" data-hash="h_A-9" ${A}>go</a></p>`,
+    );
+  });
+
+  it("drops a hash with any other character from an in-app link", () => {
+    for (const href of ["/doc/abc#h%22x", "/doc/abc#a.b", "/doc/abc#", "/doc/abc#h x"]) {
+      expect(render(para(link(href)))).toBe(
+        `<p><a href="/doc/abc" data-doc="/doc/abc" ${A}>go</a></p>`,
+      );
+    }
+  });
+
+  it("makes a bare hash an in-page link with no target", () => {
+    expect(render(para(link("#h-area-2")))).toBe(
+      '<p><a href="#h-area-2" data-hash="h-area-2">go</a></p>',
+    );
+    expect(render(para(link("  #h-x  ")))).toBe('<p><a href="#h-x" data-hash="h-x">go</a></p>');
+  });
+
+  it("renders the text only for a bare hash with any other character", () => {
+    for (const href of ["#", '#a"b', "#<x>", "#a b", "#h%20x"]) {
+      expect(render(para(link(href)))).toBe("<p>go</p>");
+    }
+  });
+
+  it("points an in-guide hash at the heading rendered from its text", () => {
+    const html = render(
+      { type: "heading", attrs: { level: 2 }, content: [text("Area Two")] },
+      para(link("#h-area-two")),
+    );
+    const hash = /data-hash="([^"]+)"/.exec(html)?.[1];
+    expect(hash).toBe("h-area-two");
+    expect(html).toContain(`<h2 id="${hash}">Area Two</h2>`);
   });
 
   it("opens other http(s) addresses as plain external links", () => {

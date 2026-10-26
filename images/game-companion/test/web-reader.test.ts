@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PMNode } from "../src/web/guide-checkbox.js";
+import { tick } from "../src/web/guide-tick.js";
 import { OutlineError, type GuideDocument, type OutlineApi } from "../src/web/outline-api.js";
 import { createReader, type Reader, type ReaderDeps } from "../src/web/reader.js";
+
+// The real tick, wrapped so one test can make it throw.
+vi.mock("../src/web/guide-tick.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../src/web/guide-tick.js")>();
+  return { ...real, tick: vi.fn(real.tick) };
+});
 
 const ORIGIN = "https://wiki.example";
 const A = "/doc/area-a-1";
@@ -260,6 +267,12 @@ describe("createReader", () => {
   it.each([
     ["not-found", new OutlineError(404, "not-found"), "This page wasn't found."],
     ["other", new OutlineError(500, "other"), "Couldn't load this page. Check your connection."],
+    ["network", new OutlineError(0, "other"), "Couldn't load this page. Check your connection."],
+    [
+      "unreadable answer",
+      new OutlineError(200, "other"),
+      "This page can't be shown here. Use Show in Outline.",
+    ],
   ])("shows a load error (%s) with an empty body", async (_kind, err, copy) => {
     const api = fake();
     api.fail.document = [err];
@@ -376,6 +389,25 @@ describe("createReader", () => {
       expect(status(reader).textContent).toBe(
         "Couldn't save. Check your connection and try again.",
       );
+    });
+
+    it("on an unexpected error from the save, as on failed", async () => {
+      const { reader, onSaved } = setup();
+      await settle();
+      vi.mocked(tick).mockRejectedValueOnce(new TypeError("boom"));
+      box(reader, 0).click();
+      await settle();
+      expect(box(reader, 0).getAttribute("aria-checked")).toBe("false");
+      expect(box(reader, 0).hasAttribute("aria-busy")).toBe(false);
+      expect(status(reader).textContent).toBe(
+        "Couldn't save. Check your connection and try again.",
+      );
+      expect(onSaved).not.toHaveBeenCalled();
+      // The box can be tapped again, and saves.
+      box(reader, 0).click();
+      await settle();
+      expect(box(reader, 0).getAttribute("aria-checked")).toBe("true");
+      expect(onSaved).toHaveBeenCalledTimes(1);
     });
 
     it("on failed with a read-back, re-rendering from it", async () => {
@@ -576,6 +608,138 @@ describe("createReader", () => {
     unknown?.dispatchEvent(second);
     expect(openPage).toHaveBeenCalledWith("/doc/unknown-3");
     expect(second.defaultPrevented).toBe(false);
+  });
+
+  describe("hash links", () => {
+    let scrolled: Element[] = [];
+    beforeEach(() => {
+      scrolled = [];
+      Element.prototype.scrollIntoView = function (this: Element) {
+        scrolled.push(this);
+      };
+    });
+    afterEach(() => {
+      Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+    });
+    const click = (link: Element | null | undefined): MouseEvent => {
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+      link?.dispatchEvent(event);
+      return event;
+    };
+
+    it("scrolls to a bare hash's heading inside a closed toggle, opening it", async () => {
+      const api = fake();
+      const openPage = vi.fn(() => true);
+      (api.pages["1"] as Page).data = {
+        type: "doc",
+        content: [
+          {
+            type: "container_toggle",
+            content: [
+              { type: "paragraph", content: [text("More")] },
+              { type: "heading", attrs: { level: 2 }, content: [text("Area Two")] },
+            ],
+          },
+          {
+            type: "paragraph",
+            content: [
+              { ...text("jump"), marks: [{ type: "link", attrs: { href: "#h-area-two" } }] },
+            ],
+          },
+        ],
+      };
+      const { reader } = setup(A, { outline: api, openPage });
+      await settle();
+      const details = body(reader).querySelector("details") as HTMLDetailsElement;
+      expect(details.open).toBe(false);
+      const event = click(body(reader).querySelector("a[data-hash]"));
+      expect(event.defaultPrevented).toBe(true);
+      expect(openPage).not.toHaveBeenCalled();
+      expect(scrolled).toEqual([body(reader).querySelector("#h-area-two")]);
+      expect(details.open).toBe(true);
+    });
+
+    it("scrolls in place for a link to the page already shown", async () => {
+      const api = fake();
+      const openPage = vi.fn(() => true);
+      (api.pages["1"] as Page).md = `${MD_A}\n\n[Top](/doc/area-a-1#h-area)`;
+      const { reader } = setup(A, { outline: api, openPage });
+      await settle();
+      const event = click(body(reader).querySelector("a[data-doc]"));
+      expect(event.defaultPrevented).toBe(true);
+      expect(openPage).not.toHaveBeenCalled();
+      expect(scrolled).toEqual([body(reader).querySelector("h2")]);
+    });
+
+    it("does nothing but stop the navigation for a bare hash that names no element", async () => {
+      const api = fake();
+      (api.pages["1"] as Page).md = "[Gone](#h-nowhere)";
+      const { reader } = setup(A, { outline: api });
+      await settle();
+      expect(click(body(reader).querySelector("a[data-hash]")).defaultPrevented).toBe(true);
+      expect(scrolled).toEqual([]);
+    });
+
+    it("opens another page and scrolls to the hash once it is loaded", async () => {
+      const api = fake();
+      api.hold = true;
+      (api.pages["1"] as Page).md = "[Other](/doc/area-b-2#h-other)";
+      let shown: Reader | null = null;
+      const openPage = vi.fn((url: string) => {
+        shown?.load(url);
+        return true;
+      });
+      const { reader } = setup(A, { outline: api, openPage });
+      shown = reader;
+      api.held[0]?.release();
+      await settle();
+      const event = click(body(reader).querySelector("a[data-doc]"));
+      expect(event.defaultPrevented).toBe(true);
+      expect(openPage).toHaveBeenCalledWith("/doc/area-b-2");
+      expect(scrolled).toEqual([]);
+      api.held[1]?.release();
+      await settle();
+      expect(body(reader).textContent).toContain("Second page text");
+      expect(scrolled).toEqual([body(reader).querySelector("#h-other")]);
+    });
+
+    it("scrolls the reader the page opens in, when that is another reader", async () => {
+      const api = fake();
+      (api.pages["1"] as Page).md = "[Other](/doc/area-b-2#h-other)";
+      let other: Reader | null = null;
+      const openPage = (url: string): boolean => {
+        other = setup(url, { outline: api }).reader;
+        return true;
+      };
+      const { reader } = setup(A, { outline: api, openPage });
+      await settle();
+      click(body(reader).querySelector("a[data-doc]"));
+      await settle();
+      const opened = other as Reader | null;
+      expect(opened).not.toBeNull();
+      expect(scrolled).toEqual([opened && body(opened).querySelector("#h-other")]);
+    });
+
+    it("scrolls a reader already showing the linked page", async () => {
+      const api = fake();
+      (api.pages["1"] as Page).md = "[Other](/doc/area-b-2#h-other)";
+      const already = setup(B, { outline: api }).reader;
+      const { reader } = setup(A, { outline: api, openPage: () => true });
+      await settle();
+      click(body(reader).querySelector("a[data-doc]"));
+      expect(scrolled).toEqual([body(already).querySelector("#h-other")]);
+    });
+
+    it("forgets the hash when the page does not open in the companion", async () => {
+      const api = fake();
+      (api.pages["1"] as Page).md = "[Other](/doc/area-b-2#h-other)";
+      const { reader } = setup(A, { outline: api, openPage: () => false });
+      await settle();
+      expect(click(body(reader).querySelector("a[data-doc]")).defaultPrevented).toBe(false);
+      reader.load(B);
+      await settle();
+      expect(scrolled).toEqual([]);
+    });
   });
 
   it("Show in Outline calls showInOutline with the current url", async () => {
