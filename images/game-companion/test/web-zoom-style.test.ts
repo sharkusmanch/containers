@@ -53,3 +53,38 @@ describe("the find highlight rule", () => {
     expect(rule?.body).toContain("color: #111;");
   });
 });
+
+describe("the guide reader rules", () => {
+  it.each(GUIDE_ZOOM_STEPS.filter((step) => step !== 100))(
+    "sizes the reader's text by font-size, never by a transform, at %i",
+    (step) => {
+      const rule = rules.find((r) => r.selector === `.frames.zoom-${step} .reader`);
+      expect(rule?.body).toContain(`font-size: ${step}%;`);
+      expect(rule?.body).not.toContain("transform");
+    },
+  );
+
+  it("has no other reader text size rule", () => {
+    const sized = rules.filter((r) => /^\.frames\.zoom-\d+ \.reader$/.test(r.selector));
+    expect(sized).toHaveLength(GUIDE_ZOOM_STEPS.length - 1);
+  });
+
+  it("gives a checkbox a hit area of at least 44 by 44 pixels", () => {
+    const rule = rules.find((r) => r.selector === ".reader .cb");
+    expect(rule?.body).toContain("min-width: 44px;");
+    expect(rule?.body).toContain("min-height: 44px;");
+  });
+
+  it("is a scroll container of its own, kept in the layout while hidden", () => {
+    const reader = rules.find((r) => r.selector === ".reader");
+    expect(reader?.body).toContain("overflow-y: auto;");
+    const inactive = rules.find((r) => r.selector === ".reader.inactive");
+    expect(inactive?.body).toContain("visibility: hidden;");
+    expect(inactive?.body).not.toContain("display");
+  });
+
+  it("styles a row by the box's checked state, not by the item's class", () => {
+    expect(rules.some((r) => r.selector.includes('.cb[aria-checked="true"]'))).toBe(true);
+    expect(rules.some((r) => r.selector.includes(".cb-item.checked"))).toBe(false);
+  });
+});

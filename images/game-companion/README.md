@@ -6,7 +6,8 @@ puts that game's guide pages and achievement progress one tap apart.
 A small Node service polls Steam and RetroAchievements for the current game, indexes guide
 documents in an Outline wiki by the `Steam App ID` or `RA Game ID` row in each guide, and
 serves a read-only JSON API together with a static front end. The front end is a thin
-sidebar that frames real Outline pages and shows an achievements panel.
+sidebar that shows Outline guide pages (in its own guide reader, or framed) and an achievements
+panel.
 
 From an achievement, **Find in guide** searches the game's guide pages and opens the page at
 that line. **Ask how** sends `How do I get "<name>"? <description>` to Ask at hint depth (hidden
@@ -22,7 +23,7 @@ switched off under ⋯ › Display. **Guide text size** there draws the framed g
 80 or 70 per cent, for a small screen; it enlarges the frame and scales it down, so the guide
 lays out in a wider window as it would under browser zoom.
 
-**Reader mode** (⋯ › Display, on by default) lets you read a guide page and tick its
+**Reader mode** (⋯ › Display, on by default) lets you read a framed guide page and tick its
 checkboxes on a touch screen without the on-screen keyboard coming up: the framed page's
 editable areas are marked so the browser shows no keyboard for them. Pages meant for typing
 are exempt by title, set with `EDITABLE_PAGES`.
@@ -44,7 +45,7 @@ returns.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.16.1
+- **Version**: v0.17.0
 
 ## Usage
 
@@ -55,7 +56,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.16.1
+  ghcr.io/sharkusmanch/containers/game-companion:v0.17.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -254,6 +255,33 @@ tools. Guide page text is read from Outline at most a few times a minute and kep
 and missable marks use a copy up to ten minutes old; while a page is open, the guide being
 shown is read again about once a minute, and a few seconds after a tap inside a guide page, so
 the checkbox counts stay current.
+
+## Guide reader
+
+Guide pages open in the companion's own reader rather than in a framed Outline editor. The
+browser reads the page from Outline directly (same origin, with your Outline sign-in) and draws
+it itself: headings, lists, tables (a wide one scrolls sideways), notices, code and links. A
+link to another page of the same guide opens it in the companion. Each page keeps its reading
+position for the session, Find in guide and the guide jump highlight the line in the reader,
+and **Guide text size** sets the reader's font size instead of scaling it.
+
+A checkbox ticks with one tap on the box (a 44 px target down the item's left edge; the rest of
+the row is not a toggle, so scrolling past links does not tick anything). The box shows the new
+state dimmed until Outline has saved it and a fresh read of the page confirms it; the sidebar
+count follows at once. The tick is written by the browser as the signed-in Outline user, so it
+appears in the page's history under your name; there is no server-side writer key. Signed out
+of Outline, the page stays readable and a **Sign in** link is shown instead of saving. If the
+page changed elsewhere since it was shown, it is refreshed and the tap has to be made again.
+
+A tick is saved as a small patch to the page's Markdown, and only when that item's line (with
+its neighbours in the same block) occurs exactly once. Where it does not, about 0.4% of the
+checklist items in the guides today (identical lines repeated in one list), the reader says
+**Tick it in Outline** and changes nothing.
+
+**Show in Outline**, at the top of the reader, frames that page in Outline itself for the rest
+of the session, for anything the reader cannot show or to edit the page. Choosing the page again
+from ⋯ › Pages brings the reader back. Pages meant for typing in (`EDITABLE_PAGES`, such as
+Notes) always stay framed in Outline, with Reader mode as before, and so do your own links.
 
 ## Guide format
 

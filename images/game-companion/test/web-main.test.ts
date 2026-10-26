@@ -4,6 +4,8 @@ import { captureInstallPrompt } from "../src/web/device.js";
 import { startApp } from "../src/web/main.js";
 import { ApiError, createApi, type Api } from "../src/web/api.js";
 import type { Layout } from "../src/web/state.js";
+import type { PMNode } from "../src/web/guide-checkbox.js";
+import type { OutlineApi } from "../src/web/outline-api.js";
 import type {
   Achievement,
   AchievementsResponse,
@@ -6505,5 +6507,160 @@ describe("xbox", () => {
     expect($(".toast-text")?.textContent).toBe("Could not reach the Xbox sign-in");
     expect(($(".setting-xbox-action") as HTMLButtonElement).disabled).toBe(false);
     expect(api.xboxCalls.at(-1)).toBe("status");
+  });
+});
+
+describe("guide reader", () => {
+  /** A synthetic Outline: every page has one checkbox ("Potion") and a link to Collectibles. */
+  function fakeOutline() {
+    const state = { checked: false, revision: 1, documentCalls: [] as string[] };
+    const markdown = (): string =>
+      [`- [${state.checked ? "x" : " "}] Potion`, "", "See [Collectibles](/doc/hA-coll)"].join(
+        "\n",
+      );
+    const data = (): PMNode => ({
+      type: "doc",
+      content: [
+        {
+          type: "checkbox_list",
+          content: [
+            {
+              type: "checkbox_item",
+              attrs: { checked: state.checked },
+              content: [{ type: "paragraph", content: [{ type: "text", text: "Potion" }] }],
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "See " },
+            {
+              type: "text",
+              text: "Collectibles",
+              marks: [{ type: "link", attrs: { href: "/doc/hA-coll" } }],
+            },
+          ],
+        },
+      ],
+    });
+    const outline: OutlineApi = {
+      async document(id) {
+        state.documentCalls.push(id);
+        return {
+          id,
+          title: `Page ${id}`,
+          url: `/doc/page-${id}`,
+          revision: state.revision,
+          data: data(),
+        };
+      },
+      async markdown() {
+        return { text: markdown(), revision: state.revision };
+      },
+      async patch(_id, edit) {
+        const next = markdown().replace(edit.findText, () => edit.text);
+        state.checked = next.includes("- [x] Potion");
+        state.revision += 1;
+      },
+    };
+    return { outline, state };
+  }
+
+  const start = async (api: Fake = fakeApi(playing(hubA)), withOutline = true) => {
+    const fake = fakeOutline();
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      ...(withOutline ? { outline: fake.outline } : {}),
+    });
+    await app.ready;
+    return { app, api, ...fake };
+  };
+  const shownReader = (): HTMLElement | null => $(".reader:not(.inactive)");
+  const shownFrame = (): HTMLIFrameElement | null =>
+    $("iframe:not(.inactive)") as HTMLIFrameElement | null;
+  const openPicked = (title: string): void => {
+    railButtons().at(-1)?.click();
+    const item = [...document.querySelectorAll<HTMLElement>(".picker-pages .picker-item")].find(
+      (b) => b.textContent?.includes(title),
+    );
+    item?.click();
+  };
+
+  it("shows a guide page in the reader rather than a frame", async () => {
+    const { state } = await start();
+    railButtons()[1]?.click();
+    expect(shownReader()).not.toBeNull();
+    expect($("iframe")).toBeNull();
+    await flush();
+    expect(state.documentCalls).toEqual(["checklist"]);
+    expect(shownReader()?.querySelector(".reader-body")?.textContent).toContain("Potion");
+  });
+
+  it("frames a page listed as editable", async () => {
+    const api = fakeApi(playing(hubA));
+    api.hubTree = async (id) => ({
+      ...tree(id === "hA" ? hubA : hubZ),
+      editablePages: ["Achievement Checklist"],
+    });
+    await start(api);
+    railButtons()[1]?.click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    expect($(".reader")).toBeNull();
+  });
+
+  it("Show in Outline frames that page, and choosing it again shows the reader", async () => {
+    await start();
+    railButtons()[1]?.click();
+    await flush();
+    ($(".reader-outline") as HTMLElement).click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    expect($(".reader")).toBeNull();
+    // Another visit to the slot keeps it in Outline for the session.
+    railButtons()[0]?.click();
+    railButtons()[1]?.click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    openPicked("Achievement Checklist");
+    expect(shownReader()).not.toBeNull();
+    expect($("iframe")).toBeNull();
+  });
+
+  it("asks for fresh progress when a tick is saved", async () => {
+    const { api, state } = await start();
+    railButtons()[1]?.click();
+    await flush();
+    api.progressCalls.length = 0;
+    ($(".reader .cb") as HTMLElement).click();
+    await flush();
+    await flush();
+    expect(state.checked).toBe(true);
+    expect(api.progressCalls).toContainEqual(["hA", true]);
+  });
+
+  it("opens a guide page linked from the reader in the companion", async () => {
+    await start();
+    railButtons()[1]?.click();
+    await flush();
+    const link = $(".reader a[data-doc]") as HTMLAnchorElement;
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    const shown = [...document.querySelectorAll<HTMLElement>(".reader")];
+    expect(shown).toHaveLength(2);
+    expect(shownReader()).toBe(shown[1]);
+    expect(
+      [...document.querySelectorAll(".rail button")].slice(1, 3).map((b) => b.textContent),
+    ).toEqual(["AC", "CO"]);
+  });
+
+  it("frames every guide page without an Outline client, as before", async () => {
+    await start(fakeApi(playing(hubA)), false);
+    railButtons()[1]?.click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    expect($(".reader")).toBeNull();
+    expect($(".reader-outline")).toBeNull();
   });
 });
