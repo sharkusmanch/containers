@@ -56,8 +56,16 @@ interface Scan {
   all: string;
 }
 
-function scan(doc: Document): Scan | null {
-  const root = searchRoot(doc);
+const isDocument = (root: Document | Element): root is Document => root.nodeType === 9;
+
+/** The document a search root belongs to: ranges and walkers come from it. */
+const docOf = (root: Document | Element): Document =>
+  isDocument(root) ? root : root.ownerDocument;
+
+/** A Document is searched from its page text (`searchRoot`); an Element only inside itself. */
+function scan(within: Document | Element): Scan | null {
+  const doc = docOf(within);
+  const root = isDocument(within) ? searchRoot(within) : within;
   if (root === null) return null;
   const pieces: Piece[] = [];
   let all = "";
@@ -104,7 +112,8 @@ function textRange(doc: Document, found: Scan, needle: string, from = 0): Range 
 }
 
 /**
- * First place `text` occurs in the page text of `doc`, ignoring case, as a Range. The text may
+ * First place `text` occurs in the page text of `root` (a Document's editor region, or only inside
+ * an Element), ignoring case, as a Range. The text may
  * span adjacent text nodes. With a `heading`, the first occurrence after the first heading of
  * that name is preferred; the first occurrence anywhere is the fallback. Null when absent.
  *
@@ -116,13 +125,14 @@ function textRange(doc: Document, found: Scan, needle: string, from = 0): Range 
  * control is never matched.
  */
 export function findTextRange(
-  doc: Document,
+  root: Document | Element,
   text: string,
   heading?: string | null,
   mode: LocateMode = "text",
 ): Range | null {
+  const doc = docOf(root);
   const needle = fold(text.trim());
-  const found = scan(doc);
+  const found = scan(root);
   if (needle === "" || found === null) return null;
 
   if (mode === "heading") {
@@ -159,9 +169,10 @@ export function findTextRange(
  * The last resort for a heading whose text has drifted from the server's copy: the first heading
  * containing `text`, else the first place `text` occurs in the page.
  */
-export function findFallbackRange(doc: Document, text: string): Range | null {
+export function findFallbackRange(root: Document | Element, text: string): Range | null {
+  const doc = docOf(root);
   const needle = fold(text.trim());
-  const found = scan(doc);
+  const found = scan(root);
   if (needle === "" || found === null) return null;
   const wanted = collapse(text);
   return (
@@ -352,4 +363,39 @@ export function locateInFrame(
     opts.signal?.addEventListener("abort", stop);
     attempt();
   });
+}
+
+/** Opens every closed `details` from `node` up to and including `root`, so the match shows. */
+function openDetails(root: Element, node: Node): void {
+  for (let el = node.parentElement; el !== null; el = el.parentElement) {
+    if (el.tagName === "DETAILS") el.setAttribute("open", "");
+    if (el === root) break;
+  }
+}
+
+/**
+ * Finds `text` (preferably under `heading`) inside `root` now, opens any `details` around it,
+ * scrolls to it and highlights it as `locateInFrame` does. In "heading" mode with no match, the
+ * `fallback` text is tried at once. False when absent; never throws.
+ */
+export function locateInElement(
+  root: Element,
+  text: string,
+  heading: string | null,
+  opts: { mode?: LocateMode; fallback?: string; highlightMs?: number; signal?: AbortSignal } = {},
+): boolean {
+  if (text.trim() === "" || opts.signal?.aborted === true) return false;
+  let range: Range | null;
+  try {
+    range = findTextRange(root, text, heading, opts.mode ?? "text");
+    if (range === null && opts.mode === "heading" && opts.fallback !== undefined) {
+      range = findFallbackRange(root, opts.fallback);
+    }
+  } catch {
+    return false;
+  }
+  if (range === null) return false;
+  openDetails(root, range.startContainer);
+  reveal(root.ownerDocument, range, opts.highlightMs ?? 6_000, opts.signal);
+  return true;
 }

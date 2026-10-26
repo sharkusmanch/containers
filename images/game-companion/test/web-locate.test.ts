@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { findTextRange, locateInFrame } from "../src/web/locate.js";
+import {
+  findFallbackRange,
+  findTextRange,
+  locateInElement,
+  locateInFrame,
+} from "../src/web/locate.js";
 
 function page(bodyHtml: string): Document {
   return new DOMParser().parseFromString(`<!doctype html><body>${bodyHtml}</body>`, "text/html");
@@ -771,5 +776,100 @@ describe("locateInFrame", () => {
       false,
     );
     expect(frameDoc(frame).body.innerHTML).toBe(before);
+  });
+});
+
+describe("searching inside an element", () => {
+  it("findTextRange ignores matching text outside the element", () => {
+    const doc = page(
+      "<p id='out'>Sample Boss outside</p><article id='in'><p>the Sample Boss inside</p></article>",
+    );
+    const article = doc.getElementById("in") as Element;
+    const range = findTextRange(article, "sample boss");
+    expect(range?.toString()).toBe("Sample Boss");
+    expect(range?.startContainer.parentElement?.closest("#in")).toBe(article);
+    expect(findTextRange(article, "outside")).toBeNull();
+  });
+
+  it("findTextRange finds only headings inside the element in heading mode", () => {
+    const doc = page("<h2>Chapter</h2><article id='in'><p>x</p><h3>Chapter Two</h3></article>");
+    const article = doc.getElementById("in") as Element;
+    expect(findTextRange(article, "Chapter", null, "heading")?.toString()).toBe("Chapter Two");
+  });
+
+  it("findFallbackRange searches only inside the element", () => {
+    const doc = page("<h2>Lost Woods</h2><article id='in'><p>to the lost woods</p></article>");
+    const article = doc.getElementById("in") as Element;
+    expect(findFallbackRange(article, "lost woods")?.startContainer.parentElement?.tagName).toBe(
+      "P",
+    );
+  });
+
+  it("findTextRange on a Document still searches the editor region only", () => {
+    const doc = page("<nav>Sample Boss</nav><div class='ProseMirror'><p>no match</p></div>");
+    expect(findTextRange(doc, "Sample Boss")).toBeNull();
+  });
+});
+
+describe("locateInElement", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("opens a closed details around the match and returns true", () => {
+    const doc = page(
+      "<article id='in'><details id='outer'><summary>More</summary>" +
+        "<details id='inner'><summary>Deeper</summary><p>the Hidden Key</p></details></details></article>",
+    );
+    const article = doc.getElementById("in") as Element;
+    expect(locateInElement(article, "hidden key", null, { highlightMs: 1000 })).toBe(true);
+    expect((doc.getElementById("outer") as HTMLDetailsElement).open).toBe(true);
+    expect((doc.getElementById("inner") as HTMLDetailsElement).open).toBe(true);
+  });
+
+  it("returns false when the text is absent, and for a blank text", () => {
+    const doc = page("<p>Hidden Key</p><article id='in'><p>nothing</p></article>");
+    const article = doc.getElementById("in") as Element;
+    expect(locateInElement(article, "Hidden Key", null, {})).toBe(false);
+    expect(locateInElement(article, "  ", null, {})).toBe(false);
+  });
+
+  it("prefers the match under the heading", () => {
+    const doc = page(
+      "<article id='in'><p id='a'>Potion</p><h2>Shop</h2><p id='b'>Potion</p></article>",
+    );
+    const article = doc.getElementById("in") as Element;
+    const scrolled: string[] = [];
+    for (const p of article.querySelectorAll("p")) {
+      p.scrollIntoView = () => scrolled.push(p.id);
+    }
+    expect(locateInElement(article, "potion", "Shop", { highlightMs: 1000 })).toBe(true);
+    expect(scrolled).toEqual(["b"]);
+  });
+
+  it("uses the fallback at once in heading mode", () => {
+    const doc = page("<article id='in'><h2>The Lost Woods (Night)</h2></article>");
+    const article = doc.getElementById("in") as Element;
+    expect(
+      locateInElement(article, "Lost Woods Day", null, {
+        mode: "heading",
+        fallback: "Lost Woods",
+        highlightMs: 1000,
+      }),
+    ).toBe(true);
+    expect(locateInElement(article, "Lost Woods Day", null, { mode: "heading" })).toBe(false);
+  });
+
+  it("selects the match and clears it after highlightMs", () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = "<p>Hidden Key</p><article id='in'><p>the Hidden Key</p></article>";
+    const article = document.getElementById("in") as Element;
+    expect(locateInElement(article, "Hidden Key", null, { highlightMs: 1000 })).toBe(true);
+    const selection = document.getSelection();
+    expect(selection?.toString()).toBe("Hidden Key");
+    expect(selection?.getRangeAt(0).startContainer.parentElement?.parentElement).toBe(article);
+    vi.advanceTimersByTime(1000);
+    expect(selection?.toString()).toBe("");
+    document.body.innerHTML = "";
   });
 });
