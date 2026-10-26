@@ -39,4 +39,10 @@ describe("runtime dependencies", () => {
     // The server reads its version from package.json at startup.
     expect(runtime).toMatch(/^COPY package\.json \.\/$/m);
   });
+
+  it("ships the third-party notices beside the app in the runtime image", () => {
+    const runtime = read("Dockerfile").split("AS runtime")[1] ?? "";
+    expect(runtime).toMatch(/^COPY THIRD-PARTY-NOTICES\.md \.\/$/m);
+    expect(read(".dockerignore")).not.toMatch(/THIRD-PARTY/);
+  });
 });
