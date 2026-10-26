@@ -1589,12 +1589,15 @@ describe("reader slots", () => {
       },
     });
     f.show(0, "/doc/a-1", "reader");
+    const before = made[0]?.outerHTML;
     const editable = vi.fn(() => false);
     f.setReader(true, editable);
     f.setHideChrome(true);
     ticks.forEach((t) => t());
     expect(editable).not.toHaveBeenCalled();
     expect(made[0]?.querySelector("#note")?.hasAttribute("inputmode")).toBe(false);
-    expect(document.getElementById("gc-chrome-style")).toBeNull();
+    // Neither the chrome nor the keyboard pass added a style, marker or attribute to the reader.
+    expect(made[0]?.outerHTML).toBe(before);
+    expect(made[0]?.querySelector("style, [data-gc-chrome], [data-gc-reader]")).toBeNull();
   });
 });

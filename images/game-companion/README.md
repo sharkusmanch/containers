@@ -6,8 +6,8 @@ puts that game's guide pages and achievement progress one tap apart.
 A small Node service polls Steam and RetroAchievements for the current game, indexes guide
 documents in an Outline wiki by the `Steam App ID` or `RA Game ID` row in each guide, and
 serves a read-only JSON API together with a static front end. The front end is a thin
-sidebar that shows Outline guide pages (in its own guide reader, or framed) and an achievements
-panel.
+sidebar that shows Outline guide pages (framed, or in its own guide reader when that is turned
+on) and an achievements panel.
 
 From an achievement, **Find in guide** searches the game's guide pages and opens the page at
 that line. **Ask how** sends `How do I get "<name>"? <description>` to Ask at hint depth (hidden
@@ -258,12 +258,17 @@ the checkbox counts stay current.
 
 ## Guide reader
 
-Guide pages open in the companion's own reader rather than in a framed Outline editor. The
-browser reads the page from Outline directly (same origin, with your Outline sign-in) and draws
-it itself: headings, lists, tables (a wide one scrolls sideways), notices, code and links. A
-link to another page of the same guide opens it in the companion. Each page keeps its reading
-position for the session, Find in guide and the guide jump highlight the line in the reader,
-and **Guide text size** sets the reader's font size instead of scaling it.
+The reader is off by default in v0.17.0: turn on **Guide reader** under ⋯ › Display, per
+device (it is saved with the other display settings). Off, guide pages are framed in Outline as
+before; switching it either way changes the pages already open at once.
+
+With it on, guide pages open in the companion's own reader rather than in a framed Outline
+editor. The browser reads the page from Outline directly (same origin, with your Outline
+sign-in) and draws it itself: headings, lists, tables (a wide one scrolls sideways), notices,
+code and links. A link to another page of the same guide opens it in the companion, at the
+heading the link names (`#h-…`); a link to a heading on the same page scrolls there. Each page
+keeps its reading position for the session, Find in guide and the guide jump highlight the line
+in the reader, and **Guide text size** sets the reader's font size instead of scaling it.
 
 A checkbox ticks with one tap on the box (a 44 px target down the item's left edge; the rest of
 the row is not a toggle, so scrolling past links does not tick anything). The box shows the new

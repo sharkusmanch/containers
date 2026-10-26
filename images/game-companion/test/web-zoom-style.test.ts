@@ -75,6 +75,21 @@ describe("the guide reader rules", () => {
     expect(rule?.body).toContain("min-height: 44px;");
   });
 
+  it("gives the Show in Outline button a touch target at least 44 pixels high", () => {
+    const rule = rules.find((r) => r.selector === ".reader-outline");
+    expect(rule?.body).toContain("min-height: 44px;");
+  });
+
+  it("styles the Guide reader hint like the layout readout under its row", () => {
+    const rule = rules.find((r) =>
+      r.selector
+        .split(",")
+        .map((s) => s.trim())
+        .includes(".setting-guide-reader-hint"),
+    );
+    expect(rule?.selector).toContain(".setting-layout-readout");
+  });
+
   it("is a scroll container of its own, kept in the layout while hidden", () => {
     const reader = rules.find((r) => r.selector === ".reader");
     expect(reader?.body).toContain("overflow-y: auto;");

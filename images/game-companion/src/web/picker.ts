@@ -32,6 +32,7 @@ export type SettingName =
   | "guideJump"
   | "guideZoom"
   | "readerMode"
+  | "guideReader"
   | "layoutMode"
   | "fullscreen";
 
@@ -41,6 +42,7 @@ export interface SettingsState {
   guideJump: boolean;
   guideZoom: GuideZoom;
   readerMode: boolean;
+  guideReader: boolean;
   /** The person's choice; "auto" follows the window. */
   layoutMode: LayoutOverride;
   /** The window size and the arrangement in use for it (never "auto"), for the readout line. */
@@ -168,6 +170,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     ["guideJump", "setting-guide-jump"],
     ["guideZoom", "setting-guide-zoom"],
     ["readerMode", "setting-reader-mode"],
+    ["guideReader", "setting-guide-reader"],
     ["layoutMode", "setting-layout"],
   ] as const) {
     const b = doc.createElement("button");
@@ -180,6 +183,11 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   const readout = doc.createElement("p");
   readout.classList.add("setting-layout-readout");
   settingRows.get("layoutMode")?.after(readout);
+  const guideReaderHint = doc.createElement("p");
+  guideReaderHint.classList.add("setting-guide-reader-hint");
+  guideReaderHint.textContent =
+    "Show guide pages in the companion's own reader with one-tap checkboxes.";
+  settingRows.get("guideReader")?.after(guideReaderHint);
   const installRow = doc.createElement("div");
   installRow.classList.add("setting-install");
   const installButton = doc.createElement("button");
@@ -459,6 +467,7 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
         state.guideJump,
       );
       label("readerMode", `Reader mode: ${state.readerMode ? "on" : "off"}`, state.readerMode);
+      label("guideReader", `Guide reader: ${state.guideReader ? "on" : "off"}`, state.guideReader);
       const zoomRow = settingRows.get("guideZoom");
       if (zoomRow !== undefined) zoomRow.textContent = `Guide text size: ${state.guideZoom}%`;
       const layoutRow = settingRows.get("layoutMode");

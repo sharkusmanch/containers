@@ -320,6 +320,8 @@ export function startApp(opts: AppOptions): App {
                 },
                 onSaved: () => {
                   if (current !== null) void refreshProgress(current, true);
+                  // The server answers from a copy under ~5 s old: look again later too.
+                  onGuideInteract();
                 },
               },
               url,
@@ -399,6 +401,8 @@ export function startApp(opts: AppOptions): App {
       applySettings();
       showSettings();
       renderPresence();
+      // Open guide pages switch between the reader and a frame.
+      if (name === "guideReader") render();
     },
     onUnpin(page) {
       if (current === null) return;
@@ -1087,10 +1091,12 @@ export function startApp(opts: AppOptions): App {
     }
   }
 
-  // A guide page opens in the reader, unless it is for typing in or was asked for in Outline.
+  // With the Guide reader setting on, a guide page opens in the reader, unless it is for typing
+  // in or was asked for in Outline.
   function slotKind(url: string): FrameKind {
     if (isLinkUrl(url)) return "link";
-    if (outline === undefined || isEditable(url) || outlineView.has(docId(url))) return "doc";
+    if (!settings.guideReader || outline === undefined) return "doc";
+    if (isEditable(url) || outlineView.has(docId(url))) return "doc";
     return "reader";
   }
 
