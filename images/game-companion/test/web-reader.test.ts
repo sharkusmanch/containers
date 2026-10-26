@@ -67,6 +67,8 @@ interface Fake extends OutlineApi {
   held: Held[];
   fail: { document?: Error[]; markdown?: Error[]; patch?: Error[] };
   land: boolean;
+  /** Runs once a patch has landed: another writer's edit before the read-back. */
+  afterPatch?: ((page: Page) => void) | undefined;
   patches: { id: string; findText: string; text: string; lastRevision: number }[];
 }
 
@@ -122,6 +124,7 @@ function fake(): Fake {
         page.md = page.md.replace(edit.findText, () => edit.text);
         page.revision += 1;
       }
+      api.afterPatch?.(page);
     },
   };
   return api;
@@ -166,7 +169,10 @@ const status = (r: Reader): HTMLElement => r.element.querySelector(".reader-stat
 const box = (r: Reader, i: number): HTMLElement =>
   r.element.querySelector(`.cb[data-cb="${i}"]`) as HTMLElement;
 
-/** Gives the reader's scroller a writable scrollTop (jsdom does not lay out). */
+/**
+ * Gives the reader's scroller a writable scrollTop (jsdom does not lay out). Replacing the body's
+ * markup scrolls back to the top, as a browser may when the content is swapped.
+ */
 function scrollable(r: Reader): void {
   let top = 0;
   Object.defineProperty(r.element, "scrollTop", {
@@ -174,6 +180,16 @@ function scrollable(r: Reader): void {
     get: () => top,
     set: (v: number) => {
       top = v;
+    },
+  });
+  const inner = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
+  const target = body(r);
+  Object.defineProperty(target, "innerHTML", {
+    configurable: true,
+    get: () => inner?.get?.call(target) as string,
+    set: (html: string) => {
+      top = 0;
+      inner?.set?.call(target, html);
     },
   });
 }
@@ -446,6 +462,91 @@ describe("createReader", () => {
     expect(box(reader, 1).getAttribute("aria-checked")).toBe("false");
     expect(box(reader, 1).hasAttribute("aria-busy")).toBe(false);
     expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an item is inserted above it", "- [ ] Inserted\n- [ ] Ether"],
+    ["its text changes", "- [ ] Hi-Ether"],
+    ["a twin with the same text is inserted above it", "- [ ] Ether\n- [ ] Ether"],
+  ])(
+    "does not tick a queued item when another writer's edit arrives with a save (%s)",
+    async (_case, replacement) => {
+      const { api, reader, onSaved } = setup();
+      await settle();
+      api.afterPatch = (page) => {
+        api.afterPatch = undefined;
+        page.md = page.md.replace("- [ ] Ether", replacement);
+        page.revision += 1;
+      };
+      box(reader, 0).click();
+      box(reader, 1).click();
+      await settle();
+      expect(api.patches).toHaveLength(1);
+      expect(api.pages["1"]?.md).not.toMatch(/- \[x\] (Inserted|Hi-Ether|Ether)/);
+      expect(onSaved).toHaveBeenCalledTimes(1);
+      expect(status(reader).textContent).toBe(
+        "This page changed elsewhere and was refreshed. Tap again.",
+      );
+      expect(box(reader, 0).getAttribute("aria-checked")).toBe("true");
+      expect(box(reader, 1).getAttribute("aria-checked")).toBe("false");
+      expect(reader.element.querySelectorAll('[aria-busy="true"]')).toHaveLength(0);
+      // Taps queued behind it are dropped too.
+      expect(api.patches).toHaveLength(1);
+    },
+  );
+
+  it("does not apply a save confirmed after the page was left, but still reports it", async () => {
+    const { api, reader, onSaved } = setup();
+    await settle();
+    api.hold = true;
+    box(reader, 0).click();
+    await settle();
+    expect(api.patches).toHaveLength(1);
+    const readBack = api.held.shift();
+    reader.load(B);
+    api.held.shift()?.release();
+    await settle();
+    const shownB = body(reader).innerHTML;
+    expect(shownB).toContain("Second page text");
+    readBack?.release();
+    await settle();
+    expect(body(reader).innerHTML).toBe(shownB);
+    expect(status(reader).textContent).toBe("");
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not apply a save confirmed after dispose, but still reports it", async () => {
+    const { api, reader, onSaved } = setup();
+    await settle();
+    api.hold = true;
+    const before = box(reader, 0);
+    before.click();
+    await settle();
+    reader.dispose();
+    const markup = body(reader).innerHTML;
+    api.held.shift()?.release();
+    await settle();
+    expect(body(reader).innerHTML).toBe(markup);
+    expect(box(reader, 0)).toBe(before);
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a box with a missing or empty index", async () => {
+    const { api, reader } = setup();
+    await settle();
+    body(reader).insertAdjacentHTML(
+      "beforeend",
+      '<button type="button" class="cb" id="none" aria-checked="false"></button>' +
+        '<button type="button" class="cb" id="empty" aria-checked="false" data-cb=""></button>',
+    );
+    for (const id of ["none", "empty"]) {
+      const odd = body(reader).querySelector(`#${id}`) as HTMLElement;
+      odd.click();
+      expect(odd.hasAttribute("aria-busy")).toBe(false);
+      expect(odd.getAttribute("aria-checked")).toBe("false");
+    }
+    await settle();
+    expect(api.patches).toHaveLength(0);
   });
 
   it("keeps scroll position across a re-render after save", async () => {

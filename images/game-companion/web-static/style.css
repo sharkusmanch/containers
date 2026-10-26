@@ -329,6 +329,12 @@ button {
   pointer-events: none;
 }
 
+/* A find match in the guide reader (the framed wiki gets the same rule injected by locate.ts) */
+::highlight(gc-find) {
+  background: #ffd54a;
+  color: #111;
+}
+
 /*
  * Guide text size: the wiki sizes its page in viewport units, so zooming the page inside the frame
  * would only shrink it into a corner. Instead the frame is made larger and scaled back to fill the

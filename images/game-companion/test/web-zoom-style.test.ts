@@ -45,3 +45,11 @@ describe("the guide text size stylesheet rules", () => {
     expect(frames?.body).toContain("overflow: hidden;");
   });
 });
+
+describe("the find highlight rule", () => {
+  it("is in the stylesheet, since the reader may not inject one", () => {
+    const rule = rules.find((r) => r.selector === "::highlight(gc-find)");
+    expect(rule?.body).toContain("background: #ffd54a;");
+    expect(rule?.body).toContain("color: #111;");
+  });
+});

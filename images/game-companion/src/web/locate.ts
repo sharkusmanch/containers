@@ -197,15 +197,23 @@ interface HighlightWindow {
 /**
  * Marks the range for `highlightMs`, by the highlight API when the frame has it, else by selection.
  * Aborting `signal` takes the mark down at once and cancels the pending clean-up, so a stopped
- * search can never touch a newer one's mark.
+ * search can never touch a newer one's mark. With `injectStyle` the `::highlight` rule is added to
+ * the document (a framed wiki page); without it the document's own stylesheet must carry it (the
+ * companion, whose CSP blocks an injected `<style>`).
  */
-function highlight(doc: Document, range: Range, highlightMs: number, signal?: AbortSignal): void {
+function highlight(
+  doc: Document,
+  range: Range,
+  highlightMs: number,
+  injectStyle: boolean,
+  signal?: AbortSignal,
+): void {
   const win = doc.defaultView as unknown as HighlightWindow | null;
   if (win === null) return;
   let clear: () => void;
   const registry = win.CSS?.highlights;
   if (registry !== undefined && typeof win.Highlight === "function") {
-    if (doc.getElementById(STYLE_ID) === null && doc.head !== null) {
+    if (injectStyle && doc.getElementById(STYLE_ID) === null && doc.head !== null) {
       const style = doc.createElement("style");
       style.id = STYLE_ID;
       style.textContent = STYLE_TEXT;
@@ -255,13 +263,19 @@ function highlight(doc: Document, range: Range, highlightMs: number, signal?: Ab
   );
 }
 
-function reveal(doc: Document, range: Range, highlightMs: number, signal?: AbortSignal): void {
+function reveal(
+  doc: Document,
+  range: Range,
+  highlightMs: number,
+  injectStyle: boolean,
+  signal?: AbortSignal,
+): void {
   try {
     const target = range.startContainer.parentElement;
     if (target !== null && typeof target.scrollIntoView === "function") {
       target.scrollIntoView({ block: "center" });
     }
-    highlight(doc, range, highlightMs, signal);
+    highlight(doc, range, highlightMs, injectStyle, signal);
   } catch {
     // The text was found; failing to decorate it is not a failure to locate it.
   }
@@ -351,7 +365,7 @@ export function locateInFrame(
         }
       }
       if (found !== null) {
-        reveal(found.doc, found.range, highlightMs, opts.signal);
+        reveal(found.doc, found.range, highlightMs, true, opts.signal);
         finish(true);
       } else if (Date.now() >= deadline) {
         finish(false);
@@ -396,6 +410,7 @@ export function locateInElement(
   }
   if (range === null) return false;
   openDetails(root, range.startContainer);
-  reveal(root.ownerDocument, range, opts.highlightMs ?? 6_000, opts.signal);
+  // The companion's own stylesheet carries the ::highlight rule; its CSP blocks injecting one.
+  reveal(root.ownerDocument, range, opts.highlightMs ?? 6_000, false, opts.signal);
   return true;
 }

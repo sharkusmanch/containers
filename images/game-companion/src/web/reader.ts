@@ -3,6 +3,7 @@
  * JSON, with checkboxes that save in one tap. A thin DOM layer over `outline-api`, `guide-render`
  * and `guide-tick`.
  */
+import { checkboxItems } from "./guide-checkbox.js";
 import { renderGuide } from "./guide-render.js";
 import { tick } from "./guide-tick.js";
 import { locateInElement, type LocateMode } from "./locate.js";
@@ -42,6 +43,16 @@ const CONFLICT = "This page changed elsewhere and was refreshed. Tap again.";
 const REFUSED = "Couldn't match this item safely. Tick it in Outline.";
 const FAILED = "Couldn't save. Check your connection and try again.";
 const LOCATE_WAIT_MS = 10_000;
+
+/** A tap waiting its turn, with what it was made on so a moved item is never ticked. */
+interface Tap {
+  gen: number;
+  index: number;
+  checked: boolean;
+  doc: GuideDocument;
+  count: number;
+  label: string | null;
+}
 
 /** Reading positions by page id, shared by every reader for the session. */
 const positions = new Map<string, number>();
@@ -162,10 +173,39 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     );
   }
 
-  async function runTap(gen: number, index: number, checked: boolean): Promise<void> {
+  /** Drops every queued tap and shows `fresh` with the conflict copy. */
+  function conflict(fresh: GuideDocument): void {
+    generation += 1;
+    pending.clear();
+    if (rerender(fresh)) setStatus(CONFLICT);
+  }
+
+  async function runTap(tapped: Tap): Promise<void> {
+    const { gen, index, checked } = tapped;
     if (gen !== generation || shown === null) return;
+    // An earlier save's read-back may carry another writer's edit: the same index may now be a
+    // different item. Never patch it; refresh instead.
+    if (
+      shown !== tapped.doc &&
+      (checkboxItems(shown.data).length !== tapped.count ||
+        boxAt(index)?.getAttribute("aria-label") !== tapped.label)
+    ) {
+      const before = shown;
+      let fresh = before;
+      try {
+        fresh = await deps.outline.document(before.id);
+      } catch {
+        // Show what was read last.
+      }
+      if (gen === generation) conflict(fresh);
+      return;
+    }
     const result = await tick(deps.outline, shown, index, checked);
-    if (gen !== generation) return;
+    if (gen !== generation) {
+      // The page was left or the reader disposed: nothing to redraw, but progress moved on.
+      if (result.kind === "saved") deps.onSaved();
+      return;
+    }
     pending.delete(index);
     switch (result.kind) {
       case "saved":
@@ -173,9 +213,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
         deps.onSaved();
         return;
       case "conflict":
-        generation += 1;
-        pending.clear();
-        if (rerender(result.doc)) setStatus(CONFLICT);
+        conflict(result.doc);
         return;
       case "refused":
         mark(boxAt(index), !checked, false);
@@ -194,16 +232,23 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
   }
 
   function tap(box: Element): void {
-    const index = Number(box.getAttribute("data-cb"));
-    if (shown === null || !Number.isInteger(index) || box.getAttribute("aria-busy") === "true") {
-      return;
-    }
+    const raw = box.getAttribute("data-cb");
+    if (shown === null || raw === null || !/^\d+$/.test(raw)) return;
+    if (box.getAttribute("aria-busy") === "true") return;
+    const index = Number(raw);
     const checked = box.getAttribute("aria-checked") !== "true";
     setStatus("");
     mark(box, checked, true);
     pending.set(index, checked);
-    const gen = generation;
-    chain = chain.then(() => runTap(gen, index, checked)).catch(() => undefined);
+    const tapped: Tap = {
+      gen: generation,
+      index,
+      checked,
+      doc: shown,
+      count: checkboxItems(shown.data).length,
+      label: box.getAttribute("aria-label"),
+    };
+    chain = chain.then(() => runTap(tapped)).catch(() => undefined);
   }
 
   function onBodyClick(event: Event): void {

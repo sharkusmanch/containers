@@ -515,6 +515,18 @@ describe("locateInFrame", () => {
       expect(frameDoc(frame).head.querySelectorAll("#gc-find-style")).toHaveLength(1);
     });
 
+    it("locateInElement registers the highlight but adds no style element (the CSP blocks it)", () => {
+      vi.useFakeTimers();
+      const frame = makeFrame("<article id='in'><p>The Sample Boss waits</p></article>");
+      const highlights = stub(frame);
+      const article = frameDoc(frame).getElementById("in") as Element;
+      expect(locateInElement(article, "sample boss", null, { highlightMs: 1000 })).toBe(true);
+      expect(highlights.get("gc-find")?.ranges[0]?.toString()).toBe("Sample Boss");
+      expect(frameDoc(frame).querySelectorAll("style")).toHaveLength(0);
+      vi.advanceTimersByTime(1000);
+      expect(highlights.has("gc-find")).toBe(false);
+    });
+
     it("adds the style element only once across searches and keeps a newer highlight", async () => {
       vi.useFakeTimers();
       const frame = makeFrame("<p>Sample Boss</p><p>Hidden Key</p>");
