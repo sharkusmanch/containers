@@ -5,7 +5,25 @@ Private front-end for Reddit. No JavaScript, no ads, no tracking.
 ## Upstream
 
 - **Repository**: [redlib-org/redlib](https://github.com/redlib-org/redlib)
-- **Version**: v0.40.0 (official release binary, tracked by Renovate)
+- **Version**: v0.40.0 + [PR #603](https://github.com/redlib-org/redlib/pull/603)
+  (GraphQL comments), built from `fxmfxmfx/redlib@6cd8366`. Pinned by hand, not by Renovate.
+
+## Why PR #603? (temporary)
+
+Since 2026-10-20 Reddit answers the comments JSON endpoints with `403` for logged-out
+tokens, on every redlib instance. So with the v0.40.0 release, listings and RSS work but
+every post page fails with "Failed to parse page JSON data". PR #603 fetches the post from
+`/by_id` and its comments through the Android app's persisted GraphQL operation
+(`PostComments` on `gql-fed.reddit.com`) with the same anonymous token: one request per
+page, up to 200 comments at 10 levels, with "More comments" / "More replies" links for the
+rest. It is two commits on top of upstream main `ba116c1` (v0.40.0 plus a CI change) and
+adds no dependencies.
+
+The commit is pinned without a renovate comment on purpose. This repo automerges every
+update, and new commits on a third-party fork branch should be reviewed first.
+
+**Revert** to the upstream release binary (the Dockerfile at `342913f`) once an upstream
+release loads comment threads.
 
 ## Why not the hyper-tls fork any more?
 
@@ -26,7 +44,7 @@ December 2025.
 ## Usage
 
 ```bash
-docker run -p 8080:8080 ghcr.io/sharkusmanch/containers/redlib:v0.40.0
+docker run -p 8080:8080 ghcr.io/sharkusmanch/containers/redlib:v0.40.0-gql.6cd8366
 ```
 
 ## Environment Variables
@@ -51,23 +69,23 @@ Listens on port `8080`.
 
 ## Modifications from Upstream
 
-- Same release binary upstream's own image ships, verified against a pinned SHA256
+- Source is upstream v0.40.0 plus PR #603, built with upstream's own `Dockerfile.alpine`
+  builder (`rust-musl-cross`, static musl)
 - Current Alpine runtime (upstream's image is on Alpine 3.19) with only `ca-certificates`
 - Non-root user `10000:10000` with a numeric UID (upstream uses a named user)
-- `linux/amd64` only (see `.platforms`), since the checksum pin covers one asset
+- `linux/amd64` only (see `.platforms`)
 
 ## Egress
 
 v0.40.0 resolves `www.reddit.com` through `dualstack.reddit.map.fastly.net`,
 keeping `www.reddit.com` as the TLS SNI and Host. FQDN egress allowlists need that
-name as well as the Reddit hosts.
+name as well as the Reddit hosts. PR #603 also calls `gql-fed.reddit.com` (resolved
+directly, no alias).
 
 ## Known Issues
 
-- **Comment threads fail with 403 on every redlib instance** (since 2026-10-20).
-  Reddit's edge now refuses the comments endpoints for logged-out tokens, so this
-  is a Reddit policy change, not fingerprinting. Upstream's `%2f` path-encoding
-  workaround in v0.40.0 was blocked again within a day. Fixes are in progress
-  upstream (GraphQL in #603, shreddit HTML in #599).
+- **Comment threads depend on Reddit's GraphQL API** (PR #603). The persisted operation
+  hash comes from the Android app; Reddit can retire it or refuse it to anonymous tokens,
+  as it did with the comments JSON endpoints on 2026-10-20.
 - Reddit may still rate-limit or block by IP, traffic pattern or fingerprint. This
   is an ongoing cat-and-mouse game.
