@@ -4,7 +4,7 @@
 ARG POKEMON_RED_MASTERY_COMPANION_VERSION=v0.3.0
 
 # renovate: datasource=docker depName=node
-ARG NODE_VERSION=24.21.0
+ARG NODE_VERSION=24.22.1
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
