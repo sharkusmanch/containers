@@ -61,10 +61,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-/** `data.document` of a v3 documents.info answer, checked down to what the reader uses. */
+/**
+ * `data.document` of a v3 documents.info answer (`{ data: { document }, policies }` on Outline
+ * 1.12), checked down to what the reader uses. The flat `{ data: document }` shape of an
+ * unversioned answer is rejected: it carries markdown, not the ProseMirror tree.
+ */
 function toGuideDocument(body: unknown, status: number): GuideDocument {
   const data = isRecord(body) ? body["data"] : undefined;
-  const doc = isRecord(data) ? data : undefined;
+  const wrapped = isRecord(data) ? data["document"] : undefined;
+  const doc = isRecord(wrapped) ? wrapped : undefined;
   if (
     doc !== undefined &&
     typeof doc["id"] === "string" &&
@@ -159,13 +164,20 @@ export function createOutlineApi(deps: {
       throw new OutlineError(status, "other");
     },
 
+    // The v3 answer (`{ data: { document } }`) is not read: guide-tick reads the page back.
     async patch(id, edit) {
       const token = csrfToken(deps.cookie());
       if (token === null) throw new OutlineError(0, "signed-out");
       await post(
         "documents.update",
         { "x-api-version": "3", "x-csrf-token": token },
-        { id, editMode: "patch", ...edit },
+        {
+          id,
+          editMode: "patch",
+          findText: edit.findText,
+          text: edit.text,
+          lastRevision: edit.lastRevision,
+        },
       );
     },
   };

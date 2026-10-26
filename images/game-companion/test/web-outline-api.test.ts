@@ -29,6 +29,8 @@ const DOC = {
   revision: 7,
   data: { type: "doc", content: [] },
 };
+/** How Outline 1.12 wraps a v3 documents.info answer. */
+const v3 = (document: unknown): unknown => ({ data: { document } });
 
 async function rejection(p: Promise<unknown>): Promise<unknown> {
   return p.then(
@@ -60,7 +62,7 @@ describe("csrfToken", () => {
 
 describe("OutlineApi.document", () => {
   it("posts documents.info with the v3 header and returns the document", async () => {
-    const f = fake(200, { data: { ...DOC, extra: 1 } });
+    const f = fake(200, v3({ ...DOC, extra: 1 }));
     const doc = await createOutlineApi({ fetch: f.fn, cookie: () => COOKIE }).document("abc");
     expect(doc).toEqual(DOC);
     expect(f.calls[0]?.url).toBe("/api/documents.info");
@@ -73,21 +75,98 @@ describe("OutlineApi.document", () => {
   });
 
   it("rejects a response without data", async () => {
-    const f = fake(200, {});
+    for (const body of [{}, { data: {} }, { data: { document: null } }]) {
+      const f = fake(200, body);
+      const err = await rejection(
+        createOutlineApi({ fetch: f.fn, cookie: () => "" }).document("a"),
+      );
+      expect(err).toBeInstanceOf(OutlineError);
+      expect(err).toMatchObject({ status: 200, kind: "other" });
+    }
+  });
+
+  it("rejects the flat { data: document } shape of an unversioned answer", async () => {
+    const f = fake(200, { data: DOC });
     const err = await rejection(createOutlineApi({ fetch: f.fn, cookie: () => "" }).document("a"));
     expect(err).toBeInstanceOf(OutlineError);
     expect(err).toMatchObject({ status: 200, kind: "other" });
   });
 
+  it("parses a realistic Outline 1.12 v3 answer with extra fields and policies", async () => {
+    const body = {
+      data: {
+        document: {
+          id: "9f3c2a1e-0b4d-4c8e-9a7f-1d2e3f4a5b6c",
+          url: "/doc/chapter-1-walkthrough-Xy12AbC9dE",
+          urlId: "Xy12AbC9dE",
+          title: "Chapter 1 walkthrough",
+          icon: null,
+          color: null,
+          revision: 42,
+          fullWidth: false,
+          createdAt: "2026-10-01T12:00:00.000Z",
+          updatedAt: "2026-10-26T08:30:00.000Z",
+          publishedAt: "2026-10-01T12:05:00.000Z",
+          archivedAt: null,
+          deletedAt: null,
+          collectionId: "11111111-2222-3333-4444-555555555555",
+          parentDocumentId: null,
+          isCollectionDeleted: false,
+          tasks: { completed: 1, total: 3 },
+          createdBy: { id: "u1", name: "Marcus" },
+          updatedBy: { id: "u1", name: "Marcus" },
+          collaboratorIds: ["u1"],
+          data: {
+            type: "doc",
+            content: [
+              {
+                type: "heading",
+                attrs: { level: 1 },
+                content: [{ type: "text", text: "Area One" }],
+              },
+              {
+                type: "checkbox_list",
+                content: [
+                  {
+                    type: "checkbox_item",
+                    attrs: { checked: true },
+                    content: [{ type: "paragraph", content: [{ type: "text", text: "Key" }] }],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      policies: [
+        {
+          id: "9f3c2a1e-0b4d-4c8e-9a7f-1d2e3f4a5b6c",
+          abilities: { read: true, update: true, delete: true },
+        },
+      ],
+      status: 200,
+      ok: true,
+    };
+    const f = fake(200, body);
+    const doc = await createOutlineApi({ fetch: f.fn, cookie: () => "" }).document("Xy12AbC9dE");
+    expect(doc).toEqual({
+      id: "9f3c2a1e-0b4d-4c8e-9a7f-1d2e3f4a5b6c",
+      title: "Chapter 1 walkthrough",
+      url: "/doc/chapter-1-walkthrough-Xy12AbC9dE",
+      revision: 42,
+      data: body.data.document.data,
+    });
+  });
+
   it("rejects a non-integer revision", async () => {
-    const f = fake(200, { data: { ...DOC, revision: 1.5 } });
+    const f = fake(200, v3({ ...DOC, revision: 1.5 }));
     const err = await rejection(createOutlineApi({ fetch: f.fn, cookie: () => "" }).document("a"));
     expect(err).toMatchObject({ status: 200, kind: "other" });
   });
 
   it("rejects a document whose data is not a node", async () => {
     for (const data of [null, "x", {}, { type: 3 }]) {
-      const f = fake(200, { data: { ...DOC, data } });
+      const f = fake(200, v3({ ...DOC, data }));
       const err = await rejection(
         createOutlineApi({ fetch: f.fn, cookie: () => "" }).document("a"),
       );
@@ -117,7 +196,7 @@ describe("OutlineApi.document", () => {
   });
 
   it("rejects at once when the signal is already aborted", async () => {
-    const f = fake(200, { data: DOC });
+    const f = fake(200, v3(DOC));
     const ctl = new AbortController();
     ctl.abort();
     const err = await rejection(
@@ -170,6 +249,21 @@ describe("OutlineApi.patch", () => {
     expect(f.headers(0).get("content-type")).toBe("application/json");
     expect(f.headers(0).get("x-api-version")).toBe("3");
     expect(f.headers(0).get("x-csrf-token")).toBe("tok.sig");
+  });
+
+  it("sends only the edit's own fields and ignores the v3 answer body", async () => {
+    const f = fake(200, v3({ ...DOC, revision: 5 }));
+    const extra = { ...edit, collectionId: "c", publish: true } as typeof edit;
+    await expect(
+      createOutlineApi({ fetch: f.fn, cookie: () => COOKIE }).patch("abc", extra),
+    ).resolves.toBeUndefined();
+    expect(Object.keys(JSON.parse(f.calls[0]?.init.body as string) as object).sort()).toEqual([
+      "editMode",
+      "findText",
+      "id",
+      "lastRevision",
+      "text",
+    ]);
   });
 
   it("reads the cookie at call time", async () => {
