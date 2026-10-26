@@ -19,6 +19,8 @@ export interface Settings {
   guideZoom: GuideZoom;
   /** Stops the on-screen keyboard coming up for the framed wiki pages that are for reading. */
   readerMode: boolean;
+  /** Shows guide pages in the companion's own reader (one-tap checkboxes) instead of framing them. */
+  guideReader: boolean;
   /** Which arrangement to use: "auto" follows the window size. */
   layoutMode: LayoutOverride;
   /** The share of the width the left pane takes in the two-pane arrangement (0.3 to 0.7). */
@@ -33,6 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   guideJump: true,
   guideZoom: 100,
   readerMode: true,
+  guideReader: false,
   layoutMode: "auto",
   splitFraction: DEFAULT_SPLIT_FRACTION,
   setupDismissed: false,
@@ -59,6 +62,7 @@ export function loadSettings(storage: StorageLike | null | undefined): Settings 
       guideJump: flag(parsed["guideJump"], DEFAULT_SETTINGS.guideJump),
       guideZoom: zoom(parsed["guideZoom"]),
       readerMode: flag(parsed["readerMode"], DEFAULT_SETTINGS.readerMode),
+      guideReader: flag(parsed["guideReader"], DEFAULT_SETTINGS.guideReader),
       layoutMode: layout(parsed["layoutMode"]),
       splitFraction: clampSplitFraction(parsed["splitFraction"]),
       setupDismissed: flag(parsed["setupDismissed"], DEFAULT_SETTINGS.setupDismissed),
@@ -78,6 +82,7 @@ export function saveSettings(storage: StorageLike | null | undefined, s: Setting
         guideJump: s.guideJump,
         guideZoom: s.guideZoom,
         readerMode: s.readerMode,
+        guideReader: s.guideReader,
         layoutMode: s.layoutMode,
         splitFraction: clampSplitFraction(s.splitFraction),
         setupDismissed: s.setupDismissed,

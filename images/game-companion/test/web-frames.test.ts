@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createFrames } from "../src/web/frames.js";
+import type { Reader } from "../src/web/reader.js";
 
 /** What the browser does when a framed page has finished loading. */
 function loaded(frame: HTMLIFrameElement | undefined): void {
@@ -1401,5 +1402,202 @@ describe("link frames", () => {
       frameAt(f, 0).contentDocument?.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       expect(onInteract).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("reader slots", () => {
+  interface FakeReader {
+    element: HTMLElement;
+    url: string;
+    load: Mock<(url: string) => void>;
+    locate: Mock<Reader["locate"]>;
+    dispose: Mock<() => void>;
+  }
+
+  function withReaders() {
+    const made: FakeReader[] = [];
+    const reader = vi.fn((url: string) => {
+      const element = document.createElement("div");
+      element.className = "reader";
+      const r: FakeReader = {
+        element,
+        url,
+        load: vi.fn<(url: string) => void>((next: string) => {
+          r.url = next;
+        }),
+        locate: vi.fn<Reader["locate"]>(async () => true),
+        dispose: vi.fn<() => void>(),
+      };
+      made.push(r);
+      return r;
+    });
+    document.body.innerHTML = "";
+    const f = createFrames(document, 4, { reader });
+    document.body.append(f.element);
+    return { f, made, reader };
+  }
+
+  it("shows a reader element and no iframe", () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    expect(made).toHaveLength(1);
+    expect(f.element.querySelectorAll("iframe")).toHaveLength(0);
+    const node = f.element.querySelector(".reader");
+    expect(node).toBe(made[0]?.element);
+    expect(node?.classList.contains("inactive")).toBe(false);
+  });
+
+  it("loads another page into the same reader instead of making a second one", () => {
+    const { f, made, reader } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    f.show(0, "/doc/b-2", "reader");
+    expect(reader).toHaveBeenCalledTimes(1);
+    expect(made[0]?.load).toHaveBeenCalledWith("/doc/b-2");
+    expect(f.element.querySelectorAll(".reader")).toHaveLength(1);
+  });
+
+  it("does not reload a reader shown again with the same page", () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    f.show(1, "/doc/b-2", "reader");
+    expect(made[0]?.element.classList.contains("inactive")).toBe(true);
+    f.show(0, "/doc/a-1", "reader");
+    expect(made[0]?.load).not.toHaveBeenCalled();
+    expect(made[0]?.element.classList.contains("inactive")).toBe(false);
+    expect(made[1]?.element.classList.contains("inactive")).toBe(true);
+  });
+
+  it("hideAll hides a reader by class", () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    f.hideAll();
+    expect(made[0]?.element.classList.contains("inactive")).toBe(true);
+    expect(made[0]?.element.isConnected).toBe(true);
+  });
+
+  it("switching a slot from reader to doc disposes the reader and frames the page", () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    f.show(0, "/doc/a-1", "doc");
+    expect(made[0]?.dispose).toHaveBeenCalledTimes(1);
+    expect(made[0]?.element.isConnected).toBe(false);
+    expect(f.element.querySelector("iframe")?.getAttribute("src")).toBe("/doc/a-1");
+  });
+
+  it("switching a slot from doc to reader removes the iframe", () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "doc");
+    f.show(0, "/doc/a-1", "reader");
+    expect(f.element.querySelectorAll("iframe")).toHaveLength(0);
+    expect(made[0]?.element.isConnected).toBe(true);
+  });
+
+  it("refuses an unsafe address for a reader", () => {
+    const { f, reader } = withReaders();
+    f.show(0, "https://evil.example/doc/a-1", "reader");
+    expect(reader).not.toHaveBeenCalled();
+    expect(f.element.children).toHaveLength(0);
+  });
+
+  it("falls back to an iframe without a reader factory", () => {
+    const f = createFrames(document, 4);
+    f.show(0, "/doc/a-1", "reader");
+    expect(f.element.querySelector("iframe")?.getAttribute("src")).toBe("/doc/a-1");
+    expect(f.element.querySelector(".reader")).toBeNull();
+  });
+
+  it("locate delegates to the reader and maps its answer", async () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    const r = made[0] as FakeReader;
+    expect(await f.locate(0, "Potion")).toBe("found");
+    expect(r.locate).toHaveBeenLastCalledWith("Potion", null, "text");
+    r.locate.mockResolvedValueOnce(false);
+    expect(await f.locate(0, "Ether", "Area", "heading", "Area 2")).toBe("not-found");
+    expect(r.locate).toHaveBeenLastCalledWith("Ether", "Area", "heading", "Area 2");
+  });
+
+  it("locate is gone when the reader's slot was replaced meanwhile", async () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    const r = made[0] as FakeReader;
+    let answer: (found: boolean) => void = () => {};
+    r.locate.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const located = f.locate(0, "Potion");
+    f.show(0, "/doc/a-1", "doc");
+    answer(true);
+    expect(await located).toBe("gone");
+  });
+
+  it("locate is gone when the reader moved on to another page meanwhile", async () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    const r = made[0] as FakeReader;
+    let answer: (found: boolean) => void = () => {};
+    r.locate.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const located = f.locate(0, "Potion");
+    f.show(0, "/doc/b-2", "reader");
+    answer(false);
+    expect(await located).toBe("gone");
+  });
+
+  it("reset disposes every reader", () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    f.show(1, "/doc/b-2", "reader");
+    f.reset();
+    expect(made.map((r) => r.dispose.mock.calls.length)).toEqual([1, 1]);
+    expect(f.element.children).toHaveLength(0);
+  });
+
+  it("sync keeps a reader by address and disposes the readers no longer listed", () => {
+    const { f, made, reader } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    f.show(1, "/doc/b-2", "reader");
+    f.sync(["/doc/b-2", null, null, null]);
+    expect(made[0]?.dispose).toHaveBeenCalledTimes(1);
+    expect(made[0]?.element.isConnected).toBe(false);
+    expect(made[1]?.dispose).not.toHaveBeenCalled();
+    f.show(0, "/doc/b-2", "reader");
+    expect(reader).toHaveBeenCalledTimes(2);
+    expect(made[1]?.load).not.toHaveBeenCalled();
+    expect(made[1]?.element.classList.contains("inactive")).toBe(false);
+  });
+
+  it("setReader, setHideChrome and the sweep never touch a reader", () => {
+    const ticks: (() => void)[] = [];
+    const fakeTimer = ((fn: () => void) => ticks.push(fn)) as unknown as typeof setInterval;
+    const made: HTMLElement[] = [];
+    const f = createFrames(document, 4, {
+      setInterval: fakeTimer,
+      reader: (url) => {
+        const element = document.createElement("div");
+        element.className = "reader";
+        element.innerHTML = '<div id="note" contenteditable="true">x</div>';
+        made.push(element);
+        return { element, url, load: () => {}, locate: async () => false, dispose: () => {} };
+      },
+    });
+    f.show(0, "/doc/a-1", "reader");
+    const before = made[0]?.outerHTML;
+    const editable = vi.fn(() => false);
+    f.setReader(true, editable);
+    f.setHideChrome(true);
+    ticks.forEach((t) => t());
+    expect(editable).not.toHaveBeenCalled();
+    expect(made[0]?.querySelector("#note")?.hasAttribute("inputmode")).toBe(false);
+    // Neither the chrome nor the keyboard pass added a style, marker or attribute to the reader.
+    expect(made[0]?.outerHTML).toBe(before);
+    expect(made[0]?.querySelector("style, [data-gc-chrome], [data-gc-reader]")).toBeNull();
   });
 });

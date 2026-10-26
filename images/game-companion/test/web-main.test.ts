@@ -4,6 +4,8 @@ import { captureInstallPrompt } from "../src/web/device.js";
 import { startApp } from "../src/web/main.js";
 import { ApiError, createApi, type Api } from "../src/web/api.js";
 import type { Layout } from "../src/web/state.js";
+import type { PMNode } from "../src/web/guide-checkbox.js";
+import type { OutlineApi } from "../src/web/outline-api.js";
 import type {
   Achievement,
   AchievementsResponse,
@@ -2853,6 +2855,7 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      guideReader: false,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -2867,6 +2870,7 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      guideReader: false,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -3200,6 +3204,7 @@ describe("display settings", () => {
         guideJump: true,
         guideZoom: 100,
         readerMode: false,
+        guideReader: false,
         layoutMode: "auto",
         splitFraction: 0.55,
         setupDismissed: false,
@@ -3427,6 +3432,7 @@ describe("display settings", () => {
         guideJump: true,
         guideZoom: percent,
         readerMode: true,
+        guideReader: false,
         layoutMode: "auto",
         splitFraction: 0.55,
         setupDismissed: false,
@@ -3453,6 +3459,7 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      guideReader: false,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -3467,6 +3474,7 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
+      guideReader: false,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -6505,5 +6513,316 @@ describe("xbox", () => {
     expect($(".toast-text")?.textContent).toBe("Could not reach the Xbox sign-in");
     expect(($(".setting-xbox-action") as HTMLButtonElement).disabled).toBe(false);
     expect(api.xboxCalls.at(-1)).toBe("status");
+  });
+});
+
+describe("guide reader", () => {
+  /** A synthetic Outline: every page has one checkbox ("Potion") and a link to Collectibles. */
+  function fakeOutline() {
+    const state = { checked: false, revision: 1, documentCalls: [] as string[] };
+    const markdown = (): string =>
+      [`- [${state.checked ? "x" : " "}] Potion`, "", "See [Collectibles](/doc/hA-coll)"].join(
+        "\n",
+      );
+    const data = (): PMNode => ({
+      type: "doc",
+      content: [
+        {
+          type: "checkbox_list",
+          content: [
+            {
+              type: "checkbox_item",
+              attrs: { checked: state.checked },
+              content: [{ type: "paragraph", content: [{ type: "text", text: "Potion" }] }],
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+          content: [
+            { type: "text", text: "See " },
+            {
+              type: "text",
+              text: "Collectibles",
+              marks: [{ type: "link", attrs: { href: "/doc/hA-coll" } }],
+            },
+          ],
+        },
+        { type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: "Chapter One" }] },
+        { type: "paragraph", content: [{ type: "text", text: "the First Steps are here" }] },
+        {
+          type: "heading",
+          attrs: { level: 2 },
+          content: [{ type: "text", text: "Chapter Two: Sample Keep" }],
+        },
+        { type: "paragraph", content: [{ type: "text", text: "keep notes" }] },
+      ],
+    });
+    const outline: OutlineApi = {
+      async document(id) {
+        state.documentCalls.push(id);
+        return {
+          id,
+          title: `Page ${id}`,
+          url: `/doc/page-${id}`,
+          revision: state.revision,
+          data: data(),
+        };
+      },
+      async markdown() {
+        return { text: markdown(), revision: state.revision };
+      },
+      async patch(_id, edit) {
+        const next = markdown().replace(edit.findText, () => edit.text);
+        state.checked = next.includes("- [x] Potion");
+        state.revision += 1;
+      },
+    };
+    return { outline, state };
+  }
+
+  const SETTINGS_KEY = "game-companion:v1:settings";
+  let scroll: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll as unknown as Element["scrollIntoView"];
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+  });
+
+  /** Starts the app with an Outline client and, unless `guideReader` is false, the reader on. */
+  const start = async (
+    api: Fake = fakeApi(playing(hubA)),
+    withOutline = true,
+    over: { guideReader?: boolean; setTimeout?: typeof setTimeout } = {},
+  ) => {
+    const fake = fakeOutline();
+    const storage = memory();
+    if (over.guideReader !== false) {
+      storage.setItem(SETTINGS_KEY, JSON.stringify({ guideReader: true }));
+    }
+    const app = startApp({
+      doc: document,
+      api,
+      storage,
+      setInterval: noTimers,
+      ...(over.setTimeout === undefined ? {} : { setTimeout: over.setTimeout }),
+      ...(withOutline ? { outline: fake.outline } : {}),
+    });
+    await app.ready;
+    return { app, api, storage, ...fake };
+  };
+  const toggleGuideReader = (): void => ($(".setting-guide-reader") as HTMLElement).click();
+  const shownReader = (): HTMLElement | null => $(".reader:not(.inactive)");
+  const shownFrame = (): HTMLIFrameElement | null =>
+    $("iframe:not(.inactive)") as HTMLIFrameElement | null;
+  const openPicked = (title: string): void => {
+    railButtons().at(-1)?.click();
+    const item = [...document.querySelectorAll<HTMLElement>(".picker-pages .picker-item")].find(
+      (b) => b.textContent?.includes(title),
+    );
+    item?.click();
+  };
+
+  it("is off by default: guide pages are framed even with an Outline client", async () => {
+    const { state } = await start(fakeApi(playing(hubA)), true, { guideReader: false });
+    railButtons()[1]?.click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    expect($(".reader")).toBeNull();
+    await flush();
+    expect(state.documentCalls).toEqual([]);
+    expect(($(".setting-guide-reader") as HTMLElement).textContent).toBe("Guide reader: off");
+  });
+
+  it("switches an open slot between frame and reader when the setting is toggled", async () => {
+    const { storage } = await start(fakeApi(playing(hubA)), true, { guideReader: false });
+    railButtons()[1]?.click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    toggleGuideReader();
+    expect(shownReader()).not.toBeNull();
+    expect($("iframe")).toBeNull();
+    expect(($(".setting-guide-reader") as HTMLElement).textContent).toBe("Guide reader: on");
+    expect(JSON.parse(storage.getItem(SETTINGS_KEY) ?? "{}")).toMatchObject({ guideReader: true });
+    await flush();
+    expect(shownReader()?.querySelector(".reader-body")?.textContent).toContain("Potion");
+    const reader = shownReader() as HTMLElement;
+    toggleGuideReader();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    expect($(".reader")).toBeNull();
+    expect(reader.isConnected).toBe(false);
+    expect(JSON.parse(storage.getItem(SETTINGS_KEY) ?? "{}")).toMatchObject({
+      guideReader: false,
+    });
+  });
+
+  it("shows a guide page in the reader rather than a frame", async () => {
+    const { state } = await start();
+    railButtons()[1]?.click();
+    expect(shownReader()).not.toBeNull();
+    expect($("iframe")).toBeNull();
+    await flush();
+    expect(state.documentCalls).toEqual(["checklist"]);
+    expect(shownReader()?.querySelector(".reader-body")?.textContent).toContain("Potion");
+  });
+
+  it("frames a page listed as editable", async () => {
+    const api = fakeApi(playing(hubA));
+    api.hubTree = async (id) => ({
+      ...tree(id === "hA" ? hubA : hubZ),
+      editablePages: ["Achievement Checklist"],
+    });
+    await start(api);
+    railButtons()[1]?.click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    expect($(".reader")).toBeNull();
+  });
+
+  it("Show in Outline frames that page, and choosing it again shows the reader", async () => {
+    await start();
+    railButtons()[1]?.click();
+    await flush();
+    ($(".reader-outline") as HTMLElement).click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    expect($(".reader")).toBeNull();
+    // Another visit to the slot keeps it in Outline for the session.
+    railButtons()[0]?.click();
+    railButtons()[1]?.click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    openPicked("Achievement Checklist");
+    expect(shownReader()).not.toBeNull();
+    expect($("iframe")).toBeNull();
+  });
+
+  it("asks for fresh progress when a tick is saved, and again 4 and 12 seconds later", async () => {
+    const tm = timers();
+    const { api, state } = await start(fakeApi(playing(hubA)), true, { setTimeout: tm.set });
+    railButtons()[1]?.click();
+    await flush();
+    api.progressCalls.length = 0;
+    ($(".reader .cb") as HTMLElement).click();
+    await flush();
+    await flush();
+    expect(state.checked).toBe(true);
+    expect(api.progressCalls).toEqual([["hA", true]]);
+    // The server answers from a copy under ~5 s old: look again, as after a tap in a frame.
+    const later = tm.calls.filter((c) => c.ms === 4000 || c.ms === 12_000);
+    expect(later.map((c) => c.ms)).toEqual([4000, 12_000]);
+    for (const c of later) c.fn();
+    await flush();
+    expect(api.progressCalls).toEqual([
+      ["hA", true],
+      ["hA", true],
+      ["hA", true],
+    ]);
+  });
+
+  it("lands Find in guide in a reader slot and highlights the text in its body", async () => {
+    const api = fakeApi(playing(hubA));
+    api.achievements = async () => board([mk("a1", "First Steps")]);
+    api.find = async (hubId, query) => {
+      api.findCalls.push([hubId, query]);
+      return {
+        matches: [
+          {
+            pageTitle: "Collectibles",
+            pageUrl: "/doc/hA-coll",
+            heading: "Chapter One",
+            snippet: "the First Steps are here",
+          },
+        ],
+        truncated: false,
+      };
+    };
+    const { state } = await start(api);
+    (document.querySelector(".ach-locked .ach-row") as HTMLElement).click();
+    (document.querySelector(".ach-find") as HTMLElement).click();
+    for (let i = 0; i < 4; i++) await flush();
+    expect(api.findCalls).toEqual([["hA", "First Steps"]]);
+    expect(state.documentCalls).toContain("coll");
+    expect($("iframe")).toBeNull();
+    const reader = shownReader() as HTMLElement;
+    expect(reader).not.toBeNull();
+    expect(locateCalls.map((c) => c.slice(1))).toEqual([["First Steps", "Chapter One", "text"]]);
+    const target = scroll.mock.contexts[0] as Element | undefined;
+    expect(target).toBeDefined();
+    expect(reader.querySelector(".reader-body")?.contains(target as Element)).toBe(true);
+    expect(target?.textContent).toContain("First Steps");
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("lands the status-based guide jump in a reader slot at the heading", async () => {
+    const line = "Chapter Two: Sample Keep";
+    const api = fakeApi({ ...playing(hubA), presence: line });
+    api.whereValue = {
+      matches: [
+        {
+          pageTitle: "Collectibles",
+          pageUrl: "/doc/hA-coll",
+          heading: line,
+          phrase: "Sample Keep",
+        },
+      ],
+    };
+    const { state } = await start(api);
+    await flush();
+    const jump = $(".presence-jump") as HTMLButtonElement;
+    expect(jump.hidden).toBe(false);
+    jump.click();
+    for (let i = 0; i < 4; i++) await flush();
+    expect(state.documentCalls).toContain("coll");
+    expect($("iframe")).toBeNull();
+    const reader = shownReader() as HTMLElement;
+    expect(locateCalls.map((c) => c.slice(1))).toEqual([[line, null, "heading", "Sample Keep"]]);
+    const target = scroll.mock.contexts[0] as Element | undefined;
+    expect(reader.querySelector(".reader-body")?.contains(target as Element)).toBe(true);
+    expect(target?.tagName).toBe("H2");
+    expect(target?.textContent).toBe(line);
+    expect(toast().hidden).toBe(true);
+  });
+
+  it("disposes the readers when the game is switched", async () => {
+    const { app, api, state } = await start();
+    railButtons()[1]?.click();
+    await flush();
+    const reader = shownReader() as HTMLElement;
+    const box = reader.querySelector(".cb") as HTMLElement;
+    api.nowValue = playing(hubZ);
+    await app.tick();
+    ($(".switch-banner .switch-accept") as HTMLElement).click();
+    await app.tick();
+    await flush();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    expect(document.querySelectorAll(".reader")).toHaveLength(0);
+    expect(reader.isConnected).toBe(false);
+    // A disposed reader no longer listens: a tap on its old box saves nothing.
+    box.click();
+    await flush();
+    expect(box.hasAttribute("aria-busy")).toBe(false);
+    expect(state.checked).toBe(false);
+  });
+
+  it("opens a guide page linked from the reader in the companion", async () => {
+    await start();
+    railButtons()[1]?.click();
+    await flush();
+    const link = $(".reader a[data-doc]") as HTMLAnchorElement;
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+    link.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    const shown = [...document.querySelectorAll<HTMLElement>(".reader")];
+    expect(shown).toHaveLength(2);
+    expect(shownReader()).toBe(shown[1]);
+    expect(
+      [...document.querySelectorAll(".rail button")].slice(1, 3).map((b) => b.textContent),
+    ).toEqual(["AC", "CO"]);
+  });
+
+  it("frames every guide page without an Outline client, as before", async () => {
+    await start(fakeApi(playing(hubA)), false);
+    railButtons()[1]?.click();
+    expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
+    expect($(".reader")).toBeNull();
+    expect($(".reader-outline")).toBeNull();
   });
 });

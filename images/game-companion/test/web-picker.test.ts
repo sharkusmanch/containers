@@ -518,6 +518,7 @@ describe("display settings", () => {
     guideJump: true,
     guideZoom: 100 as const,
     readerMode: true,
+    guideReader: false,
     layoutMode: "auto" as const,
     window: { width: 412, height: 915, layout: "tabs" as const },
     fullscreen: false,
@@ -555,7 +556,7 @@ describe("display settings", () => {
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
   });
 
-  it("holds the set-up card, seven setting buttons, then the readout and the install row", () => {
+  it("holds the set-up card, eight setting buttons, then the readout and the install row", () => {
     const { picker } = make();
     picker.setSettings(all);
     const list = picker.element.querySelector(".picker-settings") as HTMLElement;
@@ -568,6 +569,7 @@ describe("display settings", () => {
       "setting-guide-jump",
       "setting-guide-zoom",
       "setting-reader-mode",
+      "setting-guide-reader",
       "setting-layout",
     ]);
     expect(rows.every((b) => b.getAttribute("type") === "button")).toBe(true);
@@ -615,6 +617,22 @@ describe("display settings", () => {
     expect(row(picker, "setting-reader-mode").hidden).toBe(false);
   });
 
+  it("labels the guide reader row for both states, with a hint under it", () => {
+    const { picker } = make();
+    picker.setSettings(all);
+    expect(row(picker, "setting-guide-reader").textContent).toBe("Guide reader: off");
+    expect(row(picker, "setting-guide-reader").getAttribute("aria-pressed")).toBe("false");
+    picker.setSettings({ ...all, guideReader: true });
+    expect(row(picker, "setting-guide-reader").textContent).toBe("Guide reader: on");
+    expect(row(picker, "setting-guide-reader").getAttribute("aria-pressed")).toBe("true");
+    expect(row(picker, "setting-guide-reader").hidden).toBe(false);
+    const hint = row(picker, "setting-guide-reader").nextElementSibling;
+    expect(hint?.className).toBe("setting-guide-reader-hint");
+    expect(hint?.textContent).toBe(
+      "Show guide pages in the companion's own reader with one-tap checkboxes.",
+    );
+  });
+
   it("keeps the picker open when the reader mode row is tapped", () => {
     const { picker, handlers } = make();
     picker.setSettings(all);
@@ -650,6 +668,7 @@ describe("display settings", () => {
     row(picker, "setting-guide-jump").click();
     row(picker, "setting-guide-zoom").click();
     row(picker, "setting-reader-mode").click();
+    row(picker, "setting-guide-reader").click();
     row(picker, "setting-layout").click();
     expect(handlers.onSetting.mock.calls).toEqual([
       ["keepAwake"],
@@ -658,6 +677,7 @@ describe("display settings", () => {
       ["guideJump"],
       ["guideZoom"],
       ["readerMode"],
+      ["guideReader"],
       ["layoutMode"],
     ]);
     expect(picker.element.hidden).toBe(false);

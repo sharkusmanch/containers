@@ -34,11 +34,13 @@ import {
   type InstallOffer,
   type WakeLockLike,
 } from "./device.js";
-import { createFrames } from "./frames.js";
+import { createFrames, type FrameKind } from "./frames.js";
 import { chooseLayout, nextLayoutOverride, type LayoutMode } from "./layout-mode.js";
 import type { LocateMode } from "./locate.js";
+import type { OutlineApi } from "./outline-api.js";
 import { createPicker } from "./picker.js";
 import { createRail, type PageProgressLabel } from "./rail.js";
+import { createReader } from "./reader.js";
 import { choosePanes, createDivider } from "./split.js";
 import {
   ACHIEVEMENTS,
@@ -99,6 +101,11 @@ export interface AppOptions {
   achievementsPollMs?: number;
   /** Reloads the page, which signs in again; `location.reload()` by default. */
   reload?: () => void;
+  /**
+   * The wiki's own API, called from the browser as the signed-in reader. With it a guide page
+   * opens in the companion's reader; without it every guide page is framed.
+   */
+  outline?: OutlineApi;
 }
 
 export interface App {
@@ -293,9 +300,33 @@ export function startApp(opts: AppOptions): App {
       syncAskHow();
     },
   });
+  const outline = opts.outline;
   const frames = createFrames(doc, SLOT_COUNT, {
     ...(opts.setInterval === undefined ? {} : { setInterval: opts.setInterval }),
     onInteract: () => onGuideInteract(),
+    ...(outline === undefined
+      ? {}
+      : {
+          reader: (url: string) =>
+            createReader(
+              {
+                doc,
+                outline,
+                origin: doc.location.origin,
+                openPage: (target) => openLinkedPage(target),
+                showInOutline: (shown) => {
+                  outlineView.add(docId(shown));
+                  render();
+                },
+                onSaved: () => {
+                  if (current !== null) void refreshProgress(current, true);
+                  // The server answers from a copy under ~5 s old: look again later too.
+                  onGuideInteract();
+                },
+              },
+              url,
+            ),
+        }),
   });
   const toastText = el("span", "toast-text");
   const toast = doc.createElement("div");
@@ -334,11 +365,7 @@ export function startApp(opts: AppOptions): App {
 
   const picker = createPicker(doc, {
     onPage(page) {
-      if (current === null || !isSafeDocUrl(page.url)) return;
-      closeAskForPage();
-      current.layout = assignSlot(current.layout, page);
-      save();
-      render();
+      openPage(page);
     },
     onHub(hub) {
       pending = { kind: "hub", game: choosingFor, hub };
@@ -374,6 +401,8 @@ export function startApp(opts: AppOptions): App {
       applySettings();
       showSettings();
       renderPresence();
+      // Open guide pages switch between the reader and a frame.
+      if (name === "guideReader") render();
     },
     onUnpin(page) {
       if (current === null) return;
@@ -510,6 +539,8 @@ export function startApp(opts: AppOptions): App {
   let layoutMode: LayoutMode = "single";
   // Titles of the open guide's pages that are for typing in; empty without a page tree.
   let editableTitles: readonly string[] = [];
+  // Pages (by document id) the person asked to see in Outline itself, for this session.
+  const outlineView = new Set<string>();
   const wakeLock = createWakeLock(opts.nav ?? {}, doc);
   // The search (or status line) a list of matches in the picker belongs to, and the text to look
   // for on the page of the one picked.
@@ -1060,9 +1091,37 @@ export function startApp(opts: AppOptions): App {
     }
   }
 
+  // With the Guide reader setting on, a guide page opens in the reader, unless it is for typing
+  // in or was asked for in Outline.
+  function slotKind(url: string): FrameKind {
+    if (isLinkUrl(url)) return "link";
+    if (!settings.guideReader || outline === undefined) return "doc";
+    if (isEditable(url) || outlineView.has(docId(url))) return "doc";
+    return "reader";
+  }
+
   function showSlot(index: number, url: string): void {
-    frames.show(index, url, isLinkUrl(url) ? "link" : "doc");
+    frames.show(index, url, slotKind(url));
     lastShownUrl = url;
+  }
+
+  // Opens a page of the guide in a slot, as picked from the list; choosing it shows the reader again.
+  function openPage(page: Slot): boolean {
+    if (current === null || !isSafeDocUrl(page.url)) return false;
+    outlineView.delete(docId(page.url));
+    closeAskForPage();
+    current.layout = assignSlot(current.layout, page);
+    save();
+    render();
+    return true;
+  }
+
+  // A page the reader links to opens like a picked page, when it is one of the open guide's pages.
+  function openLinkedPage(url: string): boolean {
+    if (current === null || !isSafeDocUrl(url)) return false;
+    const id = docId(url);
+    const page = flattenPages(current.pages).find((p) => docId(p.url) === id);
+    return page === undefined ? false : openPage({ title: page.title, url: page.url });
   }
 
   function render(): void {

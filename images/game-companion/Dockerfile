@@ -2,7 +2,7 @@
 
 # This directory is the source: there is no upstream. Bump on every change that should ship;
 # the build workflow tags the image with the first *_VERSION ARG in this file.
-ARG GAME_COMPANION_VERSION=v0.16.1
+ARG GAME_COMPANION_VERSION=v0.17.0
 
 # renovate: datasource=docker depName=node
 ARG NODE_VERSION=24.22.1
@@ -42,6 +42,8 @@ WORKDIR /app
 # compiled output as ES modules, and the server reads its version from it at startup.
 COPY --from=builder /build/dist ./dist
 COPY package.json ./
+# The reader's renderer is adapted from Inkharbor (MIT): its notice ships with the app.
+COPY THIRD-PARTY-NOTICES.md ./
 
 ENV NODE_ENV=production \
     PORT=8080 \

@@ -56,8 +56,16 @@ interface Scan {
   all: string;
 }
 
-function scan(doc: Document): Scan | null {
-  const root = searchRoot(doc);
+const isDocument = (root: Document | Element): root is Document => root.nodeType === 9;
+
+/** The document a search root belongs to: ranges and walkers come from it. */
+const docOf = (root: Document | Element): Document =>
+  isDocument(root) ? root : root.ownerDocument;
+
+/** A Document is searched from its page text (`searchRoot`); an Element only inside itself. */
+function scan(within: Document | Element): Scan | null {
+  const doc = docOf(within);
+  const root = isDocument(within) ? searchRoot(within) : within;
   if (root === null) return null;
   const pieces: Piece[] = [];
   let all = "";
@@ -104,7 +112,8 @@ function textRange(doc: Document, found: Scan, needle: string, from = 0): Range 
 }
 
 /**
- * First place `text` occurs in the page text of `doc`, ignoring case, as a Range. The text may
+ * First place `text` occurs in the page text of `root` (a Document's editor region, or only inside
+ * an Element), ignoring case, as a Range. The text may
  * span adjacent text nodes. With a `heading`, the first occurrence after the first heading of
  * that name is preferred; the first occurrence anywhere is the fallback. Null when absent.
  *
@@ -116,13 +125,14 @@ function textRange(doc: Document, found: Scan, needle: string, from = 0): Range 
  * control is never matched.
  */
 export function findTextRange(
-  doc: Document,
+  root: Document | Element,
   text: string,
   heading?: string | null,
   mode: LocateMode = "text",
 ): Range | null {
+  const doc = docOf(root);
   const needle = fold(text.trim());
-  const found = scan(doc);
+  const found = scan(root);
   if (needle === "" || found === null) return null;
 
   if (mode === "heading") {
@@ -159,9 +169,10 @@ export function findTextRange(
  * The last resort for a heading whose text has drifted from the server's copy: the first heading
  * containing `text`, else the first place `text` occurs in the page.
  */
-export function findFallbackRange(doc: Document, text: string): Range | null {
+export function findFallbackRange(root: Document | Element, text: string): Range | null {
+  const doc = docOf(root);
   const needle = fold(text.trim());
-  const found = scan(doc);
+  const found = scan(root);
   if (needle === "" || found === null) return null;
   const wanted = collapse(text);
   return (
@@ -186,15 +197,23 @@ interface HighlightWindow {
 /**
  * Marks the range for `highlightMs`, by the highlight API when the frame has it, else by selection.
  * Aborting `signal` takes the mark down at once and cancels the pending clean-up, so a stopped
- * search can never touch a newer one's mark.
+ * search can never touch a newer one's mark. With `injectStyle` the `::highlight` rule is added to
+ * the document (a framed wiki page); without it the document's own stylesheet must carry it (the
+ * companion, whose CSP blocks an injected `<style>`).
  */
-function highlight(doc: Document, range: Range, highlightMs: number, signal?: AbortSignal): void {
+function highlight(
+  doc: Document,
+  range: Range,
+  highlightMs: number,
+  injectStyle: boolean,
+  signal?: AbortSignal,
+): void {
   const win = doc.defaultView as unknown as HighlightWindow | null;
   if (win === null) return;
   let clear: () => void;
   const registry = win.CSS?.highlights;
   if (registry !== undefined && typeof win.Highlight === "function") {
-    if (doc.getElementById(STYLE_ID) === null && doc.head !== null) {
+    if (injectStyle && doc.getElementById(STYLE_ID) === null && doc.head !== null) {
       const style = doc.createElement("style");
       style.id = STYLE_ID;
       style.textContent = STYLE_TEXT;
@@ -244,13 +263,19 @@ function highlight(doc: Document, range: Range, highlightMs: number, signal?: Ab
   );
 }
 
-function reveal(doc: Document, range: Range, highlightMs: number, signal?: AbortSignal): void {
+function reveal(
+  doc: Document,
+  range: Range,
+  highlightMs: number,
+  injectStyle: boolean,
+  signal?: AbortSignal,
+): void {
   try {
     const target = range.startContainer.parentElement;
     if (target !== null && typeof target.scrollIntoView === "function") {
       target.scrollIntoView({ block: "center" });
     }
-    highlight(doc, range, highlightMs, signal);
+    highlight(doc, range, highlightMs, injectStyle, signal);
   } catch {
     // The text was found; failing to decorate it is not a failure to locate it.
   }
@@ -340,7 +365,7 @@ export function locateInFrame(
         }
       }
       if (found !== null) {
-        reveal(found.doc, found.range, highlightMs, opts.signal);
+        reveal(found.doc, found.range, highlightMs, true, opts.signal);
         finish(true);
       } else if (Date.now() >= deadline) {
         finish(false);
@@ -352,4 +377,40 @@ export function locateInFrame(
     opts.signal?.addEventListener("abort", stop);
     attempt();
   });
+}
+
+/** Opens every closed `details` from `node` up to and including `root`, so the match shows. */
+function openDetails(root: Element, node: Node): void {
+  for (let el = node.parentElement; el !== null; el = el.parentElement) {
+    if (el.tagName === "DETAILS") el.setAttribute("open", "");
+    if (el === root) break;
+  }
+}
+
+/**
+ * Finds `text` (preferably under `heading`) inside `root` now, opens any `details` around it,
+ * scrolls to it and highlights it as `locateInFrame` does. In "heading" mode with no match, the
+ * `fallback` text is tried at once. False when absent; never throws.
+ */
+export function locateInElement(
+  root: Element,
+  text: string,
+  heading: string | null,
+  opts: { mode?: LocateMode; fallback?: string; highlightMs?: number; signal?: AbortSignal } = {},
+): boolean {
+  if (text.trim() === "" || opts.signal?.aborted === true) return false;
+  let range: Range | null;
+  try {
+    range = findTextRange(root, text, heading, opts.mode ?? "text");
+    if (range === null && opts.mode === "heading" && opts.fallback !== undefined) {
+      range = findFallbackRange(root, opts.fallback);
+    }
+  } catch {
+    return false;
+  }
+  if (range === null) return false;
+  openDetails(root, range.startContainer);
+  // The companion's own stylesheet carries the ::highlight rule; its CSP blocks injecting one.
+  reveal(root.ownerDocument, range, opts.highlightMs ?? 6_000, false, opts.signal);
+  return true;
 }

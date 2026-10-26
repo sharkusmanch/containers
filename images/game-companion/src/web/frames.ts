@@ -1,19 +1,21 @@
 import { applyChrome, applyReader } from "./chrome.js";
 import type { GuideZoom } from "./device.js";
 import { locateInFrame, type LocateMode } from "./locate.js";
+import type { Reader } from "./reader.js";
 import { isSafeDocUrl, isSafeLinkUrl } from "./state.js";
 
 export interface Frames {
   element: HTMLElement;
   /**
    * Shows `url` in slot `index`. A "doc" is a wiki page (`isSafeDocUrl`); a "link" is an address the
-   * person added (`isSafeLinkUrl`) and is framed sandboxed. A slot that changes kind gets a new iframe.
+   * person added (`isSafeLinkUrl`) and is framed sandboxed. A "reader" is a wiki page the companion
+   * renders itself (a "doc" without the `reader` option). A slot that changes kind gets a new element.
    */
   show(index: number, url: string, kind?: FrameKind): void;
   hideAll(): void;
   /**
-   * Re-keys the kept iframes so slot i holds the frame showing urls[i]; frames for URLs not
-   * listed are removed. Never reloads a frame and never creates one.
+   * Re-keys the kept iframes and readers so slot i holds the one showing urls[i]; those for URLs not
+   * listed are removed (a reader is disposed). Never reloads one and never creates one.
    */
   sync(urls: (string | null)[]): void;
   reset(): void;
@@ -35,8 +37,8 @@ export interface Frames {
    * Finds `text` (preferably under `heading`) in the page framed in slot `index` and highlights it.
    * In "heading" mode it looks for the section heading carrying `text` instead (see findTextRange);
    * `fallback` is then tried once, at the deadline, if the heading text has drifted.
-   * Waits for a navigation this module started to finish first. "gone" when the slot has no frame or
-   * its frame was dropped meanwhile.
+   * Waits for a navigation this module started to finish first. A reader slot asks its reader.
+   * "gone" when the slot has no frame or its frame (or reader page) was dropped meanwhile.
    */
   locate(
     index: number,
@@ -47,16 +49,19 @@ export interface Frames {
   ): Promise<LocateResult>;
 }
 
-export type FrameKind = "doc" | "link";
+export type FrameKind = "doc" | "link" | "reader";
 
 export type LocateResult = "found" | "not-found" | "gone";
 
 interface Entry {
-  frame: HTMLIFrameElement;
+  /** What is in the container: the iframe, or the reader's element. Carries `.inactive`. */
+  node: HTMLElement;
+  frame: HTMLIFrameElement | null;
+  reader: Reader | null;
   url: string;
   /** A link frame shows another origin's page: nothing here ever reaches into its document. */
   kind: FrameKind;
-  /** True from the moment this module starts a navigation until that frame's load event. */
+  /** True from the moment this module starts a navigation until that frame's load event (never for a reader). */
   loading: boolean;
   /** Counts the navigations this module has started in the frame (creating it counts as one). */
   generation: number;
@@ -91,6 +96,8 @@ export function createFrames(
     setInterval?: typeof setInterval;
     /** Called with the slot index when the reader clicks inside a framed page. Never throws into the page. */
     onInteract?: (index: number) => void;
+    /** Makes the reader for a "reader" slot; without it a "reader" slot is framed as a "doc". */
+    reader?: (url: string) => Reader;
   } = {},
 ): Frames {
   const element = doc.createElement("div");
@@ -101,7 +108,7 @@ export function createFrames(
   // frame's own window; the slot's address is the fallback.
   const shownPath = (entry: Entry): string => {
     try {
-      const path = entry.frame.contentWindow?.location.pathname;
+      const path = entry.frame?.contentWindow?.location.pathname;
       return (typeof path === "string" ? DOC_PATH.exec(path)?.[0] : undefined) ?? entry.url;
     } catch {
       return entry.url;
@@ -112,7 +119,7 @@ export function createFrames(
   let reader = false;
   let isEditable: (url: string) => boolean = () => false;
   const applyTo = (entry: Entry): void => {
-    if (entry.kind === "link") return;
+    if (entry.kind !== "doc" || entry.frame === null) return;
     try {
       const framed = entry.frame.contentDocument;
       if (framed === null) return;
@@ -126,7 +133,7 @@ export function createFrames(
   const listened = new WeakSet<Document>();
   const watchClicks = (entry: Entry): void => {
     const onInteract = options.onInteract;
-    if (onInteract === undefined || entry.kind === "link") return;
+    if (onInteract === undefined || entry.kind !== "doc" || entry.frame === null) return;
     try {
       const framed = entry.frame.contentDocument;
       if (framed === null || listened.has(framed)) return;
@@ -154,29 +161,51 @@ export function createFrames(
   (options.setInterval ?? setInterval)(() => {
     if (!(hideChrome || reader) || doc.visibilityState === "hidden") return;
     for (const entry of entries) {
-      if (entry !== null && !entry.frame.classList.contains("inactive")) applyTo(entry);
+      if (entry !== null && !entry.node.classList.contains("inactive")) applyTo(entry);
     }
   }, 1500);
 
   const hideAll = (): void => {
-    for (const entry of entries) entry?.frame.classList.add("inactive");
+    for (const entry of entries) entry?.node.classList.add("inactive");
+  };
+
+  /** Takes an entry out of the container for good: its search stops and its reader is disposed. */
+  const drop = (entry: Entry): void => {
+    entry.live?.abort();
+    entry.reader?.dispose();
+    entry.node.remove();
   };
 
   return {
     element,
-    show(index, url, kind = "doc") {
+    show(index, url, wanted = "doc") {
       if (!Number.isInteger(index) || index < 0 || index >= slotCount) return;
+      const makeReader = options.reader;
+      const kind: FrameKind = wanted === "reader" && makeReader === undefined ? "doc" : wanted;
       if (!(kind === "link" ? isSafeLinkUrl(url) : isSafeDocUrl(url))) return;
       hideAll();
       let entry = entries[index] ?? null;
       // A sandbox only counts at the next navigation, so a frame never changes kind: it is replaced.
       if (entry !== null && entry.kind !== kind) {
-        entry.live?.abort();
-        entry.frame.remove();
+        drop(entry);
         entries[index] = null;
         entry = null;
       }
-      if (entry === null) {
+      if (entry === null && kind === "reader" && makeReader !== undefined) {
+        const made = makeReader(url);
+        entry = {
+          node: made.element,
+          frame: null,
+          reader: made,
+          url,
+          kind,
+          loading: false,
+          generation: 1,
+          live: null,
+        };
+        element.append(made.element);
+        entries[index] = entry;
+      } else if (entry === null) {
         const frame = doc.createElement("iframe");
         frame.classList.add("frame");
         if (kind === "link") {
@@ -186,7 +215,16 @@ export function createFrames(
         } else {
           frame.setAttribute("title", "Guide page");
         }
-        const created: Entry = { frame, url, kind, loading: true, generation: 1, live: null };
+        const created: Entry = {
+          node: frame,
+          frame,
+          reader: null,
+          url,
+          kind,
+          loading: true,
+          generation: 1,
+          live: null,
+        };
         frame.addEventListener("load", () => {
           created.loading = false;
           if (hideChrome || reader) applyTo(created);
@@ -197,14 +235,18 @@ export function createFrames(
         entry = created;
         entries[index] = entry;
       } else if (entry.url !== url) {
-        entry.loading = true;
         entry.generation += 1;
         // A search on the page being left would only ever look at the page that replaces it.
         entry.live?.abort();
-        entry.frame.setAttribute("src", url);
+        if (entry.reader !== null) {
+          entry.reader.load(url);
+        } else if (entry.frame !== null) {
+          entry.loading = true;
+          entry.frame.setAttribute("src", url);
+        }
         entry.url = url;
       }
-      entry.frame.classList.remove("inactive");
+      entry.node.classList.remove("inactive");
       // A frame that is still navigating is applied by its load handler.
       if ((hideChrome || reader) && !entry.loading) applyTo(entry);
     },
@@ -218,9 +260,10 @@ export function createFrames(
         entries[i] = kept ?? null;
         if (kept !== undefined) used.add(kept);
       }
-      for (const e of old) if (!used.has(e)) e.frame.remove();
+      for (const e of old) if (!used.has(e)) drop(e);
     },
     reset() {
+      for (const entry of entries) if (entry !== null) drop(entry);
       element.replaceChildren();
       entries.fill(null);
     },
@@ -245,11 +288,19 @@ export function createFrames(
     async locate(index, text, heading, mode = "text", fallback) {
       const entry = Number.isInteger(index) ? (entries[index] ?? null) : null;
       if (entry === null || entry.kind === "link") return "gone";
+      const generation = entry.generation;
+      const dropped = (): boolean => !entries.includes(entry) || entry.generation !== generation;
+      if (entry.reader !== null) {
+        const found = await (fallback === undefined
+          ? entry.reader.locate(text, heading ?? null, mode)
+          : entry.reader.locate(text, heading ?? null, mode, fallback));
+        if (dropped()) return "gone";
+        return found ? "found" : "not-found";
+      }
+      if (entry.frame === null) return "gone";
       entry.live?.abort();
       const mine = new AbortController();
       entry.live = mine;
-      const generation = entry.generation;
-      const dropped = (): boolean => !entries.includes(entry) || entry.generation !== generation;
       const found = await locateInFrame(entry.frame, text, heading, {
         ready: () => !entry.loading,
         gone: dropped,
