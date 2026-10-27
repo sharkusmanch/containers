@@ -510,15 +510,20 @@ export function createPicker(
     gamesFilter.hidden = false;
     const options = platformOptions(allHubs);
     const platform = options.some((o) => o.value === platformChoice) ? platformChoice : "all";
-    gamesPlatform.replaceChildren(
-      ...options.map((o) => {
-        const option = doc.createElement("option");
-        option.value = o.value;
-        option.textContent = o.label;
-        return option;
-      }),
-    );
-    gamesPlatform.value = platform;
+    // The options are only rebuilt when they change: replacing them under an open native picker
+    // (a guide refresh lands just after the menu opens) can close it.
+    const values = options.map((o) => o.value);
+    if (values.join("\n") !== [...gamesPlatform.options].map((o) => o.value).join("\n")) {
+      gamesPlatform.replaceChildren(
+        ...options.map((o) => {
+          const option = doc.createElement("option");
+          option.value = o.value;
+          option.textContent = o.label;
+          return option;
+        }),
+      );
+    }
+    if (gamesPlatform.value !== platform) gamesPlatform.value = platform;
     const shown = allHubs.filter((h) => h.nowPlaying || hubMatches(h, platform, gamesSearch.value));
     const nothing = !shown.some((h) => !h.nowPlaying) && allHubs.some((h) => !h.nowPlaying);
     const none = empty("No games match");

@@ -1402,6 +1402,49 @@ describe("game filters", () => {
     expect((el.querySelector(".picker-games-filter") as HTMLElement).hidden).toBe(false);
   });
 
+  it("keeps the same search box and dropdown options while typing and on a refresh", () => {
+    const { el, picker, search, platform, type } = build();
+    const first = platform.options[1];
+    type("a");
+    picker.setHubs([...all], true);
+    picker.open("games");
+    expect(el.querySelector(".picker-games-search")).toBe(search);
+    expect(platform.options[1]).toBe(first);
+  });
+
+  it("rebuilds the dropdown when the platforms change", () => {
+    const { picker, platform } = build();
+    picker.setHubs([...all, hub("9", "Iota", "RA · SNES")], true);
+    expect([...platform.options].map((o) => o.value)).toContain("ra:RA · SNES");
+  });
+
+  it("lists a guide labelled just RA under its own entry", () => {
+    const { platform, choose, shown } = build([...all, hub("9", "Kappa", "RA")]);
+    expect([...platform.options].map((o) => o.value)).toContain("ra:RA");
+    choose("ra:RA");
+    expect(shown()).toEqual({ "Now playing": ["Alpha Quest"], RA: ["Kappa"] });
+  });
+
+  it("works when storage throws", () => {
+    const broken = {
+      data: new Map<string, string>(),
+      getItem: (): string | null => {
+        throw new Error("blocked");
+      },
+      setItem: (): undefined => {
+        throw new Error("full");
+      },
+    };
+    const { platform, choose, shown } = build(all, broken);
+    expect(platform.value).toBe("all");
+    choose("xbox");
+    expect(shown()).toEqual({
+      "Now playing": ["Alpha Quest"],
+      "Steam + Xbox": ["Echo Base"],
+      Xbox: ["Gamma Ray"],
+    });
+  });
+
   it("uses a 16px search box so phones do not zoom, with no autocorrect", () => {
     const { search } = build();
     expect(search.getAttribute("type")).toBe("search");
