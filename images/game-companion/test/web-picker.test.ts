@@ -1203,3 +1203,210 @@ describe("Xbox row", () => {
     expect(text(picker)).toBe("Enter ABCD-EFGH at login.live.com/oauth20_remoteconnect.srf");
   });
 });
+
+describe("game filters", () => {
+  const hub = (
+    hubId: string,
+    title: string,
+    platformLabel: string,
+    nowPlaying = false,
+  ): GuideHub => ({
+    hubId,
+    title,
+    url: `/doc/${hubId}`,
+    source: null,
+    gameId: null,
+    xboxTitleId: null,
+    platforms: [],
+    lastPlatform: null,
+    trackedOn: null,
+    platformLabel,
+    nowPlaying,
+  });
+  const all: GuideHub[] = [
+    hub("1", "Alpha Quest", "RA · PS2", true),
+    hub("2", "Beta Blaster", "Steam"),
+    hub("3", "Console Thing", "Other"),
+    hub("4", "Delta Run", "RA · GC"),
+    hub("5", "Echo Base", "Steam + Xbox"),
+    hub("6", "Foxtrot", "RA · PS2"),
+    hub("7", "Gamma Ray", "Xbox"),
+  ];
+
+  function memory(initial: Record<string, string> = {}) {
+    const data = new Map(Object.entries(initial));
+    return {
+      data,
+      getItem: (k: string) => data.get(k) ?? null,
+      setItem: (k: string, v: string) => void data.set(k, v),
+    };
+  }
+
+  function build(hubs: GuideHub[] = all, storage = memory()) {
+    const handlers = {
+      onPage: vi.fn(),
+      onHub: vi.fn(),
+      onClose: vi.fn(),
+      onUnpin: vi.fn(),
+      onMatch: vi.fn(),
+      onSetting: vi.fn(),
+      onAddLink: vi.fn(() => null),
+      onRemoveLink: vi.fn(),
+      onLink: vi.fn(),
+      onInstall: vi.fn(),
+      onDismissSetup: vi.fn(),
+      onXbox: vi.fn(),
+    };
+    const picker = createPicker(document, handlers, { storage });
+    picker.setHubs(hubs, true);
+    picker.open("games");
+    const el = picker.element;
+    const search = el.querySelector(".picker-games-search") as HTMLInputElement;
+    const platform = el.querySelector(".picker-games-platform") as HTMLSelectElement;
+    const type = (text: string): void => {
+      search.value = text;
+      search.dispatchEvent(new Event("input"));
+    };
+    const choose = (value: string): void => {
+      platform.value = value;
+      platform.dispatchEvent(new Event("change"));
+    };
+    const shown = (): Record<string, string[]> =>
+      Object.fromEntries(
+        [...el.querySelectorAll<HTMLElement>(".picker-games .picker-group")].map((g) => [
+          g.dataset["group"] ?? "",
+          [...g.querySelectorAll(".picker-item .picker-title")].map((t) => t.textContent ?? ""),
+        ]),
+      );
+    return { picker, el, search, platform, type, choose, shown, storage };
+  }
+
+  it("offers All, Steam, Xbox, each RA console, then Other, from the guides present", () => {
+    const { platform } = build();
+    expect([...platform.options].map((o) => [o.value, o.textContent])).toEqual([
+      ["all", "All platforms"],
+      ["steam", "Steam"],
+      ["xbox", "Xbox"],
+      ["ra:RA · GC", "RA · GC"],
+      ["ra:RA · PS2", "RA · PS2"],
+      ["other", "Other"],
+    ]);
+    expect(platform.value).toBe("all");
+  });
+
+  it("leaves out platforms no guide has", () => {
+    const { platform } = build([hub("2", "Beta Blaster", "Steam"), hub("9", "Iota", "RA · SNES")]);
+    expect([...platform.options].map((o) => o.value)).toEqual(["all", "steam", "ra:RA · SNES"]);
+  });
+
+  it("filters titles as you type, ignoring case, and drops empty groups", () => {
+    const { type, shown } = build();
+    type("  BLAST ");
+    expect(shown()).toEqual({ "Now playing": ["Alpha Quest"], Steam: ["Beta Blaster"] });
+  });
+
+  it("keeps Now playing whatever the filters", () => {
+    const { type, choose, shown } = build();
+    type("zzz");
+    choose("xbox");
+    expect(shown()).toEqual({ "Now playing": ["Alpha Quest"] });
+  });
+
+  it("shows Steam + Xbox guides under both Steam and Xbox", () => {
+    const { choose, shown } = build();
+    choose("steam");
+    expect(shown()).toEqual({
+      "Now playing": ["Alpha Quest"],
+      Steam: ["Beta Blaster"],
+      "Steam + Xbox": ["Echo Base"],
+    });
+    choose("xbox");
+    expect(shown()).toEqual({
+      "Now playing": ["Alpha Quest"],
+      "Steam + Xbox": ["Echo Base"],
+      Xbox: ["Gamma Ray"],
+    });
+  });
+
+  it("narrows to one RA console, or to Other", () => {
+    const { choose, shown } = build();
+    choose("ra:RA · PS2");
+    expect(shown()).toEqual({ "Now playing": ["Alpha Quest"], "RA · PS2": ["Foxtrot"] });
+    choose("other");
+    expect(shown()).toEqual({ "Now playing": ["Alpha Quest"], Other: ["Console Thing"] });
+  });
+
+  it("combines the search and the platform", () => {
+    const { type, choose, shown } = build();
+    choose("steam");
+    type("echo");
+    expect(shown()).toEqual({ "Now playing": ["Alpha Quest"], "Steam + Xbox": ["Echo Base"] });
+  });
+
+  it("says so when nothing but Now playing matches, and not otherwise", () => {
+    const { el, type } = build();
+    type("zzz");
+    expect(el.querySelector(".picker-games-none")?.textContent).toBe("No games match");
+    type("");
+    expect(el.querySelector(".picker-games-none")).toBeNull();
+  });
+
+  it("remembers the platform on the device and restores it", () => {
+    const storage = memory();
+    build(all, storage).choose("ra:RA · GC");
+    expect(storage.data.get("game-companion:v1:games-platform")).toBe("ra:RA · GC");
+    document.body.replaceChildren();
+    const again = build(all, storage);
+    expect(again.platform.value).toBe("ra:RA · GC");
+    expect(again.shown()).toEqual({ "Now playing": ["Alpha Quest"], "RA · GC": ["Delta Run"] });
+  });
+
+  it("shows everything when the remembered platform has no guides now", () => {
+    const { platform, shown } = build(
+      all,
+      memory({ "game-companion:v1:games-platform": "ra:RA · N64" }),
+    );
+    expect(platform.value).toBe("all");
+    expect(Object.keys(shown())).toContain("Other");
+  });
+
+  it("clears the search each time the menu opens but keeps the platform", () => {
+    const { picker, search, type, choose, shown } = build();
+    choose("steam");
+    type("beta");
+    picker.open("games");
+    expect(search.value).toBe("");
+    expect(shown()).toEqual({
+      "Now playing": ["Alpha Quest"],
+      Steam: ["Beta Blaster"],
+      "Steam + Xbox": ["Echo Base"],
+    });
+  });
+
+  it("keeps the filters when the guide list is refreshed", () => {
+    const { picker, type, shown } = build();
+    type("gamma");
+    picker.setHubs([...all, hub("8", "Gamma Two", "Steam")], true);
+    expect(shown()).toEqual({
+      "Now playing": ["Alpha Quest"],
+      Steam: ["Gamma Two"],
+      Xbox: ["Gamma Ray"],
+    });
+  });
+
+  it("hides the filters when there are no guides", () => {
+    const { picker, el } = build();
+    picker.setHubs([], true);
+    expect((el.querySelector(".picker-games-filter") as HTMLElement).hidden).toBe(true);
+    picker.setHubs(all, true);
+    expect((el.querySelector(".picker-games-filter") as HTMLElement).hidden).toBe(false);
+  });
+
+  it("uses a 16px search box so phones do not zoom, with no autocorrect", () => {
+    const { search } = build();
+    expect(search.getAttribute("type")).toBe("search");
+    expect(search.getAttribute("placeholder")).toBe("Search games");
+    expect(search.getAttribute("autocapitalize")).toBe("off");
+    expect(search.getAttribute("spellcheck")).toBe("false");
+  });
+});

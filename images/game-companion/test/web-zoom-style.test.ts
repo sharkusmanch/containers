@@ -103,3 +103,13 @@ describe("the guide reader rules", () => {
     expect(rules.some((r) => r.selector.includes(".cb-item.checked"))).toBe(false);
   });
 });
+
+describe("the Games tab filter styles", () => {
+  const css = readFileSync(new URL("../web-static/style.css", import.meta.url), "utf8");
+  it("gives the search box and dropdown 44px targets and 16px text", () => {
+    const block =
+      /\.picker-games-search,\s*\.picker-games-platform\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(block).toContain("min-height: 44px;");
+    expect(block).toContain("font-size: 16px;");
+  });
+});

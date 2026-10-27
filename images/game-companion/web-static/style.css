@@ -1007,6 +1007,37 @@ button {
   font-size: 18px;
 }
 
+/* Games tab: search box and platform dropdown above the groups */
+.picker-games-filter {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.picker-games-search,
+.picker-games-platform {
+  min-height: 44px;
+  font: inherit;
+  /* 16px or larger keeps mobile browsers from zooming the page on focus */
+  font-size: 16px;
+  color: var(--text);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.picker-games-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 12px;
+}
+
+.picker-games-platform {
+  flex: 0 1 auto;
+  max-width: 45%;
+  padding: 0 8px;
+}
+
 .picker-item {
   display: flex;
   align-items: center;

@@ -363,113 +363,117 @@ export function startApp(opts: AppOptions): App {
     },
   });
 
-  const picker = createPicker(doc, {
-    onPage(page) {
-      openPage(page);
+  const picker = createPicker(
+    doc,
+    {
+      onPage(page) {
+        openPage(page);
+      },
+      onHub(hub) {
+        pending = { kind: "hub", game: choosingFor, hub };
+        setChoosingFor(null);
+        picker.setHubs(allHubs, available);
+        loadingLabel = hub.title;
+        renderHeader();
+        void tick();
+      },
+      onMatch(match) {
+        if (findFor === null) return;
+        openMatch(
+          findFor.current,
+          findFor.locate(match),
+          match,
+          findFor.mode,
+          findFor.fallback?.(match),
+        );
+      },
+      onSetting(name) {
+        if (name === "fullscreen") {
+          void toggleFullscreen(doc).then(showSettings);
+          return;
+        }
+        if (name === "guideZoom") {
+          settings = { ...settings, guideZoom: nextGuideZoom(settings.guideZoom) };
+        } else if (name === "layoutMode") {
+          settings = { ...settings, layoutMode: nextLayoutOverride(settings.layoutMode) };
+        } else {
+          settings = { ...settings, [name]: !settings[name] };
+        }
+        saveSettings(storage, settings);
+        applySettings();
+        showSettings();
+        renderPresence();
+        // Open guide pages switch between the reader and a frame.
+        if (name === "guideReader") render();
+      },
+      onUnpin(page) {
+        if (current === null) return;
+        current.layout = removeSlot(current.layout, page.url);
+        frames.sync(current.layout.slots.map((s) => s?.url ?? null));
+        save();
+        render();
+        refreshPicker();
+      },
+      onAddLink(title, url) {
+        const c = current;
+        const link = normaliseLink(title, url);
+        // The form is only reachable while a game with a scope is on screen.
+        if (c === null || c.scope === null || link === null) {
+          return "Enter an address that starts with https://";
+        }
+        if (c.links.some((l) => l.url === link.url)) return "That link is already in the list";
+        if (c.links.length >= LINKS_MAX) {
+          return `That is the most links a game can have (${LINKS_MAX})`;
+        }
+        const next = addLink(c.links, link);
+        if (!saveLinks(storage, c.scope, next)) return "Could not save the link on this device";
+        c.links = next;
+        refreshPicker();
+        return null;
+      },
+      onInstall() {
+        opts.install?.prompt();
+        showSettings();
+      },
+      onDismissSetup() {
+        settings = { ...settings, setupDismissed: true };
+        saveSettings(storage, settings);
+        showSettings();
+      },
+      onXbox(action) {
+        void runXboxAction(action);
+      },
+      onLink(link) {
+        const c = current;
+        if (c === null || !c.links.some((l) => l.url === link.url)) return;
+        closeAskForPage();
+        c.layout = assignSlot(c.layout, link);
+        save();
+        render();
+      },
+      onRemoveLink(url) {
+        const c = current;
+        if (c === null || c.scope === null) return;
+        c.links = removeLink(c.links, url);
+        saveLinks(storage, c.scope, c.links);
+        c.layout = removeSlot(c.layout, url);
+        frames.sync(c.layout.slots.map((s) => s?.url ?? null));
+        save();
+        render();
+        refreshPicker();
+      },
+      onClose() {
+        if (choosingFor === null) return;
+        // No guide chosen: show the detected game's achievements without one.
+        declinedKey = gameKey(choosingFor);
+        pending = { kind: "hub", game: choosingFor, hub: null };
+        setChoosingFor(null);
+        picker.setHubs(allHubs, available);
+        void tick();
+      },
     },
-    onHub(hub) {
-      pending = { kind: "hub", game: choosingFor, hub };
-      setChoosingFor(null);
-      picker.setHubs(allHubs, available);
-      loadingLabel = hub.title;
-      renderHeader();
-      void tick();
-    },
-    onMatch(match) {
-      if (findFor === null) return;
-      openMatch(
-        findFor.current,
-        findFor.locate(match),
-        match,
-        findFor.mode,
-        findFor.fallback?.(match),
-      );
-    },
-    onSetting(name) {
-      if (name === "fullscreen") {
-        void toggleFullscreen(doc).then(showSettings);
-        return;
-      }
-      if (name === "guideZoom") {
-        settings = { ...settings, guideZoom: nextGuideZoom(settings.guideZoom) };
-      } else if (name === "layoutMode") {
-        settings = { ...settings, layoutMode: nextLayoutOverride(settings.layoutMode) };
-      } else {
-        settings = { ...settings, [name]: !settings[name] };
-      }
-      saveSettings(storage, settings);
-      applySettings();
-      showSettings();
-      renderPresence();
-      // Open guide pages switch between the reader and a frame.
-      if (name === "guideReader") render();
-    },
-    onUnpin(page) {
-      if (current === null) return;
-      current.layout = removeSlot(current.layout, page.url);
-      frames.sync(current.layout.slots.map((s) => s?.url ?? null));
-      save();
-      render();
-      refreshPicker();
-    },
-    onAddLink(title, url) {
-      const c = current;
-      const link = normaliseLink(title, url);
-      // The form is only reachable while a game with a scope is on screen.
-      if (c === null || c.scope === null || link === null) {
-        return "Enter an address that starts with https://";
-      }
-      if (c.links.some((l) => l.url === link.url)) return "That link is already in the list";
-      if (c.links.length >= LINKS_MAX) {
-        return `That is the most links a game can have (${LINKS_MAX})`;
-      }
-      const next = addLink(c.links, link);
-      if (!saveLinks(storage, c.scope, next)) return "Could not save the link on this device";
-      c.links = next;
-      refreshPicker();
-      return null;
-    },
-    onInstall() {
-      opts.install?.prompt();
-      showSettings();
-    },
-    onDismissSetup() {
-      settings = { ...settings, setupDismissed: true };
-      saveSettings(storage, settings);
-      showSettings();
-    },
-    onXbox(action) {
-      void runXboxAction(action);
-    },
-    onLink(link) {
-      const c = current;
-      if (c === null || !c.links.some((l) => l.url === link.url)) return;
-      closeAskForPage();
-      c.layout = assignSlot(c.layout, link);
-      save();
-      render();
-    },
-    onRemoveLink(url) {
-      const c = current;
-      if (c === null || c.scope === null) return;
-      c.links = removeLink(c.links, url);
-      saveLinks(storage, c.scope, c.links);
-      c.layout = removeSlot(c.layout, url);
-      frames.sync(c.layout.slots.map((s) => s?.url ?? null));
-      save();
-      render();
-      refreshPicker();
-    },
-    onClose() {
-      if (choosingFor === null) return;
-      // No guide chosen: show the detected game's achievements without one.
-      declinedKey = gameKey(choosingFor);
-      pending = { kind: "hub", game: choosingFor, hub: null };
-      setChoosingFor(null);
-      picker.setHubs(allHubs, available);
-      void tick();
-    },
-  });
+    { storage: opts.storage },
+  );
 
   root.replaceChildren(
     rail.element,

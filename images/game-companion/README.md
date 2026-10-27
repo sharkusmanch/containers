@@ -45,7 +45,7 @@ returns.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.17.1
+- **Version**: v0.17.2
 
 ## Usage
 
@@ -56,7 +56,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.17.1
+  ghcr.io/sharkusmanch/containers/game-companion:v0.17.2
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -170,7 +170,10 @@ was last detected on, else the guide's own row. A game being played always wins.
 knows both a Steam and an Xbox ID, a **Steam / Xbox** switch above its achievements picks the
 other one; the choice is kept per device. The game list labels each guide "Steam", "Xbox" or
 "Steam + Xbox", and the device ("Series X", "PC") shows beside the title while an Xbox game is
-being played.
+being played. Above the list, a search box narrows it by title and a dropdown by platform (Steam,
+Xbox, each RetroAchievements console, Other; a "Steam + Xbox" guide counts for both). Now playing
+always stays; the platform is remembered per device and the search clears each time the menu
+opens.
 
 **Xbox tools on the MCP endpoint.** Besides the guide tools, `POST /companion/mcp` has two
 read-only tools that expose the signed-in account's Xbox data to Claude Code skills (no second

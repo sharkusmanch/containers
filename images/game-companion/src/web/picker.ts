@@ -3,7 +3,7 @@ import type { XboxAction } from "./api.js";
 import type { GuideZoom, InstallRow } from "./device.js";
 import { LAYOUT_LABELS, windowReadout } from "./layout-mode.js";
 import type { LayoutMode, LayoutOverride } from "./layout-mode.js";
-import type { GameLink, Layout, Slot } from "./state.js";
+import type { GameLink, Layout, Slot, StorageLike } from "./state.js";
 
 export interface PickerHandlers {
   onPage(page: Slot): void;
@@ -97,9 +97,56 @@ export function safeVerificationUrl(uri: string | null): URL | null {
   return url;
 }
 
+/** Where the Games tab's platform choice is kept on the device. */
+export const GAMES_PLATFORM_KEY = "game-companion:v1:games-platform";
+
+export interface PlatformOption {
+  value: string;
+  label: string;
+}
+
+/**
+ * What the Games tab can narrow to: All, Steam, Xbox, each RetroAchievements console, then Other.
+ * Only platforms some guide has are offered. A "Steam + Xbox" guide counts for both Steam and Xbox.
+ */
+export function platformOptions(hubs: readonly GuideHub[]): PlatformOption[] {
+  const labels = new Set(hubs.map((h) => h.platformLabel));
+  const has = (...names: string[]): boolean => names.some((n) => labels.has(n));
+  const ra = [...labels]
+    .filter((l) => l === "RA" || l.startsWith("RA · "))
+    .sort((a, b) => a.localeCompare(b));
+  return [
+    { value: "all", label: "All platforms" },
+    ...(has("Steam", "Steam + Xbox") ? [{ value: "steam", label: "Steam" }] : []),
+    ...(has("Xbox", "Steam + Xbox") ? [{ value: "xbox", label: "Xbox" }] : []),
+    ...ra.map((label) => ({ value: `ra:${label}`, label })),
+    ...(has("Other") ? [{ value: "other", label: "Other" }] : []),
+  ];
+}
+
+/** True when `hub` is listed under `platform` (a `platformOptions` value) and its title contains `query`, case ignored. */
+export function hubMatches(hub: GuideHub, platform: string, query: string): boolean {
+  const label = hub.platformLabel;
+  const onPlatform =
+    platform === "all" ||
+    (platform === "steam" && (label === "Steam" || label === "Steam + Xbox")) ||
+    (platform === "xbox" && (label === "Xbox" || label === "Steam + Xbox")) ||
+    (platform === "other" && label === "Other") ||
+    platform === `ra:${label}`;
+  const needle = query.trim().toLocaleLowerCase();
+  return onPlatform && (needle === "" || hub.title.toLocaleLowerCase().includes(needle));
+}
+
 type Tab = "pages" | "games" | "settings";
 
-export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
+export function createPicker(
+  doc: Document,
+  handlers: PickerHandlers,
+  opts: {
+    /** Keeps the Games tab's platform choice on the device; without it the choice lasts the page. */
+    storage?: StorageLike;
+  } = {},
+): Picker {
   const element = doc.createElement("div");
   element.classList.add("picker");
   element.hidden = true;
@@ -132,6 +179,24 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
   pagesList.classList.add("picker-pages");
   const gamesList = doc.createElement("div");
   gamesList.classList.add("picker-games");
+  const gamesFilter = doc.createElement("div");
+  gamesFilter.classList.add("picker-games-filter");
+  const gamesSearch = doc.createElement("input");
+  gamesSearch.classList.add("picker-games-search");
+  gamesSearch.setAttribute("type", "search");
+  gamesSearch.setAttribute("placeholder", "Search games");
+  gamesSearch.setAttribute("aria-label", "Search games");
+  gamesSearch.setAttribute("autocomplete", "off");
+  gamesSearch.setAttribute("autocapitalize", "off");
+  gamesSearch.setAttribute("spellcheck", "false");
+  gamesSearch.setAttribute("enterkeyhint", "search");
+  const gamesPlatform = doc.createElement("select");
+  gamesPlatform.classList.add("picker-games-platform");
+  gamesPlatform.setAttribute("aria-label", "Platform");
+  gamesFilter.append(gamesSearch, gamesPlatform);
+  const gamesGroups = doc.createElement("div");
+  gamesGroups.classList.add("picker-games-groups");
+  gamesList.append(gamesFilter, gamesGroups);
   const matchesList = doc.createElement("div");
   matchesList.classList.add("picker-matches");
   matchesList.hidden = true;
@@ -423,9 +488,59 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
     ];
   };
 
+  let allHubs: GuideHub[] = [];
+  let hubsAvailable = true;
+  let platformChoice = "all";
+  try {
+    platformChoice = opts.storage?.getItem(GAMES_PLATFORM_KEY) ?? "all";
+  } catch {
+    // Storage that cannot be read leaves the choice at All.
+  }
+
+  // The guides that pass the search and platform, grouped; Now playing always stays. A remembered
+  // platform no guide has now shows everything, but stays remembered for when one does.
+  const renderGames = (): void => {
+    if (allHubs.length === 0) {
+      gamesFilter.hidden = true;
+      gamesGroups.replaceChildren(
+        empty(hubsAvailable ? "No guides found" : "Guides are unavailable right now"),
+      );
+      return;
+    }
+    gamesFilter.hidden = false;
+    const options = platformOptions(allHubs);
+    const platform = options.some((o) => o.value === platformChoice) ? platformChoice : "all";
+    gamesPlatform.replaceChildren(
+      ...options.map((o) => {
+        const option = doc.createElement("option");
+        option.value = o.value;
+        option.textContent = o.label;
+        return option;
+      }),
+    );
+    gamesPlatform.value = platform;
+    const shown = allHubs.filter((h) => h.nowPlaying || hubMatches(h, platform, gamesSearch.value));
+    const nothing = !shown.some((h) => !h.nowPlaying) && allHubs.some((h) => !h.nowPlaying);
+    const none = empty("No games match");
+    none.classList.add("picker-games-none");
+    gamesGroups.replaceChildren(...groupHubs(shown), ...(nothing ? [none] : []));
+  };
+  gamesSearch.addEventListener("input", renderGames);
+  gamesPlatform.addEventListener("change", () => {
+    platformChoice = gamesPlatform.value;
+    try {
+      opts.storage?.setItem(GAMES_PLATFORM_KEY, platformChoice);
+    } catch {
+      // A full or blocked storage keeps the choice for this page only.
+    }
+    renderGames();
+  });
+
   return {
     element,
     open(next) {
+      gamesSearch.value = "";
+      renderGames();
       showTab(next);
       element.hidden = false;
     },
@@ -587,11 +702,9 @@ export function createPicker(doc: Document, handlers: PickerHandlers): Picker {
       linksSection.hidden = !available;
     },
     setHubs(hubs, available) {
-      gamesList.replaceChildren(
-        ...(hubs.length === 0
-          ? [empty(available ? "No guides found" : "Guides are unavailable right now")]
-          : groupHubs(hubs)),
-      );
+      allHubs = hubs;
+      hubsAvailable = available;
+      renderGames();
     },
   };
 }
