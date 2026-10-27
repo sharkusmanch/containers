@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: Settings = {
   guideJump: true,
   guideZoom: 100,
   readerMode: true,
-  guideReader: false,
+  guideReader: true,
   layoutMode: "auto",
   splitFraction: DEFAULT_SPLIT_FRACTION,
   setupDismissed: false,

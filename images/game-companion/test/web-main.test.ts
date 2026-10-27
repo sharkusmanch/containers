@@ -2855,7 +2855,7 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -2870,7 +2870,7 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -3204,7 +3204,7 @@ describe("display settings", () => {
         guideJump: true,
         guideZoom: 100,
         readerMode: false,
-        guideReader: false,
+        guideReader: true,
         layoutMode: "auto",
         splitFraction: 0.55,
         setupDismissed: false,
@@ -3432,7 +3432,7 @@ describe("display settings", () => {
         guideJump: true,
         guideZoom: percent,
         readerMode: true,
-        guideReader: false,
+        guideReader: true,
         layoutMode: "auto",
         splitFraction: 0.55,
         setupDismissed: false,
@@ -3459,7 +3459,7 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -3474,7 +3474,7 @@ describe("display settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -6591,7 +6591,7 @@ describe("guide reader", () => {
     Reflect.deleteProperty(Element.prototype, "scrollIntoView");
   });
 
-  /** Starts the app with an Outline client and, unless `guideReader` is false, the reader on. */
+  /** Starts the app with an Outline client; the reader is on unless `guideReader` is false. */
   const start = async (
     api: Fake = fakeApi(playing(hubA)),
     withOutline = true,
@@ -6599,8 +6599,8 @@ describe("guide reader", () => {
   ) => {
     const fake = fakeOutline();
     const storage = memory();
-    if (over.guideReader !== false) {
-      storage.setItem(SETTINGS_KEY, JSON.stringify({ guideReader: true }));
+    if (over.guideReader === false) {
+      storage.setItem(SETTINGS_KEY, JSON.stringify({ guideReader: false }));
     }
     const app = startApp({
       doc: document,
@@ -6625,7 +6625,7 @@ describe("guide reader", () => {
     item?.click();
   };
 
-  it("is off by default: guide pages are framed even with an Outline client", async () => {
+  it("can be turned off: guide pages are then framed even with an Outline client", async () => {
     const { state } = await start(fakeApi(playing(hubA)), true, { guideReader: false });
     railButtons()[1]?.click();
     expect(shownFrame()?.getAttribute("src")).toBe("/doc/hA-checklist");
@@ -6656,8 +6656,9 @@ describe("guide reader", () => {
     });
   });
 
-  it("shows a guide page in the reader rather than a frame", async () => {
+  it("shows a guide page in the reader rather than a frame, by default", async () => {
     const { state } = await start();
+    expect(($(".setting-guide-reader") as HTMLElement).textContent).toBe("Guide reader: on");
     railButtons()[1]?.click();
     expect(shownReader()).not.toBeNull();
     expect($("iframe")).toBeNull();

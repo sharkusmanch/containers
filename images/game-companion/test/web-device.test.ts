@@ -36,7 +36,7 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -48,7 +48,7 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -72,7 +72,7 @@ describe("settings", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -83,7 +83,7 @@ describe("settings", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -94,7 +94,7 @@ describe("settings", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -105,7 +105,7 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -116,7 +116,7 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -133,7 +133,7 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -160,7 +160,7 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -171,7 +171,7 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -183,7 +183,7 @@ describe("settings", () => {
       guideJump: true,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -243,7 +243,7 @@ describe("guide text size", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -258,7 +258,7 @@ describe("guide text size", () => {
       guideJump: false,
       guideZoom: 100,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -301,7 +301,7 @@ describe("reader mode setting", () => {
       keepAwake: false,
       guideJump: false,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -321,7 +321,7 @@ describe("reader mode setting", () => {
       guideJump: false,
       guideZoom: 80,
       readerMode: true,
-      guideReader: false,
+      guideReader: true,
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
@@ -330,9 +330,9 @@ describe("reader mode setting", () => {
 });
 
 describe("guide reader setting", () => {
-  it("is off by default", () => {
-    expect(DEFAULT_SETTINGS.guideReader).toBe(false);
-    expect(loadSettings(memory()).guideReader).toBe(false);
+  it("is on by default", () => {
+    expect(DEFAULT_SETTINGS.guideReader).toBe(true);
+    expect(loadSettings(memory()).guideReader).toBe(true);
   });
 
   it.each([true, false])("round-trips %s through storage", (guideReader) => {
@@ -350,19 +350,19 @@ describe("guide reader setting", () => {
     ["a number", 1],
     ["null", null],
     ["an object", {}],
-  ])("falls back to off for %s and keeps the other values", (_name, value) => {
+  ])("falls back to on for %s and keeps the other values", (_name, value) => {
     const raw = JSON.stringify({ keepAwake: false, readerMode: false, guideReader: value });
     expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw }))).toEqual({
       ...DEFAULT_SETTINGS,
       keepAwake: false,
       readerMode: false,
-      guideReader: false,
+      guideReader: true,
     });
   });
 
-  it("gives an older stored object without the key off", () => {
+  it("gives an older stored object without the key on", () => {
     const raw = JSON.stringify({ keepAwake: false, readerMode: true });
-    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw })).guideReader).toBe(false);
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw })).guideReader).toBe(true);
   });
 });
 

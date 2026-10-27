@@ -45,7 +45,7 @@ returns.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.17.0
+- **Version**: v0.17.1
 
 ## Usage
 
@@ -56,7 +56,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.17.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.17.1
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -258,9 +258,10 @@ the checkbox counts stay current.
 
 ## Guide reader
 
-The reader is off by default in v0.17.0: turn on **Guide reader** under ⋯ › Display, per
-device (it is saved with the other display settings). Off, guide pages are framed in Outline as
-before; switching it either way changes the pages already open at once.
+The reader is on by default since v0.17.1 (it was opt-in in v0.17.0): turn **Guide reader**
+off under ⋯ › Display, per device (it is saved with the other display settings). Off, guide
+pages are framed in Outline as before; switching it either way changes the pages already open
+at once. A device that saved its display settings under v0.17.0 keeps the value it saved.
 
 With it on, guide pages open in the companion's own reader rather than in a framed Outline
 editor. The browser reads the page from Outline directly (same origin, with your Outline
