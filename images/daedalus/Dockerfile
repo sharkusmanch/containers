@@ -19,7 +19,7 @@ ARG CODEX_VERSION=0.165.0
 ARG COSIGN_VERSION=v3.1.4
 
 # renovate: datasource=github-releases depName=fluxcd/flux2
-ARG FLUX_VERSION=v2.9.6
+ARG FLUX_VERSION=v2.10.0
 
 # renovate: datasource=github-releases depName=yannh/kubeconform
 ARG KUBECONFORM_VERSION=v0.8.0
