@@ -4,7 +4,7 @@
 ARG ALPINE_VERSION=3.24
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-ARG KUBECTL_VERSION=v1.37.1
+ARG KUBECTL_VERSION=v1.37.2
 
 # renovate: datasource=github-releases depName=helm/helm
 ARG HELM_VERSION=v4.3.1
