@@ -10,6 +10,13 @@ import { locateInElement, type LocateMode } from "./locate.js";
 import { OutlineError, type GuideDocument, type OutlineApi } from "./outline-api.js";
 import { docId } from "./state.js";
 
+/**
+ * A box ignores taps for this long after it is saved. Safari on the iPhone has been seen to
+ * deliver a second click to the freshly redrawn box just after a save, which would untick it.
+ * A failed save holds nothing back: trying again at once is what the person wants there.
+ */
+export const SETTLE_MS = 1000;
+
 export interface ReaderDeps {
   doc: Document;
   outline: OutlineApi;
@@ -95,6 +102,8 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
   let generation = 0;
   /** Boxes tapped and not yet answered, by index, with the state asked for. */
   const pending = new Map<number, boolean>();
+  /** When each box was last saved (Date.now()), for SETTLE_MS. */
+  const settledAt = new Map<number, number>();
   let chain: Promise<void> = Promise.resolve();
   let highlightCtl: AbortController | null = null;
   let disposed = false;
@@ -174,6 +183,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     highlightCtl = null;
     generation += 1;
     pending.clear();
+    settledAt.clear();
   }
 
   function load(next: string): void {
@@ -212,6 +222,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
   function conflict(fresh: GuideDocument): void {
     generation += 1;
     pending.clear();
+    settledAt.clear();
     if (rerender(fresh)) setStatus(CONFLICT);
   }
 
@@ -250,6 +261,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     pending.delete(index);
     switch (result.kind) {
       case "saved":
+        settledAt.set(index, Date.now());
         rerender(result.doc);
         deps.onSaved();
         return;
@@ -277,6 +289,8 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     if (shown === null || raw === null || !/^\d+$/.test(raw)) return;
     if (box.getAttribute("aria-busy") === "true") return;
     const index = Number(raw);
+    const settled = settledAt.get(index);
+    if (settled !== undefined && Date.now() - settled < SETTLE_MS) return;
     const checked = box.getAttribute("aria-checked") !== "true";
     setStatus("");
     mark(box, checked, true);

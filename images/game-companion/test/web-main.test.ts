@@ -6718,6 +6718,26 @@ describe("guide reader", () => {
     ]);
   });
 
+  it("saves one tap exactly once, even after the progress refresh redraws the app", async () => {
+    const tm = timers();
+    const { outline, state } = await start(fakeApi(playing(hubA)), true, { setTimeout: tm.set });
+    const patch = outline.patch.bind(outline);
+    const patches: boolean[] = [];
+    outline.patch = async (id, edit) => {
+      patches.push(edit.text.includes("[x]"));
+      await patch(id, edit);
+    };
+    railButtons()[1]?.click();
+    await flush();
+    ($(".reader .cb") as HTMLElement).click();
+    for (let i = 0; i < 10; i += 1) await flush();
+    for (const c of tm.calls) c.fn();
+    for (let i = 0; i < 10; i += 1) await flush();
+    expect(patches).toEqual([true]);
+    expect(state.checked).toBe(true);
+    expect(($(".reader .cb") as HTMLElement).getAttribute("aria-checked")).toBe("true");
+  });
+
   it("lands Find in guide in a reader slot and highlights the text in its body", async () => {
     const api = fakeApi(playing(hubA));
     api.achievements = async () => board([mk("a1", "First Steps")]);

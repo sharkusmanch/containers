@@ -338,6 +338,50 @@ describe("createReader", () => {
     expect(api.patches).toHaveLength(1);
   });
 
+  it("ignores a stray second tap on a box just after its save, but takes one a second later", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const { api, reader } = setup();
+      await settle();
+      box(reader, 0).click();
+      await settle();
+      expect(api.patches).toHaveLength(1);
+      // Some phones deliver a second click to the redrawn box right after the save: not an untick.
+      now += 150;
+      box(reader, 0).click();
+      await settle();
+      expect(api.patches).toHaveLength(1);
+      expect(box(reader, 0).getAttribute("aria-checked")).toBe("true");
+      expect(box(reader, 0).hasAttribute("aria-busy")).toBe(false);
+      now += 1000;
+      box(reader, 0).click();
+      await settle();
+      expect(api.patches).toHaveLength(2);
+      expect(box(reader, 0).getAttribute("aria-checked")).toBe("false");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("does not hold back a tap on another box right after a save", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const { api, reader } = setup();
+      await settle();
+      box(reader, 0).click();
+      await settle();
+      now += 100;
+      box(reader, 1).click();
+      await settle();
+      expect(api.patches).toHaveLength(2);
+      expect(box(reader, 1).getAttribute("aria-checked")).toBe("true");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("unticks a ticked box", async () => {
     const { api, reader } = setup();
     await settle();
