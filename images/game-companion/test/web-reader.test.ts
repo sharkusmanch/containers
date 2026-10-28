@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PMNode } from "../src/web/guide-checkbox.js";
 import { tick } from "../src/web/guide-tick.js";
 import { OutlineError, type GuideDocument, type OutlineApi } from "../src/web/outline-api.js";
-import { createReader, type Reader, type ReaderDeps } from "../src/web/reader.js";
+import { SETTLE_MS, createReader, type Reader, type ReaderDeps } from "../src/web/reader.js";
 
 // The real tick, wrapped so one test can make it throw.
 vi.mock("../src/web/guide-tick.js", async (importOriginal) => {
@@ -338,7 +338,7 @@ describe("createReader", () => {
     expect(api.patches).toHaveLength(1);
   });
 
-  it("ignores a stray second tap on a box just after its save, but takes one a second later", async () => {
+  it("ignores a stray second tap on a box until SETTLE_MS after its save, then takes it", async () => {
     let now = 1_000_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
@@ -350,15 +350,55 @@ describe("createReader", () => {
       // Some phones deliver a second click to the redrawn box right after the save: not an untick.
       now += 150;
       box(reader, 0).click();
+      now += SETTLE_MS - 151;
+      box(reader, 0).click();
       await settle();
       expect(api.patches).toHaveLength(1);
       expect(box(reader, 0).getAttribute("aria-checked")).toBe("true");
       expect(box(reader, 0).hasAttribute("aria-busy")).toBe(false);
-      now += 1000;
+      now += 1;
       box(reader, 0).click();
       await settle();
       expect(api.patches).toHaveLength(2);
       expect(box(reader, 0).getAttribute("aria-checked")).toBe("false");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("does not hold a box when the clock steps back", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const { api, reader } = setup();
+      await settle();
+      box(reader, 0).click();
+      await settle();
+      now -= 60_000;
+      box(reader, 0).click();
+      await settle();
+      expect(api.patches).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("forgets the hold when the page is left and opened again", async () => {
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      const { api, reader } = setup();
+      await settle();
+      box(reader, 0).click();
+      await settle();
+      reader.load(B);
+      await settle();
+      reader.load(A);
+      await settle();
+      now += 100;
+      box(reader, 0).click();
+      await settle();
+      expect(api.patches).toHaveLength(2);
     } finally {
       clock.mockRestore();
     }

@@ -15,7 +15,7 @@ import { docId } from "./state.js";
  * deliver a second click to the freshly redrawn box just after a save, which would untick it.
  * A failed save holds nothing back: trying again at once is what the person wants there.
  */
-export const SETTLE_MS = 1000;
+export const SETTLE_MS = 2000;
 
 export interface ReaderDeps {
   doc: Document;
@@ -289,8 +289,10 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     if (shown === null || raw === null || !/^\d+$/.test(raw)) return;
     if (box.getAttribute("aria-busy") === "true") return;
     const index = Number(raw);
-    const settled = settledAt.get(index);
-    if (settled !== undefined && Date.now() - settled < SETTLE_MS) return;
+    // Deliberately silent: an undo meant within the window just needs another tap. A clock that
+    // stepped back (a negative gap) never holds the box.
+    const since = Date.now() - (settledAt.get(index) ?? Number.NEGATIVE_INFINITY);
+    if (since >= 0 && since < SETTLE_MS) return;
     const checked = box.getAttribute("aria-checked") !== "true";
     setStatus("");
     mark(box, checked, true);
