@@ -18,9 +18,12 @@ export function partitionByGroup(
   return parts;
 }
 
-/** A group's header: its name, a DLC tag for a DLC, and its own `unlocked/total`. Not tappable. */
+/**
+ * A group's header: its name, a DLC tag for a DLC, and its own `unlocked/total`. A heading, so a
+ * screen reader can move from group to group; not tappable.
+ */
 export function renderGroupHead(doc: Document, group: AchievementGroup): HTMLElement {
-  const head = doc.createElement("div");
+  const head = doc.createElement("h3");
   head.classList.add("ach-group-head");
   const part = (className: string, text: string): HTMLElement => {
     const el = doc.createElement("span");

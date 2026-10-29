@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   AchievementService,
   normaliseRa,
@@ -1031,6 +1031,105 @@ describe("AchievementService xbox achievement groups", () => {
       const r = await svc.get("xbox", "20");
       expect(r?.stale).toBe(false);
       expect(r?.groups?.map((g) => g.name)).toEqual(["Base game", "Add-on 1"]);
+    }
+  });
+});
+
+const SESSION_FOR_SERVICE = {
+  headers: { Authorization: "XBL3.0 x=fake-uhs;fake-xsts" },
+  xuid: "2535000000001",
+};
+
+describe("AchievementService xbox: a slow catalog lookup", () => {
+  const GAME = "11111111-aaaa-4000-8000-000000000001";
+  const DLC = "22222222-bbbb-4000-8000-000000000002";
+  const idle = {
+    steam: { gameData: async () => null },
+    ra: { gameProgress: async () => null },
+  };
+  const list: XboxAchievementList = {
+    achievements: [
+      { id: "1", name: "Base one", productId: GAME },
+      { id: "2", name: "Base two", productId: GAME },
+      { id: "3", name: "DLC one", productId: DLC },
+    ],
+  };
+
+  it("answers after about a second with fallback names when the lookup never finishes", async () => {
+    vi.useFakeTimers();
+    try {
+      let cacheReads = 0;
+      const svc = new AchievementService({
+        ...idle,
+        xbox: {
+          achievements: async () => list,
+          titleInfo: async () => null,
+          products: () => new Promise(() => {}),
+          cachedProducts: () => {
+            cacheReads += 1;
+            return new Map();
+          },
+        },
+      });
+      let settled = false;
+      const pending = svc.get("xbox", "20").finally(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      const r = await pending;
+      expect(cacheReads).toBe(1);
+      expect(r?.groups?.map((g) => g.name)).toEqual(["Base game", "Add-on 1"]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the names a lookup still running fills in on the next refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      const clock = { t: 1_000_000 };
+      let releaseCatalog: (() => void) | null = null;
+      const fetchFn = (async (input: string | URL | Request) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes("achievements.xboxlive")) return new Response(JSON.stringify(list));
+        if (url.includes("titlehub")) return new Response('{"titles":[]}');
+        const body = url.includes(GAME)
+          ? fixture("xbox-catalog-game.json")
+          : fixture("xbox-catalog-dlc.json");
+        // The catalog answers only once released, after the service has stopped waiting.
+        await new Promise<void>((resolve) => {
+          const previous = releaseCatalog;
+          releaseCatalog = () => {
+            previous?.();
+            resolve();
+          };
+        });
+        return new Response(body);
+      }) as typeof fetch;
+      const xbox = new XboxClient({
+        auth: { session: async () => SESSION_FOR_SERVICE },
+        fetch: fetchFn,
+        now: () => clock.t,
+      });
+      const svc = new AchievementService({ ...idle, xbox, now: () => clock.t });
+      const first = svc.get("xbox", "20");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect((await first)?.groups?.map((g) => g.name)).toEqual(["Base game", "Add-on 1"]);
+
+      (releaseCatalog as (() => void) | null)?.();
+      await vi.advanceTimersByTimeAsync(0);
+      clock.t += 46_000;
+      const second = await svc.get("xbox", "20");
+      expect(second?.groups?.map((g) => [g.key, g.name])).toEqual([
+        [`xbox:${GAME}`, "Base game"],
+        [`xbox:${DLC}`, "Test Quest: Far Side Expansion"],
+      ]);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

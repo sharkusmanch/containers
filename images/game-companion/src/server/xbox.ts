@@ -19,6 +19,8 @@ const TITLE_FAIL_TTL_MS = 5 * 60_000;
 const CATALOG_TIMEOUT_MS = 3_000;
 const PRODUCT_TTL_MS = 7 * 24 * 3_600_000;
 const PRODUCT_FAIL_TTL_MS = 3_600_000;
+/** Catalog lookups at once: a title with many products must not draw a 429 for all of them. */
+const MAX_CATALOG_LOOKUPS = 4;
 /** Used when Microsoft sends a 429 without a usable Retry-After. */
 const DEFAULT_RETRY_AFTER_MS = 60_000;
 /** Titlehub devices that make a title a genuine Xbox Live game; `Win32` alone does not. */
@@ -121,6 +123,9 @@ export class XboxClient {
   private readonly titleCache = new Map<string, TitleEntry>();
   private readonly productCache = new Map<string, ProductEntry>();
   private readonly productLookups = new Map<string, Promise<XboxProduct | null>>();
+  private catalogActive = 0;
+  /** Lookups waiting for one of the `MAX_CATALOG_LOOKUPS` slots, oldest first. */
+  private readonly catalogQueue: (() => void)[] = [];
   private titleLookup: Promise<LookupOutcome> | null = null;
   /** Every title of the last good history call, with when it goes stale. */
   private history: XboxTitleInfo[] | null = null;
@@ -219,9 +224,24 @@ export class XboxClient {
     return new Map(ids.map((id, i) => [id, found[i] ?? null]));
   }
 
+  /** The fresh cached answers for `ids`, at once and without calling out; an id not held is left out. */
+  cachedProducts(ids: readonly string[]): Map<string, XboxProduct | null> {
+    const held = new Map<string, XboxProduct | null>();
+    for (const id of ids) {
+      const cached = this.freshProduct(id);
+      if (cached) held.set(id, cached.product);
+    }
+    return held;
+  }
+
+  private freshProduct(id: string): ProductEntry | null {
+    const entry = this.productCache.get(id);
+    return entry && this.now() < entry.expiresAt ? entry : null;
+  }
+
   private product(id: string): Promise<XboxProduct | null> {
-    const cached = this.productCache.get(id);
-    if (cached && this.now() < cached.expiresAt) return Promise.resolve(cached.product);
+    const cached = this.freshProduct(id);
+    if (cached) return Promise.resolve(cached.product);
     let pending = this.productLookups.get(id);
     if (!pending) {
       pending = this.lookUpProduct(id).finally(() => this.productLookups.delete(id));
@@ -231,6 +251,9 @@ export class XboxClient {
   }
 
   private async lookUpProduct(id: string): Promise<XboxProduct | null> {
+    // A finished lookup hands its slot straight to the oldest waiter, so none can jump the queue.
+    if (this.catalogActive < MAX_CATALOG_LOOKUPS) this.catalogActive += 1;
+    else await new Promise<void>((resolve) => this.catalogQueue.push(resolve));
     let product: XboxProduct | null;
     try {
       const query = new URLSearchParams({
@@ -245,6 +268,10 @@ export class XboxClient {
     } catch {
       // Unreachable (not yet allowed out, say), timed out, refused or rate-limited: a fallback name.
       product = null;
+    } finally {
+      const next = this.catalogQueue.shift();
+      if (next) next();
+      else this.catalogActive -= 1;
     }
     const ttl = product === null ? PRODUCT_FAIL_TTL_MS : PRODUCT_TTL_MS;
     this.productCache.set(id, { product, expiresAt: this.now() + ttl });

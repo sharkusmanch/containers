@@ -46,10 +46,12 @@ returns.
 lists them in sections: **Base game** first, then one per DLC (tagged **DLC**), each with its
 own unlocked/total. Sort, the filters and Unlocked: hidden work inside each section, and a
 section with nothing left to show is hidden. Steam's groups come from
-`IPlayerService/GetGameAchievements` (most Steam games define none, and then the list looks as
-before); Xbox groups follow the product each achievement was released with, named from the
-public Microsoft Store catalog (`displaycatalog.mp.microsoft.com`, no sign-in; names are kept
-7 days, a failed lookup is retried after an hour and leaves `Add-on 1`, `Add-on 2`…). A game
+`IPlayerService/GetGameAchievements`, asked once a day per game (most Steam games define none,
+and then the list looks as before); Xbox groups follow the product each achievement was released
+with, named from the public Microsoft Store catalog (`displaycatalog.mp.microsoft.com`, no
+sign-in, at most 4 lookups at once; names are kept 7 days, a failed lookup is retried after an
+hour and leaves `Add-on 1`, `Add-on 2`…). The list waits at most a second for new names; a slower
+lookup carries on and its names appear on the next refresh. A game
 with only one group, and every RetroAchievements game, is shown ungrouped. A failed group
 lookup never fails the list.
 

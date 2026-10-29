@@ -1858,6 +1858,18 @@ describe("achievement groups", () => {
     expect(head(BASE).tagName).not.toBe("BUTTON");
   });
 
+  it("makes each group header a heading, so a screen reader can move between groups", () => {
+    const view = createAchievementsView(document);
+    view.update(grouped);
+    for (const s of sections(view.element)) {
+      const head = s.querySelector(".ach-group-head") as HTMLElement;
+      expect(head.tagName).toBe("H3");
+      expect(s.firstElementChild).toBe(head);
+      expect(s.querySelectorAll("h1, h2, h3, h4, h5, h6")).toHaveLength(1);
+    }
+    expect(section(view.element, HW).querySelector("h3")?.textContent).toBe("Hot WheelsDLC0/2");
+  });
+
   it("lists each group's locked achievements in the current sort order, then its unlocked ones", () => {
     const view = createAchievementsView(document);
     view.update(grouped);

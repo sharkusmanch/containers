@@ -179,3 +179,46 @@ describe("SteamClient.gameData achievement groups", () => {
     expect(await new SteamClient({ ...opts, fetchFn: f.fn }).gameData("5")).toBeNull();
   });
 });
+
+describe("SteamClient.gameData group cache", () => {
+  const routes = (groups: { status?: number; body: string }) =>
+    [
+      ["GetPlayerAchievements", { body: fixture("steam-player-achievements.json") }],
+      ["GetSchemaForGame", { body: fixture("steam-schema.json") }],
+      ["GetGlobalAchievementPercentagesForApp", { body: fixture("steam-percentages.json") }],
+      ["GetGameAchievements", groups],
+    ] as [string, { status?: number; body: string }][];
+  const groupCalls = (f: ReturnType<typeof fakeFetch>, appId = "1000001"): number =>
+    f.calls.filter((c) => c.url.includes("GetGameAchievements") && c.url.includes(`appid=${appId}`))
+      .length;
+
+  it("asks Steam for an app's groups once a day, while the other calls run on every poll", async () => {
+    const clock = { t: 1_000_000 };
+    const f = fakeFetch(routes({ body: fixture("steam-game-achievements.json") }));
+    const steam = new SteamClient({ ...opts, fetchFn: f.fn, now: () => clock.t });
+    await steam.gameData("1000001");
+    clock.t += 23 * 3_600_000;
+    const again = await steam.gameData("1000001");
+    expect(again?.groups?.byName.get("ACH_02")).toBe(1);
+    expect(groupCalls(f)).toBe(1);
+    expect(f.calls.filter((c) => c.url.includes("GetPlayerAchievements"))).toHaveLength(2);
+    await steam.gameData("2000002");
+    expect(groupCalls(f, "2000002")).toBe(1);
+    clock.t += 2 * 3_600_000;
+    await steam.gameData("1000001");
+    expect(groupCalls(f)).toBe(2);
+  });
+
+  it("does not cache a failed or malformed answer", async () => {
+    const f = fakeFetch(routes({ status: 500, body: "x" }));
+    const steam = new SteamClient({ ...opts, fetchFn: f.fn });
+    await steam.gameData("1000001");
+    await steam.gameData("1000001");
+    expect(groupCalls(f)).toBe(2);
+    const odd = fakeFetch(routes({ body: "{}" }));
+    const steam2 = new SteamClient({ ...opts, fetchFn: odd.fn });
+    await steam2.gameData("1000001");
+    await steam2.gameData("1000001");
+    expect(groupCalls(odd)).toBe(2);
+  });
+});

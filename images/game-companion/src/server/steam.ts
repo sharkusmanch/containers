@@ -1,6 +1,8 @@
 import { fetchJson, UpstreamError, type FetchLike } from "./fetch-json.js";
 
 const BASE = "https://api.steampowered.com";
+/** An app's achievement groups change only with an update: asked for once a day. */
+const GROUPS_TTL_MS = 24 * 3_600_000;
 
 export interface SteamPresence {
   appId: string | null;
@@ -108,14 +110,12 @@ function parsePercents(result: PromiseSettledResult<unknown>): Map<string, numbe
 }
 
 /**
- * Achievement groups are decoration too: any failure or odd shape yields undefined, and the game is
- * shown ungrouped. A malformed entry is skipped (its achievement then counts as the base game's).
+ * Achievement groups are decoration too: an odd shape yields undefined, and the game is shown
+ * ungrouped. A malformed entry is skipped (its achievement then counts as the base game's).
  */
-function parseGroups(result: PromiseSettledResult<unknown>): SteamAchievementGroups | undefined {
-  if (result.status === "rejected" || !isRec(result.value) || !isRec(result.value.response)) {
-    return undefined;
-  }
-  const { achievements, groups } = result.value.response;
+function parseGroups(body: unknown): SteamAchievementGroups | undefined {
+  if (!isRec(body) || !isRec(body.response)) return undefined;
+  const { achievements, groups } = body.response;
   if (!Array.isArray(achievements) || !Array.isArray(groups)) return undefined;
   const byName = new Map<string, number>();
   for (const item of achievements as unknown[]) {
@@ -140,11 +140,18 @@ export class SteamClient {
   private readonly apiKey: string;
   private readonly steamId: string;
   private readonly fetchFn: FetchLike;
+  private readonly now: () => number;
+  /** Each app's groups from a good answer; a failed or odd one is not kept. */
+  private readonly groupCache = new Map<
+    string,
+    { groups: SteamAchievementGroups; expiresAt: number }
+  >();
 
-  constructor(opts: { apiKey: string; steamId: string; fetchFn?: FetchLike }) {
+  constructor(opts: { apiKey: string; steamId: string; fetchFn?: FetchLike; now?: () => number }) {
     this.apiKey = opts.apiKey;
     this.steamId = opts.steamId;
     this.fetchFn = opts.fetchFn ?? ((url, init) => fetch(url, init));
+    this.now = opts.now ?? Date.now;
   }
 
   private get(path: string, params: Record<string, string>): Promise<unknown> {
@@ -166,6 +173,26 @@ export class SteamClient {
     };
   }
 
+  /** The app's achievement groups, cached for a day; undefined (and asked again) on any failure. */
+  private async groupsFor(appId: string): Promise<SteamAchievementGroups | undefined> {
+    const cached = this.groupCache.get(appId);
+    if (cached && this.now() < cached.expiresAt) return cached.groups;
+    let groups: SteamAchievementGroups | undefined;
+    try {
+      groups = parseGroups(
+        await this.get("IPlayerService/GetGameAchievements/v1", {
+          key: this.apiKey,
+          appid: appId,
+          language: "english",
+        }),
+      );
+    } catch {
+      return undefined;
+    }
+    if (groups) this.groupCache.set(appId, { groups, expiresAt: this.now() + GROUPS_TTL_MS });
+    return groups;
+  }
+
   async gameData(appId: string): Promise<SteamGameData | null> {
     const [player, schema, percents, groups] = await Promise.allSettled([
       this.get("ISteamUserStats/GetPlayerAchievements/v1", {
@@ -179,11 +206,7 @@ export class SteamClient {
         l: "english",
       }),
       this.get("ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2", { gameid: appId }),
-      this.get("IPlayerService/GetGameAchievements/v1", {
-        key: this.apiKey,
-        appid: appId,
-        language: "english",
-      }),
+      this.groupsFor(appId),
     ]);
 
     // The player call is judged first: a 400/403 means the app has no stats, whatever the others said.
@@ -206,7 +229,7 @@ export class SteamClient {
     const title = typeof stats.gameName === "string" ? stats.gameName : game.gameName;
     if (typeof title !== "string") throw badShape();
 
-    const grouping = parseGroups(groups);
+    const grouping = groups.status === "fulfilled" ? groups.value : undefined;
     return {
       title,
       player: (stats.achievements as unknown[]).map(parsePlayer),

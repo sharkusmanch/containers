@@ -3,13 +3,19 @@ import { groupAchievements, type GroupDef } from "./achievement-groups.js";
 import { safeIcon } from "./safe-icon.js";
 import { parseRaDate, type RaGameProgress } from "./ra.js";
 import type { SteamAchievementGroups, SteamGameData } from "./steam.js";
-import { normaliseXbox, xboxProductIds, type XboxClient } from "./xbox.js";
+import { normaliseXbox, xboxProductIds, type XboxClient, type XboxProduct } from "./xbox.js";
 
 export { safeIcon };
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
 
 const STEAM_BASE_GROUP = 0;
+/**
+ * How long an Xbox refresh waits for DLC names from the store catalog before answering with what
+ * is cached. The lookup goes on and fills the cache for the next refresh; with the Xbox calls'
+ * own 6 s this stays inside the browser's 8 s deadline.
+ */
+const PRODUCT_WAIT_MS = 1_000;
 
 /**
  * Steam's groups as the panel shows them: group 0 as "Base game", then each public,
@@ -58,14 +64,13 @@ export function normaliseSteam(appId: string, data: SteamGameData): Achievements
       kind: null,
     };
   });
-  let grouped = null;
-  if (data.groups) {
-    const { keys, defs } = steamGroupKeys(
+  const grouping =
+    data.groups &&
+    steamGroupKeys(
       data.schema.map((s) => s.name),
       data.groups,
     );
-    grouped = groupAchievements(achievements, keys, defs);
-  }
+  const grouped = grouping && groupAchievements(achievements, grouping.keys, grouping.defs);
   return {
     source: "steam",
     id: appId,
@@ -120,7 +125,8 @@ export interface AchievementServiceOptions {
    * Absent when Xbox is off; an Xbox lookup then finds nothing. Without `products` a DLC game's
    * groups get fallback names.
    */
-  xbox?: Pick<XboxClient, "titleInfo" | "achievements"> & Partial<Pick<XboxClient, "products">>;
+  xbox?: Pick<XboxClient, "titleInfo" | "achievements"> &
+    Partial<Pick<XboxClient, "products" | "cachedProducts">>;
   now?: () => number;
   ttlMs?: number;
   /** How long a failed first fetch is remembered before upstream is tried again. */
@@ -251,18 +257,34 @@ export class AchievementService {
       const xbox = this.opts.xbox;
       if (!xbox) return null;
       const [list, info] = await Promise.all([xbox.achievements(id), xbox.titleInfo(id)]);
-      // Names for a DLC game's groups only; a lookup failure just leaves the fallback names.
-      const ids = xboxProductIds(list);
-      const products =
-        ids.length >= 2 && xbox.products
-          ? await xbox.products(ids).catch(() => undefined)
-          : undefined;
+      const products = await this.xboxProducts(xbox, xboxProductIds(list));
       const response = normaliseXbox(id, info?.name || `Xbox game ${id}`, list, info, products);
       // Like Steam: a game with no achievements at all is "none", not an empty list.
       return response.total === 0 && !response.noList ? null : response;
     }
     const data = await this.opts.ra.gameProgress(id);
     return data && normaliseRa(id, data);
+  }
+
+  /**
+   * Names for a DLC game's groups (two or more products only). Waits at most `PRODUCT_WAIT_MS`
+   * for the catalog, then answers with the cached names; a failure leaves the fallback names.
+   */
+  private async xboxProducts(
+    xbox: NonNullable<AchievementServiceOptions["xbox"]>,
+    ids: string[],
+  ): Promise<ReadonlyMap<string, XboxProduct | null> | undefined> {
+    if (ids.length < 2 || !xbox.products) return undefined;
+    const lookup = xbox.products(ids).catch(() => undefined);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cached = new Promise<ReadonlyMap<string, XboxProduct | null> | undefined>((resolve) => {
+      timer = setTimeout(() => resolve(xbox.cachedProducts?.(ids)), PRODUCT_WAIT_MS);
+    });
+    try {
+      return await Promise.race([lookup, cached]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private store<T>(map: Map<string, T>, key: string, entry: T): void {

@@ -860,3 +860,54 @@ describe("XboxClient.products", () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+describe("XboxClient catalog lookups: cache read and concurrency", () => {
+  it("cachedProducts answers only fresh cache entries, synchronously, without calling out", async () => {
+    const clock = { t: 1_000_000 };
+    const { xbox, calls } = client(
+      [
+        [`value=${GAME}`, { body: fixture("xbox-catalog-game.json") }],
+        [`value=${DLC}`, { status: 500 }],
+      ],
+      { now: () => clock.t },
+    );
+    expect([...xbox.cachedProducts([GAME, DLC])]).toEqual([]);
+    await xbox.products([GAME, DLC]);
+    expect(calls).toHaveLength(2);
+    expect([...xbox.cachedProducts([GAME, DLC, DLC2])]).toEqual([
+      [GAME, { kind: "Game", title: "Test Quest: Moon Edition" }],
+      [DLC, null],
+    ]);
+    clock.t += 2 * 3_600_000; // the failure has expired, the name has not
+    expect([...xbox.cachedProducts([GAME, DLC])]).toEqual([
+      [GAME, { kind: "Game", title: "Test Quest: Moon Edition" }],
+    ]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("runs at most 4 catalog lookups at once, starting the next as one finishes", async () => {
+    const started: string[] = [];
+    const release: (() => void)[] = [];
+    const fetchFn = ((url: string) => {
+      started.push(url);
+      return new Promise<Response>((resolve) => {
+        release.push(() => resolve(new Response(fixture("xbox-catalog-dlc.json"))));
+      });
+    }) as typeof fetch;
+    const xbox = new XboxClient({ auth: { session: async () => SESSION }, fetch: fetchFn });
+    const ids = Array.from({ length: 7 }, (_, i) => `00000000-0000-4000-8000-00000000000${i}`);
+    const pending = xbox.products(ids);
+    await vi.waitFor(() => expect(started).toHaveLength(4));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(started).toHaveLength(4);
+    release.shift()?.();
+    await vi.waitFor(() => expect(started).toHaveLength(5));
+    while (started.length < 7 || release.length > 0) {
+      release.shift()?.();
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    const found = await pending;
+    expect([...found.values()].every((p) => p?.kind === "Durable")).toBe(true);
+    expect(started).toHaveLength(7);
+  });
+});
