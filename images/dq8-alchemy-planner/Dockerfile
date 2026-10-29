@@ -11,7 +11,7 @@
 ARG DQ8_ALCHEMY_PLANNER_VERSION=v1.1.2
 
 # renovate: datasource=docker depName=node
-ARG NODE_VERSION=26.12.1
+ARG NODE_VERSION=26.13.0
 
 # renovate: datasource=docker depName=alpine
 ARG ALPINE_VERSION=3.24
