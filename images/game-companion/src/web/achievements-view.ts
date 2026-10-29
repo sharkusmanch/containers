@@ -1,4 +1,5 @@
 import type { Achievement, AchievementsResponse, Source } from "../shared/types.js";
+import { partitionByGroup, renderGroupHead } from "./achievement-groups.js";
 import type { StorageLike } from "./state.js";
 
 export type SortKey = "rarity" | "name" | "order";
@@ -201,8 +202,9 @@ export function createAchievementsView(
   let lastData: AchievementsResponse | null = null;
   let lastMessage = "";
   let lastGame: string | null = null;
-  let unlockedSection: HTMLDetailsElement | null = null;
-  let unlockedOpen = false;
+  // The Unlocked sections on screen, and which are open, by group key ("" without groups).
+  const unlockedSections = new Map<string, HTMLDetailsElement>();
+  const openUnlocked = new Set<string>();
   // The user's own choices: unlike the per-game state above, a change of game does not reset them.
   let sortPref = loadSortPref(storage);
   let hideUnlocked = loadHideUnlocked(storage);
@@ -295,6 +297,18 @@ export function createAchievementsView(
     container.classList.add(className);
     container.append(...renderRows(list));
     return container;
+  };
+
+  /** The collapsible Unlocked section of one group ("" without groups), open as last left. */
+  const renderUnlocked = (key: string, list: Achievement[]): HTMLElement => {
+    const details = doc.createElement("details");
+    details.classList.add("ach-unlocked");
+    details.open = openUnlocked.has(key);
+    unlockedSections.set(key, details);
+    const summary = doc.createElement("summary");
+    summary.textContent = `Unlocked (${list.length})`;
+    details.append(summary, ...renderRows(list));
+    return details;
   };
 
   // The control rows are created once and updated in place by syncControls(): only the lists are
@@ -408,10 +422,14 @@ export function createAchievementsView(
   };
 
   const render = (): void => {
-    // Read the section's state before it is replaced. While unlocked achievements are hidden there is
-    // no section, so the last remembered state is kept and applies when it comes back.
-    if (unlockedSection !== null) unlockedOpen = unlockedSection.open;
-    unlockedSection = null;
+    // Read the sections' state before they are replaced. While unlocked achievements are hidden (or
+    // a group has none to show) there is no section, so the last remembered state is kept and
+    // applies when it comes back.
+    for (const [key, details] of unlockedSections) {
+      if (details.open) openUnlocked.add(key);
+      else openUnlocked.delete(key);
+    }
+    unlockedSections.clear();
     for (const node of listNodes) node.remove();
     listNodes = [];
     if (lastData === null || lastData.noList === true) {
@@ -473,16 +491,25 @@ export function createAchievementsView(
       if (showUnlocked && !filtering) {
         listNodes.push(renderList("ach-recent", recentUnlocks(data.achievements)));
       }
-      listNodes.push(renderList("ach-locked", locked));
-      if (showUnlocked) {
-        const details = doc.createElement("details");
-        details.classList.add("ach-unlocked");
-        details.open = unlockedOpen;
-        unlockedSection = details;
-        const summary = doc.createElement("summary");
-        summary.textContent = `Unlocked (${unlocked.length})`;
-        details.append(summary, ...renderRows(unlocked));
-        listNodes.push(details);
+      const groups = data.groups ?? [];
+      if (groups.length === 0) {
+        listNodes.push(renderList("ach-locked", locked));
+        if (showUnlocked) listNodes.push(renderUnlocked("", unlocked));
+      } else {
+        // One section per group (base game, then each DLC); a group with nothing to show is left out.
+        const lockedBy = partitionByGroup(groups, locked);
+        const unlockedBy = partitionByGroup(groups, unlocked);
+        for (const group of groups) {
+          const groupLocked = lockedBy.get(group.key) ?? [];
+          const groupUnlocked = unlockedBy.get(group.key) ?? [];
+          if (groupLocked.length === 0 && groupUnlocked.length === 0) continue;
+          const section = doc.createElement("section");
+          section.classList.add("ach-group");
+          section.dataset["group"] = group.key;
+          section.append(renderGroupHead(doc, group), renderList("ach-locked", groupLocked));
+          if (groupUnlocked.length > 0) section.append(renderUnlocked(group.key, groupUnlocked));
+          listNodes.push(section);
+        }
       }
     }
     element.append(...listNodes);
@@ -511,8 +538,8 @@ export function createAchievementsView(
         if (game !== lastGame) {
           revealed.clear();
           expanded.clear();
-          unlockedOpen = false;
-          unlockedSection = null;
+          openUnlocked.clear();
+          unlockedSections.clear();
           filter = "";
           missableOnly = false;
           kindOnly = false;

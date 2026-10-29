@@ -784,3 +784,253 @@ describe("trustworthy RA metadata", () => {
     expect(steam).not.toHaveProperty("accountIdentity");
   });
 });
+
+describe("normaliseSteam achievement groups", () => {
+  const group = (
+    groupId: number,
+    name: string,
+    over: Partial<{ order: number; isPublic: boolean; developerOnly: boolean }> = {},
+  ) => ({ groupId, name, order: 0, isPublic: true, developerOnly: false, ...over });
+  const withGroups = (
+    byName: [string, number][],
+    groups: ReturnType<typeof group>[],
+  ): SteamGameData => ({ ...steamData, groups: { byName: new Map(byName), groups } });
+  const fh5Like = withGroups(
+    [
+      ["ACH_01", 0],
+      ["ACH_02", 1],
+      ["ACH_03", 2],
+    ],
+    [group(0, ""), group(1, "Test Game: Hot Wheels"), group(2, "Test Game: Rally Adventure")],
+  );
+
+  it("lists the base game first, then each DLC in order, with their counts", () => {
+    const r = normaliseSteam("1000001", fh5Like);
+    expect(r.groups).toEqual([
+      { key: "steam:0", name: "Base game", dlc: false, total: 1, unlocked: 1 },
+      { key: "steam:1", name: "Test Game: Hot Wheels", dlc: true, total: 1, unlocked: 0 },
+      { key: "steam:2", name: "Test Game: Rally Adventure", dlc: true, total: 1, unlocked: 0 },
+    ]);
+    expect(r.achievements.map((a) => a.group)).toEqual(["steam:0", "steam:1", "steam:2"]);
+    expect(r).toMatchObject({ total: 3, unlocked: 1 });
+  });
+
+  it("keeps everything else about each achievement as it was", () => {
+    const plain = normaliseSteam("1000001", steamData);
+    const grouped = normaliseSteam("1000001", fh5Like);
+    expect(grouped.achievements.map(({ group: _g, ...rest }) => rest)).toEqual(plain.achievements);
+  });
+
+  it("follows Steam's order field, then the order Steam lists the groups in", () => {
+    const r = normaliseSteam(
+      "1000001",
+      withGroups(
+        [
+          ["ACH_01", 2],
+          ["ACH_02", 1],
+          ["ACH_03", 3],
+        ],
+        [group(3, "C", { order: 1 }), group(2, "B"), group(1, "A"), group(0, "")],
+      ),
+    );
+    // No achievement is in group 0 here, so the base group is left out like any empty group.
+    expect(r.groups?.map((g) => g.key)).toEqual(["steam:2", "steam:1", "steam:3"]);
+  });
+
+  it("names a DLC group with no name by its id", () => {
+    const r = normaliseSteam(
+      "1000001",
+      withGroups(
+        [
+          ["ACH_01", 0],
+          ["ACH_02", 4],
+        ],
+        [group(0, ""), group(4, "")],
+      ),
+    );
+    expect(r.groups?.[1]).toEqual({
+      key: "steam:4",
+      name: "DLC 4",
+      dlc: true,
+      total: 1,
+      unlocked: 0,
+    });
+  });
+
+  it("names the base group Base game whatever Steam calls group 0, even when Steam omits it", () => {
+    const r = normaliseSteam(
+      "1000001",
+      withGroups(
+        [
+          ["ACH_01", 0],
+          ["ACH_02", 1],
+        ],
+        [group(1, "Extra")],
+      ),
+    );
+    expect(r.groups?.[0]).toMatchObject({ key: "steam:0", name: "Base game", dlc: false });
+    expect(r.groups?.[0]?.total).toBe(2);
+  });
+
+  it("adds no group fields for a game with only the base group", () => {
+    const r = normaliseSteam(
+      "1000001",
+      withGroups(
+        [
+          ["ACH_01", 0],
+          ["ACH_02", 0],
+          ["ACH_03", 0],
+        ],
+        [group(0, "")],
+      ),
+    );
+    expect(r).toEqual(normaliseSteam("1000001", steamData));
+    expect("groups" in r).toBe(false);
+    expect(r.achievements.some((a) => "group" in a)).toBe(false);
+  });
+
+  it("adds no group fields when the only DLC group has none of the achievements", () => {
+    const r = normaliseSteam(
+      "1000001",
+      withGroups(
+        [
+          ["ACH_01", 0],
+          ["ACH_02", 0],
+          ["ACH_03", 0],
+        ],
+        [group(0, ""), group(1, "Empty DLC")],
+      ),
+    );
+    expect("groups" in r).toBe(false);
+    expect(r.achievements.some((a) => "group" in a)).toBe(false);
+  });
+
+  it("adds no group fields without group data, as before", () => {
+    const r = normaliseSteam("1000001", steamData);
+    expect("groups" in r).toBe(false);
+    expect(r.achievements.some((a) => "group" in a)).toBe(false);
+  });
+
+  it("puts achievements of a hidden or developer-only group in the base group", () => {
+    const r = normaliseSteam(
+      "1000001",
+      withGroups(
+        [
+          ["ACH_01", 1],
+          ["ACH_02", 2],
+          ["ACH_03", 3],
+        ],
+        [
+          group(0, ""),
+          group(1, "Not public", { isPublic: false }),
+          group(2, "Developers", { developerOnly: true }),
+          group(3, "Real DLC"),
+        ],
+      ),
+    );
+    expect(r.groups?.map((g) => [g.key, g.total])).toEqual([
+      ["steam:0", 2],
+      ["steam:3", 1],
+    ]);
+    expect(r.achievements.map((a) => a.group)).toEqual(["steam:0", "steam:0", "steam:3"]);
+  });
+
+  it("puts an achievement missing from the map, or in a group Steam does not list, in the base group", () => {
+    const r = normaliseSteam(
+      "1000001",
+      withGroups(
+        [
+          ["ACH_02", 9],
+          ["ACH_03", 1],
+        ],
+        [group(0, ""), group(1, "DLC One")],
+      ),
+    );
+    expect(r.achievements.map((a) => a.group)).toEqual(["steam:0", "steam:0", "steam:1"]);
+    expect(r.groups?.map((g) => [g.key, g.total, g.unlocked])).toEqual([
+      ["steam:0", 2, 1],
+      ["steam:1", 1, 0],
+    ]);
+  });
+});
+
+describe("AchievementService xbox achievement groups", () => {
+  const GAME = "11111111-aaaa-4000-8000-000000000001";
+  const DLC = "22222222-bbbb-4000-8000-000000000002";
+  const idle = {
+    steam: { gameData: async () => null },
+    ra: { gameProgress: async () => null },
+  };
+  const twoProducts: XboxAchievementList = {
+    achievements: [
+      { id: "1", name: "Base one", progressState: "Achieved", productId: GAME },
+      { id: "2", name: "DLC one", progressState: "NotStarted", productId: DLC },
+    ],
+  };
+
+  it("names the groups from the client's catalog lookup", async () => {
+    const asked: string[][] = [];
+    const svc = new AchievementService({
+      ...idle,
+      xbox: {
+        achievements: async () => twoProducts,
+        titleInfo: async () => null,
+        products: async (ids) => {
+          asked.push([...ids]);
+          return new Map([
+            [GAME, { kind: "Game", title: "Test Quest" }],
+            [DLC, { kind: "Durable", title: "Far Side" }],
+          ]);
+        },
+      },
+    });
+    const r = await svc.get("xbox", "20");
+    expect(asked).toEqual([[GAME, DLC]]);
+    expect(r?.groups?.map((g) => [g.name, g.dlc, g.total, g.unlocked])).toEqual([
+      ["Base game", false, 1, 1],
+      ["Far Side", true, 1, 0],
+    ]);
+  });
+
+  it("does not look anything up for a list with one product", async () => {
+    let asked = 0;
+    const svc = new AchievementService({
+      ...idle,
+      xbox: {
+        achievements: async () => ({
+          achievements: [{ id: "1", name: "Only", productId: GAME }],
+        }),
+        titleInfo: async () => null,
+        products: async () => {
+          asked += 1;
+          return new Map();
+        },
+      },
+    });
+    const r = await svc.get("xbox", "20");
+    expect(asked).toBe(0);
+    expect(r && "groups" in r).toBe(false);
+  });
+
+  it("still answers, with fallback names, when the lookup rejects or the client has none", async () => {
+    const failing = new AchievementService({
+      ...idle,
+      xbox: {
+        achievements: async () => twoProducts,
+        titleInfo: async () => null,
+        products: async () => {
+          throw new Error("catalog down");
+        },
+      },
+    });
+    const without = new AchievementService({
+      ...idle,
+      xbox: { achievements: async () => twoProducts, titleInfo: async () => null },
+    });
+    for (const svc of [failing, without]) {
+      const r = await svc.get("xbox", "20");
+      expect(r?.stale).toBe(false);
+      expect(r?.groups?.map((g) => g.name)).toEqual(["Base game", "Add-on 1"]);
+    }
+  });
+});

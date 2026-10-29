@@ -1,0 +1,12 @@
+{
+  "BigIds": ["9TESTGAME001"],
+  "HasMorePages": false,
+  "Products": [
+    {
+      "ProductId": "9TESTGAME001",
+      "ProductKind": "Game",
+      "LocalizedProperties": [{ "ProductTitle": "Test Quest: Moon Edition", "Language": "en-us" }]
+    }
+  ],
+  "TotalResultCount": 1
+}

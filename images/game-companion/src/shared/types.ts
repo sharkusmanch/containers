@@ -93,6 +93,19 @@ export interface Achievement {
   gamerscore?: number;
   /** Xbox only: a counter such as 3/10, null when the achievement has none. */
   progress?: { current: number; target: number } | null;
+  /** The key of the `AchievementGroup` it belongs to; absent when the response has no groups. */
+  group?: string;
+}
+
+/** The base game or one DLC, as the platform groups its achievements. */
+export interface AchievementGroup {
+  /** `steam:<groupid>` or `xbox:<product GUID>`. */
+  key: string;
+  /** "Base game" for the base group, else the DLC's name. */
+  name: string;
+  dlc: boolean;
+  total: number;
+  unlocked: number;
 }
 
 export interface AchievementsResponse {
@@ -111,6 +124,12 @@ export interface AchievementsResponse {
   gamerscore?: { current: number; total: number };
   /** Xbox only: the title has Gamerscore but Xbox returned no list (Xbox 360 back-compat). */
   noList?: boolean;
+  /**
+   * The base game first, then each DLC in the platform's order. Present only when the platform
+   * says which achievements came with a DLC and at least two groups have achievements; every
+   * achievement then has a `group`.
+   */
+  groups?: AchievementGroup[];
 }
 
 /** One place where a guide page mentions the searched text. */

@@ -1,12 +1,42 @@
 import type { Achievement, AchievementsResponse, Source } from "../shared/types.js";
+import { groupAchievements, type GroupDef } from "./achievement-groups.js";
 import { safeIcon } from "./safe-icon.js";
 import { parseRaDate, type RaGameProgress } from "./ra.js";
-import type { SteamGameData } from "./steam.js";
-import { normaliseXbox, type XboxClient } from "./xbox.js";
+import type { SteamAchievementGroups, SteamGameData } from "./steam.js";
+import { normaliseXbox, xboxProductIds, type XboxClient } from "./xbox.js";
 
 export { safeIcon };
 
 const round1 = (n: number): number => Math.round(n * 10) / 10;
+
+const STEAM_BASE_GROUP = 0;
+
+/**
+ * Steam's groups as the panel shows them: group 0 as "Base game", then each public,
+ * non-developer group by Steam's `order` (ties in Steam's own order). An achievement in a group
+ * not kept, or missing from Steam's map, counts as the base game's.
+ */
+function steamGroupKeys(
+  names: string[],
+  grouping: SteamAchievementGroups,
+): { keys: string[]; defs: GroupDef[] } {
+  const kept = grouping.groups
+    .map((g, i) => ({ g, i }))
+    .filter(({ g }) => g.groupId !== STEAM_BASE_GROUP && g.isPublic && !g.developerOnly)
+    .sort((x, y) => x.g.order - y.g.order || x.i - y.i)
+    .map(({ g }) => g);
+  const keyOf = (id: number): string => `steam:${id}`;
+  const keptIds = new Set(kept.map((g) => g.groupId));
+  const defs: GroupDef[] = [
+    { key: keyOf(STEAM_BASE_GROUP), name: "Base game", dlc: false },
+    ...kept.map((g) => ({ key: keyOf(g.groupId), name: g.name || `DLC ${g.groupId}`, dlc: true })),
+  ];
+  const keys = names.map((name) => {
+    const id = grouping.byName.get(name);
+    return keyOf(id !== undefined && keptIds.has(id) ? id : STEAM_BASE_GROUP);
+  });
+  return { keys, defs };
+}
 
 export function normaliseSteam(appId: string, data: SteamGameData): AchievementsResponse {
   const progress = new Map(data.player.map((p) => [p.apiname, p]));
@@ -28,6 +58,14 @@ export function normaliseSteam(appId: string, data: SteamGameData): Achievements
       kind: null,
     };
   });
+  let grouped = null;
+  if (data.groups) {
+    const { keys, defs } = steamGroupKeys(
+      data.schema.map((s) => s.name),
+      data.groups,
+    );
+    grouped = groupAchievements(achievements, keys, defs);
+  }
   return {
     source: "steam",
     id: appId,
@@ -35,7 +73,8 @@ export function normaliseSteam(appId: string, data: SteamGameData): Achievements
     total: achievements.length,
     unlocked: achievements.filter((a) => a.unlocked).length,
     stale: false,
-    achievements,
+    achievements: grouped?.achievements ?? achievements,
+    ...(grouped ? { groups: grouped.groups } : {}),
   };
 }
 
@@ -77,8 +116,11 @@ export function normaliseRa(gameId: string, data: RaGameProgress): AchievementsR
 export interface AchievementServiceOptions {
   steam: { gameData(appId: string): Promise<SteamGameData | null> };
   ra: { gameProgress(id: string): Promise<RaGameProgress | null> };
-  /** Absent when Xbox is off; an Xbox lookup then finds nothing. */
-  xbox?: Pick<XboxClient, "titleInfo" | "achievements">;
+  /**
+   * Absent when Xbox is off; an Xbox lookup then finds nothing. Without `products` a DLC game's
+   * groups get fallback names.
+   */
+  xbox?: Pick<XboxClient, "titleInfo" | "achievements"> & Partial<Pick<XboxClient, "products">>;
   now?: () => number;
   ttlMs?: number;
   /** How long a failed first fetch is remembered before upstream is tried again. */
@@ -209,7 +251,13 @@ export class AchievementService {
       const xbox = this.opts.xbox;
       if (!xbox) return null;
       const [list, info] = await Promise.all([xbox.achievements(id), xbox.titleInfo(id)]);
-      const response = normaliseXbox(id, info?.name || `Xbox game ${id}`, list, info);
+      // Names for a DLC game's groups only; a lookup failure just leaves the fallback names.
+      const ids = xboxProductIds(list);
+      const products =
+        ids.length >= 2 && xbox.products
+          ? await xbox.products(ids).catch(() => undefined)
+          : undefined;
+      const response = normaliseXbox(id, info?.name || `Xbox game ${id}`, list, info, products);
       // Like Steam: a game with no achievements at all is "none", not an empty list.
       return response.total === 0 && !response.noList ? null : response;
     }

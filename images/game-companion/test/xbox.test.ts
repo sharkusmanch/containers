@@ -1,10 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { UpstreamError } from "../src/server/fetch-json.js";
 import {
   normaliseXbox,
+  xboxProductIds,
   XboxClient,
   XboxRateLimitError,
   type XboxAchievementList,
+  type XboxProduct,
   type XboxTitleInfo,
 } from "../src/server/xbox.js";
 import { fixture } from "./helpers.js";
@@ -592,5 +594,269 @@ describe("normaliseXbox", () => {
       progress: null,
     });
     expect(messy.achievements[1]?.progress).toBeNull();
+  });
+});
+
+const GAME = "11111111-aaaa-4000-8000-000000000001";
+const DLC = "22222222-bbbb-4000-8000-000000000002";
+const DLC2 = "33333333-cccc-4000-8000-000000000003";
+const ach = (id: string, productId: string | null, achieved = false): Record<string, unknown> => ({
+  id,
+  name: `Achievement ${id}`,
+  progressState: achieved ? "Achieved" : "NotStarted",
+  ...(productId === null ? {} : { productId }),
+});
+const products = (entries: [string, XboxProduct | null][]) => new Map(entries);
+
+describe("normaliseXbox achievement groups", () => {
+  it("adds no group fields when every achievement comes with one product", () => {
+    const r = normaliseXbox(
+      "1",
+      "T",
+      { achievements: [ach("1", GAME, true), ach("2", GAME), ach("3", null)] },
+      null,
+      products([[GAME, { kind: "Game", title: "Test Quest" }]]),
+    );
+    expect("groups" in r).toBe(false);
+    expect(r.achievements.some((a) => "group" in a)).toBe(false);
+  });
+
+  it("adds no group fields to the fixture list, which carries no product ids", () => {
+    const list = JSON.parse(fixture("xbox-achievements.json")) as XboxAchievementList;
+    const r = normaliseXbox("2000000002", "T", list, null);
+    expect("groups" in r).toBe(false);
+    expect(r.achievements.some((a) => "group" in a)).toBe(false);
+  });
+
+  it("puts the Game product first as the base game and names the DLC from the catalog", () => {
+    const r = normaliseXbox(
+      "1",
+      "T",
+      { achievements: [ach("1", DLC), ach("2", DLC, true), ach("3", GAME, true), ach("4", null)] },
+      null,
+      products([
+        [GAME, { kind: "Game", title: "Test Quest" }],
+        [DLC, { kind: "Durable", title: "Test Quest: Far Side Expansion" }],
+      ]),
+    );
+    expect(r.groups).toEqual([
+      { key: `xbox:${GAME}`, name: "Base game", dlc: false, total: 2, unlocked: 1 },
+      {
+        key: `xbox:${DLC}`,
+        name: "Test Quest: Far Side Expansion",
+        dlc: true,
+        total: 2,
+        unlocked: 1,
+      },
+    ]);
+    expect(r.achievements.map((a) => a.group)).toEqual([
+      `xbox:${DLC}`,
+      `xbox:${DLC}`,
+      `xbox:${GAME}`,
+      `xbox:${GAME}`,
+    ]);
+    expect(r).toMatchObject({ total: 4, unlocked: 2 });
+  });
+
+  it("falls back to the product shared by most achievements, and Add-on names, without the catalog", () => {
+    const list = {
+      achievements: [ach("1", DLC2), ach("2", GAME), ach("3", DLC), ach("4", GAME), ach("5", DLC)],
+    };
+    const expected = [
+      { key: `xbox:${GAME}`, name: "Base game", dlc: false, total: 2, unlocked: 0 },
+      { key: `xbox:${DLC2}`, name: "Add-on 1", dlc: true, total: 1, unlocked: 0 },
+      { key: `xbox:${DLC}`, name: "Add-on 2", dlc: true, total: 2, unlocked: 0 },
+    ];
+    // GAME and DLC tie on two achievements each: the first to appear wins.
+    expect(normaliseXbox("1", "T", list, null).groups).toEqual(expected);
+    expect(
+      normaliseXbox(
+        "1",
+        "T",
+        list,
+        null,
+        products([
+          [GAME, null],
+          [DLC, null],
+          [DLC2, null],
+        ]),
+      ).groups,
+    ).toEqual(expected);
+  });
+
+  it("names the add-ons it knows and numbers the rest by their place", () => {
+    const r = normaliseXbox(
+      "1",
+      "T",
+      { achievements: [ach("1", GAME), ach("2", DLC), ach("3", DLC2)] },
+      null,
+      products([
+        [GAME, { kind: "Game", title: "Test Quest" }],
+        [DLC, null],
+        [DLC2, { kind: "Durable", title: "Second Pack" }],
+      ]),
+    );
+    expect(r.groups?.map((g) => g.name)).toEqual(["Base game", "Add-on 1", "Second Pack"]);
+  });
+
+  it("uses the product shared by most achievements when no product, or several, is a Game", () => {
+    const list = { achievements: [ach("1", GAME), ach("2", DLC), ach("3", DLC)] };
+    const none = normaliseXbox(
+      "1",
+      "T",
+      list,
+      null,
+      products([
+        [GAME, { kind: "Durable", title: "One" }],
+        [DLC, { kind: "Durable", title: "Two" }],
+      ]),
+    );
+    expect(none.groups?.map((g) => [g.key, g.name, g.dlc])).toEqual([
+      [`xbox:${DLC}`, "Base game", false],
+      [`xbox:${GAME}`, "One", true],
+    ]);
+    const several = normaliseXbox(
+      "1",
+      "T",
+      list,
+      null,
+      products([
+        [GAME, { kind: "Game", title: "One" }],
+        [DLC, { kind: "Game", title: "Two" }],
+      ]),
+    );
+    expect(several.groups?.map((g) => [g.key, g.name])).toEqual([
+      [`xbox:${DLC}`, "Base game"],
+      [`xbox:${GAME}`, "One"],
+    ]);
+  });
+
+  it("uses Add-on n for a catalog product that has no title", () => {
+    const r = normaliseXbox(
+      "1",
+      "T",
+      { achievements: [ach("1", GAME), ach("2", DLC)] },
+      null,
+      products([
+        [GAME, { kind: "Game", title: null }],
+        [DLC, { kind: "Durable", title: null }],
+      ]),
+    );
+    expect(r.groups?.map((g) => g.name)).toEqual(["Base game", "Add-on 1"]);
+  });
+
+  it("lists the distinct product ids of usable achievements, in order of first appearance", () => {
+    expect(
+      xboxProductIds({
+        achievements: [
+          ach("1", DLC),
+          ach("2", GAME),
+          ach("3", DLC),
+          ach("4", null),
+          { name: "no id", productId: DLC2 },
+          { id: "5", productId: "" },
+          null,
+        ],
+      }),
+    ).toEqual([DLC, GAME]);
+  });
+});
+
+describe("XboxClient.products", () => {
+  const catalogGame = { body: fixture("xbox-catalog-game.json") };
+  const catalogDlc = { body: fixture("xbox-catalog-dlc.json") };
+
+  it("names each product from the public store catalog, without the Xbox sign-in", async () => {
+    const { xbox, calls } = client(
+      [
+        [`value=${GAME}`, catalogGame],
+        [`value=${DLC}`, catalogDlc],
+      ],
+      { session: null },
+    );
+    const found = await xbox.products([GAME, DLC]);
+    expect([...found]).toEqual([
+      [GAME, { kind: "Game", title: "Test Quest: Moon Edition" }],
+      [DLC, { kind: "Durable", title: "Test Quest: Far Side Expansion" }],
+    ]);
+    expect(calls.map((c) => c.url)).toEqual([
+      `https://displaycatalog.mp.microsoft.com/v7.0/products/lookup?alternateId=LegacyXboxProductId&value=${GAME}&market=US&languages=en-US&fieldsTemplate=details`,
+      `https://displaycatalog.mp.microsoft.com/v7.0/products/lookup?alternateId=LegacyXboxProductId&value=${DLC}&market=US&languages=en-US&fieldsTemplate=details`,
+    ]);
+    for (const c of calls) expect(c.headers.Authorization).toBeUndefined();
+  });
+
+  it("caches a name for 7 days", async () => {
+    const clock = { t: 1_000_000 };
+    const { xbox, calls } = client([[`value=${GAME}`, catalogGame]], { now: () => clock.t });
+    await xbox.products([GAME]);
+    clock.t += 6 * 24 * 3_600_000;
+    expect((await xbox.products([GAME])).get(GAME)?.title).toBe("Test Quest: Moon Edition");
+    expect(calls).toHaveLength(1);
+    clock.t += 2 * 24 * 3_600_000;
+    await xbox.products([GAME]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("answers null for a failed lookup, without rejecting, and does not ask again for an hour", async () => {
+    const clock = { t: 1_000_000 };
+    let answer: Answer = { status: 500 };
+    const { xbox, calls } = client([[`value=${DLC}`, () => answer]], { now: () => clock.t });
+    expect([...(await xbox.products([DLC]))]).toEqual([[DLC, null]]);
+    clock.t += 59 * 60_000;
+    expect((await xbox.products([DLC])).get(DLC)).toBeNull();
+    expect(calls).toHaveLength(1);
+    answer = catalogDlc;
+    clock.t += 2 * 60_000;
+    expect((await xbox.products([DLC])).get(DLC)?.title).toBe("Test Quest: Far Side Expansion");
+    expect(calls).toHaveLength(2);
+  });
+
+  it.each([
+    ["no product", { body: fixture("xbox-catalog-empty.json") }],
+    ["an odd shape", { body: "[1]" }],
+    ["invalid JSON", { body: "nope" }],
+    ["a 429", { status: 429 }],
+  ])("treats %s as a failure", async (_label, answer: Answer) => {
+    const clock = { t: 1_000_000 };
+    const { xbox, calls } = client([[`value=${DLC}`, answer]], { now: () => clock.t });
+    expect((await xbox.products([DLC])).get(DLC)).toBeNull();
+    clock.t += 30 * 60_000;
+    await xbox.products([DLC]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("answers null when the catalog cannot be reached", async () => {
+    const xbox = new XboxClient({
+      auth: { session: async () => SESSION },
+      fetch: async () => {
+        throw new TypeError("fetch failed");
+      },
+    });
+    expect((await xbox.products([GAME])).get(GAME)).toBeNull();
+  });
+
+  it("gives up on a catalog that does not answer within its deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const xbox = new XboxClient({
+        auth: { session: async () => SESSION },
+        fetch: ((_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          })) as typeof fetch,
+      });
+      const pending = xbox.products([GAME]);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect((await pending).get(GAME)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shares one lookup per product between concurrent calls", async () => {
+    const { xbox, calls } = client([[`value=${GAME}`, catalogGame]]);
+    await Promise.all([xbox.products([GAME]), xbox.products([GAME])]);
+    expect(calls).toHaveLength(1);
   });
 });

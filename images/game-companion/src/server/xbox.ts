@@ -1,4 +1,5 @@
 import type { Achievement, AchievementsResponse } from "../shared/types.js";
+import { groupAchievements, type GroupDef } from "./achievement-groups.js";
 import { safeIcon } from "./safe-icon.js";
 import { UpstreamError } from "./fetch-json.js";
 import { cleanPresence } from "./ra.js";
@@ -7,11 +8,17 @@ import type { XboxAuth } from "./xbox-auth.js";
 const PRESENCE_URL = "https://userpresence.xboxlive.com/users/xuid";
 const TITLEHUB_URL = "https://titlehub.xboxlive.com/users/xuid";
 const ACHIEVEMENTS_URL = "https://achievements.xboxlive.com/users/xuid";
+/** The public Microsoft Store catalog: names the product an achievement came with. No sign-in. */
+const CATALOG_URL = "https://displaycatalog.mp.microsoft.com/v7.0/products/lookup";
 const TITLE_HISTORY_ITEMS = 100;
 const ACHIEVEMENT_ITEMS = 1000;
 const REQUEST_TIMEOUT_MS = 6_000;
 const TITLE_TTL_MS = 24 * 3_600_000;
 const TITLE_FAIL_TTL_MS = 5 * 60_000;
+/** Short: a lookup runs after the achievements call, and both must fit the browser's deadline. */
+const CATALOG_TIMEOUT_MS = 3_000;
+const PRODUCT_TTL_MS = 7 * 24 * 3_600_000;
+const PRODUCT_FAIL_TTL_MS = 3_600_000;
 /** Used when Microsoft sends a 429 without a usable Retry-After. */
 const DEFAULT_RETRY_AFTER_MS = 60_000;
 /** Titlehub devices that make a title a genuine Xbox Live game; `Win32` alone does not. */
@@ -42,6 +49,12 @@ export interface XboxTitleInfo {
   devices?: string[];
   /** When the account last played the title (ISO 8601), when titlehub says. */
   lastPlayed?: string;
+}
+
+/** A product from the store catalog: `kind` is "Game" for a game, e.g. "Durable" for DLC. */
+export interface XboxProduct {
+  kind: string | null;
+  title: string | null;
 }
 
 /** The parsed achievements response; each item's fields are read defensively by `normaliseXbox`. */
@@ -84,6 +97,11 @@ interface TitleEntry {
   expiresAt: number;
 }
 
+interface ProductEntry {
+  product: XboxProduct | null;
+  expiresAt: number;
+}
+
 export interface XboxClientOptions {
   auth: Pick<XboxAuth, "session">;
   fetch?: typeof fetch;
@@ -101,6 +119,8 @@ export class XboxClient {
   private readonly fetchFn: typeof fetch;
   private readonly now: () => number;
   private readonly titleCache = new Map<string, TitleEntry>();
+  private readonly productCache = new Map<string, ProductEntry>();
+  private readonly productLookups = new Map<string, Promise<XboxProduct | null>>();
   private titleLookup: Promise<LookupOutcome> | null = null;
   /** Every title of the last good history call, with when it goes stale. */
   private history: XboxTitleInfo[] | null = null;
@@ -189,6 +209,48 @@ export class XboxClient {
     return { achievements: body.achievements };
   }
 
+  /**
+   * Names the products (GUIDs from achievement records) from the public store catalog: no
+   * sign-in, nothing of the account sent. Never rejects: a product that could not be looked up is
+   * null, and is not asked about again for an hour; one found is kept for 7 days.
+   */
+  async products(ids: readonly string[]): Promise<Map<string, XboxProduct | null>> {
+    const found = await Promise.all(ids.map((id) => this.product(id)));
+    return new Map(ids.map((id, i) => [id, found[i] ?? null]));
+  }
+
+  private product(id: string): Promise<XboxProduct | null> {
+    const cached = this.productCache.get(id);
+    if (cached && this.now() < cached.expiresAt) return Promise.resolve(cached.product);
+    let pending = this.productLookups.get(id);
+    if (!pending) {
+      pending = this.lookUpProduct(id).finally(() => this.productLookups.delete(id));
+      this.productLookups.set(id, pending);
+    }
+    return pending;
+  }
+
+  private async lookUpProduct(id: string): Promise<XboxProduct | null> {
+    let product: XboxProduct | null;
+    try {
+      const query = new URLSearchParams({
+        alternateId: "LegacyXboxProductId",
+        value: id,
+        market: "US",
+        languages: "en-US",
+        fieldsTemplate: "details",
+      }).toString();
+      const body = await this.get(`${CATALOG_URL}?${query}`, {}, {}, CATALOG_TIMEOUT_MS);
+      product = parseProduct(body);
+    } catch {
+      // Unreachable (not yet allowed out, say), timed out, refused or rate-limited: a fallback name.
+      product = null;
+    }
+    const ttl = product === null ? PRODUCT_FAIL_TTL_MS : PRODUCT_TTL_MS;
+    this.productCache.set(id, { product, expiresAt: this.now() + ttl });
+    return product;
+  }
+
   private fresh(titleId: string): TitleEntry | null {
     const entry = this.titleCache.get(titleId);
     return entry && this.now() < entry.expiresAt ? entry : null;
@@ -234,9 +296,10 @@ export class XboxClient {
     url: string,
     sessionHeaders: Record<string, string>,
     extra: Record<string, string>,
+    timeoutMs = REQUEST_TIMEOUT_MS,
   ): Promise<unknown> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       let response: Response;
       try {
@@ -264,6 +327,18 @@ export class XboxClient {
       clearTimeout(timer);
     }
   }
+}
+
+/** The catalog's first product; null when it lists none (an unknown GUID) or the shape is odd. */
+function parseProduct(body: unknown): XboxProduct | null {
+  if (!isRec(body)) return null;
+  const first = arr(body.Products)[0];
+  if (!isRec(first)) return null;
+  const localized = arr(first.LocalizedProperties)[0];
+  return {
+    kind: str(first.ProductKind),
+    title: isRec(localized) ? str(localized.ProductTitle) : null,
+  };
 }
 
 function parsePresence(body: Rec): XboxPresence {
@@ -355,20 +430,82 @@ function iconOf(a: Rec): string | null {
   return asset ? safeIcon(str(asset.url)) : null;
 }
 
-/** Xbox achievements in the shape the panel shows. Secret ones are `hidden` until unlocked. */
+/** An achievement record's id; null for a record `normaliseXbox` skips. */
+function achievementId(raw: Rec): string | null {
+  return typeof raw.id === "number" ? String(raw.id) : str(raw.id);
+}
+
+/** The products the listed achievements came with, each once, in order of first appearance. */
+export function xboxProductIds(list: XboxAchievementList): string[] {
+  const ids = new Set<string>();
+  for (const raw of list.achievements) {
+    if (!isRec(raw) || achievementId(raw) === null) continue;
+    const productId = str(raw.productId);
+    if (productId !== null) ids.add(productId);
+  }
+  return [...ids];
+}
+
+/**
+ * The base game is the one product the catalog calls a Game; with none or several, the product
+ * most achievements came with (the first to appear on a tie).
+ */
+function baseProduct(
+  ids: string[],
+  productIds: (string | null)[],
+  products: ReadonlyMap<string, XboxProduct | null> | undefined,
+): string {
+  const games = ids.filter((id) => products?.get(id)?.kind === "Game");
+  if (games.length === 1 && games[0] !== undefined) return games[0];
+  const counts = new Map<string, number>();
+  for (const id of productIds) if (id !== null) counts.set(id, (counts.get(id) ?? 0) + 1);
+  let best = ids[0] ?? "";
+  for (const id of ids) if ((counts.get(id) ?? 0) > (counts.get(best) ?? 0)) best = id;
+  return best;
+}
+
+/**
+ * Groups by the product each achievement came with, when there are at least two. DLC are named
+ * from the catalog, else `Add-on <n>` by their place; an achievement with no product counts as the
+ * base game's.
+ */
+function xboxGroupKeys(
+  productIds: (string | null)[],
+  products: ReadonlyMap<string, XboxProduct | null> | undefined,
+): { keys: string[]; defs: GroupDef[] } | null {
+  const ids = [...new Set(productIds.filter((id): id is string => id !== null))];
+  if (ids.length < 2) return null;
+  const keyOf = (id: string): string => `xbox:${id}`;
+  const base = baseProduct(ids, productIds, products);
+  const defs: GroupDef[] = [{ key: keyOf(base), name: "Base game", dlc: false }];
+  for (const id of ids) {
+    if (id === base) continue;
+    const name = products?.get(id)?.title ?? `Add-on ${defs.length}`;
+    defs.push({ key: keyOf(id), name, dlc: true });
+  }
+  return { keys: productIds.map((id) => keyOf(id ?? base)), defs };
+}
+
+/**
+ * Xbox achievements in the shape the panel shows. Secret ones are `hidden` until unlocked.
+ * `products` (from `XboxClient.products`) names a DLC game's groups.
+ */
 export function normaliseXbox(
   titleId: string,
   title: string,
   list: XboxAchievementList,
   info: XboxTitleInfo | null,
+  products?: ReadonlyMap<string, XboxProduct | null>,
 ): AchievementsResponse {
   const achievements: Achievement[] = [];
+  const productIds: (string | null)[] = [];
   let current = 0;
   let total = 0;
   for (const raw of list.achievements) {
     if (!isRec(raw)) continue;
-    const id = typeof raw.id === "number" ? String(raw.id) : str(raw.id);
+    const id = achievementId(raw);
     if (id === null) continue;
+    productIds.push(str(raw.productId));
     const progression = isRec(raw.progression) ? raw.progression : {};
     const unlocked = raw.progressState === "Achieved";
     const percentage = isRec(raw.rarity) ? num(raw.rarity.currentPercentage) : null;
@@ -390,6 +527,8 @@ export function normaliseXbox(
       progress: progressOf(raw),
     });
   }
+  const grouping = xboxGroupKeys(productIds, products);
+  const grouped = grouping && groupAchievements(achievements, grouping.keys, grouping.defs);
   return {
     source: "xbox",
     id: titleId,
@@ -397,8 +536,9 @@ export function normaliseXbox(
     total: achievements.length,
     unlocked: achievements.filter((a) => a.unlocked).length,
     stale: false,
-    achievements,
+    achievements: grouped ? grouped.achievements : achievements,
     gamerscore: { current, total },
     ...(achievements.length === 0 && (info?.totalGamerscore ?? 0) > 0 ? { noList: true } : {}),
+    ...(grouped ? { groups: grouped.groups } : {}),
   };
 }

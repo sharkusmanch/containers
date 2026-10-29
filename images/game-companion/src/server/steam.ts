@@ -19,11 +19,28 @@ export interface SteamSchemaAchievement {
   icon: string;
   icongray: string;
 }
+/** One achievement group from `GetGameAchievements`: group 0 is the base game, others DLC. */
+export interface SteamAchievementGroup {
+  groupId: number;
+  /** Empty for group 0, and for any group Steam gives no name. */
+  name: string;
+  order: number;
+  isPublic: boolean;
+  developerOnly: boolean;
+}
+export interface SteamAchievementGroups {
+  /** Achievement API name to group id. */
+  byName: Map<string, number>;
+  /** In Steam's order. */
+  groups: SteamAchievementGroup[];
+}
 export interface SteamGameData {
   title: string;
   player: SteamPlayerAchievement[];
   schema: SteamSchemaAchievement[];
   percents: Map<string, number>;
+  /** Absent when `GetGameAchievements` failed or answered an unexpected shape. */
+  groups?: SteamAchievementGroups;
 }
 
 type Rec = Record<string, unknown>;
@@ -90,6 +107,35 @@ function parsePercents(result: PromiseSettledResult<unknown>): Map<string, numbe
   return percents;
 }
 
+/**
+ * Achievement groups are decoration too: any failure or odd shape yields undefined, and the game is
+ * shown ungrouped. A malformed entry is skipped (its achievement then counts as the base game's).
+ */
+function parseGroups(result: PromiseSettledResult<unknown>): SteamAchievementGroups | undefined {
+  if (result.status === "rejected" || !isRec(result.value) || !isRec(result.value.response)) {
+    return undefined;
+  }
+  const { achievements, groups } = result.value.response;
+  if (!Array.isArray(achievements) || !Array.isArray(groups)) return undefined;
+  const byName = new Map<string, number>();
+  for (const item of achievements as unknown[]) {
+    if (!isRec(item) || typeof item.internal_name !== "string") continue;
+    if (typeof item.groupid === "number") byName.set(item.internal_name, item.groupid);
+  }
+  const list: SteamAchievementGroup[] = [];
+  for (const item of groups as unknown[]) {
+    if (!isRec(item) || typeof item.groupid !== "number") continue;
+    list.push({
+      groupId: item.groupid,
+      name: typeof item.localized_name === "string" ? item.localized_name : "",
+      order: typeof item.order === "number" ? item.order : 0,
+      isPublic: item.ispublic === true,
+      developerOnly: item.developeronly === true,
+    });
+  }
+  return { byName, groups: list };
+}
+
 export class SteamClient {
   private readonly apiKey: string;
   private readonly steamId: string;
@@ -121,7 +167,7 @@ export class SteamClient {
   }
 
   async gameData(appId: string): Promise<SteamGameData | null> {
-    const [player, schema, percents] = await Promise.allSettled([
+    const [player, schema, percents, groups] = await Promise.allSettled([
       this.get("ISteamUserStats/GetPlayerAchievements/v1", {
         key: this.apiKey,
         steamid: this.steamId,
@@ -133,6 +179,11 @@ export class SteamClient {
         l: "english",
       }),
       this.get("ISteamUserStats/GetGlobalAchievementPercentagesForApp/v2", { gameid: appId }),
+      this.get("IPlayerService/GetGameAchievements/v1", {
+        key: this.apiKey,
+        appid: appId,
+        language: "english",
+      }),
     ]);
 
     // The player call is judged first: a 400/403 means the app has no stats, whatever the others said.
@@ -155,11 +206,13 @@ export class SteamClient {
     const title = typeof stats.gameName === "string" ? stats.gameName : game.gameName;
     if (typeof title !== "string") throw badShape();
 
+    const grouping = parseGroups(groups);
     return {
       title,
       player: (stats.achievements as unknown[]).map(parsePlayer),
       schema: (schemaList as unknown[]).map(parseSchema),
       percents: parsePercents(percents),
+      ...(grouping ? { groups: grouping } : {}),
     };
   }
 }

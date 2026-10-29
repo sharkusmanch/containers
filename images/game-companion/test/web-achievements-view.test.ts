@@ -1775,3 +1775,261 @@ describe("platform choice storage", () => {
     expect(() => savePlatformChoice(broken, "h1", "xbox")).not.toThrow();
   });
 });
+
+describe("achievement groups", () => {
+  const BASE = "steam:0";
+  const HW = "steam:1";
+  const RALLY = "steam:2";
+  const groupedList: Achievement[] = [
+    a({ id: "b-common", group: BASE, unlockPercent: 80 }),
+    a({ id: "hw-rare", group: HW, unlockPercent: 3, missable: true }),
+    a({
+      id: "b-done",
+      group: BASE,
+      unlocked: true,
+      unlockedAt: "2026-10-02T10:00:00.000Z",
+      unlockPercent: 90,
+    }),
+    a({ id: "b-rare", group: BASE, unlockPercent: 5 }),
+    a({
+      id: "r-done",
+      group: RALLY,
+      unlocked: true,
+      unlockedAt: "2026-10-03T10:00:00.000Z",
+      unlockPercent: 40,
+    }),
+    a({
+      id: "hw-secret",
+      group: HW,
+      unlockPercent: 20,
+      hidden: true,
+      name: "Secret Wheels",
+      description: "Secret wheel text",
+    }),
+  ];
+  const grouped: AchievementsResponse = {
+    source: "steam",
+    id: "1551360",
+    title: "Forza",
+    total: 6,
+    unlocked: 2,
+    stale: false,
+    achievements: groupedList,
+    groups: [
+      { key: BASE, name: "Base game", dlc: false, total: 3, unlocked: 1 },
+      { key: HW, name: "Hot Wheels", dlc: true, total: 2, unlocked: 0 },
+      { key: RALLY, name: "Rally Adventure", dlc: true, total: 1, unlocked: 1 },
+    ],
+  };
+  const sections = (el: HTMLElement): HTMLElement[] => [
+    ...el.querySelectorAll<HTMLElement>(".ach-group"),
+  ];
+  const keys = (el: HTMLElement): string[] => sections(el).map((s) => s.dataset.group ?? "");
+  const rowIds = (root: Element, sel: string): string[] =>
+    [...root.querySelectorAll<HTMLElement>(sel)].map((r) => r.dataset.id ?? "");
+  const section = (el: HTMLElement, key: string): HTMLElement =>
+    el.querySelector(`.ach-group[data-group="${key}"]`) as HTMLElement;
+
+  it("shows one section per group, in order, after the recent strip", () => {
+    const view = createAchievementsView(document);
+    view.update(grouped);
+    expect(keys(view.element)).toEqual([BASE, HW, RALLY]);
+    const recent = view.element.querySelector(".ach-recent") as HTMLElement;
+    expect(rowIds(recent, ".ach-row")).toEqual(["r-done", "b-done"]);
+    expect(recent.compareDocumentPosition(sections(view.element)[0] as HTMLElement)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(view.element.querySelector(".ach-summary")?.textContent).toBe("2 / 6 · 33%");
+  });
+
+  it("heads each section with the group's name, a DLC tag for DLC, and its own count", () => {
+    const view = createAchievementsView(document);
+    view.update(grouped);
+    const head = (key: string): HTMLElement =>
+      section(view.element, key).querySelector(".ach-group-head") as HTMLElement;
+    expect(head(BASE).querySelector(".ach-group-name")?.textContent).toBe("Base game");
+    expect(head(BASE).querySelector(".ach-group-dlc")).toBeNull();
+    expect(head(BASE).querySelector(".ach-group-count")?.textContent).toBe("1/3");
+    expect(head(HW).querySelector(".ach-group-name")?.textContent).toBe("Hot Wheels");
+    expect(head(HW).querySelector(".ach-group-dlc")?.textContent).toBe("DLC");
+    expect(head(HW).querySelector(".ach-group-count")?.textContent).toBe("0/2");
+    expect(head(RALLY).querySelector(".ach-group-count")?.textContent).toBe("1/1");
+    expect(section(view.element, BASE).firstElementChild).toBe(head(BASE));
+    expect(head(BASE).tagName).not.toBe("BUTTON");
+  });
+
+  it("lists each group's locked achievements in the current sort order, then its unlocked ones", () => {
+    const view = createAchievementsView(document);
+    view.update(grouped);
+    const base = section(view.element, BASE);
+    expect(rowIds(base, ".ach-locked .ach-row")).toEqual(["b-common", "b-rare"]);
+    expect(rowIds(base, "details.ach-unlocked .ach-row")).toEqual(["b-done"]);
+    expect(base.querySelector("details.ach-unlocked > summary")?.textContent).toBe("Unlocked (1)");
+    const hw = section(view.element, HW);
+    expect(rowIds(hw, ".ach-locked .ach-row")).toEqual(["hw-secret", "hw-rare"]);
+    expect(hw.querySelector("details.ach-unlocked")).toBeNull();
+    const rally = section(view.element, RALLY);
+    expect(rowIds(rally, ".ach-locked .ach-row")).toEqual([]);
+    expect(rowIds(rally, "details.ach-unlocked .ach-row")).toEqual(["r-done"]);
+
+    (view.element.querySelector(".ach-sort-dir") as HTMLElement).click();
+    expect(rowIds(section(view.element, BASE), ".ach-locked .ach-row")).toEqual([
+      "b-rare",
+      "b-common",
+    ]);
+    expect(rowIds(section(view.element, HW), ".ach-locked .ach-row")).toEqual([
+      "hw-rare",
+      "hw-secret",
+    ]);
+  });
+
+  it("hides a group with nothing left to show under the filters", () => {
+    const view = createAchievementsView(document);
+    view.update(grouped);
+    (view.element.querySelector(".ach-hide-unlocked") as HTMLElement).click();
+    expect(keys(view.element)).toEqual([BASE, HW]);
+
+    const input = view.element.querySelector(".ach-filter-input") as HTMLInputElement;
+    input.value = "hw-";
+    input.dispatchEvent(new Event("input"));
+    // The masked secret does not match until revealed.
+    expect(keys(view.element)).toEqual([HW]);
+    expect(rowIds(view.element, ".ach-row")).toEqual(["hw-rare"]);
+
+    input.value = "";
+    input.dispatchEvent(new Event("input"));
+    (view.element.querySelector(".ach-missable-only") as HTMLElement).click();
+    expect(keys(view.element)).toEqual([HW]);
+
+    input.value = "nothing at all";
+    input.dispatchEvent(new Event("input"));
+    expect(sections(view.element)).toHaveLength(0);
+    expect(view.element.querySelector(".ach-empty")?.textContent).toBe("No matching achievements");
+  });
+
+  it("keeps a group with only unlocked matches while unlocked achievements are shown", () => {
+    const view = createAchievementsView(document);
+    view.update(grouped);
+    const input = view.element.querySelector(".ach-filter-input") as HTMLInputElement;
+    input.value = "r-done";
+    input.dispatchEvent(new Event("input"));
+    expect(keys(view.element)).toEqual([RALLY]);
+    expect(view.element.querySelector(".ach-recent")).toBeNull();
+  });
+
+  it("masks, reveals, expands and offers Find and Ask on rows inside a group", () => {
+    const found: string[] = [];
+    const asked: string[] = [];
+    const view = createAchievementsView(document, {
+      onFind: (x) => found.push(x.id),
+      onAsk: (x) => asked.push(x.id),
+    });
+    view.setFindEnabled(true);
+    view.setAskState("enabled");
+    view.update(grouped);
+    const sel = '.ach-row[data-id="hw-secret"]';
+    expect(section(view.element, HW).querySelector(sel)?.textContent).toContain(
+      "Hidden achievement",
+    );
+    expect(view.element.textContent).not.toContain("Secret Wheels");
+    (view.element.querySelector(sel) as HTMLElement).click();
+    expect(view.element.querySelector(sel)?.textContent).toContain("Secret Wheels");
+    (view.element.querySelector(sel) as HTMLElement).click();
+    const row = view.element.querySelector(sel) as HTMLElement;
+    const bar = row.nextElementSibling as HTMLElement;
+    expect(bar.classList.contains("ach-actions")).toBe(true);
+    expect(section(view.element, HW).contains(bar)).toBe(true);
+    (bar.querySelector(".ach-find") as HTMLElement).click();
+    (bar.querySelector(".ach-ask") as HTMLElement).click();
+    expect(found).toEqual(["hw-secret"]);
+    expect(asked).toEqual(["hw-secret"]);
+  });
+
+  it("ignores a tap on a group header", () => {
+    const view = createAchievementsView(document);
+    view.update(grouped);
+    const before = view.element.innerHTML;
+    (section(view.element, HW).querySelector(".ach-group-head") as HTMLElement).click();
+    expect(view.element.innerHTML).toBe(before);
+  });
+
+  it("remembers each group's Unlocked section on its own, until the game changes", () => {
+    const view = createAchievementsView(document);
+    view.update(grouped);
+    const details = (key: string): HTMLDetailsElement =>
+      section(view.element, key).querySelector("details.ach-unlocked") as HTMLDetailsElement;
+    expect(details(BASE).open).toBe(false);
+    details(RALLY).open = true;
+    view.update({ ...grouped });
+    expect(details(RALLY).open).toBe(true);
+    expect(details(BASE).open).toBe(false);
+    (view.element.querySelector(".ach-hide-unlocked") as HTMLElement).click();
+    (view.element.querySelector(".ach-hide-unlocked") as HTMLElement).click();
+    expect(details(RALLY).open).toBe(true);
+    view.update({ ...grouped, id: "other" });
+    expect(details(RALLY).open).toBe(false);
+  });
+
+  it("puts an achievement whose group is unknown in the first group", () => {
+    const view = createAchievementsView(document);
+    const stray = a({ id: "stray", unlockPercent: 1 });
+    view.update({
+      ...grouped,
+      achievements: [...groupedList, stray, a({ id: "odd", group: "steam:99" })],
+    });
+    expect(rowIds(section(view.element, BASE), ".ach-locked .ach-row")).toContain("stray");
+    expect(rowIds(section(view.element, BASE), ".ach-locked .ach-row")).toContain("odd");
+  });
+
+  it("renders group names as literal text", () => {
+    const view = createAchievementsView(document);
+    view.update({
+      ...grouped,
+      groups: [
+        { key: BASE, name: "Base game", dlc: false, total: 3, unlocked: 1 },
+        { key: HW, name: "<img src=x onerror=alert(1)>", dlc: true, total: 2, unlocked: 0 },
+      ],
+    });
+    expect(view.element.querySelector("img[src='x']")).toBeNull();
+    expect(section(view.element, HW).querySelector(".ach-group-name")?.textContent).toBe(
+      "<img src=x onerror=alert(1)>",
+    );
+  });
+
+  it("renders a response without groups, or with an empty list of them, as before", () => {
+    for (const response of [data, { ...data, groups: [] }]) {
+      const view = createAchievementsView(document);
+      view.update(response);
+      expect(sections(view.element)).toHaveLength(0);
+      expect(view.element.querySelectorAll(".ach-locked")).toHaveLength(1);
+      expect(view.element.querySelectorAll("details.ach-unlocked")).toHaveLength(1);
+      expect(rowIds(view.element, ".ach-locked .ach-row")).toEqual([
+        "common",
+        "secret",
+        "tie",
+        "rare",
+        "unknown",
+      ]);
+      expect([...view.element.children].map((c) => c.className)).toEqual([
+        "ach-platforms",
+        "ach-summary",
+        "ach-sort",
+        "ach-filter",
+        "ach-recent",
+        "ach-locked",
+        "ach-unlocked",
+      ]);
+    }
+  });
+
+  it("switches between grouped and ungrouped lists across updates", () => {
+    const view = createAchievementsView(document);
+    view.update(grouped);
+    expect(sections(view.element)).toHaveLength(3);
+    view.update(data);
+    expect(sections(view.element)).toHaveLength(0);
+    expect(view.element.querySelectorAll(".ach-locked")).toHaveLength(1);
+    view.update(grouped);
+    expect(sections(view.element)).toHaveLength(3);
+  });
+});

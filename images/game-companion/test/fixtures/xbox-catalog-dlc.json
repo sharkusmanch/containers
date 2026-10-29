@@ -1,0 +1,14 @@
+{
+  "BigIds": ["9TESTDLC0001"],
+  "HasMorePages": false,
+  "Products": [
+    {
+      "ProductId": "9TESTDLC0001",
+      "ProductKind": "Durable",
+      "LocalizedProperties": [
+        { "ProductTitle": "Test Quest: Far Side Expansion", "Language": "en-us" }
+      ]
+    }
+  ],
+  "TotalResultCount": 1
+}

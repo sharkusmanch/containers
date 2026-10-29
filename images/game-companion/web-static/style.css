@@ -828,6 +828,43 @@ button {
   color: var(--text-dim);
 }
 
+/* A game whose platform groups its achievements: one section per group (base game, then each
+   DLC), headed by its name, a DLC tag and its own unlocked/total. The header is not tappable. */
+.ach-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+}
+
+.ach-group-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.ach-group-dlc {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.ach-group-count {
+  flex: 0 0 auto;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+
 .ach-unlocked > summary {
   min-height: 44px;
   display: flex;

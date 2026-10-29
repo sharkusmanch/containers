@@ -1,0 +1,79 @@
+{
+  "response": {
+    "achievements": [
+      {
+        "internal_name": "ACH_01",
+        "localized_name": "First",
+        "localized_desc": "Do the first thing",
+        "icon": "a.jpg",
+        "icon_gray": "a_g.jpg",
+        "hidden": false,
+        "player_percent_unlocked": "92.7",
+        "groupid": 0,
+        "progress_type": 0,
+        "archived": false
+      },
+      {
+        "internal_name": "ACH_02",
+        "localized_name": "Secret",
+        "localized_desc": "",
+        "icon": "b.jpg",
+        "icon_gray": "b_g.jpg",
+        "hidden": true,
+        "player_percent_unlocked": "12.2",
+        "groupid": 1,
+        "progress_type": 0,
+        "archived": false
+      },
+      {
+        "internal_name": "ACH_03",
+        "localized_name": "Third",
+        "localized_desc": "Do the third thing",
+        "icon": "c.jpg",
+        "icon_gray": "c_g.jpg",
+        "hidden": false,
+        "player_percent_unlocked": "3.1",
+        "groupid": 2,
+        "progress_type": 0,
+        "archived": false
+      }
+    ],
+    "groups": [
+      {
+        "groupid": 0,
+        "localized_name": "",
+        "dlcappid": 0,
+        "archived": false,
+        "developeronly": false,
+        "order": 0,
+        "ispublic": true,
+        "total_achievements": 1,
+        "completion_achievements": 1
+      },
+      {
+        "groupid": 1,
+        "localized_name": "Test Game: Hot Wheels",
+        "dlcappid": 1000002,
+        "archived": false,
+        "developeronly": false,
+        "order": 0,
+        "ispublic": true,
+        "total_achievements": 1,
+        "completion_achievements": 1
+      },
+      {
+        "groupid": 2,
+        "localized_name": "Test Game: Rally Adventure",
+        "dlcappid": 1000003,
+        "archived": false,
+        "developeronly": false,
+        "order": 0,
+        "ispublic": true,
+        "total_achievements": 1,
+        "completion_achievements": 1
+      }
+    ],
+    "schema_hash": "abc123",
+    "schema_version": 7
+  }
+}

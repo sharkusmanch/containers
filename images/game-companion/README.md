@@ -42,10 +42,21 @@ guide page within a few seconds. RetroAchievements achievements on the story pat
 narrows the list to them. The page refreshes at once when it is shown again or the network
 returns.
 
+**Achievement groups.** When the platform says which achievements came with a DLC, the panel
+lists them in sections: **Base game** first, then one per DLC (tagged **DLC**), each with its
+own unlocked/total. Sort, the filters and Unlocked: hidden work inside each section, and a
+section with nothing left to show is hidden. Steam's groups come from
+`IPlayerService/GetGameAchievements` (most Steam games define none, and then the list looks as
+before); Xbox groups follow the product each achievement was released with, named from the
+public Microsoft Store catalog (`displaycatalog.mp.microsoft.com`, no sign-in; names are kept
+7 days, a failed lookup is retried after an hour and leaves `Add-on 1`, `Add-on 2`…). A game
+with only one group, and every RetroAchievements game, is shown ungrouped. A failed group
+lookup never fails the list.
+
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.17.3
+- **Version**: v0.18.0
 
 ## Usage
 
@@ -56,7 +67,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.17.3
+  ghcr.io/sharkusmanch/containers/game-companion:v0.18.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
