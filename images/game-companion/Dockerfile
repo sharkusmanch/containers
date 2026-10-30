@@ -5,7 +5,7 @@
 ARG GAME_COMPANION_VERSION=v0.18.0
 
 # renovate: datasource=docker depName=node
-ARG NODE_VERSION=26.12.1
+ARG NODE_VERSION=26.13.0
 
 # ---------- builder ----------
 # Build on the runner's native platform: the output is platform-independent JavaScript.
