@@ -33,7 +33,7 @@ FROM python:${PYTHON_VERSION} AS vendor
 ARG DEDRM_VERSION=v10.0.30
 ARG DEDRM_SHA256=980bfc17715b998afc5995d6a308e5998681a3ad1a59fa6dd97ab6c414d8f0d6
 # renovate: datasource=github-commits depName=kluyg/calibre-kfx-input branch=main
-ARG KFX_INPUT_COMMIT=44db6b6ee8c0094a98c33770575a9070ddb90fda
+ARG KFX_INPUT_COMMIT=a0285556253889fce506ff44520537e5045f0237
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git unzip zip \
