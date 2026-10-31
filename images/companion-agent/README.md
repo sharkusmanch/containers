@@ -89,7 +89,9 @@ claude -p --output-format stream-json --verbose --include-partial-messages
 - **House rules.** claude runs in `AGENT_PROJECT_DIR`, so its `CLAUDE.md` loads as project
   memory. The image ships a default (`project/CLAUDE.md`); the deploy mounts its own copy. Only
   when that folder has no `CLAUDE.md` is the request's `instructions` passed with
-  `--append-system-prompt`.
+  `--append-system-prompt`. Rule changes must also be made in home-ops-public
+  `clusters/home/apps/toolbox/companion-agent/project/CLAUDE.md` (the deployed copy, mounted over
+  /agent/project) and in game-companion's `INSTRUCTIONS`.
 - **Skills.** Each plugin directory gets its own `--plugin-dir`; Claude Code reports them as
   `redlib@inline` (skill `redlib:browsing-reddit-via-redlib`), `vibepollo@inline` (skill
   `vibepollo:operating-vibepollo`) and so on. The `Skill` tool is what shows the model the skill
@@ -107,9 +109,10 @@ claude -p --output-format stream-json --verbose --include-partial-messages
 - **Prompt.** The status block, earlier questions and answers, `Answer depth: <depth>`,
   `Guide hub id: <hub or none>`, then `Question: <question>`.
 - **Answer depth.** The house rules give each depth its own answer: `hint` the smallest useful
-  nudge, spoiler-safe; `researched` a complete answer that always checks the web (and Reddit
-  when players' experience matters) to confirm or fill in the guide, even when the guide covers
-  it, still kept to the player's progress; `full` a direct, complete answer, spoilers allowed.
+  nudge, spoiler-safe; `researched` a complete answer that, for questions about the game,
+  always checks the web (and Reddit when players' experience matters) to confirm or fill in the
+  guide, even when the guide covers it, still kept to the player's progress; `full` a direct,
+  complete answer, spoilers allowed.
 - **Process.** stdin is `/dev/null`; claude runs in its own process group with an allowlisted
   environment (`PATH`, `LANG`, `TZ`, `CLAUDE_CODE_OAUTH_TOKEN`, `REDLIB_URL`, the names listed in
   `AGENT_CHILD_ENV`, its own `HOME`). `AGENT_TOKEN` and the MCP tokens are not in the child's
