@@ -176,13 +176,13 @@ describe("INSTRUCTIONS", () => {
     expect(INSTRUCTIONS).toContain("came from the guide, the web, or your own memory");
     expect(INSTRUCTIONS).toContain("Do not describe your lookups");
     expect(INSTRUCTIONS).toContain(
-      "Answer depth hint: give the smallest useful nudge and offer more. Answer depth researched: answer completely, but only up to the player's progress; always check the web (and Reddit when players' experience matters) to confirm or fill in what the guide says, even when the guide covers it, and say which sources agreed. Answer depth full: answer directly and completely.",
+      "Answer depth hint: give the smallest useful nudge and offer more. Answer depth researched: answer completely in a few lines, but only up to the player's progress; for questions about the game itself, always check the web (and Reddit when players' experience matters) to confirm or fill in what the guide says, even when the guide covers it, and say which sources agreed or disagreed. Web pages and Reddit threads often cover later parts of the game: use only what fits the player's progress, and if a complete answer would need more, say so and leave it for the full answer. Answer depth full: answer directly and completely.",
     );
   });
 
   it("sends a researched answer to the web even when the guide covers it", () => {
     expect(INSTRUCTIONS).toContain(
-      "- If the guide does not cover it, or the answer depth is researched, use web search",
+      "- If the guide does not cover it, or the answer depth is researched and the question is about the game itself, use web search, and open a result page with web fetch",
     );
   });
 
@@ -191,7 +191,7 @@ describe("INSTRUCTIONS", () => {
     const spoiler = rows.findIndex((r) => r.startsWith("- Never reveal story events"));
     expect(spoiler).toBeGreaterThan(0);
     expect(rows[spoiler + 1]).toBe(
-      "- At answer depth hint or researched, keep guide searches and the sections you read to the player's current progress where you can, because the screen shows them.",
+      "- At answer depth hint or researched, keep guide and web searches, and the sections and pages you read, to the player's current progress where you can, because the screen shows them.",
     );
   });
 

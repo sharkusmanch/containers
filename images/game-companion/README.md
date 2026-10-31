@@ -236,8 +236,9 @@ tools, web search and fetch, and a shell for its skills.
 under ⋯ › Display › **Ask answers**, saved per device with the other display settings. **Hints** (the
 default, `hint`) gives the smallest useful nudge and keeps to the player's progress.
 **Researched** (`researched`) gives a complete answer, still without spoilers past the player's
-progress, and always checks the web (and Reddit when players' experience matters) to confirm or
-fill in what the guide says, even when the guide covers it; it is slower. After any answer
+progress, and for questions about the game always checks the web (and Reddit when players'
+experience matters) to confirm or fill in what the guide says, even when the guide covers it; it
+is slower. After any answer
 except the full answer itself, **Full answer** asks again at `full`: direct and complete,
 spoilers allowed.
 
