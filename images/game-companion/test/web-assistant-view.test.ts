@@ -333,6 +333,69 @@ describe("assistant view: errors", () => {
   });
 });
 
+describe("assistant view: default depth", () => {
+  it("sends typed questions and starters as hints until told otherwise", async () => {
+    type("Where is the key?");
+    press("Enter");
+    await answer(fake.calls[0], { type: "done", truncatedGuide: false });
+    starters()[0]?.click();
+    expect(fake.calls.map((c) => c.req.depth)).toEqual(["hint", "hint"]);
+  });
+
+  it("sends a typed question at the researched depth once set", async () => {
+    view.setDefaultDepth("researched");
+    type("Where is the key?");
+    press("Enter");
+    expect(fake.calls.map((c) => [c.req.question, c.req.depth])).toEqual([
+      ["Where is the key?", "researched"],
+    ]);
+    await answer(fake.calls[0], { type: "done", truncatedGuide: false });
+    type("And the door?");
+    q(".ask-send").click();
+    expect(fake.calls[1]?.req.depth).toBe("researched");
+  });
+
+  it("sends a starter at the researched depth once set, and as a hint again when set back", async () => {
+    view.setDefaultDepth("researched");
+    starters()[2]?.click();
+    expect(fake.calls[0]?.req).toEqual({
+      ...target,
+      history: [],
+      question: "Where do I go now?",
+      depth: "researched",
+    });
+    await answer(fake.calls[0], { type: "done", truncatedGuide: false });
+    view.setDefaultDepth("hint");
+    starters()[0]?.click();
+    expect(fake.calls[1]?.req.depth).toBe("hint");
+  });
+
+  it("still offers Full answer after a researched answer, and sends it as full", async () => {
+    view.setDefaultDepth("researched");
+    starters()[0]?.click();
+    await answer(
+      fake.calls[0],
+      { type: "text", text: "All of it, up to here." },
+      { type: "done", truncatedGuide: false },
+    );
+    const full = q<HTMLButtonElement>(".ask-full");
+    expect(full.textContent).toBe("Full answer");
+    full.click();
+    expect(fake.calls[1]?.req).toEqual({
+      ...target,
+      history: [{ question: "What should I do next?", answer: "All of it, up to here." }],
+      question: "Give me the full answer.",
+      depth: "full",
+    });
+  });
+
+  it("leaves the depth given to ask alone", () => {
+    view.setDefaultDepth("researched");
+    expect(view.ask("How do I get the lamp?", "hint")).toBe(true);
+    expect(fake.calls[0]?.req.depth).toBe("hint");
+  });
+});
+
 describe("assistant view: full answer and history", () => {
   it("offers Full answer after a hint answer and sends the follow-up with the history", async () => {
     starters()[0]?.click();

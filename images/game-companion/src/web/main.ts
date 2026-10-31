@@ -396,6 +396,11 @@ export function startApp(opts: AppOptions): App {
           settings = { ...settings, guideZoom: nextGuideZoom(settings.guideZoom) };
         } else if (name === "layoutMode") {
           settings = { ...settings, layoutMode: nextLayoutOverride(settings.layoutMode) };
+        } else if (name === "askDepth") {
+          settings = {
+            ...settings,
+            askDepth: settings.askDepth === "researched" ? "hint" : "researched",
+          };
         } else {
           settings = { ...settings, [name]: !settings[name] };
         }
@@ -864,6 +869,7 @@ export function startApp(opts: AppOptions): App {
     wakeLock.setEnabled(settings.keepAwake);
     frames.setHideChrome(settings.hideChrome);
     frames.setZoom(settings.guideZoom);
+    assistant.setDefaultDepth(settings.askDepth);
     applyReader();
   }
 

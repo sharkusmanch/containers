@@ -729,6 +729,7 @@ describe("POST /companion/api/ask", () => {
       { ...valid, history: [{ question: "q" }] },
       { ...valid, history: "none" },
       { ...valid, depth: "medium" },
+      { ...valid, depth: "Researched" },
       { ...valid, depth: undefined },
     ];
     for (const body of bad) {
@@ -756,6 +757,13 @@ describe("POST /companion/api/ask", () => {
     const sent = startArgs[0]?.[0] as Record<string, unknown>;
     expect(Object.keys(sent).sort()).toEqual(["depth", "game", "history", "hubId", "question"]);
     expect(sent.hubId).toBeNull();
+  });
+
+  it("accepts the researched depth and passes it on", async () => {
+    const r = await post({ ...valid, depth: "researched" });
+    expect(r.status).toBe(200);
+    await r.text();
+    expect(startArgs[0]?.[0]).toEqual({ ...valid, depth: "researched" });
   });
 
   it("accepts an Xbox game like a Steam or RetroAchievements one", async () => {

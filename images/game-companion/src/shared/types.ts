@@ -217,7 +217,7 @@ export interface AskRequest {
   game: { source: Source; id: string } | null;
   history: AskHistoryEntry[];
   question: string;
-  depth: "hint" | "full";
+  depth: "hint" | "researched" | "full";
 }
 
 export type AskEvent =

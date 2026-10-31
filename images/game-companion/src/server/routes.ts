@@ -224,7 +224,7 @@ function parseAsk(raw: unknown): AskRequest | null {
   if (typeof question !== "string") return null;
   const trimmed = question.trim();
   if (trimmed === "" || chars(trimmed) > QUESTION_MAX) return null;
-  if (depth !== "hint" && depth !== "full") return null;
+  if (depth !== "hint" && depth !== "researched" && depth !== "full") return null;
   return { hubId, game: gameRef, history: turns, question: trimmed, depth };
 }
 

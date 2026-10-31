@@ -1,4 +1,4 @@
-import type { AskEvent, AskHistoryEntry } from "../shared/types.js";
+import type { AskEvent, AskHistoryEntry, AskRequest } from "../shared/types.js";
 
 /** The body of `POST <AGENT_URL>/ask`: exactly these fields. */
 export interface AgentRequest {
@@ -6,7 +6,7 @@ export interface AgentRequest {
   statusBlock: string;
   history: AskHistoryEntry[];
   question: string;
-  depth: "hint" | "full";
+  depth: AskRequest["depth"];
   /** The guide the companion tools default to; null for a game with no guide. */
   hub: string | null;
 }

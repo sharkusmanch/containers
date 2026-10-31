@@ -36,6 +36,8 @@ export interface AssistantView {
   ): void;
   /** Sends `text` as a normal turn; false when it cannot be sent now (blank, streaming, no game). */
   ask(text: string, depth: AskRequest["depth"]): boolean;
+  /** The depth typed questions and starters are sent at ("hint" until set); Full answer stays "full". */
+  setDefaultDepth(depth: Exclude<AskRequest["depth"], "full">): void;
 }
 
 const blank = (s: string): boolean => s.trim() === "";
@@ -160,10 +162,12 @@ export function createAssistantView(
   log.setAttribute("aria-live", "polite");
   const notice = el("p", "ask-notice", PICK_A_GAME);
 
+  // What typed questions and starters are sent at; main sets it from the Ask answers setting.
+  let defaultDepth: Exclude<AskRequest["depth"], "full"> = "hint";
   const starterRow = el("div", "ask-starters");
   const starters = STARTERS.map((text) => {
     const b = buttonEl("ask-starter", text);
-    b.addEventListener("click", () => send(text, "hint"));
+    b.addEventListener("click", () => send(text, defaultDepth));
     return b;
   });
   starterRow.append(...starters);
@@ -362,7 +366,7 @@ export function createAssistantView(
   });
 
   const sendTyped = (): void => {
-    if (!send(input.value, "hint")) return;
+    if (!send(input.value, defaultDepth)) return;
     input.value = "";
     syncCounter();
   };
@@ -386,6 +390,9 @@ export function createAssistantView(
   return {
     element,
     ask: (text, depth) => send(cut(text.trim(), QUESTION_MAX), depth),
+    setDefaultDepth(depth) {
+      defaultDepth = depth;
+    },
     setScope(next, request) {
       target = next === null ? null : request;
       if (next === scope) {

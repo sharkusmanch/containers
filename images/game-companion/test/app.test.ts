@@ -890,6 +890,15 @@ describe("ask", () => {
     expect(signal).toBe(ctl.signal);
   });
 
+  it("passes the researched depth on to the agent", async () => {
+    const { d, calls } = setup({
+      detector: detecting({ source: "steam", id: "10" }, "playing", "In Mock Village"),
+    });
+    await collect(await d.ask?.start(req({ depth: "researched" }), new AbortController().signal));
+    const [body] = calls.ask[0] as [Record<string, unknown>, AbortSignal];
+    expect(body.depth).toBe("researched");
+  });
+
   it("sends no guide text: the agent reads pages through its tools", async () => {
     const { d, calls } = setup({
       detector: detecting({ source: "steam", id: "10" }, "playing", "In Mock Village"),

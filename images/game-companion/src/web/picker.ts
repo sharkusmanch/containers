@@ -1,6 +1,6 @@
 import type { FindMatch, GuideHub, GuidePage, XboxAuthStatus } from "../shared/types.js";
 import type { XboxAction } from "./api.js";
-import type { GuideZoom, InstallRow } from "./device.js";
+import type { AskDepthSetting, GuideZoom, InstallRow } from "./device.js";
 import { LAYOUT_LABELS, windowReadout } from "./layout-mode.js";
 import type { LayoutMode, LayoutOverride } from "./layout-mode.js";
 import type { GameLink, Layout, Slot, StorageLike } from "./state.js";
@@ -33,6 +33,7 @@ export type SettingName =
   | "guideZoom"
   | "readerMode"
   | "guideReader"
+  | "askDepth"
   | "layoutMode"
   | "fullscreen";
 
@@ -53,6 +54,7 @@ export interface SettingsState {
   /** What the Install row offers on this device. */
   install: InstallRow;
   setupDismissed: boolean;
+  askDepth: AskDepthSetting;
 }
 
 export interface Picker {
@@ -236,6 +238,7 @@ export function createPicker(
     ["guideZoom", "setting-guide-zoom"],
     ["readerMode", "setting-reader-mode"],
     ["guideReader", "setting-guide-reader"],
+    ["askDepth", "setting-ask-depth"],
     ["layoutMode", "setting-layout"],
   ] as const) {
     const b = doc.createElement("button");
@@ -253,6 +256,11 @@ export function createPicker(
   guideReaderHint.textContent =
     "Show guide pages in the companion's own reader with one-tap checkboxes.";
   settingRows.get("guideReader")?.after(guideReaderHint);
+  const askDepthHint = doc.createElement("p");
+  askDepthHint.classList.add("setting-ask-depth-hint");
+  askDepthHint.textContent =
+    "Researched answers are complete and checked against the web, without spoilers past your progress. Slower.";
+  settingRows.get("askDepth")?.after(askDepthHint);
   const installRow = doc.createElement("div");
   installRow.classList.add("setting-install");
   const installButton = doc.createElement("button");
@@ -588,6 +596,8 @@ export function createPicker(
       );
       label("readerMode", `Reader mode: ${state.readerMode ? "on" : "off"}`, state.readerMode);
       label("guideReader", `Guide reader: ${state.guideReader ? "on" : "off"}`, state.guideReader);
+      const researched = state.askDepth === "researched";
+      label("askDepth", `Ask answers: ${researched ? "Researched" : "Hints"}`, researched);
       const zoomRow = settingRows.get("guideZoom");
       if (zoomRow !== undefined) zoomRow.textContent = `Guide text size: ${state.guideZoom}%`;
       const layoutRow = settingRows.get("layoutMode");

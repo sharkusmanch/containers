@@ -12,6 +12,10 @@ export function nextGuideZoom(z: GuideZoom): GuideZoom {
   return next ?? 100;
 }
 
+/** The answer depths Ask can default to. */
+export type AskDepthSetting = "hint" | "researched";
+export const ASK_DEPTH_SETTINGS: readonly AskDepthSetting[] = ["hint", "researched"];
+
 export interface Settings {
   keepAwake: boolean;
   hideChrome: boolean;
@@ -27,6 +31,8 @@ export interface Settings {
   splitFraction: number;
   /** The "Set up this device" card was put away with Got it. */
   setupDismissed: boolean;
+  /** The depth Ask sends typed questions and starters at; Full answer always asks for "full". */
+  askDepth: AskDepthSetting;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -39,6 +45,7 @@ export const DEFAULT_SETTINGS: Settings = {
   layoutMode: "auto",
   splitFraction: DEFAULT_SPLIT_FRACTION,
   setupDismissed: false,
+  askDepth: "hint",
 };
 export const SETTINGS_STORAGE_KEY = "game-companion:v1:settings";
 
@@ -56,6 +63,8 @@ export function loadSettings(storage: StorageLike | null | undefined): Settings 
       GUIDE_ZOOM_STEPS.find((step) => step === value) ?? DEFAULT_SETTINGS.guideZoom;
     const layout = (value: unknown): LayoutOverride =>
       LAYOUT_OVERRIDES.find((choice) => choice === value) ?? DEFAULT_SETTINGS.layoutMode;
+    const askDepth = (value: unknown): AskDepthSetting =>
+      ASK_DEPTH_SETTINGS.find((choice) => choice === value) ?? DEFAULT_SETTINGS.askDepth;
     return {
       keepAwake: flag(parsed["keepAwake"], DEFAULT_SETTINGS.keepAwake),
       hideChrome: flag(parsed["hideChrome"], DEFAULT_SETTINGS.hideChrome),
@@ -66,6 +75,7 @@ export function loadSettings(storage: StorageLike | null | undefined): Settings 
       layoutMode: layout(parsed["layoutMode"]),
       splitFraction: clampSplitFraction(parsed["splitFraction"]),
       setupDismissed: flag(parsed["setupDismissed"], DEFAULT_SETTINGS.setupDismissed),
+      askDepth: askDepth(parsed["askDepth"]),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -86,6 +96,7 @@ export function saveSettings(storage: StorageLike | null | undefined, s: Setting
         layoutMode: s.layoutMode,
         splitFraction: clampSplitFraction(s.splitFraction),
         setupDismissed: s.setupDismissed,
+        askDepth: s.askDepth,
       }),
     );
   } catch {

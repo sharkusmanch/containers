@@ -2859,6 +2859,7 @@ describe("display settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     expect($(".picker")?.hidden).toBe(false);
     row("setting-hide-chrome").click();
@@ -2874,6 +2875,7 @@ describe("display settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
   });
 
@@ -3208,6 +3210,7 @@ describe("display settings", () => {
         layoutMode: "auto",
         splitFraction: 0.55,
         setupDismissed: false,
+        askDepth: "hint",
       });
       expect($(".picker")?.hidden).toBe(false);
       row("setting-reader-mode").click();
@@ -3436,6 +3439,7 @@ describe("display settings", () => {
         layoutMode: "auto",
         splitFraction: 0.55,
         setupDismissed: false,
+        askDepth: "hint",
       });
       expect($(".picker")?.hidden).toBe(false);
     }
@@ -3463,6 +3467,7 @@ describe("display settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     row("setting-keep-awake").click();
     await flush();
@@ -3478,6 +3483,7 @@ describe("display settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
   });
 
@@ -5379,6 +5385,84 @@ describe("Ask panel", () => {
     expect(askPanel().hidden).toBe(true);
     expect($(".ach")?.hidden).toBe(false);
   });
+
+  describe("the Ask answers setting", () => {
+    const SETTINGS_KEY = "game-companion:v1:settings";
+    const depthRow = (): HTMLButtonElement =>
+      $(".picker-settings .setting-ask-depth") as HTMLButtonElement;
+    const openDisplay = (): void => {
+      railButtons().at(-1)?.click();
+      ($('[data-tab="settings"]') as HTMLElement).click();
+    };
+    const closePicker = (): void => ($(".picker-close") as HTMLElement).click();
+    const start = async (storage = memory()) => {
+      const api = fakeApi(withAssistant(hubA));
+      const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+      await app.ready;
+      return { api, storage };
+    };
+    const typeAndSend = (text: string): void => {
+      const box = $(".ask-input") as HTMLTextAreaElement;
+      box.value = text;
+      ($(".ask-send") as HTMLElement).click();
+    };
+
+    it("defaults to hints: the row says so and questions go as hints", async () => {
+      const { api } = await start();
+      openDisplay();
+      expect(depthRow().textContent).toBe("Ask answers: Hints");
+      expect(depthRow().getAttribute("aria-pressed")).toBe("false");
+      closePicker();
+      askButton().click();
+      typeAndSend("Where is the key?");
+      await flush();
+      ($(".ask-starter") as HTMLElement).click();
+      await flush();
+      expect(api.askCalls.map((r) => r.depth)).toEqual(["hint", "hint"]);
+    });
+
+    it("toggles to researched and back, saving it and switching what Ask sends", async () => {
+      const { api, storage } = await start();
+      openDisplay();
+      depthRow().click();
+      expect(depthRow().textContent).toBe("Ask answers: Researched");
+      expect(depthRow().getAttribute("aria-pressed")).toBe("true");
+      expect($(".picker")?.hidden).toBe(false);
+      expect(JSON.parse(storage.getItem(SETTINGS_KEY) ?? "{}")).toMatchObject({
+        askDepth: "researched",
+      });
+      closePicker();
+      askButton().click();
+      typeAndSend("Where is the key?");
+      await flush();
+      ($(".ask-starter") as HTMLElement).click();
+      await flush();
+      expect(api.askCalls.map((r) => [r.question, r.depth])).toEqual([
+        ["Where is the key?", "researched"],
+        ["What should I do next?", "researched"],
+      ]);
+
+      openDisplay();
+      depthRow().click();
+      expect(depthRow().textContent).toBe("Ask answers: Hints");
+      expect(JSON.parse(storage.getItem(SETTINGS_KEY) ?? "{}")).toMatchObject({ askDepth: "hint" });
+      closePicker();
+      askButton().click();
+      typeAndSend("And the door?");
+      await flush();
+      expect(api.askCalls.at(-1)?.depth).toBe("hint");
+    });
+
+    it("starts with a stored researched setting", async () => {
+      const storage = memory();
+      storage.setItem(SETTINGS_KEY, JSON.stringify({ askDepth: "researched" }));
+      const { api } = await start(storage);
+      askButton().click();
+      ($(".ask-starter") as HTMLElement).click();
+      await flush();
+      expect(api.askCalls.map((r) => r.depth)).toEqual(["researched"]);
+    });
+  });
 });
 
 describe("two panes", () => {
@@ -5875,6 +5959,18 @@ describe("ask how", () => {
     expect(document.querySelector(".ask-question")?.textContent).toBe(
       'How do I get "The "Gate""? Open the gate.',
     );
+  });
+
+  it("still asks how as a hint when Ask answers are set to researched", async () => {
+    const api = fakeApi(assistantNow(hubA));
+    api.achievements = async () => board(list);
+    const storage = memory();
+    storage.setItem("game-companion:v1:settings", JSON.stringify({ askDepth: "researched" }));
+    const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+    await app.ready;
+    expand("a1");
+    (askHow() as HTMLElement).click();
+    expect(api.askCalls.map((r) => r.depth)).toEqual(["hint"]);
   });
 
   it("leaves the description out when there is none", async () => {

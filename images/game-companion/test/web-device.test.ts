@@ -40,6 +40,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     expect(SETTINGS_STORAGE_KEY).toBe("game-companion:v1:settings");
     expect(loadSettings(memory())).toEqual({
@@ -52,6 +53,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
   });
 
@@ -76,6 +78,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     expect(JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string)).toEqual({
       keepAwake: false,
@@ -87,6 +90,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     expect(loadSettings(storage)).toEqual({
       keepAwake: false,
@@ -98,6 +102,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     saveSettings(storage, {
       keepAwake: true,
@@ -109,6 +114,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     expect(loadSettings(storage)).toEqual({
       keepAwake: true,
@@ -120,6 +126,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
   });
 
@@ -137,6 +144,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
   });
 
@@ -164,6 +172,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     expect(load({ keepAwake: 0, hideChrome: false })).toEqual({
       keepAwake: true,
@@ -175,6 +184,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     expect(load({ keepAwake: null, hideChrome: null })).toEqual(DEFAULT_SETTINGS);
     expect(load({ keepAwake: false, hideChrome: false, guideJump: "off" })).toEqual({
@@ -187,6 +197,7 @@ describe("settings", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
     expect(load({ guideJump: false })).toEqual({ ...DEFAULT_SETTINGS, guideJump: false });
   });
@@ -247,6 +258,7 @@ describe("guide text size", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
   });
 
@@ -262,6 +274,7 @@ describe("guide text size", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
   });
 
@@ -305,6 +318,7 @@ describe("reader mode setting", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
   });
 
@@ -325,6 +339,7 @@ describe("reader mode setting", () => {
       layoutMode: "auto",
       splitFraction: 0.55,
       setupDismissed: false,
+      askDepth: "hint",
     });
   });
 });
@@ -363,6 +378,49 @@ describe("guide reader setting", () => {
   it("gives an older stored object without the key on", () => {
     const raw = JSON.stringify({ keepAwake: false, readerMode: true });
     expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw })).guideReader).toBe(true);
+  });
+});
+
+describe("ask answers setting", () => {
+  it("is hints by default", () => {
+    expect(DEFAULT_SETTINGS.askDepth).toBe("hint");
+    expect(loadSettings(memory()).askDepth).toBe("hint");
+  });
+
+  it.each(["hint", "researched"] as const)("round-trips %s through storage", (askDepth) => {
+    const storage = memory();
+    saveSettings(storage, { ...DEFAULT_SETTINGS, askDepth });
+    const saved = JSON.parse(storage.data.get(SETTINGS_STORAGE_KEY) as string) as {
+      askDepth: unknown;
+    };
+    expect(saved.askDepth).toBe(askDepth);
+    expect(loadSettings(storage).askDepth).toBe(askDepth);
+  });
+
+  it.each([
+    ["the full depth, which is only for the Full answer button", "full"],
+    ["a capitalised value", "Researched"],
+    ["a boolean", true],
+    ["a number", 1],
+    ["null", null],
+    ["an object", {}],
+  ])("falls back to hints for %s and keeps the other values", (_name, value) => {
+    const raw = JSON.stringify({ keepAwake: false, guideReader: false, askDepth: value });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw }))).toEqual({
+      ...DEFAULT_SETTINGS,
+      keepAwake: false,
+      guideReader: false,
+      askDepth: "hint",
+    });
+  });
+
+  it("gives an older stored object without the key hints and keeps its other values", () => {
+    const raw = JSON.stringify({ keepAwake: false, readerMode: false });
+    expect(loadSettings(memory({ [SETTINGS_STORAGE_KEY]: raw }))).toEqual({
+      ...DEFAULT_SETTINGS,
+      keepAwake: false,
+      readerMode: false,
+    });
   });
 });
 

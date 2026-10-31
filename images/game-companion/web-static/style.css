@@ -1420,7 +1420,8 @@ button {
 }
 
 .setting-layout-readout,
-.setting-guide-reader-hint {
+.setting-guide-reader-hint,
+.setting-ask-depth-hint {
   margin: 0;
   padding: 4px 12px;
   font-size: 13px;

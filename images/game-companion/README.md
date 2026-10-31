@@ -58,7 +58,7 @@ lookup never fails the list.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.18.0
+- **Version**: v0.19.0
 
 ## Usage
 
@@ -69,7 +69,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.18.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.19.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -226,11 +226,20 @@ posts it to `<AGENT_URL>/ask` with `authorization: Bearer <AGENT_TOKEN>` and the
 `{instructions, statusBlock, history, question, depth, hub}`: the answering rules, a status
 block (the game, the play state, the status line, achievement progress with the missables
 still open and the next story achievements, and the guide section matching the status line),
-the earlier turns, the question, the depth (`hint` or `full`) and the id of the game's guide
+the earlier turns, the question, the depth (`hint`, `researched` or `full`) and the id of the game's guide
 (`null` for a game with no guide). No guide text is sent: the agent reads the guide through the
 companion's MCP endpoint (`companion_status`, `list_guides`, `guide_outline`, `search_guide`,
 `read_guide_page`), and also has read-only RetroAchievements, RomM, Syncthing and Outline
 tools, web search and fetch, and a shell for its skills.
+
+**Answer depth.** Typed questions and the starter questions go at the depth chosen under
+⋯ › Display › **Ask answers**, saved per device with the other display settings. **Hints** (the
+default, `hint`) gives the smallest useful nudge and keeps to the player's progress.
+**Researched** (`researched`) gives a complete answer, still without spoilers past the player's
+progress, and always checks the web (and Reddit when players' experience matters) to confirm or
+fill in what the guide says, even when the guide covers it; it is slower. After any answer
+except the full answer itself, **Full answer** asks again at `full`: direct and complete,
+spoilers allowed. **Ask how** always asks at `hint`.
 
 The agent's answer streams through as it comes. Only well-formed events of the known types
 pass; anything else, and the agent's own pings, is dropped. A busy agent (its 429) gets the

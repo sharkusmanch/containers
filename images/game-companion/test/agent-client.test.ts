@@ -108,6 +108,12 @@ describe("AgentClient request", () => {
     expect(sent).toEqual(body);
   });
 
+  it("forwards the researched depth", async () => {
+    const { agent } = client();
+    await collect(await agent.ask({ ...body, depth: "researched" }, new AbortController().signal));
+    expect((JSON.parse(seen[0]?.body ?? "") as AgentRequest).depth).toBe("researched");
+  });
+
   it("sends a null hub as null", async () => {
     const { agent } = client();
     await collect(await agent.ask({ ...body, hub: null }, new AbortController().signal));

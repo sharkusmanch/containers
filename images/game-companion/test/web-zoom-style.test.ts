@@ -90,6 +90,16 @@ describe("the guide reader rules", () => {
     expect(rule?.selector).toContain(".setting-layout-readout");
   });
 
+  it("styles the Ask answers hint like the layout readout under its row", () => {
+    const rule = rules.find((r) =>
+      r.selector
+        .split(",")
+        .map((s) => s.trim())
+        .includes(".setting-ask-depth-hint"),
+    );
+    expect(rule?.selector).toContain(".setting-layout-readout");
+  });
+
   it("is a scroll container of its own, kept in the layout while hidden", () => {
     const reader = rules.find((r) => r.selector === ".reader");
     expect(reader?.body).toContain("overflow-y: auto;");

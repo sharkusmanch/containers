@@ -526,6 +526,7 @@ describe("display settings", () => {
     fullscreenSupported: true,
     install: "hidden" as const,
     setupDismissed: false,
+    askDepth: "hint" as const,
   };
   const row = (picker: { element: HTMLElement }, name: string): HTMLButtonElement =>
     picker.element.querySelector(`.picker-settings .${name}`) as HTMLButtonElement;
@@ -556,7 +557,7 @@ describe("display settings", () => {
     expect((picker.element.querySelector(".picker-pages") as HTMLElement).hidden).toBe(false);
   });
 
-  it("holds the set-up card, eight setting buttons, then the readout and the install row", () => {
+  it("holds the set-up card, nine setting buttons, then the readout and the install row", () => {
     const { picker } = make();
     picker.setSettings(all);
     const list = picker.element.querySelector(".picker-settings") as HTMLElement;
@@ -570,6 +571,7 @@ describe("display settings", () => {
       "setting-guide-zoom",
       "setting-reader-mode",
       "setting-guide-reader",
+      "setting-ask-depth",
       "setting-layout",
     ]);
     expect(rows.every((b) => b.getAttribute("type") === "button")).toBe(true);
@@ -633,6 +635,22 @@ describe("display settings", () => {
     );
   });
 
+  it("labels the ask answers row for both depths, with a hint under it", () => {
+    const { picker } = make();
+    picker.setSettings(all);
+    expect(row(picker, "setting-ask-depth").textContent).toBe("Ask answers: Hints");
+    expect(row(picker, "setting-ask-depth").getAttribute("aria-pressed")).toBe("false");
+    expect(row(picker, "setting-ask-depth").hidden).toBe(false);
+    picker.setSettings({ ...all, askDepth: "researched" });
+    expect(row(picker, "setting-ask-depth").textContent).toBe("Ask answers: Researched");
+    expect(row(picker, "setting-ask-depth").getAttribute("aria-pressed")).toBe("true");
+    const hint = row(picker, "setting-ask-depth").nextElementSibling;
+    expect(hint?.className).toBe("setting-ask-depth-hint");
+    expect(hint?.textContent).toBe(
+      "Researched answers are complete and checked against the web, without spoilers past your progress. Slower.",
+    );
+  });
+
   it("keeps the picker open when the reader mode row is tapped", () => {
     const { picker, handlers } = make();
     picker.setSettings(all);
@@ -669,6 +687,7 @@ describe("display settings", () => {
     row(picker, "setting-guide-zoom").click();
     row(picker, "setting-reader-mode").click();
     row(picker, "setting-guide-reader").click();
+    row(picker, "setting-ask-depth").click();
     row(picker, "setting-layout").click();
     expect(handlers.onSetting.mock.calls).toEqual([
       ["keepAwake"],
@@ -678,6 +697,7 @@ describe("display settings", () => {
       ["guideZoom"],
       ["readerMode"],
       ["guideReader"],
+      ["askDepth"],
       ["layoutMode"],
     ]);
     expect(picker.element.hidden).toBe(false);
