@@ -17,7 +17,7 @@ ARG MCP_PROXY_VERSION=v0.13.0
 ARG MCP_SDK_VERSION=1.30.0
 
 # renovate: datasource=docker depName=node versioning=docker
-ARG NODE_VERSION=24
+ARG NODE_VERSION=26
 
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.15
