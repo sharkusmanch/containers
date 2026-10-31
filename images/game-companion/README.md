@@ -10,8 +10,8 @@ sidebar that shows Outline guide pages (framed, or in its own guide reader when 
 on) and an achievements panel.
 
 From an achievement, **Find in guide** searches the game's guide pages and opens the page at
-that line. **Ask how** sends `How do I get "<name>"? <description>` to Ask at hint depth (hidden
-achievements: only once revealed). Achievements the guide marks as missable can be shown on
+that line. **Ask how** sends `How do I get "<name>"? <description>` to Ask at the depth set
+under ⋯ › Display › **Ask answers**, hint by default (hidden achievements: only once revealed). Achievements the guide marks as missable can be shown on
 their own, and a notice appears when an achievement unlocks while the page is open. While a
 RetroAchievements game is being played, a row under the title shows the status line the game
 reports (its rich presence); a tap on it shows a long line in full. When that line names a place
@@ -232,14 +232,14 @@ companion's MCP endpoint (`companion_status`, `list_guides`, `guide_outline`, `s
 `read_guide_page`), and also has read-only RetroAchievements, RomM, Syncthing and Outline
 tools, web search and fetch, and a shell for its skills.
 
-**Answer depth.** Typed questions and the starter questions go at the depth chosen under
-⋯ › Display › **Ask answers**, saved per device with the other display settings. **Hints** (the
+**Answer depth.** Typed questions, the starter questions and **Ask how** go at the depth chosen
+under ⋯ › Display › **Ask answers**, saved per device with the other display settings. **Hints** (the
 default, `hint`) gives the smallest useful nudge and keeps to the player's progress.
 **Researched** (`researched`) gives a complete answer, still without spoilers past the player's
 progress, and always checks the web (and Reddit when players' experience matters) to confirm or
 fill in what the guide says, even when the guide covers it; it is slower. After any answer
 except the full answer itself, **Full answer** asks again at `full`: direct and complete,
-spoilers allowed. **Ask how** always asks at `hint`.
+spoilers allowed.
 
 The agent's answer streams through as it comes. Only well-formed events of the known types
 pass; anything else, and the agent's own pings, is dropped. A busy agent (its 429) gets the

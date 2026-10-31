@@ -31,7 +31,7 @@ export interface Settings {
   splitFraction: number;
   /** The "Set up this device" card was put away with Got it. */
   setupDismissed: boolean;
-  /** The depth Ask sends typed questions and starters at; Full answer always asks for "full". */
+  /** The depth Ask sends typed questions, starters and Ask how at; Full answer always asks for "full". */
   askDepth: AskDepthSetting;
 }
 

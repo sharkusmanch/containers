@@ -5938,7 +5938,7 @@ describe("ask how", () => {
     expect(document.querySelector(".ach-find")).not.toBeNull();
   });
 
-  it("opens Ask in place of the achievements and sends the question as a hint", async () => {
+  it("opens Ask in place of the achievements and sends the question as a hint by default", async () => {
     const api = fakeApi(assistantNow(hubA));
     await start(api);
     expand("a1");
@@ -5961,7 +5961,7 @@ describe("ask how", () => {
     );
   });
 
-  it("still asks how as a hint when Ask answers are set to researched", async () => {
+  it("asks how at the researched depth when Ask answers are set to researched", async () => {
     const api = fakeApi(assistantNow(hubA));
     api.achievements = async () => board(list);
     const storage = memory();
@@ -5970,7 +5970,7 @@ describe("ask how", () => {
     await app.ready;
     expand("a1");
     (askHow() as HTMLElement).click();
-    expect(api.askCalls.map((r) => r.depth)).toEqual(["hint"]);
+    expect(api.askCalls.map((r) => r.depth)).toEqual(["researched"]);
   });
 
   it("leaves the description out when there is none", async () => {

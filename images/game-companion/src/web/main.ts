@@ -1083,7 +1083,7 @@ export function startApp(opts: AppOptions): App {
     if (!canAsk()) return;
     const description = a.description === null ? "" : a.description.trim();
     const question = `How do I get "${a.name}"?${description === "" ? "" : ` ${description}`}`;
-    if (!assistant.ask(question, "hint")) return;
+    if (!assistant.ask(question, settings.askDepth)) return;
     askOpen = true;
     render();
   }
