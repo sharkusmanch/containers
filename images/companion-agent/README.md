@@ -12,7 +12,7 @@ the image at a pinned version.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.2.0
+- **Version**: v0.3.0
 
 ## Usage
 
@@ -25,7 +25,7 @@ docker run --rm -p 8080:8080 \
   -v /path/to/vibepollo-plugin:/agent/skills/vibepollo:ro \
   -e AGENT_SKILLS_DIRS=/agent/skills/redlib,/agent/skills/vibepollo \
   -e AGENT_CHILD_ENV=VIBEPOLLO_TOKEN,VIBEPOLLO_HOST -e VIBEPOLLO_TOKEN=... -e VIBEPOLLO_HOST=... \
-  ghcr.io/sharkusmanch/containers/companion-agent:v0.2.0
+  ghcr.io/sharkusmanch/containers/companion-agent:v0.3.0
 ```
 
 In the cluster it runs as non-root (uid 10000) with a read-only root filesystem, `emptyDir`
@@ -66,7 +66,7 @@ configured server lacks its token, or when `allowed-tools.json` allows none of i
 - `GET /healthz` → `{"ok":true}`.
 - `POST /ask` with `authorization: Bearer <AGENT_TOKEN>` and a JSON body of at most 64 KiB:
   `{"instructions", "statusBlock", "history": [{"question", "answer"}], "question",
-"depth": "hint"|"full", "hub": string|null}`. Answers `200 application/x-ndjson` with one event
+"depth": "hint"|"researched"|"full", "hub": string|null}`. Answers `200 application/x-ndjson` with one event
   per line: `text`, `search`, `lookup`, `ping` (every 15 s while nothing else was sent), and
   exactly one `done` (`{"type":"done","truncatedGuide":false}`) or `error` at the end. `401` for a
   missing or wrong token, `413` for a larger body, `400` for an invalid one, and
@@ -106,6 +106,10 @@ claude -p --output-format stream-json --verbose --include-partial-messages
   sets on the service.
 - **Prompt.** The status block, earlier questions and answers, `Answer depth: <depth>`,
   `Guide hub id: <hub or none>`, then `Question: <question>`.
+- **Answer depth.** The house rules give each depth its own answer: `hint` the smallest useful
+  nudge, spoiler-safe; `researched` a complete answer that always checks the web (and Reddit
+  when players' experience matters) to confirm or fill in the guide, even when the guide covers
+  it, still kept to the player's progress; `full` a direct, complete answer, spoilers allowed.
 - **Process.** stdin is `/dev/null`; claude runs in its own process group with an allowlisted
   environment (`PATH`, `LANG`, `TZ`, `CLAUDE_CODE_OAUTH_TOKEN`, `REDLIB_URL`, the names listed in
   `AGENT_CHILD_ENV`, its own `HOME`). `AGENT_TOKEN` and the MCP tokens are not in the child's

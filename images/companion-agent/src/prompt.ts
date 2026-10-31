@@ -4,7 +4,7 @@ export interface AskRequest {
   statusBlock: string;
   history: { question: string; answer: string }[];
   question: string;
-  depth: "hint" | "full";
+  depth: "hint" | "researched" | "full";
   /** The guide the companion tools default to; null for a game with no guide. */
   hub: string | null;
 }
@@ -21,7 +21,7 @@ export function parseAskRequest(body: unknown): AskRequest | null {
   const { instructions, statusBlock, history, question, depth, hub } = body;
   if (typeof instructions !== "string" || typeof statusBlock !== "string") return null;
   if (typeof question !== "string" || question.trim() === "") return null;
-  if (depth !== "hint" && depth !== "full") return null;
+  if (depth !== "hint" && depth !== "researched" && depth !== "full") return null;
   if (hub !== null && typeof hub !== "string") return null;
   if (!Array.isArray(history)) return null;
   const pairs: AskRequest["history"] = [];

@@ -21,12 +21,21 @@ describe("parseAskRequest", () => {
     });
   });
 
+  it("accepts the researched depth", () => {
+    expect(parseAskRequest({ ...valid, depth: "researched" })).toEqual({
+      ...valid,
+      depth: "researched",
+    });
+  });
+
   it.each([
     ["not an object", "x"],
     ["an array", [valid]],
     ["no question", { ...valid, question: undefined }],
     ["a blank question", { ...valid, question: "  " }],
     ["a bad depth", { ...valid, depth: "medium" }],
+    ["a capitalised depth", { ...valid, depth: "Researched" }],
+    ["a missing depth", { ...valid, depth: undefined }],
     ["a numeric hub", { ...valid, hub: 3 }],
     ["a missing hub", { ...valid, hub: undefined }],
     ["a non-string status block", { ...valid, statusBlock: null }],
@@ -54,6 +63,10 @@ describe("buildPrompt", () => {
         "Question: And the door?",
       ].join("\n\n"),
     );
+  });
+
+  it("carries the researched depth", () => {
+    expect(buildPrompt({ ...valid, depth: "researched" })).toContain("Answer depth: researched");
   });
 
   it("says none for a game with no guide and skips empty parts", () => {

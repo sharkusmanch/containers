@@ -279,6 +279,22 @@ describe("answering", () => {
     await until(() => !existsSync(runHome));
   });
 
+  it("passes the researched depth to claude", async () => {
+    const res = await ask(
+      body(`replay:${fixturePath("websearch.jsonl")}`, { depth: "researched" }),
+    );
+    expect(res.status).toBe(200);
+    await res.text();
+    const [rec] = records();
+    expect(rec?.argv.at(-1)).toContain("\n\nAnswer depth: researched\n\n");
+  });
+
+  it("refuses an unknown depth with 400 and starts nothing", async () => {
+    const res = await ask(body("replay:/nonexistent", { depth: "deep" }));
+    expect(res.status).toBe(400);
+    expect(records()).toEqual([]);
+  });
+
   it("passes the instructions as a system prompt when the project has no CLAUDE.md", async () => {
     const bare = await start({}, false);
     try {
