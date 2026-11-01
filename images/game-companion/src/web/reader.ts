@@ -4,7 +4,7 @@
  * and `guide-tick`.
  */
 import { checkboxItems } from "./guide-checkbox.js";
-import { checkboxLabel, renderGuide } from "./guide-render.js";
+import { checkboxText, renderGuide } from "./guide-render.js";
 import { tick, type TickResult } from "./guide-tick.js";
 import { locateInElement, type LocateMode } from "./locate.js";
 import { OutlineError, type GuideDocument, type OutlineApi } from "./outline-api.js";
@@ -69,8 +69,29 @@ interface Tap {
   index: number;
   checked: boolean;
   doc: GuideDocument;
-  count: number;
-  label: string | null;
+}
+
+/** The full text of every checkbox of a document, in order, once worked out. */
+const itemTexts = new WeakMap<GuideDocument, readonly string[]>();
+
+function textsOf(doc: GuideDocument): readonly string[] {
+  let texts = itemTexts.get(doc);
+  if (texts === undefined) {
+    texts = checkboxItems(doc.data).map(checkboxText);
+    itemTexts.set(doc, texts);
+  }
+  return texts;
+}
+
+/**
+ * True when `next` has the same checkboxes, by full text and in the same order, as `before`: an
+ * index then names the same item in both. Comparing the one item at the index is not enough, as
+ * labels repeat ("Chest" in every room) and other items can shift a twin onto it.
+ */
+function sameItems(before: GuideDocument, next: GuideDocument): boolean {
+  const a = textsOf(before);
+  const b = textsOf(next);
+  return a.length === b.length && a.every((text, i) => text === b[i]);
 }
 
 /** Reading positions by page id, shared by every reader for the session. */
@@ -123,11 +144,16 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
 
   function setStatus(text: string, signIn = false): void {
     writeMessage(status, text, signIn);
+    status.removeAttribute("aria-hidden");
   }
 
-  /** A tick's outcome: in the status line, and in the toast where it is seen. */
+  /**
+   * A tick's outcome: in the status line, and in the toast where it is seen. The toast announces
+   * it; the status line's copy is hidden from screen readers so it is not announced twice.
+   */
   function notify(text: string, signIn = false): void {
     setStatus(text, signIn);
+    status.setAttribute("aria-hidden", "true");
     toast.show(text, signIn);
   }
 
@@ -239,7 +265,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
       (fresh) => {
         // A tap made meanwhile is saved against `before`, and redraws the page itself.
         if (gen !== generation || shown !== before || pending.size > 0) return;
-        if (fresh.revision !== before.revision) rerender(fresh);
+        if (fresh.revision > before.revision) rerender(fresh);
       },
       () => undefined,
     );
@@ -263,14 +289,12 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     }
   }
 
-  /** True when `fresh` has the tapped item where it was, with its text and the state it had. */
+  /** True when `fresh` has the same items as the tapped page, the tapped one in its old state. */
   function unchanged(fresh: GuideDocument, tapped: Tap): boolean {
-    const items = checkboxItems(fresh.data);
-    const item = items[tapped.index];
+    const item = checkboxItems(fresh.data)[tapped.index];
     return (
       item !== undefined &&
-      items.length === tapped.count &&
-      checkboxLabel(item) === tapped.label &&
+      sameItems(tapped.doc, fresh) &&
       (item.attrs?.["checked"] === true) === !tapped.checked
     );
   }
@@ -280,11 +304,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     if (gen !== generation || shown === null) return;
     // An earlier save's read-back may carry another writer's edit: the same index may now be a
     // different item. Never patch it; refresh instead.
-    if (
-      shown !== tapped.doc &&
-      (checkboxItems(shown.data).length !== tapped.count ||
-        boxAt(index)?.getAttribute("aria-label") !== tapped.label)
-    ) {
+    if (shown !== tapped.doc && !sameItems(tapped.doc, shown)) {
       const before = shown;
       let fresh = before;
       try {
@@ -351,8 +371,6 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
       index,
       checked,
       doc: shown,
-      count: checkboxItems(shown.data).length,
-      label: box.getAttribute("aria-label"),
     };
     chain = chain.then(() => runTap(tapped)).catch(() => undefined);
   }

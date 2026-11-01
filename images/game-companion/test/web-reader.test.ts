@@ -612,6 +612,61 @@ describe("createReader", () => {
       expect(onSaved).not.toHaveBeenCalled();
     });
 
+    it("when another box was ticked and prose edited elsewhere: saves the tapped item", async () => {
+      const { api, reader, onSaved } = setup();
+      await settle();
+      const page = api.pages["1"] as Page;
+      page.md = page.md.replace("- [ ] Ether", "- [x] Ether").replace("Plain words", "New words");
+      page.revision = 7;
+      box(reader, 0).click();
+      await settle();
+      expect(api.patches).toHaveLength(1);
+      expect(api.pages["1"]?.md).toContain("- [x] Potion\n- [x] Ether");
+      expect(box(reader, 0).getAttribute("aria-checked")).toBe("true");
+      expect(body(reader).textContent).toContain("New words");
+      expect(status(reader).textContent).toBe("");
+      expect(onSaved).toHaveBeenCalledTimes(1);
+    });
+
+    const LONG = "A".repeat(80);
+    it.each([
+      [
+        "a repeated label shifts onto another item (Chest in two rooms)",
+        "## Start\n\n- [ ] Potion\n\n## Room 1\n\n- [ ] Chest\n\n## Room 2\n\n- [ ] Chest",
+        1,
+        (md: string) => `${md.replace("- [ ] Potion", "Potion")}\n- [ ] Elixir`,
+      ],
+      [
+        "three Chests in a row shift by one",
+        "## Start\n\n- [ ] Potion\n\n## Room\n\n- [ ] Chest\n- [ ] Chest\n- [ ] Chest",
+        2,
+        (md: string) => `${md.replace("- [ ] Potion", "Potion")}\n- [ ] Elixir`,
+      ],
+      [
+        "labels equal in their first 80 characters shift",
+        `- [ ] ${LONG} first\n- [ ] ${LONG} second`,
+        1,
+        (md: string) => `${md.replace(`- [ ] ${LONG} first\n`, "")}\n- [ ] ${LONG} third`,
+      ],
+    ])("not when %s", async (_case, md, index, edit) => {
+      const api = fake();
+      const page = api.pages["1"] as Page;
+      page.md = md;
+      const { reader, onSaved } = setup(A, { outline: api });
+      await settle();
+      page.md = edit(page.md);
+      page.revision = 7;
+      const before = page.md;
+      box(reader, index).click();
+      await settle();
+      expect(api.patches).toHaveLength(0);
+      expect(page.md).toBe(before);
+      expect(status(reader).textContent).toBe(
+        "This page changed elsewhere and was refreshed. Tap again.",
+      );
+      expect(onSaved).not.toHaveBeenCalled();
+    });
+
     it("and lets the taps queued behind it continue when it saves", async () => {
       const { api, reader, onSaved } = setup();
       await settle();
@@ -687,6 +742,20 @@ describe("createReader", () => {
       expect(status(reader).textContent).toBe(copy);
       expect(toast(reader).hidden).toBe(false);
       expect(toast(reader).textContent).toBe(copy);
+    });
+
+    it("hides the status line's copy from screen readers while the toast says it", async () => {
+      const { api, reader } = setup();
+      await settle();
+      api.fail.markdown = [new OutlineError(0, "other")];
+      box(reader, 0).click();
+      await settle();
+      expect(toast(reader).hidden).toBe(false);
+      expect(status(reader).getAttribute("aria-hidden")).toBe("true");
+      // A load message is the status line's own again.
+      reader.load(B);
+      expect(status(reader).textContent).toBe("Loading…");
+      expect(status(reader).hasAttribute("aria-hidden")).toBe(false);
     });
 
     it("shows signed out with its Sign in link", async () => {
@@ -809,13 +878,37 @@ describe("createReader", () => {
       const { api, reader } = setup();
       await settle();
       api.hold = true;
-      (api.pages["1"] as Page).revision = 9;
+      const page = api.pages["1"] as Page;
+      page.md = page.md.replace("Plain words", "Newer words");
+      page.revision = 9;
       reader.refresh();
       box(reader, 0).click();
-      api.held.shift()?.release();
       await settle();
+      api.held.shift()?.release(); // the refresh's read
+      await settle();
+      // The tap's own save redraws the page; until then the page and the busy box stay.
+      expect(body(reader).textContent).toContain("Plain words");
+      expect(body(reader).textContent).not.toContain("Newer words");
       expect(box(reader, 0).getAttribute("aria-busy")).toBe("true");
-      expect(body(reader).textContent).toContain("Potion");
+      while (api.held.length > 0) {
+        api.held.shift()?.release();
+        await settle();
+      }
+      expect(body(reader).textContent).toContain("Newer words");
+      expect(box(reader, 0).getAttribute("aria-checked")).toBe("true");
+      expect(box(reader, 0).hasAttribute("aria-busy")).toBe(false);
+    });
+
+    it("does not go back to an older revision", async () => {
+      const { api, reader } = setup();
+      await settle();
+      const page = api.pages["1"] as Page;
+      page.md = page.md.replace("Plain words", "Older words");
+      page.revision = 3;
+      reader.refresh();
+      await settle();
+      expect(body(reader).textContent).toContain("Plain words");
+      expect(body(reader).textContent).not.toContain("Older words");
     });
 
     it("drops its answer when the page was left meanwhile", async () => {
@@ -948,6 +1041,29 @@ describe("createReader", () => {
       expect(api.patches).toHaveLength(1);
     },
   );
+
+  it("does not tick a queued item when a repeated label shifts onto it with a save", async () => {
+    const api = fake();
+    const page = api.pages["1"] as Page;
+    page.md =
+      "## Start\n\n- [ ] Map\n- [ ] Potion\n\n## Room 1\n\n- [ ] Chest\n\n## Room 2\n\n- [ ] Chest";
+    const { reader, onSaved } = setup(A, { outline: api });
+    await settle();
+    api.afterPatch = (p) => {
+      api.afterPatch = undefined;
+      p.md = `${p.md.replace("- [ ] Potion", "Potion")}\n- [ ] Elixir`;
+      p.revision += 1;
+    };
+    box(reader, 0).click();
+    box(reader, 2).click(); // Room 1's Chest
+    await settle();
+    expect(api.patches).toHaveLength(1);
+    expect(page.md).not.toContain("- [x] Chest");
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(status(reader).textContent).toBe(
+      "This page changed elsewhere and was refreshed. Tap again.",
+    );
+  });
 
   it("does not apply a save confirmed after the page was left, but still reports it", async () => {
     const { api, reader, onSaved } = setup();

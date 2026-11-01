@@ -384,6 +384,33 @@ describe("OutlineApi.patch", () => {
     expect(f.calls.map((c) => c.init.method)).toEqual(["POST", "HEAD"]);
   });
 
+  it("mints at most twice when a missing cookie is followed by a 403", async () => {
+    let cookie = "";
+    let minted = 0;
+    const f = scripted([403], () => {
+      minted += 1;
+      cookie = `__Host-csrfToken=t${minted}`;
+    });
+    const err = await rejection(
+      createOutlineApi({ fetch: f.fn, cookie: () => cookie }).patch("abc", edit),
+    );
+    expect(err).toMatchObject({ status: 403, kind: "signed-out" });
+    expect(f.calls.map((c) => c.init.method)).toEqual(["HEAD", "POST", "HEAD", "POST"]);
+    expect([f.headers(1).get("x-csrf-token"), f.headers(3).get("x-csrf-token")]).toEqual([
+      "t1",
+      "t2",
+    ]);
+  });
+
+  it("saves when a missing cookie is followed by a 403 and the retry succeeds", async () => {
+    let cookie = "";
+    const f = scripted([403, 200], () => {
+      cookie = "__Host-csrfToken=t";
+    });
+    await createOutlineApi({ fetch: f.fn, cookie: () => cookie }).patch("abc", edit);
+    expect(f.calls.map((c) => c.init.method)).toEqual(["HEAD", "POST", "HEAD", "POST"]);
+  });
+
   it.each([
     [401, "signed-out"],
     [409, "conflict"],
