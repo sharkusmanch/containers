@@ -30,7 +30,7 @@ ARG ALPINE_VERSION=3.24
 # ============================================================================
 # wreq builds BoringSSL, so it needs cmake, perl and libclang. rust-musl-cross is
 # the image upstream's Dockerfile.alpine and release builds use.
-FROM ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:ce75e9174325d4fbb3de85c309e2d7ca29f7500169bc4b5d2c611ff7e86d549a AS builder
+FROM ghcr.io/rust-cross/rust-musl-cross:x86_64-musl@sha256:3f1010eb48311dfde5d51f011163451940af34bd317355c4a8652ce6b4b61051 AS builder
 
 ARG REDLIB_REPO
 ARG REDLIB_COMMIT
