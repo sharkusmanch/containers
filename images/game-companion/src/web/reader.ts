@@ -4,10 +4,11 @@
  * and `guide-tick`.
  */
 import { checkboxItems } from "./guide-checkbox.js";
-import { renderGuide } from "./guide-render.js";
+import { checkboxLabel, renderGuide } from "./guide-render.js";
 import { tick, type TickResult } from "./guide-tick.js";
 import { locateInElement, type LocateMode } from "./locate.js";
 import { OutlineError, type GuideDocument, type OutlineApi } from "./outline-api.js";
+import { createReaderToast, writeMessage } from "./reader-toast.js";
 import { docId } from "./state.js";
 
 /**
@@ -16,6 +17,12 @@ import { docId } from "./state.js";
  * A failed save holds nothing back: trying again at once is what the person wants there.
  */
 export const SETTLE_MS = 2000;
+
+/**
+ * Back after being hidden this long, the open guide pages are read again (`refresh`): agents
+ * edit them often, and a tap on a page that is behind has to be retried against the fresh one.
+ */
+export const RETURN_REFRESH_MS = 60_000;
 
 export interface ReaderDeps {
   doc: Document;
@@ -31,6 +38,11 @@ export interface Reader {
   element: HTMLElement;
   readonly url: string;
   load(url: string): void;
+  /**
+   * Reads the page shown again in the background and redraws it, at the same scroll position,
+   * if it changed. Does nothing while a tap is waiting; a failed read changes and says nothing.
+   */
+  refresh(): void;
   locate(
     text: string,
     heading: string | null,
@@ -90,7 +102,8 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
   bar.append(outlineButton, status);
   const body = doc.createElement("article");
   body.className = "reader-body";
-  element.append(bar, body);
+  const toast = createReaderToast(doc);
+  element.append(bar, body, toast.element);
 
   let current = url;
   /** The document on screen; null while loading or after a failed load. */
@@ -109,14 +122,13 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
   let disposed = false;
 
   function setStatus(text: string, signIn = false): void {
-    status.replaceChildren(text);
-    if (!signIn) return;
-    const link = doc.createElement("a");
-    link.href = "/";
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.textContent = "Sign in";
-    status.append(" ", link);
+    writeMessage(status, text, signIn);
+  }
+
+  /** A tick's outcome: in the status line, and in the toast where it is seen. */
+  function notify(text: string, signIn = false): void {
+    setStatus(text, signIn);
+    toast.show(text, signIn);
   }
 
   const boxAt = (index: number): Element | null => body.querySelector(`.cb[data-cb="${index}"]`);
@@ -184,6 +196,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     generation += 1;
     pending.clear();
     settledAt.clear();
+    toast.hide();
   }
 
   function load(next: string): void {
@@ -218,12 +231,48 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     );
   }
 
+  function refresh(): void {
+    if (disposed || shown === null || loadCtl !== null || pending.size > 0) return;
+    const before = shown;
+    const gen = generation;
+    deps.outline.document(before.id).then(
+      (fresh) => {
+        // A tap made meanwhile is saved against `before`, and redraws the page itself.
+        if (gen !== generation || shown !== before || pending.size > 0) return;
+        if (fresh.revision !== before.revision) rerender(fresh);
+      },
+      () => undefined,
+    );
+  }
+
   /** Drops every queued tap and shows `fresh` with the conflict copy. */
   function conflict(fresh: GuideDocument): void {
     generation += 1;
     pending.clear();
     settledAt.clear();
-    if (rerender(fresh)) setStatus(CONFLICT);
+    if (rerender(fresh)) notify(CONFLICT);
+  }
+
+  /** Saves one tap against `base`, as a TickResult. */
+  async function save(base: GuideDocument, index: number, checked: boolean): Promise<TickResult> {
+    try {
+      return await tick(deps.outline, base, index, checked);
+    } catch {
+      // tick never throws by contract; if it does, the box must not stay busy.
+      return { kind: "failed", doc: null };
+    }
+  }
+
+  /** True when `fresh` has the tapped item where it was, with its text and the state it had. */
+  function unchanged(fresh: GuideDocument, tapped: Tap): boolean {
+    const items = checkboxItems(fresh.data);
+    const item = items[tapped.index];
+    return (
+      item !== undefined &&
+      items.length === tapped.count &&
+      checkboxLabel(item) === tapped.label &&
+      (item.attrs?.["checked"] === true) === !tapped.checked
+    );
   }
 
   async function runTap(tapped: Tap): Promise<void> {
@@ -246,12 +295,11 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
       if (gen === generation) conflict(fresh);
       return;
     }
-    let result: TickResult;
-    try {
-      result = await tick(deps.outline, shown, index, checked);
-    } catch {
-      // tick never throws by contract; if it does, the box must not stay busy.
-      result = { kind: "failed", doc: null };
+    let result = await save(shown, index, checked);
+    // Agents edit guide pages often, so a page left open is usually behind. When the tapped item
+    // is still as the person saw it, the tap means the same on the fresh page: try once more.
+    if (gen === generation && result.kind === "conflict" && unchanged(result.doc, tapped)) {
+      result = await save(result.doc, index, checked);
     }
     if (gen !== generation) {
       // The page was left or the reader disposed: nothing to redraw, but progress moved on.
@@ -270,16 +318,16 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
         return;
       case "refused":
         mark(boxAt(index), !checked, false);
-        setStatus(REFUSED);
+        notify(REFUSED);
         return;
       case "signed-out":
         mark(boxAt(index), !checked, false);
-        setStatus(SIGN_IN_TICK, true);
+        notify(SIGN_IN_TICK, true);
         return;
       case "failed":
         if (result.doc === null) mark(boxAt(index), !checked, false);
         else if (!rerender(result.doc)) return;
-        setStatus(FAILED);
+        notify(FAILED);
         return;
     }
   }
@@ -295,6 +343,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     if (since >= 0 && since < SETTLE_MS) return;
     const checked = box.getAttribute("aria-checked") !== "true";
     setStatus("");
+    toast.hide();
     mark(box, checked, true);
     pending.set(index, checked);
     const tapped: Tap = {
@@ -363,6 +412,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
       return current;
     },
     load,
+    refresh,
     async locate(text, heading, mode, fallback) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<false>((resolve) => {

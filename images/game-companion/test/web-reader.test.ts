@@ -173,6 +173,7 @@ const settle = async (): Promise<void> => {
 
 const body = (r: Reader): HTMLElement => r.element.querySelector(".reader-body") as HTMLElement;
 const status = (r: Reader): HTMLElement => r.element.querySelector(".reader-status") as HTMLElement;
+const toast = (r: Reader): HTMLElement => r.element.querySelector(".reader-toast") as HTMLElement;
 const box = (r: Reader, i: number): HTMLElement =>
   r.element.querySelector(`.cb[data-cb="${i}"]`) as HTMLElement;
 
@@ -533,6 +534,342 @@ describe("createReader", () => {
     });
   });
 
+  describe("retries a conflicted tap once against the fresh page", () => {
+    it("when the item is unchanged there: one patch, saved, no message", async () => {
+      const { api, reader, onSaved } = setup();
+      await settle();
+      (api.pages["1"] as Page).revision = 7; // another writer edited elsewhere on the page
+      box(reader, 0).click();
+      await settle();
+      expect(api.patches).toHaveLength(1);
+      expect(api.patches[0]?.lastRevision).toBe(7);
+      expect(api.pages["1"]?.md).toContain("- [x] Potion");
+      expect(box(reader, 0).getAttribute("aria-checked")).toBe("true");
+      expect(box(reader, 0).hasAttribute("aria-busy")).toBe(false);
+      expect(status(reader).textContent).toBe("");
+      expect(onSaved).toHaveBeenCalledTimes(1);
+    });
+
+    it("and holds the saved box for SETTLE_MS like any save", async () => {
+      let now = 1_000_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const { api, reader } = setup();
+        await settle();
+        (api.pages["1"] as Page).revision = 7;
+        box(reader, 0).click();
+        await settle();
+        now += 100;
+        box(reader, 0).click();
+        await settle();
+        expect(api.patches).toHaveLength(1);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it.each([
+      ["its text changed", (md: string) => md.replace("Potion", "Hi-Potion")],
+      ["it was ticked there already", (md: string) => md.replace("- [ ] Potion", "- [x] Potion")],
+      ["an item was added", (md: string) => `${md}\n- [ ] Elixir`],
+      ["an item was removed", (md: string) => md.replace("- [ ] Ether\n", "")],
+    ])("not when %s: the conflict message instead", async (_case, edit) => {
+      const { api, reader, onSaved } = setup();
+      await settle();
+      const page = api.pages["1"] as Page;
+      page.md = edit(page.md);
+      page.revision = 7;
+      box(reader, 0).click();
+      await settle();
+      expect(api.patches).toHaveLength(0);
+      expect(reader.element.querySelectorAll('[aria-busy="true"]')).toHaveLength(0);
+      expect(status(reader).textContent).toBe(
+        "This page changed elsewhere and was refreshed. Tap again.",
+      );
+      expect(onSaved).not.toHaveBeenCalled();
+    });
+
+    it("but never twice: a retry that conflicts again shows the message", async () => {
+      const { api, reader, onSaved } = setup();
+      await settle();
+      const page = api.pages["1"] as Page;
+      const markdown = api.markdown.bind(api);
+      let reads = 0;
+      api.markdown = async (id) => {
+        reads += 1;
+        page.revision += 1; // someone saves just before every read
+        return markdown(id);
+      };
+      box(reader, 0).click();
+      await settle();
+      expect(reads).toBe(2);
+      expect(api.patches).toHaveLength(0);
+      expect(box(reader, 0).getAttribute("aria-checked")).toBe("false");
+      expect(box(reader, 0).hasAttribute("aria-busy")).toBe(false);
+      expect(status(reader).textContent).toBe(
+        "This page changed elsewhere and was refreshed. Tap again.",
+      );
+      expect(onSaved).not.toHaveBeenCalled();
+    });
+
+    it("and lets the taps queued behind it continue when it saves", async () => {
+      const { api, reader, onSaved } = setup();
+      await settle();
+      (api.pages["1"] as Page).revision = 7;
+      box(reader, 0).click();
+      box(reader, 1).click();
+      await settle();
+      expect(api.patches.map((p) => p.lastRevision)).toEqual([7, 8]);
+      expect(api.pages["1"]?.md).toContain("- [x] Potion\n- [x] Ether");
+      expect(box(reader, 1).getAttribute("aria-checked")).toBe("true");
+      expect(reader.element.querySelectorAll('[aria-busy="true"]')).toHaveLength(0);
+      expect(status(reader).textContent).toBe("");
+      expect(onSaved).toHaveBeenCalledTimes(2);
+    });
+
+    it("but not after the page was left meanwhile", async () => {
+      const { api, reader } = setup();
+      await settle();
+      (api.pages["1"] as Page).revision = 7;
+      api.hold = true;
+      box(reader, 0).click();
+      await settle();
+      const fresh = api.held.shift(); // the conflict's fresh read
+      reader.load(B);
+      api.held.shift()?.release();
+      await settle();
+      fresh?.release();
+      await settle();
+      expect(api.patches).toHaveLength(0);
+      expect(body(reader).textContent).toContain("Second page text");
+    });
+  });
+
+  describe("tick outcomes in the toast", () => {
+    const SIGN_IN = "Sign in to Outline to tick boxes.";
+    const LINK = '<a href="/" target="_blank" rel="noopener noreferrer">Sign in</a>';
+
+    it("puts the toast after the page, hidden, inside the reader", async () => {
+      const { reader } = setup();
+      await settle();
+      expect(reader.element.lastElementChild).toBe(toast(reader));
+      expect(toast(reader).getAttribute("role")).toBe("status");
+      expect(toast(reader).getAttribute("aria-live")).toBe("polite");
+      expect(toast(reader).hidden).toBe(true);
+    });
+
+    it.each([
+      [
+        "refused",
+        (api: Fake) => ((api.pages["1"] as Page).md += "\n- [ ] Extra"),
+        "Couldn't match this item safely. Tick it in Outline.",
+      ],
+      [
+        "failed",
+        (api: Fake) => (api.fail.markdown = [new OutlineError(0, "other")]),
+        "Couldn't save. Check your connection and try again.",
+      ],
+      [
+        "conflict",
+        (api: Fake) => {
+          const page = api.pages["1"] as Page;
+          page.md += "\n- [ ] Elixir";
+          page.revision = 8;
+        },
+        "This page changed elsewhere and was refreshed. Tap again.",
+      ],
+    ])("shows %s in the toast as well as the status line", async (_kind, arrange, copy) => {
+      const { api, reader } = setup();
+      await settle();
+      arrange(api);
+      box(reader, 0).click();
+      await settle();
+      expect(status(reader).textContent).toBe(copy);
+      expect(toast(reader).hidden).toBe(false);
+      expect(toast(reader).textContent).toBe(copy);
+    });
+
+    it("shows signed out with its Sign in link", async () => {
+      const { api, reader } = setup();
+      await settle();
+      api.fail.patch = [new OutlineError(401, "signed-out")];
+      box(reader, 0).click();
+      await settle();
+      expect(toast(reader).hidden).toBe(false);
+      expect(toast(reader).innerHTML).toBe(`${SIGN_IN} ${LINK}`);
+    });
+
+    it("shows nothing for a save", async () => {
+      const { reader } = setup();
+      await settle();
+      box(reader, 0).click();
+      await settle();
+      expect(toast(reader).hidden).toBe(true);
+    });
+
+    it("keeps load messages to the status line", async () => {
+      const api = fake();
+      api.fail.document = [new OutlineError(401, "signed-out")];
+      const { reader } = setup(A, { outline: api });
+      await settle();
+      expect(status(reader).textContent).toContain("Sign in to Outline to read this page.");
+      expect(toast(reader).hidden).toBe(true);
+    });
+
+    it("hides the last outcome when another box is tapped, or the page is left", async () => {
+      const { api, reader } = setup();
+      await settle();
+      api.fail.markdown = [new OutlineError(0, "other"), new OutlineError(0, "other")];
+      box(reader, 0).click();
+      await settle();
+      expect(toast(reader).hidden).toBe(false);
+      box(reader, 1).click();
+      expect(toast(reader).hidden).toBe(true);
+      await settle();
+      expect(toast(reader).hidden).toBe(false);
+      reader.load(B);
+      expect(toast(reader).hidden).toBe(true);
+    });
+
+    it("hides the outcome after 5 s", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const flush = async (): Promise<void> => {
+        for (let i = 0; i < 40; i++) await Promise.resolve();
+      };
+      const { api, reader } = setup();
+      await flush();
+      api.fail.markdown = [new OutlineError(0, "other")];
+      box(reader, 0).click();
+      await flush();
+      expect(toast(reader).hidden).toBe(false);
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(toast(reader).hidden).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(toast(reader).hidden).toBe(true);
+    });
+  });
+
+  describe("refresh", () => {
+    /** Counts the reads of each page from here on. */
+    const counting = (api: Fake): string[] => {
+      const reads: string[] = [];
+      const inner = api.document.bind(api);
+      api.document = (id, signal) => {
+        reads.push(id);
+        return inner(id, signal);
+      };
+      return reads;
+    };
+
+    it("redraws the page shown when it changed, at the same scroll position", async () => {
+      const { api, reader } = setup();
+      scrollable(reader);
+      await settle();
+      reader.element.scrollTop = 420;
+      const page = api.pages["1"] as Page;
+      page.md = page.md.replace("Plain words", "Newer words");
+      page.revision = 9;
+      reader.refresh();
+      await settle();
+      expect(body(reader).textContent).toContain("Newer words");
+      expect(reader.element.scrollTop).toBe(420);
+      expect(status(reader).textContent).toBe("");
+      expect(toast(reader).hidden).toBe(true);
+      // A tap after it is made against the refreshed revision.
+      box(reader, 0).click();
+      await settle();
+      expect(api.patches[0]?.lastRevision).toBe(9);
+    });
+
+    it("leaves the page alone when its revision is the same", async () => {
+      const { api, reader } = setup();
+      await settle();
+      const reads = counting(api);
+      const before = box(reader, 0);
+      reader.refresh();
+      await settle();
+      expect(reads).toEqual(["1"]);
+      expect(box(reader, 0)).toBe(before);
+    });
+
+    it("does not read while a tap is pending or queued", async () => {
+      const { api, reader } = setup();
+      await settle();
+      api.hold = true;
+      box(reader, 0).click();
+      box(reader, 1).click();
+      await settle();
+      const reads = counting(api);
+      reader.refresh();
+      await settle();
+      expect(reads).toEqual([]);
+    });
+
+    it("drops its answer when a tap was made while it was reading", async () => {
+      const { api, reader } = setup();
+      await settle();
+      api.hold = true;
+      (api.pages["1"] as Page).revision = 9;
+      reader.refresh();
+      box(reader, 0).click();
+      api.held.shift()?.release();
+      await settle();
+      expect(box(reader, 0).getAttribute("aria-busy")).toBe("true");
+      expect(body(reader).textContent).toContain("Potion");
+    });
+
+    it("drops its answer when the page was left meanwhile", async () => {
+      const { api, reader } = setup();
+      await settle();
+      api.hold = true;
+      (api.pages["1"] as Page).revision = 9;
+      reader.refresh();
+      const stale = api.held.shift();
+      reader.load(B);
+      api.held.shift()?.release();
+      await settle();
+      stale?.release();
+      await settle();
+      expect(body(reader).textContent).toContain("Second page text");
+    });
+
+    it("changes nothing and says nothing when the read fails", async () => {
+      const { api, reader } = setup();
+      await settle();
+      api.fail.document = [new OutlineError(0, "other")];
+      const markup = body(reader).innerHTML;
+      reader.refresh();
+      await settle();
+      expect(body(reader).innerHTML).toBe(markup);
+      expect(status(reader).textContent).toBe("");
+      expect(toast(reader).hidden).toBe(true);
+    });
+
+    it("does nothing while the page is loading, after a failed load, or after dispose", async () => {
+      const api = fake();
+      api.hold = true;
+      const { reader } = setup(A, { outline: api });
+      const reads = counting(api);
+      reader.refresh();
+      expect(reads).toEqual([]);
+      api.held.shift()?.release();
+      await settle();
+      api.hold = false;
+      api.fail.document = [new OutlineError(500, "other")];
+      reader.load(B);
+      await settle();
+      reads.length = 0;
+      reader.refresh();
+      expect(reads).toEqual([]);
+      reader.load(A);
+      await settle();
+      reader.dispose();
+      reads.length = 0;
+      reader.refresh();
+      expect(reads).toEqual([]);
+    });
+  });
+
   it("queues a second tap until the first is saved", async () => {
     const { api, reader, onSaved } = setup();
     await settle();
@@ -566,10 +903,11 @@ describe("createReader", () => {
     expect(box(reader, 1).hasAttribute("aria-busy")).toBe(false);
   });
 
-  it("drops queued taps after a conflict", async () => {
+  it("drops queued taps after a conflict it does not retry", async () => {
     const { api, reader, onSaved } = setup();
     await settle();
     const page = api.pages["1"] as Page;
+    page.md = page.md.replace("Potion", "Hi-Potion");
     page.revision = 7;
     box(reader, 0).click();
     box(reader, 1).click();

@@ -56,7 +56,7 @@ function slugOf(value: string): string {
 }
 
 /** The first `LABEL_LIMIT` characters of a checkbox's own text, whitespace collapsed. */
-function checkboxLabel(item: PMNode): string {
+export function checkboxLabel(item: PMNode): string {
   const first = item.content?.[0];
   const plain = first ? textOf(first).replace(/\s+/g, " ").trim() : "";
   const cut = Array.from(plain).slice(0, LABEL_LIMIT).join("").trim();

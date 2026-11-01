@@ -1411,6 +1411,7 @@ describe("reader slots", () => {
     url: string;
     load: Mock<(url: string) => void>;
     locate: Mock<Reader["locate"]>;
+    refresh: Mock<() => void>;
     dispose: Mock<() => void>;
   }
 
@@ -1426,6 +1427,7 @@ describe("reader slots", () => {
           r.url = next;
         }),
         locate: vi.fn<Reader["locate"]>(async () => true),
+        refresh: vi.fn<() => void>(),
         dispose: vi.fn<() => void>(),
       };
       made.push(r);
@@ -1490,6 +1492,17 @@ describe("reader slots", () => {
     f.show(0, "/doc/a-1", "reader");
     expect(f.element.querySelectorAll("iframe")).toHaveLength(0);
     expect(made[0]?.element.isConnected).toBe(true);
+  });
+
+  it("refreshReaders refreshes every kept reader, shown or hidden, and nothing dropped", () => {
+    const { f, made } = withReaders();
+    f.show(0, "/doc/a-1", "reader");
+    f.show(1, "/doc/b-2", "reader");
+    f.show(2, "/doc/c-3", "reader");
+    f.show(3, "/doc/d-4", "doc");
+    f.sync(["/doc/a-1", "/doc/b-2", null, "/doc/d-4"]);
+    f.refreshReaders();
+    expect(made.map((r) => r.refresh.mock.calls.length)).toEqual([1, 1, 0]);
   });
 
   it("refuses an unsafe address for a reader", () => {
@@ -1585,7 +1598,14 @@ describe("reader slots", () => {
         element.className = "reader";
         element.innerHTML = '<div id="note" contenteditable="true">x</div>';
         made.push(element);
-        return { element, url, load: () => {}, locate: async () => false, dispose: () => {} };
+        return {
+          element,
+          url,
+          load: () => {},
+          refresh: () => {},
+          locate: async () => false,
+          dispose: () => {},
+        };
       },
     });
     f.show(0, "/doc/a-1", "reader");

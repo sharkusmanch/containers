@@ -19,6 +19,12 @@ export interface Frames {
    */
   sync(urls: (string | null)[]): void;
   reset(): void;
+  /**
+   * Asks every kept reader, the hidden slots' too, to read its page again in the background (see
+   * Reader.refresh). A hidden reader is refreshed now rather than when next shown, so it is
+   * current the moment its tab is chosen; there are only a few slots.
+   */
+  refreshReaders(): void;
   /** Hides (or restores) the wiki's sidebar and top bar in every frame, now and as they load. */
   setHideChrome(hide: boolean): void;
   /**
@@ -261,6 +267,9 @@ export function createFrames(
         if (kept !== undefined) used.add(kept);
       }
       for (const e of old) if (!used.has(e)) drop(e);
+    },
+    refreshReaders() {
+      for (const entry of entries) entry?.reader?.refresh();
     },
     reset() {
       for (const entry of entries) if (entry !== null) drop(entry);

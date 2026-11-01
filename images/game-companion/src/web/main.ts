@@ -40,7 +40,7 @@ import type { LocateMode } from "./locate.js";
 import type { OutlineApi } from "./outline-api.js";
 import { createPicker } from "./picker.js";
 import { createRail, type PageProgressLabel } from "./rail.js";
-import { createReader } from "./reader.js";
+import { RETURN_REFRESH_MS, createReader } from "./reader.js";
 import { choosePanes, createDivider } from "./split.js";
 import {
   ACHIEVEMENTS,
@@ -1713,6 +1713,16 @@ export function startApp(opts: AppOptions): App {
     if (isTextEntry(event.relatedTarget)) return;
     applyLayoutMode();
     showSettings();
+  });
+  // Back after a while in the background, the guide pages open in readers are read again.
+  let hiddenAt: number | null = doc.visibilityState === "hidden" ? Date.now() : null;
+  doc.addEventListener("visibilitychange", () => {
+    if (doc.visibilityState === "hidden") {
+      hiddenAt ??= Date.now();
+      return;
+    }
+    if (hiddenAt !== null && Date.now() - hiddenAt >= RETURN_REFRESH_MS) frames.refreshReaders();
+    hiddenAt = null;
   });
 
   render();

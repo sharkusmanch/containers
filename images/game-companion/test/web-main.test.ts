@@ -6935,6 +6935,39 @@ describe("guide reader", () => {
     ).toEqual(["AC", "CO"]);
   });
 
+  it("reads the open reader's page again on return after a minute or more hidden", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const { state } = await start();
+      railButtons()[1]?.click();
+      await flush();
+      expect(state.documentCalls).toEqual(["checklist"]);
+      // Another writer ticks Potion while the app is in the background.
+      state.checked = true;
+      state.revision += 1;
+      const away = async (ms: number): Promise<void> => {
+        const visibility = vi.spyOn(document, "visibilityState", "get");
+        visibility.mockReturnValue("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+        vi.setSystemTime(Date.now() + ms);
+        visibility.mockReturnValue("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
+        visibility.mockRestore();
+        await flush();
+        await flush();
+      };
+      await away(59_999);
+      expect(state.documentCalls).toEqual(["checklist"]);
+      expect(($(".reader .cb") as HTMLElement).getAttribute("aria-checked")).toBe("false");
+      await away(60_000);
+      expect(state.documentCalls).toEqual(["checklist", "checklist"]);
+      expect(($(".reader .cb") as HTMLElement).getAttribute("aria-checked")).toBe("true");
+      expect(($(".reader-status") as HTMLElement).textContent).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("frames every guide page without an Outline client, as before", async () => {
     await start(fakeApi(playing(hubA)), false);
     railButtons()[1]?.click();
