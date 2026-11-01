@@ -303,9 +303,9 @@ state dimmed until Outline has saved it and a fresh read of the page confirms it
 count follows at once. The tick is written by the browser as the signed-in Outline user, so it
 appears in the page's history under your name; there is no server-side writer key. Signed out
 of Outline, the page stays readable and a **Sign in** link is shown instead of saving. If the
-page changed elsewhere since it was shown, the tap is saved against the fresh page when that
-item is still where it was, with the same text and state; otherwise the page is refreshed and
-the tap has to be made again.
+page changed elsewhere since it was shown, the tap is saved against the fresh page when the
+only change was other boxes being ticked or unticked; any other edit (text, headings, items
+added, moved or removed) refreshes the page and the tap has to be made again.
 
 Since v0.19.1 a tick that does not save (refused, signed out, failed or changed elsewhere) also
 says so in a note at the bottom of the reader for 5 seconds (tap to dismiss), since the status

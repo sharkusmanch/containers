@@ -4,7 +4,7 @@
  * and `guide-tick`.
  */
 import { checkboxItems } from "./guide-checkbox.js";
-import { checkboxText, renderGuide } from "./guide-render.js";
+import { renderGuide } from "./guide-render.js";
 import { tick, type TickResult } from "./guide-tick.js";
 import { locateInElement, type LocateMode } from "./locate.js";
 import { OutlineError, type GuideDocument, type OutlineApi } from "./outline-api.js";
@@ -71,27 +71,38 @@ interface Tap {
   doc: GuideDocument;
 }
 
-/** The full text of every checkbox of a document, in order, once worked out. */
-const itemTexts = new WeakMap<GuideDocument, readonly string[]>();
+/** `value` as JSON with sorted keys, leaving out `checked` when `dropChecked`. */
+function canonical(value: unknown, dropChecked = false): string {
+  if (Array.isArray(value)) return `[${value.map((v) => canonical(v)).join(",")}]`;
+  if (typeof value !== "object" || value === null) return JSON.stringify(value) ?? "null";
+  const record = value as Record<string, unknown>;
+  const item = record["type"] === "checkbox_item";
+  const fields = Object.keys(record)
+    .filter((key) => record[key] !== undefined && !(dropChecked && key === "checked"))
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonical(record[key], item && key === "attrs")}`);
+  return `{${fields.join(",")}}`;
+}
 
-function textsOf(doc: GuideDocument): readonly string[] {
-  let texts = itemTexts.get(doc);
-  if (texts === undefined) {
-    texts = checkboxItems(doc.data).map(checkboxText);
-    itemTexts.set(doc, texts);
+/** Each document's page without its tick states, once worked out. */
+const skeletons = new WeakMap<GuideDocument, string>();
+
+function skeletonOf(doc: GuideDocument): string {
+  let skeleton = skeletons.get(doc);
+  if (skeleton === undefined) {
+    skeleton = canonical(doc.data);
+    skeletons.set(doc, skeleton);
   }
-  return texts;
+  return skeleton;
 }
 
 /**
- * True when `next` has the same checkboxes, by full text and in the same order, as `before`: an
- * index then names the same item in both. Comparing the one item at the index is not enough, as
- * labels repeat ("Chest" in every room) and other items can shift a twin onto it.
+ * True when `next` differs from `before` in nothing but which boxes are ticked: an index then
+ * names the same item in both. Anything else (an edited, moved, added or removed item, a heading,
+ * prose) may shift a twin onto the index ("Chest" in every room), so the tap is not carried over.
  */
-function sameItems(before: GuideDocument, next: GuideDocument): boolean {
-  const a = textsOf(before);
-  const b = textsOf(next);
-  return a.length === b.length && a.every((text, i) => text === b[i]);
+function onlyTicksDiffer(before: GuideDocument, next: GuideDocument): boolean {
+  return skeletonOf(before) === skeletonOf(next);
 }
 
 /** Reading positions by page id, shared by every reader for the session. */
@@ -289,12 +300,12 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     }
   }
 
-  /** True when `fresh` has the same items as the tapped page, the tapped one in its old state. */
+  /** True when only tick states changed since the tap, the tapped box's not among them. */
   function unchanged(fresh: GuideDocument, tapped: Tap): boolean {
     const item = checkboxItems(fresh.data)[tapped.index];
     return (
       item !== undefined &&
-      sameItems(tapped.doc, fresh) &&
+      onlyTicksDiffer(tapped.doc, fresh) &&
       (item.attrs?.["checked"] === true) === !tapped.checked
     );
   }
@@ -304,7 +315,7 @@ export function createReader(deps: ReaderDeps, url: string): Reader {
     if (gen !== generation || shown === null) return;
     // An earlier save's read-back may carry another writer's edit: the same index may now be a
     // different item. Never patch it; refresh instead.
-    if (shown !== tapped.doc && !sameItems(tapped.doc, shown)) {
+    if (shown !== tapped.doc && !onlyTicksDiffer(tapped.doc, shown)) {
       const before = shown;
       let fresh = before;
       try {

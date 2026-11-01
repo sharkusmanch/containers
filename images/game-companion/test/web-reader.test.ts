@@ -612,18 +612,18 @@ describe("createReader", () => {
       expect(onSaved).not.toHaveBeenCalled();
     });
 
-    it("when another box was ticked and prose edited elsewhere: saves the tapped item", async () => {
+    it("when another box was ticked elsewhere: saves the tapped item", async () => {
       const { api, reader, onSaved } = setup();
       await settle();
       const page = api.pages["1"] as Page;
-      page.md = page.md.replace("- [ ] Ether", "- [x] Ether").replace("Plain words", "New words");
+      page.md = page.md.replace("- [ ] Ether", "- [x] Ether").replace("- [x] Done", "- [ ] Done");
       page.revision = 7;
       box(reader, 0).click();
       await settle();
       expect(api.patches).toHaveLength(1);
-      expect(api.pages["1"]?.md).toContain("- [x] Potion\n- [x] Ether");
+      expect(api.pages["1"]?.md).toContain("- [x] Potion\n- [x] Ether\n- [ ] Done");
       expect(box(reader, 0).getAttribute("aria-checked")).toBe("true");
-      expect(body(reader).textContent).toContain("New words");
+      expect(box(reader, 1).getAttribute("aria-checked")).toBe("true");
       expect(status(reader).textContent).toBe("");
       expect(onSaved).toHaveBeenCalledTimes(1);
     });
@@ -642,6 +642,22 @@ describe("createReader", () => {
         2,
         (md: string) => `${md.replace("- [ ] Potion", "Potion")}\n- [ ] Elixir`,
       ],
+      [
+        "a Chest is removed under room A and one added under room B",
+        "## Room A\n\n- [ ] Chest\n- [ ] Chest\n\n## Room B\n\n- [ ] Chest\n- [ ] Key",
+        1,
+        (md: string) =>
+          md
+            .replace("- [ ] Chest\n- [ ] Chest\n", "- [ ] Chest\n")
+            .replace("## Room B\n\n", "## Room B\n\n- [ ] Chest\n"),
+      ],
+      [
+        "prose was edited elsewhere (a deliberate trade-off: only tick states may differ)",
+        MD_A,
+        0,
+        (md: string) => md.replace("Plain words", "New words"),
+      ],
+      ["a heading was renamed", MD_A, 0, (md: string) => md.replace("## Area", "## Area One")],
       [
         "labels equal in their first 80 characters shift",
         `- [ ] ${LONG} first\n- [ ] ${LONG} second`,
@@ -879,7 +895,7 @@ describe("createReader", () => {
       await settle();
       api.hold = true;
       const page = api.pages["1"] as Page;
-      page.md = page.md.replace("Plain words", "Newer words");
+      page.md = page.md.replace("- [ ] Ether", "- [x] Ether");
       page.revision = 9;
       reader.refresh();
       box(reader, 0).click();
@@ -887,14 +903,13 @@ describe("createReader", () => {
       api.held.shift()?.release(); // the refresh's read
       await settle();
       // The tap's own save redraws the page; until then the page and the busy box stay.
-      expect(body(reader).textContent).toContain("Plain words");
-      expect(body(reader).textContent).not.toContain("Newer words");
+      expect(box(reader, 1).getAttribute("aria-checked")).toBe("false");
       expect(box(reader, 0).getAttribute("aria-busy")).toBe("true");
       while (api.held.length > 0) {
         api.held.shift()?.release();
         await settle();
       }
-      expect(body(reader).textContent).toContain("Newer words");
+      expect(box(reader, 1).getAttribute("aria-checked")).toBe("true");
       expect(box(reader, 0).getAttribute("aria-checked")).toBe("true");
       expect(box(reader, 0).hasAttribute("aria-busy")).toBe(false);
     });
@@ -1041,6 +1056,41 @@ describe("createReader", () => {
       expect(api.patches).toHaveLength(1);
     },
   );
+
+  it("does not tick a queued item when anything but tick states changed with a save", async () => {
+    const { api, reader, onSaved } = setup();
+    await settle();
+    api.afterPatch = (p) => {
+      api.afterPatch = undefined;
+      p.md = p.md.replace("Plain words", "New words");
+      p.revision += 1;
+    };
+    box(reader, 0).click();
+    box(reader, 1).click();
+    await settle();
+    expect(api.patches).toHaveLength(1);
+    expect(api.pages["1"]?.md).toContain("- [ ] Ether");
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(status(reader).textContent).toBe(
+      "This page changed elsewhere and was refreshed. Tap again.",
+    );
+  });
+
+  it("still ticks a queued item when only tick states changed with a save", async () => {
+    const { api, reader, onSaved } = setup();
+    await settle();
+    api.afterPatch = (p) => {
+      api.afterPatch = undefined;
+      p.md = p.md.replace("- [x] Done", "- [ ] Done");
+      p.revision += 1;
+    };
+    box(reader, 0).click();
+    box(reader, 1).click();
+    await settle();
+    expect(api.patches).toHaveLength(2);
+    expect(api.pages["1"]?.md).toContain("- [x] Potion\n- [x] Ether\n- [ ] Done");
+    expect(onSaved).toHaveBeenCalledTimes(2);
+  });
 
   it("does not tick a queued item when a repeated label shifts onto it with a save", async () => {
     const api = fake();

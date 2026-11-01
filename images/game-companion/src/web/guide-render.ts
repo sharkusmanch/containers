@@ -55,15 +55,11 @@ function slugOf(value: string): string {
   return slug === "" ? "section" : slug;
 }
 
-/** A checkbox's own text (its first paragraph), whitespace collapsed, in full. */
-export function checkboxText(item: PMNode): string {
-  const first = item.content?.[0];
-  return first ? textOf(first).replace(/\s+/g, " ").trim() : "";
-}
-
 /** The first `LABEL_LIMIT` characters of a checkbox's own text, whitespace collapsed. */
 function checkboxLabel(item: PMNode): string {
-  const cut = Array.from(checkboxText(item)).slice(0, LABEL_LIMIT).join("").trim();
+  const first = item.content?.[0];
+  const plain = first ? textOf(first).replace(/\s+/g, " ").trim() : "";
+  const cut = Array.from(plain).slice(0, LABEL_LIMIT).join("").trim();
   return cut === "" ? "Checkbox" : cut;
 }
 
