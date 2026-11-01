@@ -139,6 +139,30 @@ export function createOutlineApi(deps: {
     }
   }
 
+  /**
+   * Asks Outline to set its CSRF cookie again and answers the token, or null when it still has
+   * none. iOS can drop that session cookie while the web app is suspended; Outline sets it on any
+   * same-origin GET or HEAD, even an unauthenticated one. A request that cannot be sent fails as a
+   * connection error (status 0, "other").
+   */
+  async function mintCsrf(): Promise<string | null> {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(new Error("outline request timed out")), timeoutMs);
+    try {
+      await deps.fetch("/robots.txt", {
+        method: "HEAD",
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: ctl.signal,
+      });
+    } catch {
+      throw new OutlineError(0, "other");
+    } finally {
+      clearTimeout(timer);
+    }
+    return csrfToken(deps.cookie());
+  }
+
   return {
     async document(id, signal) {
       const { status, json } = await post(
@@ -166,19 +190,29 @@ export function createOutlineApi(deps: {
 
     // The v3 answer (`{ data: { document } }`) is not read: guide-tick reads the page back.
     async patch(id, edit) {
-      const token = csrfToken(deps.cookie());
+      const update = (token: string): Promise<unknown> =>
+        post(
+          "documents.update",
+          { "x-api-version": "3", "x-csrf-token": token },
+          {
+            id,
+            editMode: "patch",
+            findText: edit.findText,
+            text: edit.text,
+            lastRevision: edit.lastRevision,
+          },
+        );
+      const token = csrfToken(deps.cookie()) ?? (await mintCsrf());
       if (token === null) throw new OutlineError(0, "signed-out");
-      await post(
-        "documents.update",
-        { "x-api-version": "3", "x-csrf-token": token },
-        {
-          id,
-          editMode: "patch",
-          findText: edit.findText,
-          text: edit.text,
-          lastRevision: edit.lastRevision,
-        },
-      );
+      try {
+        await update(token);
+      } catch (e) {
+        // 403 is how Outline refuses a stale or missing CSRF token: mint it and try once more.
+        if (!(e instanceof OutlineError && e.status === 403)) throw e;
+        const fresh = await mintCsrf();
+        if (fresh === null) throw e;
+        await update(fresh);
+      }
     },
   };
 }

@@ -275,14 +275,126 @@ describe("OutlineApi.patch", () => {
     expect(f.headers(0).get("x-csrf-token")).toBe("late");
   });
 
-  it("rejects as signed out without a request when there is no CSRF cookie", async () => {
-    const f = fake(200, {});
+  /**
+   * Answers each update with the next status of `statuses` (the last one repeats). `mint` runs on
+   * a HEAD: what Outline's CSRF middleware does to the cookie jar on any GET or HEAD.
+   */
+  function scripted(
+    statuses: number[],
+    mint: () => void = () => undefined,
+  ): { fn: typeof fetch; calls: Call[]; headers: (i: number) => Headers } {
+    const calls: Call[] = [];
+    let next = 0;
+    const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: input as string, init: init ?? {} });
+      if (init?.method === "HEAD") {
+        mint();
+        return new Response(null, { status: 200 });
+      }
+      const status = statuses[Math.min(next, statuses.length - 1)] ?? 200;
+      next += 1;
+      return new Response(JSON.stringify({}), { status });
+    }) as typeof fetch;
+    return { fn, calls, headers: (i) => new Headers(calls[i]?.init.headers) };
+  }
+
+  it("mints a missing CSRF cookie with one same-origin HEAD, then saves with it", async () => {
+    let cookie = "x=1";
+    const f = scripted([200], () => {
+      cookie = "x=1; __Host-csrfToken=fresh.sig";
+    });
+    await createOutlineApi({ fetch: f.fn, cookie: () => cookie }).patch("abc", edit);
+    expect(f.calls.map((c) => [c.url, c.init.method])).toEqual([
+      ["/robots.txt", "HEAD"],
+      ["/api/documents.update", "POST"],
+    ]);
+    expect(f.calls[0]?.init.credentials).toBe("same-origin");
+    expect(f.calls[0]?.init.cache).toBe("no-store");
+    expect(f.calls[0]?.init.signal).toBeInstanceOf(AbortSignal);
+    expect(f.headers(1).get("x-csrf-token")).toBe("fresh.sig");
+  });
+
+  it("rejects as signed out without an update when the HEAD sets no cookie", async () => {
+    const f = scripted([200]);
     const err = await rejection(
       createOutlineApi({ fetch: f.fn, cookie: () => "x=1" }).patch("abc", edit),
     );
     expect(err).toBeInstanceOf(OutlineError);
     expect(err).toMatchObject({ status: 0, kind: "signed-out" });
-    expect(f.calls).toHaveLength(0);
+    expect(f.calls.map((c) => c.init.method)).toEqual(["HEAD"]);
+  });
+
+  it("fails as a connection error, without an update, when the HEAD cannot be sent", async () => {
+    const calls: string[] = [];
+    const fn = (async (input: RequestInfo | URL) => {
+      calls.push(input as string);
+      throw new TypeError("Failed to fetch");
+    }) as typeof fetch;
+    const err = await rejection(createOutlineApi({ fetch: fn, cookie: () => "" }).patch("a", edit));
+    expect(err).toBeInstanceOf(OutlineError);
+    expect(err).toMatchObject({ status: 0, kind: "other" });
+    expect(calls).toEqual(["/robots.txt"]);
+  });
+
+  it("times the HEAD out like any other request", async () => {
+    const fn = ((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason as Error));
+      })) as typeof fetch;
+    const api = createOutlineApi({ fetch: fn, cookie: () => "", timeoutMs: 10 });
+    const err = await rejection(api.patch("a", edit));
+    expect(err).toMatchObject({ status: 0, kind: "other" });
+  });
+
+  it("on a 403, mints the cookie again and retries the update once", async () => {
+    let cookie = "__Host-csrfToken=old.sig";
+    const f = scripted([403, 200], () => {
+      cookie = "__Host-csrfToken=new.sig";
+    });
+    await createOutlineApi({ fetch: f.fn, cookie: () => cookie }).patch("abc", edit);
+    expect(f.calls.map((c) => [c.url, c.init.method])).toEqual([
+      ["/api/documents.update", "POST"],
+      ["/robots.txt", "HEAD"],
+      ["/api/documents.update", "POST"],
+    ]);
+    expect(f.headers(0).get("x-csrf-token")).toBe("old.sig");
+    expect(f.headers(2).get("x-csrf-token")).toBe("new.sig");
+    expect(f.calls[2]?.init.body).toBe(f.calls[0]?.init.body);
+  });
+
+  it("maps a second 403 to signed out, after exactly one retry", async () => {
+    const f = scripted([403]);
+    const err = await rejection(
+      createOutlineApi({ fetch: f.fn, cookie: () => COOKIE }).patch("abc", edit),
+    );
+    expect(err).toBeInstanceOf(OutlineError);
+    expect(err).toMatchObject({ status: 403, kind: "signed-out" });
+    expect(f.calls.map((c) => c.init.method)).toEqual(["POST", "HEAD", "POST"]);
+  });
+
+  it("maps a 403 to signed out without a retry when no cookie can be minted", async () => {
+    let cookie = COOKIE;
+    const f = scripted([403], () => {
+      cookie = "";
+    });
+    const err = await rejection(
+      createOutlineApi({ fetch: f.fn, cookie: () => cookie }).patch("abc", edit),
+    );
+    expect(err).toMatchObject({ status: 403, kind: "signed-out" });
+    expect(f.calls.map((c) => c.init.method)).toEqual(["POST", "HEAD"]);
+  });
+
+  it.each([
+    [401, "signed-out"],
+    [409, "conflict"],
+    [500, "other"],
+  ])("never retries an update answered %i", async (status, kind) => {
+    const f = scripted([status]);
+    const err = await rejection(
+      createOutlineApi({ fetch: f.fn, cookie: () => COOKIE }).patch("abc", edit),
+    );
+    expect(err).toMatchObject({ status, kind });
+    expect(f.calls.map((c) => c.init.method)).toEqual(["POST"]);
   });
 });
 
