@@ -58,7 +58,7 @@ lookup never fails the list.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.19.0
+- **Version**: v0.19.1
 
 ## Usage
 
@@ -69,7 +69,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.19.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.19.1
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -303,7 +303,17 @@ state dimmed until Outline has saved it and a fresh read of the page confirms it
 count follows at once. The tick is written by the browser as the signed-in Outline user, so it
 appears in the page's history under your name; there is no server-side writer key. Signed out
 of Outline, the page stays readable and a **Sign in** link is shown instead of saving. If the
-page changed elsewhere since it was shown, it is refreshed and the tap has to be made again.
+page changed elsewhere since it was shown, the tap is saved against the fresh page when that
+item is still where it was, with the same text and state; otherwise the page is refreshed and
+the tap has to be made again.
+
+Since v0.19.1 a tick that does not save (refused, signed out, failed or changed elsewhere) also
+says so in a note at the bottom of the reader for 5 seconds (tap to dismiss), since the status
+line at the top of the page has usually scrolled away. Coming back to the app after a minute or
+more in the background reads the open pages again and redraws any that changed, at the same
+place; a page with a tap still saving is left alone. If iOS dropped Outline's CSRF cookie while
+the app was suspended, the reader asks Outline for a new one before saving instead of asking you
+to sign in.
 
 A tick is saved as a small patch to the page's Markdown, and only when that item's line (with
 its neighbours in the same block) occurs exactly once. Where it does not, about 0.4% of the
