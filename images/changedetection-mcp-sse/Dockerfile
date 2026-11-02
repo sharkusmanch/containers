@@ -4,7 +4,7 @@
 ARG CHANGEDETECTION_MCP_COMMIT=418621862beef008a403bdab7aa3c902af945fee
 
 # renovate: datasource=github-releases depName=sparfenyuk/mcp-proxy
-ARG MCP_PROXY_VERSION=v0.13.0
+ARG MCP_PROXY_VERSION=v0.13.2
 
 # Held at 1.x ON PURPOSE. mcp-proxy 0.12.0 declares `mcp>=1.17.0` with no upper
 # bound, but mcp 2.x dropped `mcp.server.lowlevel.server.request_ctx`, which
