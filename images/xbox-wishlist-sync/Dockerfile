@@ -3,7 +3,7 @@
 # Pinned to a commit of the xbox-wishlist-sync source. Pin only commits whose CI passed in that
 # repo; Renovate tracks main and opens a PR per new commit.
 # renovate: datasource=github-commits depName=sharkusmanch/xbox-wishlist-sync branch=main
-ARG WSYNC_COMMIT=6699f66e65c82a1f20ea0e0dcc068812ceb7762e
+ARG WSYNC_COMMIT=b1ecdb0aa18b7cabe5405fe1f4109cf9c0a41df7
 
 # renovate: datasource=docker depName=python versioning=docker
 ARG PYTHON_VERSION=3.15
