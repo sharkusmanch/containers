@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // A stand-in for `claude` in the server tests. It records how it was started in
-// `<cwd>/fake-<pid>.json`, then does what the question in its prompt (the last argument) says:
+// `<FAKE_CLAUDE_RECORDS or cwd>/fake-<pid>.json`, then does what the question in its prompt (the
+// last argument) says; in a label prompt, what its first title says:
 //   replay:<file>     print the file's stream-json lines and exit 0
 //   replay-bg:<file>  the same, leaving a background grandchild running
 //   sleep:<ms>        print an init line, wait, exit 0 without a result
@@ -14,14 +15,21 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
 const prompt = args[args.length - 1] ?? "";
-const question = /Question: (.*)$/s.exec(prompt)?.[1] ?? "";
+const titles = /\nTitles:\n(\[.*\])$/s.exec(prompt)?.[1];
+const question =
+  titles === undefined
+    ? (/Question: (.*)$/s.exec(prompt)?.[1] ?? "")
+    : String(JSON.parse(titles)[0] ?? "");
 const colon = question.indexOf(":");
 const mode = colon === -1 ? question : question.slice(0, colon);
 const arg = colon === -1 ? "" : question.slice(colon + 1);
 
 const record = { argv: args, env: process.env, cwd: process.cwd(), pid: process.pid };
 const save = () =>
-  writeFileSync(`${process.cwd()}/fake-${process.pid}.json`, JSON.stringify(record));
+  writeFileSync(
+    `${process.env.FAKE_CLAUDE_RECORDS ?? process.cwd()}/fake-${process.pid}.json`,
+    JSON.stringify(record),
+  );
 save();
 
 const init = JSON.stringify({ type: "system", subtype: "init", tools: [] });

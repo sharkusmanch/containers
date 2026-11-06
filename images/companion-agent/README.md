@@ -4,7 +4,9 @@ Answers the game companion's **Ask** questions with Claude Code. For each questi
 runs `claude -p` headless in a locked-down process: the player's guide and game status through
 the companion's MCP endpoint, read-only RetroAchievements, RomM, Syncthing and Outline MCP tools,
 web search and fetch, a shell for the skill plugins (redlib, vibepollo), and nothing that
-writes. The answer streams back to the companion as NDJSON events.
+writes. The answer streams back to the companion as NDJSON events. It also names guide pages
+for the companion's rail: `POST /label` asks Claude Haiku, with no tools, for a short button label
+per page title.
 
 The service is a small Node HTTP server with no runtime dependencies; Claude Code is installed in
 the image at a pinned version.
@@ -12,7 +14,7 @@ the image at a pinned version.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.3.0
+- **Version**: v0.4.0
 
 ## Usage
 
@@ -25,7 +27,7 @@ docker run --rm -p 8080:8080 \
   -v /path/to/vibepollo-plugin:/agent/skills/vibepollo:ro \
   -e AGENT_SKILLS_DIRS=/agent/skills/redlib,/agent/skills/vibepollo \
   -e AGENT_CHILD_ENV=VIBEPOLLO_TOKEN,VIBEPOLLO_HOST -e VIBEPOLLO_TOKEN=... -e VIBEPOLLO_HOST=... \
-  ghcr.io/sharkusmanch/containers/companion-agent:v0.3.0
+  ghcr.io/sharkusmanch/containers/companion-agent:v0.4.0
 ```
 
 In the cluster it runs as non-root (uid 10000) with a read-only root filesystem, `emptyDir`
@@ -35,7 +37,7 @@ volumes at `/home/agent` and `/tmp`, and no service-account token.
 
 | Variable                    | Required | Description                                                                                                                                                                                                                                                                                                                                                                                         |
 | --------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_TOKEN`               | Yes      | Bearer token the companion sends to `POST /ask`                                                                                                                                                                                                                                                                                                                                                     |
+| `AGENT_TOKEN`               | Yes      | Bearer token the companion sends to `POST /ask` and `POST /label`                                                                                                                                                                                                                                                                                                                                   |
 | `CLAUDE_CODE_OAUTH_TOKEN`   | Yes      | Claude subscription token for `claude -p`                                                                                                                                                                                                                                                                                                                                                           |
 | `HOME`                      | Yes      | Writable directory (image default `/home/agent`); each question gets its own HOME inside it                                                                                                                                                                                                                                                                                                         |
 | `COMPANION_MCP_URL`         | No       | The companion's MCP endpoint. Needs `COMPANION_MCP_TOKEN`                                                                                                                                                                                                                                                                                                                                           |
@@ -71,6 +73,34 @@ configured server lacks its token, or when `allowed-tools.json` allows none of i
   exactly one `done` (`{"type":"done","truncatedGuide":false}`) or `error` at the end. `401` for a
   missing or wrong token, `413` for a larger body, `400` for an invalid one, and
   `429 {"error":"busy"}` while two questions are already running.
+- `POST /label` with the same token and body limit: `{"titles": string[]}`, 1 to 40 titles, each
+  1 to 200 characters once trimmed (duplicates are dropped). Answers
+  `200 {"labels": {"<title>": "<label>"}}` with a label for each title the model named well
+  (possibly none), `400` for an invalid body (nothing is started), `401`, `413`,
+  `429 {"error":"busy"}` with `Retry-After` (seconds) while another label request runs, and
+  `502 {"error":"unavailable"}` when claude fails, prints no result or takes over 30 s.
+
+## How a label request runs
+
+```
+claude -p --output-format json --model haiku --strict-mcp-config --tools ""
+  --disable-slash-commands --permission-mode dontAsk --no-session-persistence -- <prompt>
+```
+
+- **Model and tools.** Always `haiku`, whatever `AGENT_MODEL` says. No built-in tools
+  (`--tools ""`), no MCP servers (`--strict-mcp-config` without `--mcp-config`), no plugin
+  directories and no skills (`--disable-slash-commands`). One run at a time, separate from the
+  two question slots; killed after 30 s.
+- **Prompt.** Fixed text, then the titles as a JSON array; the titles are data, never
+  instructions. It asks for one JSON object mapping each title, exactly, to a single readable
+  word or common abbreviation of 1 to 8 characters, distinct within the list, with no emoji or
+  quotes.
+- **Answer.** The first JSON object in the result text is read; an entry is kept only when its
+  key is one of the titles and its value, trimmed, is 1 to 8 characters (code points) matching
+  `^[\p{L}\p{N}][\p{L}\p{N} &'%.\-]*$`. A label given to two titles is dropped for both.
+- **Process.** As for a question (own process group, allowlisted environment, kill on timeout,
+  disconnect or shutdown), except that claude's working directory is the run's empty HOME, so
+  no house rules load.
 
 ## How a question runs
 
@@ -142,7 +172,9 @@ claude -p --output-format stream-json --verbose --include-partial-messages
 At startup one `listening` line names the plugin directories found (`skills`, by basename) and
 those missing (`skillsMissing`). One JSON line per question: outcome, duration, turns, tool
 calls by name, the result subtype, `total_cost_usd` and token totals. Question, answer and tool
-input text never appear in a log line. Refused requests are logged by status code only.
+input text never appear in a log line. One `label` line per label request: outcome, duration,
+the number of titles and of labels returned, the result subtype, cost and token totals; never a
+title or label. Refused requests are logged by status code only.
 
 ## Development
 

@@ -16,6 +16,8 @@ export interface Config {
   /** The service's writable HOME; each run gets its own directory inside it. */
   homeDir: string;
   timeoutMs: number;
+  /** Longest a label run may take before its process group is killed. */
+  labelTimeoutMs: number;
   /** Time between SIGTERM and SIGKILL to a run's process group. */
   killGraceMs: number;
   /** Ping interval while nothing was written. */
@@ -94,6 +96,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     childEnvNames: childEnvNames(env),
     homeDir: required(env, "HOME"),
     timeoutMs: positiveInt(env, "AGENT_TIMEOUT_MS", 180_000),
+    labelTimeoutMs: 30_000,
     killGraceMs: 3_000,
     pingMs: 15_000,
     maxConcurrent: 2,

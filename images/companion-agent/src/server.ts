@@ -6,8 +6,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
-import { childEnv, claudeArgs } from "./argv.js";
+import { childEnv, claudeArgs, labelArgs } from "./argv.js";
 import type { Config } from "./config.js";
+import { buildLabelPrompt, parseLabelRequest, parseLabels } from "./label.js";
 import { buildPrompt, parseAskRequest, type AskRequest } from "./prompt.js";
 import { signalByHome } from "./reap.js";
 import { REFUSED, Translator, UNAVAILABLE, type AskEvent } from "./translate.js";
@@ -34,6 +35,14 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+type Json = Record<string, unknown>;
+
+const isRecord = (v: unknown): v is Json =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** The most a label run may print; past it the run fails. */
+const LABEL_OUTPUT_MAX = 256 * 1024;
+
 /** Signals a whole process group; a group that is already gone is fine. */
 function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   if (pid === undefined) return;
@@ -42,6 +51,18 @@ function signalGroup(pid: number | undefined, signal: NodeJS.Signals): void {
   } catch {
     // ESRCH: nothing left in the group.
   }
+}
+
+/**
+ * Kills whatever a run left running (SIGTERM, then SIGKILL after the grace period when anything
+ * was found), then removes its HOME.
+ */
+async function sweepHome(home: string, graceMs: number): Promise<void> {
+  if (signalByHome(home, "SIGTERM") > 0) {
+    await new Promise((resolve) => setTimeout(resolve, graceMs));
+    signalByHome(home, "SIGKILL");
+  }
+  await rm(home, { recursive: true, force: true }).catch(() => undefined);
 }
 
 /** One question: a claude process and the NDJSON answer it streams into. */
@@ -220,24 +241,204 @@ class Run {
    * anything was found), then removes its HOME. The slot stays taken until then.
    */
   private async cleanUp(): Promise<void> {
-    const home = this.home;
-    if (home === null) return;
-    if (signalByHome(home, "SIGTERM") > 0) {
-      await new Promise((resolve) => setTimeout(resolve, this.opts.config.killGraceMs));
-      signalByHome(home, "SIGKILL");
+    if (this.home !== null) await sweepHome(this.home, this.opts.config.killGraceMs);
+  }
+}
+
+type LabelOutcome = "done" | "error" | "timeout" | "aborted" | "shutdown";
+
+/** The `result` message of `claude -p --output-format json` output (one object, or an array). */
+function resultMessage(stdout: string): Json | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return null;
+  }
+  const messages: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    if (isRecord(m) && m.type === "result") return m;
+  }
+  return null;
+}
+
+/**
+ * One label request: a haiku run with no tools whose JSON result is turned into labels. Answers
+ * `200 {"labels"}` once claude has exited with a result, else `502` (failure, timeout, shutdown).
+ * The process handling (own group, own HOME, kill on timeout or disconnect) is the question's.
+ */
+class LabelRun {
+  readonly exited: Promise<void>;
+  readonly started: number;
+  private outcome: LabelOutcome | null = null;
+  private child: ChildProcess | null = null;
+  private home: string | null = null;
+  private readonly output: Buffer[] = [];
+  private outputSize = 0;
+  private labelCount: number | null = null;
+  private result: Json | null = null;
+  private timeoutTimer: NodeJS.Timeout | undefined;
+  private killTimer: NodeJS.Timeout | undefined;
+  private exitTimer: NodeJS.Timeout | undefined;
+  private terminating = false;
+  private finalized = false;
+  private markExited!: () => void;
+
+  constructor(
+    private readonly opts: AgentOptions,
+    private readonly res: ServerResponse,
+    private readonly titles: string[],
+    private readonly onExit: () => void,
+  ) {
+    this.started = (opts.now ?? Date.now)();
+    this.exited = new Promise((resolve) => (this.markExited = resolve));
+  }
+
+  /** When the run will have been killed by its timeout at the latest. */
+  get deadline(): number {
+    return this.started + this.opts.config.labelTimeoutMs;
+  }
+
+  async start(): Promise<void> {
+    const { config } = this.opts;
+    this.res.on("close", () => {
+      if (!this.res.writableEnded) this.stop("aborted");
+    });
+    this.timeoutTimer = setTimeout(() => this.stop("timeout"), config.labelTimeoutMs);
+
+    let home: string;
+    try {
+      home = await mkdtemp(join(config.homeDir, "run-"));
+    } catch {
+      this.stop("error");
+      this.finalize();
+      return;
     }
-    await rm(home, { recursive: true, force: true }).catch(() => undefined);
+    this.home = home;
+    if (this.outcome !== null) {
+      this.finalize();
+      return;
+    }
+    let child: ChildProcessByStdio<null, Readable, null>;
+    try {
+      // The run's empty HOME is also its working directory: no house rules or project settings.
+      child = spawn(config.claudeBin, labelArgs(buildLabelPrompt(this.titles)), {
+        cwd: home,
+        env: childEnv(this.opts.baseEnv, home, config.childEnvNames),
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      this.finalize();
+      return;
+    }
+    this.child = child;
+    child.on("error", () => {
+      if (child.pid === undefined) this.finalize();
+    });
+    child.on("exit", () => {
+      signalGroup(child.pid, "SIGKILL");
+      this.exitTimer = setTimeout(() => {
+        child.stdout.destroy();
+        this.finalize();
+      }, config.killGraceMs);
+    });
+    child.on("close", () => this.finalize());
+    child.stdout.on("data", (chunk: Buffer) => {
+      this.outputSize += chunk.length;
+      if (this.outputSize > LABEL_OUTPUT_MAX) this.stop("error");
+      else this.output.push(chunk);
+    });
+  }
+
+  /** Fails the request (when it has not been answered) and kills the process group. */
+  stop(outcome: LabelOutcome): void {
+    if (this.outcome === null) {
+      this.outcome = outcome;
+      this.fail();
+    }
+    this.terminate();
+  }
+
+  private fail(): void {
+    if (this.outcome !== "aborted" && !this.res.headersSent) {
+      json(this.res, 502, { error: "unavailable" });
+    }
+  }
+
+  private terminate(): void {
+    const pid = this.child?.pid;
+    if (this.terminating || pid === undefined || this.child?.exitCode !== null) return;
+    this.terminating = true;
+    this.signalAll(pid, "SIGTERM");
+    this.killTimer = setTimeout(() => this.signalAll(pid, "SIGKILL"), this.opts.config.killGraceMs);
+  }
+
+  private signalAll(pid: number, signal: NodeJS.Signals): void {
+    signalGroup(pid, signal);
+    if (this.home !== null) signalByHome(this.home, signal);
+  }
+
+  /** claude has exited (or never started): answer, log, clean up, free the slot. */
+  private finalize(): void {
+    if (this.finalized) return;
+    this.finalized = true;
+    if (this.outcome === null) {
+      const result = resultMessage(Buffer.concat(this.output).toString("utf8"));
+      this.result = result;
+      if (
+        result !== null &&
+        result.subtype === "success" &&
+        result.is_error !== true &&
+        typeof result.result === "string"
+      ) {
+        const labels = parseLabels(result.result, this.titles);
+        this.outcome = "done";
+        this.labelCount = Object.keys(labels).length;
+        json(this.res, 200, { labels });
+      } else {
+        this.outcome = "error";
+        this.fail();
+      }
+    }
+    clearTimeout(this.timeoutTimer);
+    clearTimeout(this.killTimer);
+    clearTimeout(this.exitTimer);
+    const r = this.result;
+    const usage: Record<string, number> = {};
+    if (r !== null && isRecord(r.usage)) {
+      for (const [k, v] of Object.entries(r.usage)) if (typeof v === "number") usage[k] = v;
+    }
+    this.opts.log("label", {
+      outcome: this.outcome,
+      ms: (this.opts.now ?? Date.now)() - this.started,
+      titles: this.titles.length,
+      labels: this.labelCount,
+      result: r !== null && typeof r.subtype === "string" ? r.subtype : null,
+      costUsd: r !== null && typeof r.total_cost_usd === "number" ? r.total_cost_usd : null,
+      usage,
+    });
+    const home = this.home;
+    void (home === null ? Promise.resolve() : sweepHome(home, this.opts.config.killGraceMs)).then(
+      () => {
+        this.onExit();
+        this.markExited();
+      },
+    );
   }
 }
 
 /**
  * `POST /ask` runs one `claude -p` per question and streams its answer as NDJSON AskEvents.
- * At most `maxConcurrent` questions run at once. Logs carry counts only, never any question,
- * answer or tool input text.
+ * At most `maxConcurrent` questions run at once. `POST /label` runs haiku, one request at a time,
+ * to name guide pages for the rail. Logs carry counts only, never any question, answer, tool
+ * input, title or label text.
  */
 export class AgentServer {
   readonly server: Server;
   private readonly runs = new Set<Run>();
+  private labelRun: LabelRun | null = null;
   private closing = false;
   private readonly tokenDigest: Buffer;
 
@@ -251,9 +452,9 @@ export class AgentServer {
     });
   }
 
-  /** Questions whose claude process has not exited yet. */
+  /** Questions and label runs whose claude process has not exited yet. */
   get running(): number {
-    return this.runs.size;
+    return this.runs.size + (this.labelRun === null ? 0 : 1);
   }
 
   /** Stops accepting, ends every running answer and waits for each process group to die. */
@@ -263,7 +464,9 @@ export class AgentServer {
     this.server.closeIdleConnections();
     const runs = [...this.runs];
     for (const run of runs) run.stop("shutdown");
-    await Promise.all(runs.map((r) => r.exited));
+    const label = this.labelRun;
+    label?.stop("shutdown");
+    await Promise.all([...runs.map((r) => r.exited), label?.exited]);
   }
 
   private refuse(res: ServerResponse, status: number, body: unknown): void {
@@ -274,7 +477,7 @@ export class AgentServer {
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const path = (req.url ?? "").split("?")[0];
     if (path === "/healthz" && req.method === "GET") return json(res, 200, { ok: true });
-    if (path !== "/ask") return json(res, 404, { error: "not found" });
+    if (path !== "/ask" && path !== "/label") return json(res, 404, { error: "not found" });
     if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
     if (!this.authorized(req.headers.authorization)) {
       return this.refuse(res, 401, { error: "unauthorized" });
@@ -290,6 +493,7 @@ export class AgentServer {
     } catch {
       parsed = null;
     }
+    if (path === "/label") return this.label(res, parsed);
     const ask = parseAskRequest(parsed);
     if (ask === null) return this.refuse(res, 400, { error: "invalid body" });
     if (this.closing) return this.refuse(res, 503, { error: "shutting down" });
@@ -299,6 +503,23 @@ export class AgentServer {
     const run = new Run(this.opts, res, (r) => this.runs.delete(r));
     this.runs.add(run);
     await run.start(ask);
+  }
+
+  /** One label run at a time; another request meanwhile gets 429 with the time it may take. */
+  private async label(res: ServerResponse, parsed: unknown): Promise<void> {
+    const titles = parseLabelRequest(parsed);
+    if (titles === null) return this.refuse(res, 400, { error: "invalid body" });
+    if (this.closing) return this.refuse(res, 503, { error: "shutting down" });
+    if (this.labelRun !== null) {
+      const left = this.labelRun.deadline - (this.opts.now ?? Date.now)();
+      res.setHeader("retry-after", String(Math.max(1, Math.ceil(left / 1000))));
+      return this.refuse(res, 429, { error: "busy" });
+    }
+    const run = new LabelRun(this.opts, res, titles, () => {
+      if (this.labelRun === run) this.labelRun = null;
+    });
+    this.labelRun = run;
+    await run.start();
   }
 
   private authorized(header: string | undefined): boolean {

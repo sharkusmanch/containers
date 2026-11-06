@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Config } from "../src/config.js";
+import { labelArgs } from "../src/argv.js";
+import { buildLabelPrompt } from "../src/label.js";
 import { AgentServer } from "../src/server.js";
 import { REFUSED, UNAVAILABLE, type AskEvent } from "../src/translate.js";
 import { ev, fakeClaudePath, fixturePath, textBlock } from "./helpers.js";
@@ -43,9 +45,11 @@ async function start(overrides: Partial<Config> = {}, claudeMd = true): Promise<
     model: "opus",
     projectDir: project,
     skillsDirs: ["/agent/skills/redlib", "/agent/skills/vibepollo"],
-    childEnvNames: ["VIBEPOLLO_TOKEN", "VIBEPOLLO_HOST"],
+    // FAKE_CLAUDE_RECORDS: where the fake claude records itself (a label run's cwd is its HOME).
+    childEnvNames: ["VIBEPOLLO_TOKEN", "VIBEPOLLO_HOST", "FAKE_CLAUDE_RECORDS"],
     homeDir: home,
     timeoutMs: 10_000,
+    labelTimeoutMs: 10_000,
     killGraceMs: 200,
     pingMs: 15_000,
     maxConcurrent: 2,
@@ -64,6 +68,7 @@ async function start(overrides: Partial<Config> = {}, claudeMd = true): Promise<
       AGENT_TOKEN: TOKEN,
       COMPANION_MCP_TOKEN: "mcp-secret",
       VIBEPOLLO_TOKEN: "ro-token-test",
+      FAKE_CLAUDE_RECORDS: project,
     },
     log: (msg, extra = {}) => logs.push({ msg, extra }),
   });
@@ -491,5 +496,226 @@ describe("logging", () => {
   it("logs refused requests by status only", async () => {
     await ask(body("q"), { token: "bad" });
     expect(h.logs).toEqual([{ msg: "refused", extra: { status: 401 } }]);
+  });
+});
+
+function label(
+  payload: string,
+  opts: { token?: string | null; signal?: AbortSignal } = {},
+): Promise<Response> {
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const token = opts.token === undefined ? TOKEN : opts.token;
+  if (token !== null) headers.authorization = `Bearer ${token}`;
+  return fetch(`${h.url}/label`, {
+    method: "POST",
+    headers,
+    body: payload,
+    ...(opts.signal ? { signal: opts.signal } : {}),
+  });
+}
+
+const titlesBody = (titles: unknown): string => JSON.stringify({ titles });
+
+/** What `claude -p --output-format json` prints: one result object. */
+function labelReply(name: string, result: string, fields: Record<string, unknown> = {}): string {
+  return writeStream(name, [
+    JSON.stringify({
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result,
+      num_turns: 1,
+      total_cost_usd: 0.0004,
+      usage: { input_tokens: 120, output_tokens: 30 },
+      ...fields,
+    }),
+  ]);
+}
+
+describe("labels", () => {
+  it("answers the valid labels from haiku's reply", async () => {
+    const file = join(h.dir, "labels.json");
+    const first = `replay:${file}`;
+    labelReply(
+      "labels.json",
+      `Here you go: ${JSON.stringify({
+        [first]: "Walk",
+        "Boss Guide": "Bosses",
+        "Trophy Guide": "Trophies!",
+        Other: "Other",
+      })}`,
+    );
+    const res = await label(titlesBody([first, "Boss Guide", " Trophy Guide ", "Boss Guide"]));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/json");
+    expect(await res.json()).toEqual({ labels: { [first]: "Walk", "Boss Guide": "Bosses" } });
+  });
+
+  it("starts haiku with no tools, in its own HOME, with the allowlisted environment", async () => {
+    const file = labelReply("labels.json", "{}");
+    const titles = [`replay:${file}`, "Boss Guide"];
+    const res = await label(titlesBody(titles));
+    expect(res.status).toBe(200);
+    const [rec] = records();
+    if (!rec) throw new Error("no record");
+    expect(rec.argv).toEqual(labelArgs(buildLabelPrompt(titles)));
+    const runHome = rec.env.HOME ?? "";
+    expect(runHome.startsWith(join(h.home, "run-"))).toBe(true);
+    // No house rules: claude runs in its empty HOME, not the project folder.
+    expect(rec.cwd).toBe(runHome);
+    expect(rec.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-test");
+    expect(rec.env.AGENT_TOKEN).toBeUndefined();
+    expect(rec.env.COMPANION_MCP_TOKEN).toBeUndefined();
+    await until(() => !existsSync(runHome));
+  });
+
+  it("reads the result from the verbose array form as well", async () => {
+    const file = join(h.dir, "array.json");
+    const first = `replay:${file}`;
+    writeFileSync(
+      file,
+      JSON.stringify([
+        { type: "system", subtype: "init" },
+        { type: "result", subtype: "success", is_error: false, result: `{"${first}": "Arr"}` },
+      ]),
+    );
+    const res = await label(titlesBody([first]));
+    expect(await res.json()).toEqual({ labels: { [first]: "Arr" } });
+  });
+
+  it("answers an empty map when the reply holds no JSON object", async () => {
+    const file = labelReply("none.json", "I can't label these.");
+    const res = await label(titlesBody([`replay:${file}`]));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ labels: {} });
+  });
+
+  it.each([
+    ["broken JSON", "{"],
+    ["no titles field", JSON.stringify({ title: "Maps" })],
+    ["an empty list", titlesBody([])],
+    ["41 titles", titlesBody(Array.from({ length: 41 }, (_, i) => `Page ${i}`))],
+    ["a non-string title", titlesBody(["Maps", 1])],
+    ["a blank title", titlesBody(["  "])],
+    ["a 201-character title", titlesBody(["x".repeat(201)])],
+  ])("refuses %s with 400 and starts nothing", async (_name, payload) => {
+    const res = await label(payload);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid body" });
+    expect(h.agent.running).toBe(0);
+    expect(records()).toEqual([]);
+  });
+
+  it("refuses a missing token with 401 and starts nothing", async () => {
+    const res = await label(titlesBody(["Maps"]), { token: null });
+    expect(res.status).toBe(401);
+    expect(records()).toEqual([]);
+  });
+
+  it("answers GET with 405", async () => {
+    expect((await fetch(`${h.url}/label`)).status).toBe(405);
+  });
+
+  it("runs one label request at a time: a second gets 429 with Retry-After", async () => {
+    const first = label(titlesBody(["sleep:600"]));
+    await until(() => records().length === 1);
+    const second = await label(titlesBody(["sleep:10"]));
+    expect(second.status).toBe(429);
+    expect(await second.json()).toEqual({ error: "busy" });
+    const retry = Number(second.headers.get("retry-after"));
+    expect(Number.isInteger(retry)).toBe(true);
+    expect(retry).toBeGreaterThanOrEqual(1);
+    expect(retry).toBeLessThanOrEqual(10);
+    expect(records()).toHaveLength(1);
+    // The sleeping fake prints no result: the CLI failed.
+    expect((await first).status).toBe(502);
+    await until(() => h.agent.running === 0);
+    const file = labelReply("again.json", "{}");
+    expect((await label(titlesBody([`replay:${file}`]))).status).toBe(200);
+  });
+
+  it("is not held up by questions in progress", async () => {
+    const asks = [await ask(body("sleep:600")), await ask(body("sleep:600"))];
+    const file = labelReply("labels.json", "{}");
+    expect((await label(titlesBody([`replay:${file}`]))).status).toBe(200);
+    await Promise.all(asks.map((r) => r.text()));
+  });
+
+  it("answers 502 when claude reports an error", async () => {
+    const file = labelReply("error.json", "", {
+      is_error: true,
+      subtype: "error_during_execution",
+    });
+    const res = await label(titlesBody([`replay:${file}`]));
+    expect(res.status).toBe(502);
+    expect(await res.json()).toEqual({ error: "unavailable" });
+  });
+
+  it("answers 502 when claude cannot start", async () => {
+    await restart({ claudeBin: join(h.dir, "no-such-claude") });
+    const res = await label(titlesBody(["Maps"]));
+    expect(res.status).toBe(502);
+    await until(() => h.agent.running === 0);
+    expect(readdirSync(h.home)).toEqual([]);
+  });
+
+  it("answers 502 and kills everything when haiku times out", async () => {
+    await restart({ labelTimeoutMs: 300 });
+    const started = Date.now();
+    const res = await label(titlesBody(["hang"]));
+    expect(res.status).toBe(502);
+    expect(Date.now() - started).toBeLessThan(3000);
+    await until(() => records()[0]?.grandchild !== undefined);
+    const [rec] = records();
+    await until(() => !alive(rec?.pid ?? 0) && !alive(rec?.grandchild ?? 0));
+    await until(() => h.agent.running === 0);
+    expect(readdirSync(h.home)).toEqual([]);
+    expect(h.logs.find((l) => l.msg === "label")?.extra.outcome).toBe("timeout");
+  });
+
+  it("kills haiku when the client disconnects", async () => {
+    const controller = new AbortController();
+    const pending = label(titlesBody(["hang"]), { signal: controller.signal }).catch(() => null);
+    await until(() => records()[0]?.grandchild !== undefined);
+    const [rec] = records();
+    controller.abort();
+    await pending;
+    await until(() => !alive(rec?.pid ?? 0) && !alive(rec?.grandchild ?? 0));
+    await until(() => h.agent.running === 0);
+    expect(h.logs.find((l) => l.msg === "label")?.extra.outcome).toBe("aborted");
+  });
+
+  it("kills a running label request on shutdown", async () => {
+    const pending = label(titlesBody(["hang"])).catch(() => null);
+    await until(() => records()[0]?.grandchild !== undefined);
+    const [rec] = records();
+    await h.agent.shutdown();
+    expect(alive(rec?.pid ?? 0)).toBe(false);
+    expect(alive(rec?.grandchild ?? 0)).toBe(false);
+    const res = await pending;
+    if (res !== null) expect(res.status).toBe(502);
+  });
+
+  it("logs one line with counts and cost, never a title or label", async () => {
+    const file = join(h.dir, "labels.json");
+    const first = `replay:${file}`;
+    labelReply("labels.json", JSON.stringify({ [first]: "SECRETLB", "TITLE-MARKER": "Marker" }));
+    await (await label(titlesBody([first, "TITLE-MARKER", "Unlabelled"]))).json();
+    await until(() => h.logs.some((l) => l.msg === "label"));
+    const lines = h.logs.filter((l) => l.msg === "label");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.extra).toMatchObject({
+      outcome: "done",
+      titles: 3,
+      labels: 2,
+      result: "success",
+      costUsd: 0.0004,
+      usage: { input_tokens: 120, output_tokens: 30 },
+    });
+    expect(typeof lines[0]?.extra.ms).toBe("number");
+    const all = JSON.stringify(h.logs);
+    for (const secret of ["SECRETLB", "TITLE-MARKER", "Marker", "Unlabelled", "replay:"]) {
+      expect(all).not.toContain(secret);
+    }
   });
 });

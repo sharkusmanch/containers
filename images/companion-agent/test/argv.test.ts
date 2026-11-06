@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_TOOLS, claudeArgs, childEnv } from "../src/argv.js";
+import { BUILTIN_TOOLS, claudeArgs, childEnv, labelArgs, LABEL_MODEL } from "../src/argv.js";
 
 const base = {
   model: "opus",
@@ -68,6 +68,42 @@ describe("claudeArgs", () => {
     const listAfter = (flag: string): string[] => (args[args.indexOf(flag) + 1] ?? "").split(",");
     expect(listAfter("--tools")).toContain("Skill");
     expect(listAfter("--allowedTools")).toContain("Skill");
+  });
+});
+
+describe("labelArgs", () => {
+  const args = labelArgs("-Titles: starts with a dash");
+
+  it("runs haiku once, with no tools, MCP servers, plugins or skills, the prompt last", () => {
+    expect(LABEL_MODEL).toBe("haiku");
+    expect(args).toEqual([
+      "-p",
+      "--output-format",
+      "json",
+      "--model",
+      "haiku",
+      "--strict-mcp-config",
+      "--tools",
+      "",
+      "--disable-slash-commands",
+      "--permission-mode",
+      "dontAsk",
+      "--no-session-persistence",
+      "--",
+      "-Titles: starts with a dash",
+    ]);
+  });
+
+  it("names no MCP config, plugin dir, allowed tool or system prompt", () => {
+    for (const flag of [
+      "--mcp-config",
+      "--plugin-dir",
+      "--allowedTools",
+      "--append-system-prompt",
+      "--verbose",
+    ]) {
+      expect(args).not.toContain(flag);
+    }
   });
 });
 

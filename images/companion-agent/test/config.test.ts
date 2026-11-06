@@ -13,6 +13,7 @@ describe("loadConfig", () => {
       childEnvNames: [],
       homeDir: "/home/agent",
       timeoutMs: 180_000,
+      labelTimeoutMs: 30_000,
       killGraceMs: 3_000,
       pingMs: 15_000,
       maxConcurrent: 2,

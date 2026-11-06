@@ -59,6 +59,33 @@ export function claudeArgs(run: ClaudeRun): string[] {
   ];
 }
 
+/** The model that writes rail labels: small and fast, the task needs no more. */
+export const LABEL_MODEL = "haiku";
+
+/**
+ * The `claude` arguments for one label run: haiku, a single JSON result, and nothing to act
+ * with. `--tools ""` offers no built-in tool, `--strict-mcp-config` with no `--mcp-config` loads
+ * no MCP server, no `--plugin-dir` is given and `--disable-slash-commands` turns skills off.
+ */
+export function labelArgs(prompt: string): string[] {
+  return [
+    "-p",
+    "--output-format",
+    "json",
+    "--model",
+    LABEL_MODEL,
+    "--strict-mcp-config",
+    "--tools",
+    "",
+    "--disable-slash-commands",
+    "--permission-mode",
+    "dontAsk",
+    "--no-session-persistence",
+    "--",
+    prompt,
+  ];
+}
+
 // Copied from the service's environment when set; nothing else is (no AGENT_TOKEN, MCP tokens)
 // except the names the operator lists in AGENT_CHILD_ENV.
 const PASSED = ["PATH", "LANG", "TZ", "CLAUDE_CODE_OAUTH_TOKEN", "REDLIB_URL"] as const;
