@@ -1471,6 +1471,98 @@ describe("startApp", () => {
     );
   });
 
+  it("re-fetches the page tree once, 15 s after it said labels were pending, and shows them", async () => {
+    const storage = memory();
+    storage.setItem(
+      "game-companion:v1:layout:hA",
+      JSON.stringify({
+        slots: [{ title: "Walkthrough", url: "/doc/walkthrough-W1" }, null, null, null],
+        active: 0,
+      }),
+    );
+    const api = fakeApi(playing(hubA));
+    const trees: HubTreeResponse[] = [
+      {
+        hub: hubA,
+        pages: [{ title: "Walkthrough", url: "/doc/walkthrough-W1", children: [] }],
+        defaultPins: [],
+        editablePages: [],
+        labelsPending: true,
+      },
+      {
+        hub: hubA,
+        pages: [{ title: "Walkthrough", url: "/doc/walkthrough-W1", label: "Walk", children: [] }],
+        defaultPins: [],
+        editablePages: [],
+        // Still pending: no third fetch.
+        labelsPending: true,
+      },
+    ];
+    let treeCalls = 0;
+    api.hubTree = async () => trees[Math.min(treeCalls++, 1)] as HubTreeResponse;
+    const tm = timers();
+    const app = startApp({
+      doc: document,
+      api,
+      storage,
+      setInterval: noTimers,
+      setTimeout: tm.set,
+    });
+    await app.ready;
+    const label = () => document.querySelectorAll(".rail button")[1]?.textContent;
+    expect(label()).toBe("Walkthr…");
+    const refetches = () => tm.calls.filter((c) => c.ms === 15_000);
+    expect(refetches()).toHaveLength(1);
+    refetches()[0]?.fn();
+    await flush();
+    expect(treeCalls).toBe(2);
+    expect(label()).toBe("Walk");
+    expect(refetches()).toHaveLength(1);
+  });
+
+  it("does not re-fetch the page tree when no labels are pending", async () => {
+    const api = fakeApi(playing(hubA));
+    const tm = timers();
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: tm.set,
+    });
+    await app.ready;
+    expect(tm.calls.filter((c) => c.ms === 15_000)).toEqual([]);
+  });
+
+  it("drops the late page tree when another game was opened meanwhile", async () => {
+    const api = fakeApi(playing(hubA));
+    let treeCalls = 0;
+    api.hubTree = async (id) => {
+      treeCalls += 1;
+      return { ...tree(id === "hA" ? hubA : hubZ), labelsPending: true };
+    };
+    const tm = timers();
+    const app = startApp({
+      doc: document,
+      api,
+      storage: memory(),
+      setInterval: noTimers,
+      setTimeout: tm.set,
+    });
+    await app.ready;
+    const first = tm.calls.find((c) => c.ms === 15_000);
+    expect(first).toBeDefined();
+    // Open the other guide by hand, then let the old timer fire.
+    (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
+    (document.querySelectorAll(".picker-games .picker-item")[1] as HTMLElement).click();
+    await app.tick();
+    expect($(".game-title")?.textContent).toBe("Zeta");
+    const before = treeCalls;
+    first?.fn();
+    await flush();
+    expect(treeCalls).toBe(before);
+  });
+
   it("shows the chosen game and Loading… at once when a poll is still running", async () => {
     const api = fakeApi(playing(hubA));
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });

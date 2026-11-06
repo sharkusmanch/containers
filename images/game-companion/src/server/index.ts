@@ -139,8 +139,14 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
     detector.stop();
     index.stopAutoRefresh();
-    server.close(() => process.exit(0));
+    // Label work under way (a request, a cache write) gets up to 3 s to finish.
+    const labelsDone = Promise.race([
+      labels.close(),
+      new Promise<void>((resolve) => setTimeout(resolve, 3000).unref()),
+    ]);
+    const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
     server.closeIdleConnections();
+    void Promise.all([serverClosed, labelsDone]).then(() => process.exit(0));
     setTimeout(() => process.exit(0), 5000).unref();
   });
 }

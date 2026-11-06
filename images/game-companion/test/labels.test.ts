@@ -1,14 +1,14 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LabelService, type LabelAgent, type LabelResult } from "../src/server/labels.js";
 import type { GuidePage } from "../src/shared/types.js";
 
-// The real rename, with a seam so a test can make it fail.
+// The real rename and writeFile, with seams so a test can make one fail or count them.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return { ...actual, rename: vi.fn(actual.rename), writeFile: vi.fn(actual.writeFile) };
 });
 const fsp = await import("node:fs/promises");
 
@@ -22,6 +22,7 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "labels-"));
   file = join(dir, "labels.json");
   vi.mocked(fsp.rename).mockClear();
+  vi.mocked(fsp.writeFile).mockClear();
 });
 
 afterEach(async () => {
@@ -335,8 +336,8 @@ describe("LabelService cache file", () => {
     time.advance(2000);
     await s.settled();
     expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
-      Walkthrough: "Walk",
-      "Boss Guide": "Boss",
+      labels: { Walkthrough: "Walk", "Boss Guide": "Boss" },
+      unlabelled: {},
     });
     expect(await readdir(dir)).toEqual(["labels.json"]);
 
@@ -407,5 +408,238 @@ describe("LabelService without an agent", () => {
     });
     expect(time.pending()).toEqual([]);
     await s.settled();
+  });
+});
+
+/** The cache file as saved. */
+const saved = async (): Promise<{
+  labels: Record<string, string>;
+  unlabelled: Record<string, number>;
+}> =>
+  JSON.parse(await readFile(file, "utf8")) as {
+    labels: Record<string, string>;
+    unlabelled: Record<string, number>;
+  };
+
+describe("LabelService tries (generate once)", () => {
+  it("counts an answer without a usable label as a try, kept across restarts; two tries end it", async () => {
+    const first = fakeAgent(() => ({ kind: "labels", labels: { Walkthrough: "Walkthrough!" } }));
+    const one = service(first.agent);
+    await one.s.load();
+    one.s.annotate([page("Walkthrough")]);
+    one.time.advance(2000);
+    await one.s.settled();
+    expect(first.calls).toHaveLength(1);
+    expect((await saved()).unlabelled).toEqual({ Walkthrough: 1 });
+
+    // After a restart the second try goes out at once (the hour's wait was in memory).
+    const second = fakeAgent(() => ({ kind: "labels", labels: {} }));
+    const two = service(second.agent);
+    await two.s.load();
+    two.s.annotate([page("Walkthrough")]);
+    two.time.advance(2000);
+    await two.s.settled();
+    expect(second.calls).toEqual([["Walkthrough"]]);
+    expect((await saved()).unlabelled).toEqual({ Walkthrough: 2 });
+
+    const third = fakeAgent();
+    const three = service(third.agent);
+    await three.s.load();
+    const pages = [page("Walkthrough")];
+    expect(labelsOf(three.s.annotate(pages))).toEqual({ Walkthrough: undefined });
+    expect(three.s.labelsPending(pages)).toBe(false);
+    expect(three.time.pending()).toEqual([]);
+    three.time.advance(10 * HOUR);
+    three.s.annotate(pages);
+    expect(three.time.pending()).toEqual([]);
+    expect(third.calls).toEqual([]);
+  });
+
+  it("asks a second time after an hour within one run, then never again", async () => {
+    const { agent, calls } = fakeAgent(() => ({ kind: "labels", labels: {} }));
+    const { s, time } = service(agent);
+    await s.load();
+    for (let i = 0; i < 2; i++) {
+      s.annotate([page("Walkthrough")]);
+      time.advance(2000);
+      await s.settled();
+      time.advance(HOUR);
+    }
+    s.annotate([page("Walkthrough")]);
+    expect(time.pending()).toEqual([]);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("does not count failures, busy answers or rejected calls as tries", async () => {
+    const results: LabelResult[] = [{ kind: "busy", retryAfterMs: 5000 }, { kind: "failed" }];
+    const { agent, calls } = fakeAgent(() => results.shift() ?? { kind: "failed" });
+    const { s, time } = service(agent);
+    await s.load();
+    s.annotate([page("Walkthrough"), page("Boss Guide")]);
+    time.advance(2000);
+    await s.settled();
+    time.advance(5000);
+    await s.settled();
+    expect(calls).toHaveLength(2);
+    expect(await readdir(dir)).toEqual([]);
+    const again = service(fakeAgent().agent);
+    await again.s.load();
+    again.s.annotate([page("Walkthrough")]);
+    expect(again.time.pending()).toEqual([2000]);
+  });
+
+  it("forgets a title's tries once it gets a label", async () => {
+    await writeFile(file, JSON.stringify({ labels: {}, unlabelled: { Walkthrough: 1 } }));
+    const { s, time } = service(fakeAgent().agent);
+    await s.load();
+    s.annotate([page("Walkthrough")]);
+    time.advance(2000);
+    await s.settled();
+    expect(await saved()).toEqual({ labels: { Walkthrough: "Walk" }, unlabelled: {} });
+  });
+
+  it("refuses a label equal to a common mapping name for another title, as a try", async () => {
+    const { agent } = fakeAgent(() => ({
+      kind: "labels",
+      labels: { Walkthrough: "Notes", "Boss Guide": "checklist", "Side Quests": "Side" },
+    }));
+    const { s, time } = service(agent);
+    await s.load();
+    s.annotate([page("Walkthrough"), page("Boss Guide"), page("Side Quests")]);
+    time.advance(2000);
+    await s.settled();
+    expect(await saved()).toEqual({
+      labels: { "Side Quests": "Side" },
+      unlabelled: { Walkthrough: 1, "Boss Guide": 1 },
+    });
+  });
+
+  it("drops a cached label equal to a common mapping name on load", async () => {
+    await writeFile(file, JSON.stringify({ Walkthrough: "Blind", "Side Quests": "Side" }));
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    expect(labelsOf(s.annotate([page("Walkthrough"), page("Side Quests")]))).toEqual({
+      Walkthrough: undefined,
+      "Side Quests": "Side",
+    });
+  });
+
+  it("reads both the old flat file and the current shape", async () => {
+    await writeFile(
+      file,
+      JSON.stringify({ labels: { Walkthrough: "Walk" }, unlabelled: { "Boss Guide": 2, X: "no" } }),
+    );
+    const { s, time } = service(fakeAgent().agent);
+    await s.load();
+    expect(labelsOf(s.annotate([page("Walkthrough"), page("Boss Guide")]))).toEqual({
+      Walkthrough: "Walk",
+      "Boss Guide": undefined,
+    });
+    expect(time.pending()).toEqual([]);
+  });
+});
+
+describe("LabelService per guide", () => {
+  it("never shows one generated label on two pages of a guide: the later falls back", async () => {
+    await writeFile(
+      file,
+      JSON.stringify({ "Boss Guide": "Boss", "Boss Rush": "boss", "Side Quests": "Side" }),
+    );
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    expect(
+      labelsOf(s.annotate([page("Boss Guide", [page("Boss Rush")]), page("Side Quests")])),
+    ).toEqual({ "Boss Guide": "Boss", "Boss Rush": undefined, "Side Quests": "Side" });
+    // Each guide on its own may use it.
+    expect(labelsOf(s.annotate([page("Boss Rush")]))).toEqual({ "Boss Rush": "boss" });
+  });
+});
+
+describe("LabelService labelsPending", () => {
+  it("is true while a title of the tree is queued or being asked about, then false", async () => {
+    let open: () => void = () => undefined;
+    const { agent, calls } = fakeAgent(
+      (titles) =>
+        new Promise((resolve) => {
+          open = () =>
+            resolve({ kind: "labels", labels: Object.fromEntries(titles.map((t) => [t, "Ok"])) });
+        }),
+    );
+    const { s, time } = service(agent);
+    await s.load();
+    const tree = [page("Notes"), page("Walkthrough")];
+    expect(s.labelsPending([page("Notes")])).toBe(false);
+    s.annotate(tree);
+    expect(s.labelsPending(tree)).toBe(true);
+    time.advance(2000);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    // In flight: still pending, and not queued a second time.
+    s.annotate(tree);
+    expect(s.labelsPending(tree)).toBe(true);
+    expect(time.pending()).toEqual([]);
+    open();
+    await s.settled();
+    expect(calls).toHaveLength(1);
+    expect(s.labelsPending(tree)).toBe(false);
+    s.annotate(tree);
+    expect(s.labelsPending(tree)).toBe(false);
+  });
+
+  it("is false for a title waiting out a failure", async () => {
+    const { agent } = fakeAgent(() => ({ kind: "failed" }));
+    const { s, time } = service(agent);
+    await s.load();
+    const tree = [page("Walkthrough")];
+    s.annotate(tree);
+    time.advance(2000);
+    await s.settled();
+    s.annotate(tree);
+    expect(s.labelsPending(tree)).toBe(false);
+  });
+
+  it("is false without an agent", async () => {
+    const { s } = service(null);
+    await s.load();
+    const tree = [page("Walkthrough")];
+    s.annotate(tree);
+    expect(s.labelsPending(tree)).toBe(false);
+  });
+});
+
+describe("LabelService file safety", () => {
+  it("keeps labels in memory but never writes when the file cannot be read (not missing)", async () => {
+    await mkdir(file); // reading it fails with EISDIR, not ENOENT
+    const { s, time, log } = service(fakeAgent().agent);
+    await s.load();
+    expect(log).toHaveBeenCalledWith("label cache unreadable; not saving");
+    s.annotate([page("Walkthrough")]);
+    time.advance(2000);
+    await s.settled();
+    expect(labelsOf(s.annotate([page("Walkthrough")]))).toEqual({ Walkthrough: "Walk" });
+    expect(vi.mocked(fsp.writeFile)).not.toHaveBeenCalled();
+    expect(vi.mocked(fsp.rename)).not.toHaveBeenCalled();
+  });
+
+  it("removes stale temp files of the cache on load, and nothing else", async () => {
+    await writeFile(join(dir, "labels.json.123.4.tmp"), "{");
+    await writeFile(join(dir, "labels.json.9.1.tmp"), "{");
+    await writeFile(join(dir, "platforms.json.1.1.tmp"), "{");
+    await writeFile(join(dir, "xbox-token.json"), "{}");
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    expect((await readdir(dir)).sort()).toEqual(["platforms.json.1.1.tmp", "xbox-token.json"]);
+  });
+
+  it("close cancels a waiting request and waits for the work under way", async () => {
+    const { agent, calls } = fakeAgent();
+    const { s, time } = service(agent);
+    await s.load();
+    s.annotate([page("Walkthrough")]);
+    expect(time.pending()).toEqual([2000]);
+    await s.close();
+    expect(time.pending()).toEqual([]);
+    s.annotate([page("Side Quests")]);
+    expect(time.pending()).toEqual([]);
+    expect(calls).toEqual([]);
   });
 });

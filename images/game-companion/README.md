@@ -306,17 +306,30 @@ Each pinned page's sidebar button shows a short name. The guides' standard pages
 ones (Achievement Checklist → Checklist, Blind Playthrough Essentials → Blind, Notes → Notes,
 Collectibles → Collect). Since v0.21.0 any other title gets a label written once by Claude
 Haiku through the agent's `POST <AGENT_URL>/label` (a single readable word or common
-abbreviation, at most 8 characters) and cached by exact title in
-`XBOX_STATE_DIR/labels.json` (replaced atomically). The hub tree (`GET
-/companion/api/guides/<hubId>`) carries each page's `label` when the mapping or the cache has
-one; titles with neither are sent to the agent in the background, debounced for 2 s, in
-batches of at most 40, one request at a time, and never hold up the tree. A failed request
-(or a title the answer gave no valid label) is retried after an hour; a busy agent is waited
-out per its `Retry-After`. A label shows the next time the guide's page tree is loaded. Until
-then, and whenever no agent is configured (`AGENT_URL` and `AGENT_TOKEN`; without them only
-the fixed names are used and the cache is not read), the button shows the title's first word
-(after a colon subtitle and without a leading article), cut to 8 characters. Links keep that
-rule.
+abbreviation, at most 8 characters, never one of the fixed names) and cached by exact title in
+`XBOX_STATE_DIR/labels.json`.
+
+- **Tree.** The hub tree (`GET /companion/api/guides/<hubId>`) carries each page's `label` when
+  the mapping or the cache has one. Within one guide a generated label is shown once: a later
+  page with the same one falls back. While any of its titles is queued or being asked about,
+  the tree also carries `labelsPending: true`, and the page fetches that tree once more 15 s
+  later to pick the labels up (once only; otherwise labels show the next time the guide loads).
+- **Asking.** Titles with no label are sent in the background, never holding up the tree:
+  debounced 2 s, at most 40 per request, one request at a time; a busy agent is waited out per
+  its `Retry-After`.
+- **Generate once.** An answer without a usable label for a title (too long, a clash, junk)
+  counts a try, kept in the file; a title gets a second try an hour later (or after a restart)
+  and is never sent again after two. A failed request (unreachable, 5xx, 404, timeout) only
+  waits an hour, in memory, and does not count.
+- **File.** `{"labels": {title: label}, "unlabelled": {title: tries}}` (a flat
+  `{title: label}` from v0.21.0 development builds is read too), replaced atomically; stale
+  `labels.json.*.tmp` files are removed at start. A missing or unparsable file starts empty; a
+  file that exists but cannot be read is left alone and nothing is saved. Shutdown waits up to
+  3 s for label work under way.
+- **Fallback.** Until a label is known, after two tries, and whenever no agent is configured
+  (`AGENT_URL` and `AGENT_TOKEN`; without them only the fixed names are used and the cache is
+  not read), the button shows the title's first word (after a colon subtitle and without a
+  leading article), cut to 8 characters. Links keep that rule.
 
 ## Guide reader
 

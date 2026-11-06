@@ -26,6 +26,16 @@ export function knownLabel(title: string): string | null {
   return KNOWN_LABELS.get(collapse(title).toLocaleLowerCase()) ?? null;
 }
 
+/** The common mapping's names (Checklist, Blind, ...), lower-cased. */
+const KNOWN_NAMES: ReadonlySet<string> = new Set(
+  [...KNOWN_LABELS.values()].map((name) => name.toLocaleLowerCase()),
+);
+
+/** Whether a label is one of the common mapping's names, in any case. */
+export function isKnownName(label: string): boolean {
+  return KNOWN_NAMES.has(label.trim().toLocaleLowerCase());
+}
+
 /**
  * The name a page gets without a generated label: the common mapping's; else the first word
  * (after a leading article) of the part after a colon, or of the whole title; cut to LABEL_MAX

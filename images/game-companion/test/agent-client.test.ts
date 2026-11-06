@@ -393,6 +393,7 @@ describe("AgentClient label", () => {
   it.each([
     ["a 502", 502, { error: "unavailable" }],
     ["a 400", 400, { error: "invalid body" }],
+    ["a 404 (an agent without /label)", 404, { error: "not found" }],
     ["broken JSON", 200, "{"],
     ["no labels object", 200, { labels: ["Walk"] }],
   ])("fails on %s", async (_name, status, value) => {

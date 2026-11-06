@@ -97,10 +97,18 @@ describe("buildDeps", () => {
     const pages = [{ title: "Walkthrough", url: "/doc/w", children: [] }];
     const labelled = [{ title: "Walkthrough", url: "/doc/w", label: "Walk", children: [] }];
     const annotate = vi.fn(() => labelled);
+    let pending = false;
+    const labelsPending = vi.fn(() => pending);
     const tree = () => ({ hub, pages });
-    const d = buildDeps(parts({ index: { ...parts().index, tree }, labels: { annotate } }));
+    const d = buildDeps(
+      parts({ index: { ...parts().index, tree }, labels: { annotate, labelsPending } }),
+    );
     expect(d.hubTree("h1")?.pages).toEqual(labelled);
+    expect(d.hubTree("h1")).not.toHaveProperty("labelsPending");
     expect(annotate).toHaveBeenCalledWith(pages);
+    expect(labelsPending).toHaveBeenCalledWith(pages);
+    pending = true;
+    expect(d.hubTree("h1")?.labelsPending).toBe(true);
     // Without one, the pages go out as the index holds them.
     expect(buildDeps(parts({ index: { ...parts().index, tree } })).hubTree("h1")?.pages).toBe(
       pages,
@@ -142,8 +150,10 @@ describe("buildDeps", () => {
       const get = async () =>
         (await (await fetch(`${base}/companion/api/guides/h1`)).json()) as {
           pages: { title: string; label?: string }[];
+          labelsPending?: boolean;
         };
       const first = await get();
+      expect(first.labelsPending).toBe(true);
       expect(first.pages.map((p) => [p.title, p.label])).toEqual([
         ["Notes", "Notes"],
         ["Boss Guide", "Bosses"],
@@ -151,7 +161,9 @@ describe("buildDeps", () => {
       ]);
       await labels.settled();
       expect(asked).toEqual([["Walkthrough"]]);
-      expect((await get()).pages.map((p) => p.label)).toEqual(["Notes", "Bosses", "Walk"]);
+      const second = await get();
+      expect(second.pages.map((p) => p.label)).toEqual(["Notes", "Bosses", "Walk"]);
+      expect(second.labelsPending).toBeUndefined();
     } finally {
       server.close();
       await rm(dir, { recursive: true, force: true });

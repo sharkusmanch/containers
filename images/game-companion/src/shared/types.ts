@@ -76,6 +76,11 @@ export interface HubTreeResponse {
    * applied on them.
    */
   editablePages: string[];
+  /**
+   * Present (true) when rail labels for some of these pages are being generated right now; the
+   * web client then fetches the tree once more a little later.
+   */
+  labelsPending?: true;
 }
 
 export interface Achievement {

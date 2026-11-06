@@ -5,6 +5,7 @@ import type {
   GameRef,
   GuideHub,
   GuidePage,
+  HubTreeResponse,
   NowResponse,
   PageProgress,
   Source,
@@ -145,6 +146,8 @@ const FIND_MIN = 2;
 const WAKE_REFRESH_MS = 15_000;
 /** How often the Xbox sign-in is checked while a code waits to be entered. */
 const XBOX_POLL_MS = 3000;
+/** How long after a page tree with labels pending it is fetched once more. */
+const LABELS_REFETCH_MS = 15_000;
 
 /** The text of the notice for achievements that just unlocked. */
 function unlockText(names: string[]): string {
@@ -1442,13 +1445,15 @@ export function startApp(opts: AppOptions): App {
     if (hub !== null) {
       const stored = loadLayout(storage, hub.hubId);
       try {
-        const { pages, defaultPins, editablePages } = await api.hubTree(hub.hubId);
+        const loaded = await api.hubTree(hub.hubId);
+        const { pages, defaultPins, editablePages } = loaded;
         // The links, and any link pinned, added or removed while the tree loaded, are on `waiting`.
         const layout = withPinsFrom(
           reconcileLayout(stored ?? defaultLayout(pages, defaultPins), pages, waiting.links),
           waiting,
         );
         current = { ...waiting, pages, layout, persist: true };
+        if (loaded.labelsPending === true) refetchLabelsLater(current);
         editableTitles = titlesIn(editablePages);
         void loadMarks(current);
       } catch {
@@ -1719,18 +1724,57 @@ export function startApp(opts: AppOptions): App {
     await refreshXbox();
   }
 
+  /**
+   * The server is writing rail labels for some of this guide's pages: fetch its tree once more,
+   * a little later, and take the labels it has then. Only once per loaded tree, however the
+   * second answer reads.
+   */
+  function refetchLabelsLater(c: Current): void {
+    afterDelay(() => void refreshLabels(c), LABELS_REFETCH_MS);
+  }
+
+  async function refreshLabels(c: Current): Promise<void> {
+    if (current !== c || c.hub === null || signedOut) return;
+    let fresh: HubTreeResponse;
+    try {
+      fresh = await api.hubTree(c.hub.hubId);
+    } catch {
+      return;
+    }
+    if (current !== c) return;
+    const labels = new Map<string, string>();
+    for (const page of flattenPages(fresh.pages)) {
+      if (isSafeDocUrl(page.url) && typeof page.label === "string") {
+        labels.set(docId(page.url), page.label);
+      }
+    }
+    const relabel = (pages: GuidePage[]): GuidePage[] =>
+      pages.map((page) => {
+        const label = isSafeDocUrl(page.url) ? labels.get(docId(page.url)) : undefined;
+        const next: GuidePage = {
+          title: page.title,
+          url: page.url,
+          children: relabel(page.children),
+        };
+        if (label !== undefined) next.label = label;
+        return next;
+      });
+    c.pages = relabel(c.pages);
+    renderRail(c.layout);
+  }
+
   // A page tree that failed to load is retried on every tick until it succeeds.
   async function retryPageTree(): Promise<void> {
     const c = current;
     if (c === null || c.hub === null || c.persist) return;
-    let pages: GuidePage[];
-    let defaultPins: string[];
-    let editablePages: unknown;
+    let loaded: HubTreeResponse;
     try {
-      ({ pages, defaultPins, editablePages } = await api.hubTree(c.hub.hubId));
+      loaded = await api.hubTree(c.hub.hubId);
     } catch {
       return;
     }
+    const { pages, defaultPins } = loaded;
+    const editablePages: unknown = loaded.editablePages;
     const untouched = c.layout.active === ACHIEVEMENTS && c.layout.slots.every((s) => s === null);
     const base =
       untouched && loadLayout(storage, c.hub.hubId) === null
@@ -1741,6 +1785,7 @@ export function startApp(opts: AppOptions): App {
     c.pages = pages;
     c.layout = reconcileLayout(base, pages, c.links);
     c.persist = true;
+    if (loaded.labelsPending === true) refetchLabelsLater(c);
     editableTitles = titlesIn(editablePages);
     void loadMarks(c);
     frames.sync(c.layout.slots.map((s) => s?.url ?? null));

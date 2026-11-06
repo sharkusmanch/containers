@@ -65,7 +65,7 @@ export interface AppParts {
     client?: Pick<XboxClient, "titles" | "titleInfo" | "achievements">;
   };
   /** Puts rail labels on a hub tree's pages; absent or null sends the pages as they are. */
-  labels?: null | Pick<LabelService, "annotate">;
+  labels?: null | Pick<LabelService, "annotate" | "labelsPending">;
   /** Fixed-text log lines. */
   log?: (line: string) => void;
 }
@@ -368,9 +368,12 @@ export function buildDeps(parts: AppParts): RouteDeps {
     hubTree: (hubId) => {
       const tree = index.tree(hubId);
       if (tree === null) return null;
+      const labels = parts.labels;
       return {
         ...tree,
-        pages: parts.labels ? parts.labels.annotate(tree.pages) : tree.pages,
+        pages: labels ? labels.annotate(tree.pages) : tree.pages,
+        // Checked after annotate, which queues the titles it has no label for.
+        ...(labels?.labelsPending(tree.pages) ? { labelsPending: true as const } : {}),
         defaultPins: parts.defaultPins,
         editablePages: parts.editablePages,
       };

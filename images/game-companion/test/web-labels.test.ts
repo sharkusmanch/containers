@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cleanLabel, defaultLabel, knownLabel, LABEL_MAX } from "../src/web/labels.js";
+import { cleanLabel, defaultLabel, isKnownName, knownLabel, LABEL_MAX } from "../src/web/labels.js";
 
 describe("knownLabel", () => {
   it.each([
@@ -53,4 +53,12 @@ describe("cleanLabel", () => {
     ["a number", 12],
     ["null", null],
   ])("refuses %s", (_name, value) => expect(cleanLabel(value)).toBeNull());
+});
+
+describe("isKnownName", () => {
+  it("is true for the mapping's names in any case, false for others", () => {
+    for (const name of ["Checklist", "blind", " NOTES ", "Collect"])
+      expect(isKnownName(name)).toBe(true);
+    for (const name of ["Walk", "Collectibles", ""]) expect(isKnownName(name)).toBe(false);
+  });
 });
