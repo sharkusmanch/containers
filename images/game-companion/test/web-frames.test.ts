@@ -1664,6 +1664,33 @@ describe("two pages side by side", () => {
     setAttr.mockRestore();
   });
 
+  it("keeps a covered right page in its pane while hidden, so nothing is resized", () => {
+    const f = createFrames(document, 4);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" });
+    const [a, b] = nodes(f);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" }, { coverRight: true });
+    expect(state(a)).toEqual(LEFT);
+    expect(state(b)).toEqual({ inactive: true, left: false, right: true });
+    expect(f.element.classList.contains("two-pages")).toBe(true);
+    // Uncovered again: the same elements, shown where they were.
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" });
+    expect(nodes(f)).toEqual([a, b]);
+    expect([state(a), state(b)]).toEqual([LEFT, RIGHT]);
+  });
+
+  it("never shows a covered right page on its own when the left is refused", () => {
+    const f = createFrames(document, 4);
+    f.showPair({ index: 9, url: "/doc/z" }, { index: 1, url: "/doc/b" }, { coverRight: true });
+    expect(nodes(f).map(state)).toEqual([HIDDEN]);
+  });
+
+  it("creates a covered right page hidden, in its pane", () => {
+    const f = createFrames(document, 4);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" }, { coverRight: true });
+    const [a, b] = nodes(f);
+    expect([state(a), state(b)]).toEqual([LEFT, { inactive: true, left: false, right: true }]);
+  });
+
   it("hideAll hides both and leaves one-page mode", () => {
     const f = createFrames(document, 4);
     f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" });

@@ -292,7 +292,8 @@ resize them; a double tap on it resets the split.
 Since v0.20.0 the right pane can show a guide page too: **press and hold** a page's sidebar
 button (half a second) to show it on the right, beside the page on the left. Its button gets an
 accent on its right edge. 🏆 brings the achievements back, a tap on the page on the right moves
-it to the left, and 💬 opens Ask over it (the page comes back when Ask closes). Holding the
+it to the left, and 💬 opens Ask over it. With two panes 💬 opens and closes Ask: a second tap
+gives the right pane back to what it showed before (the page or the achievements). Holding the
 page that is already on the left moves it right, and the left shows the page shown before it;
 with no other page pinned, the page on the right fills the screen until 🏆 is tapped. Find in
 guide and the guide jump look in whichever pane already shows the page, otherwise they open it

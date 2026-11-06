@@ -340,11 +340,22 @@ describe("rail with a page on the right", () => {
     expect(marks(rail)).toEqual(["A", "A", "-", "-", "-", "-", "-"]);
   });
 
-  it("marks only the right page when it is shown alone", () => {
+  it("marks only the right page when it is shown alone, without saying it is on the right", () => {
     const rail = createRail(document, handlers());
     rail.render(layout, 3);
     rail.setPanes({ left: null, right: { slot: 0 } });
     expect(marks(rail)).toEqual(["-", "R", "-", "-", "-", "-", "-"]);
+    expect(buttons(rail)[1]?.getAttribute("aria-label")).toBe("Achievement Checklist");
+  });
+
+  it("tells a screen reader whether the Ask panel is open", () => {
+    const rail = createRail(document, handlers());
+    rail.render(layout, 3);
+    const ask = rail.element.querySelector('button[aria-label="Ask"]');
+    rail.setAsk("enabled", true);
+    expect(ask?.getAttribute("aria-pressed")).toBe("true");
+    rail.setAsk("enabled", false);
+    expect(ask?.getAttribute("aria-pressed")).toBe("false");
   });
 
   it("drops the mark with the panes", () => {
@@ -470,6 +481,45 @@ describe("rail long press", () => {
     slot.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     slot.click();
     expect(onSelect.mock.calls).toEqual([[1]]);
+  });
+
+  it("swallows only a click that comes within a second of letting go", () => {
+    const { onSelect, onLongPress, fire, slot } = setup();
+    fire("pointerdown");
+    vi.advanceTimersByTime(500);
+    fire("pointerup");
+    vi.advanceTimersByTime(2000);
+    slot.click();
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    expect(onSelect.mock.calls).toEqual([[1]]);
+  });
+
+  it("cancels when a mouse leaves the button before the timer", () => {
+    const { onLongPress, fire } = setup();
+    fire("pointerdown", 20, 20, 1, { pointerType: "mouse", button: 0, buttons: 1 });
+    fire("pointerleave", 20, 20, 1, { pointerType: "mouse", buttons: 1 });
+    vi.advanceTimersByTime(1000);
+    expect(onLongPress).not.toHaveBeenCalled();
+  });
+
+  it("is switched off by setLongPress(false): a held button is a plain click", () => {
+    const { rail, onSelect, onLongPress, press } = setup();
+    rail.setLongPress(false);
+    press(800);
+    expect(onLongPress).not.toHaveBeenCalled();
+    expect(onSelect.mock.calls).toEqual([[1]]);
+    rail.setLongPress(true);
+    press(800);
+    expect(onLongPress.mock.calls).toEqual([[1]]);
+    expect(onSelect.mock.calls).toEqual([[1]]);
+  });
+
+  it("drops a press under way when switched off", () => {
+    const { rail, onLongPress, fire } = setup();
+    fire("pointerdown");
+    rail.setLongPress(false);
+    vi.advanceTimersByTime(1000);
+    expect(onLongPress).not.toHaveBeenCalled();
   });
 
   it("is a tap without a long-press handler", () => {

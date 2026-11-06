@@ -17,9 +17,11 @@ export interface Frames {
    * placed as `show` would (created, re-pointed or kept alive) and every other slot is hidden.
    * The container gets `.two-pages` and the two elements `.pane-left` / `.pane-right`, for the
    * stylesheet to place them; nothing is moved in the DOM, so neither reloads nor loses its
-   * scroll position. Shows only one (as `show`) when both name the same slot or one is refused.
+   * scroll position. With `coverRight` (the Ask panel is over the right pane) the right one is
+   * hidden but keeps `.pane-right` and the container `.two-pages`, so it keeps its size. Shows
+   * only one (as `show`) when both name the same slot or one is refused.
    */
-  showPair(left: Shown, right: Shown): void;
+  showPair(left: Shown, right: Shown, options?: { coverRight?: boolean }): void;
   /** Hides every slot; also ends showing two at once. */
   hideAll(): void;
   /**
@@ -188,17 +190,17 @@ export function createFrames(
   }, 1500);
 
   /**
-   * Puts `on` on screen and hides every other entry. `sides`, with two entries, marks the first as
-   * the left pane and the second as the right; otherwise no entry carries a side.
+   * Puts `on` on screen and hides every other entry. With `panes`, the container shows two pages
+   * and those two entries carry their side (the right one also while hidden under Ask);
+   * otherwise no entry carries a side.
    */
-  const display = (on: Entry[], sides = false): void => {
-    element.classList.toggle("two-pages", sides);
+  const display = (on: Entry[], panes: { left: Entry; right: Entry } | null = null): void => {
+    element.classList.toggle("two-pages", panes !== null);
     for (const entry of entries) {
       if (entry === null) continue;
-      const at = on.indexOf(entry);
-      entry.node.classList.toggle("inactive", at < 0);
-      entry.node.classList.toggle("pane-left", sides && at === 0);
-      entry.node.classList.toggle("pane-right", sides && at === 1);
+      entry.node.classList.toggle("inactive", !on.includes(entry));
+      entry.node.classList.toggle("pane-left", panes?.left === entry);
+      entry.node.classList.toggle("pane-right", panes?.right === entry);
     }
     // A frame that is still navigating is applied by its load handler.
     if (!(hideChrome || reader)) return;
@@ -294,11 +296,14 @@ export function createFrames(
       const entry = place(index, url, wanted);
       if (entry !== null) display([entry]);
     },
-    showPair(left, right) {
+    showPair(left, right, options = {}) {
       const a = place(left.index, left.url, left.kind);
       const b = left.index === right.index ? null : place(right.index, right.url, right.kind);
-      if (a !== null && b !== null) display([a, b], true);
-      else if (a !== null || b !== null) display([(a ?? b) as Entry]);
+      const covered = options.coverRight === true;
+      if (a !== null && b !== null) display(covered ? [a] : [a, b], { left: a, right: b });
+      else if (a !== null) display([a]);
+      // A covered right page never shows on its own.
+      else if (b !== null) display(covered ? [] : [b]);
     },
 
     hideAll,

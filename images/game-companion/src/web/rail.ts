@@ -39,6 +39,8 @@ export interface Rail {
    * marked `right-pane` (not `active`) and its label says so.
    */
   setPanes(panes: Panes | null): void;
+  /** Turns the slots' long press on (two panes) or off (the other layouts: plain clicks only). */
+  setLongPress(enabled: boolean): void;
 }
 
 /** `3/12` when that is at most 6 characters, otherwise the whole percent rounded down. */
@@ -78,12 +80,12 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
     const done = doc.createElement("span");
     done.classList.add("rail-count");
     b.append(abbreviation, done);
-    addLongPress(b, () => {
+    const longPress = addLongPress(b, () => {
       if (handlers.onLongPress === undefined) handlers.onSelect(index);
       else handlers.onLongPress(index);
     });
     b.addEventListener("click", () => handlers.onSelect(index));
-    return { button: b, abbreviation, done, label: "Empty slot" };
+    return { button: b, abbreviation, done, longPress, label: "Empty slot" };
   });
 
   const ask = button("Ask");
@@ -108,9 +110,14 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
   // The open Ask panel covers the stage, so the layout's active item is not marked meanwhile.
   const markActive = (): void => {
     const onRight = panes !== null && typeof panes.right === "object" ? panes.right.slot : null;
+    // A right pane's page shown alone (nothing on the left) is not "on the right" to the ear.
+    const beside = panes?.left != null;
     slotButtons.forEach(({ button: b, label }, index) => {
       b.classList.toggle("right-pane", onRight === index);
-      b.setAttribute("aria-label", onRight === index ? `${label}, shown on the right` : label);
+      b.setAttribute(
+        "aria-label",
+        onRight === index && beside ? `${label}, shown on the right` : label,
+      );
     });
     if (panes !== null) {
       const { left, right } = panes;
@@ -139,8 +146,13 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
     setAsk(state, active) {
       ask.hidden = state === "hidden";
       ask.disabled = state === "disabled";
+      // With two panes 💬 opens and closes the panel.
+      ask.setAttribute("aria-pressed", active ? "true" : "false");
       askActive = active;
       markActive();
+    },
+    setLongPress(enabled) {
+      for (const { longPress } of slotButtons) longPress.setEnabled(enabled);
     },
     setPanes(next) {
       panes = next;

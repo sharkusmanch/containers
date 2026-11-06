@@ -357,7 +357,9 @@ export function startApp(opts: AppOptions): App {
       render();
     },
     onAsk() {
-      askOpen = true;
+      // With two panes 💬 opens and closes the panel beside the page; closed, the right pane
+      // shows again what it showed before. Otherwise it opens it, and a page or 🏆 closes it.
+      askOpen = layoutMode === "split" ? !askOpen : true;
       render();
     },
     onMore() {
@@ -457,8 +459,7 @@ export function startApp(opts: AppOptions): App {
       onLink(link) {
         const c = current;
         if (c === null || !c.links.some((l) => l.url === link.url)) return;
-        closeAskForPage();
-        c.layout = assignSlot(c.layout, link);
+        placePage(c, link);
         save();
         render();
       },
@@ -1209,6 +1210,7 @@ export function startApp(opts: AppOptions): App {
     const panes = panesNow();
     stage.classList.toggle("two-panes", panes !== null && panes.left !== null);
     rail.setPanes(panes);
+    rail.setLongPress(layoutMode === "split");
     renderRail(layout);
     renderHeader();
     const canFind = current !== null && current.hub !== null && current.pages.length > 0;
@@ -1218,16 +1220,24 @@ export function startApp(opts: AppOptions): App {
     }
     syncAskHow();
     const left = panes?.left == null ? null : showable(layout, panes.left);
-    const rightSlot = typeof panes?.right === "object" ? panes.right.slot : null;
+    // The page chosen for the right, also while the Ask panel covers it.
+    const rightSlot =
+      typeof panes?.right === "object"
+        ? panes.right.slot
+        : panes?.right === "ask" && layout.right !== undefined
+          ? layout.right
+          : null;
     const right = rightSlot === null ? null : showable(layout, rightSlot);
     if (panes !== null && panes.left !== null && left !== null) {
       // Two panes: a page on the left; the achievements, the Ask panel or a page on the right.
       assistant.element.hidden = panes.right !== "ask";
       showAchievementsPanel(panes.right === "achievements");
       if (rightSlot !== null && right !== null) {
+        // A page under the Ask panel stays in the right pane, hidden, so it is never resized.
         frames.showPair(
           { index: panes.left, url: left.url, kind: slotKind(left.url) },
           { index: rightSlot, url: right.url, kind: slotKind(right.url) },
+          { coverRight: panes.right === "ask" },
         );
         noteShown(left.url);
       } else {
@@ -1235,7 +1245,7 @@ export function startApp(opts: AppOptions): App {
       }
       return;
     }
-    if (rightSlot !== null && right !== null) {
+    if (panes?.right !== "ask" && rightSlot !== null && right !== null) {
       // The right pane's page with no other page to show: it fills the stage alone, as one pane.
       assistant.element.hidden = true;
       showAchievementsPanel(false);

@@ -7166,6 +7166,107 @@ describe("a guide page in the right pane", () => {
     expect(screen()).toEqual({ left: "/doc/hA-checklist", right: "/doc/hA-coll", twoPanes: true });
   });
 
+  it("keeps the covered page in the right pane, hidden, while Ask is over it", async () => {
+    const storage = memory();
+    storage.setItem(LAYOUT_KEY, pinned({ right: 1 }));
+    await start(storage);
+    const coll = $('.frames > iframe[src="/doc/hA-coll"]') as HTMLElement;
+    askButton().click();
+    expect($(".frames")?.classList.contains("two-pages")).toBe(true);
+    expect(coll.classList.contains("pane-right")).toBe(true);
+    expect(coll.classList.contains("inactive")).toBe(true);
+  });
+
+  describe("💬 opens and closes Ask with two panes", () => {
+    const pressed = (): string | null => askButton().getAttribute("aria-pressed");
+
+    it("gives the right pane's page back on a second tap", async () => {
+      const storage = memory();
+      storage.setItem(LAYOUT_KEY, pinned({ right: 1 }));
+      await start(storage);
+      expect(pressed()).toBe("false");
+      askButton().click();
+      expect(screen().right).toBe("ask");
+      expect(pressed()).toBe("true");
+      askButton().click();
+      expect(screen()).toEqual({
+        left: "/doc/hA-checklist",
+        right: "/doc/hA-coll",
+        twoPanes: true,
+      });
+      expect(pressed()).toBe("false");
+    });
+
+    it("gives the achievements back on a second tap", async () => {
+      const storage = memory();
+      storage.setItem(LAYOUT_KEY, pinned());
+      await start(storage);
+      askButton().click();
+      askButton().click();
+      expect(screen()).toEqual({
+        left: "/doc/hA-checklist",
+        right: "achievements",
+        twoPanes: true,
+      });
+    });
+
+    it.each([
+      [411, 470],
+      [412, 915],
+    ])("keeps Ask open on a second tap at %i × %i (one page or tabs)", async (w, h) => {
+      const storage = memory();
+      storage.setItem(LAYOUT_KEY, pinned({ right: 1 }));
+      const { resize } = await start(storage);
+      resize(w, h);
+      askButton().click();
+      askButton().click();
+      expect($(".ask")?.hidden).toBe(false);
+      expect(pressed()).toBe("true");
+    });
+  });
+
+  it("a link picked from the list comes to the left from under Ask", async () => {
+    const MAP = "https://example.com/map";
+    const LINKS_KEY = "game-companion:v1:links:game:ra:20";
+    const storage = memory();
+    storage.setItem(LINKS_KEY, JSON.stringify([{ title: "Map", url: MAP }]));
+    storage.setItem(
+      LAYOUT_KEY,
+      JSON.stringify({
+        slots: [
+          { title: "Achievement Checklist", url: "/doc/hA-checklist" },
+          { title: "Map", url: MAP },
+          null,
+          null,
+        ],
+        active: 0,
+        right: 1,
+      }),
+    );
+    await start(storage);
+    const linkAt = (cls: string): string | null =>
+      document.querySelector(`.frames > iframe.${cls}:not(.inactive)`)?.getAttribute("src") ?? null;
+    expect(linkAt("pane-right")).toBe(MAP);
+    askButton().click();
+    railButtons().at(-1)?.click();
+    const row = [...document.querySelectorAll<HTMLElement>(".picker-links .picker-item")].find(
+      (b) => b.textContent?.includes("Map"),
+    );
+    row?.click();
+    expect(screen()).toEqual({ left: MAP, right: "ask", twoPanes: true });
+    expect(stored(storage)).toMatchObject({ active: 1 });
+    expect("right" in stored(storage)).toBe(false);
+  });
+
+  it("long-presses only with two panes, and again after a resize back to them", async () => {
+    const storage = memory();
+    storage.setItem(LAYOUT_KEY, pinned());
+    const { resize } = await start(storage, { width: 411 });
+    resize(884, 1004);
+    longPress(railButtons()[2]);
+    expect(screen()).toEqual({ left: "/doc/hA-checklist", right: "/doc/hA-coll", twoPanes: true });
+  });
+
   it("a long press closes Ask for the page; 🏆 closes it for the achievements", async () => {
     const storage = memory();
     storage.setItem(LAYOUT_KEY, pinned({ right: 1 }));

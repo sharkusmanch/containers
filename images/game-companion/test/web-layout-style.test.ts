@@ -186,13 +186,13 @@ describe("the layout stylesheet rules", () => {
       const frames = body(pair);
       for (const decl of ["right: 0;", "bottom: 0;", "width: auto;"])
         expect(frames).toContain(decl);
-      expect(body(`${pair} > .pane-left`)).toContain("--pane-w: var(--left-width);");
+      expect(body(`${pair} > :not(.pane-right)`)).toContain("--pane-w: var(--left-width);");
       const right = body(`${pair} > .pane-right`);
       expect(right).toContain("--pane-x: calc(var(--left-width) + var(--divider-width));");
       expect(right).toContain("--pane-w: calc(100% - var(--left-width) - var(--divider-width));");
       const placed = rules.find(
         (r) =>
-          r.selectors.includes(`${pair} > .pane-left`) &&
+          r.selectors.includes(`${pair} > :not(.pane-right)`) &&
           r.selectors.includes(`${pair} > .pane-right`),
       )?.body;
       for (const decl of [
@@ -207,12 +207,20 @@ describe("the layout stylesheet rules", () => {
       }
     });
 
+    // A hidden page keeps the box it had beside the achievements, so turning two pages on or off
+    // (or Ask covering the right page) never resizes it, which would clamp its scroll position.
+    it("gives every entry but the right pane's the left pane's box, hidden ones included", () => {
+      const paired = rules.flatMap((r) => r.selectors).filter((sel) => sel.startsWith(pair));
+      expect(paired.length).toBeGreaterThan(0);
+      for (const selector of paired) expect(selector).not.toContain(".pane-left");
+    });
+
     it.each(GUIDE_ZOOM_STEPS.filter((step) => step !== 100))(
       "enlarges a framed page in either pane by its pane's size at %i",
       (step) => {
         const factor = `0.${step / 10}`;
-        for (const side of ["left", "right"]) {
-          const rule = body(`${pair}.zoom-${step} > .frame.pane-${side}`);
+        for (const side of [":not(.pane-right)", ".pane-right"]) {
+          const rule = body(`${pair}.zoom-${step} > .frame${side}`);
           expect(rule).toContain(`width: calc(var(--pane-w, 100%) / ${factor});`);
           expect(rule).toContain(`height: calc(var(--pane-h, 100%) / ${factor});`);
         }
@@ -224,7 +232,7 @@ describe("the layout stylesheet rules", () => {
       (query) => {
         const block = mediaBlock(query);
         const selectors = selectorsIn(block.slice(block.indexOf("{") + 1, -1));
-        expect(selectors).toContain(`${pair} > .pane-left`);
+        expect(selectors).toContain(`${pair} > :not(.pane-right)`);
         expect(selectors).toContain(`${pair} > .pane-right`);
       },
     );
