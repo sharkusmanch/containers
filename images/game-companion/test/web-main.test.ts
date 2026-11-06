@@ -192,7 +192,7 @@ function fakeApi(nowValue: NowResponse): Fake {
         ...t,
         pages: t.pages.map((p) => {
           const own = f.customLabels.get(p.url.slice(p.url.lastIndexOf("-") + 1));
-          return own === undefined ? p : { ...p, label: own };
+          return own === undefined ? p : { ...p, label: own, ownLabel: true as const };
         }),
       };
     },
@@ -7748,6 +7748,60 @@ describe("renaming a sidebar button", () => {
     expect($(".picker-rename-error")?.textContent).toBe(message);
     expect($(".picker-rename-editor")).not.toBeNull();
     expect(railText(1)).toBe("Checklist");
+  });
+
+  it("keeps the page's own name marked, so the editor offers it after a refetch", async () => {
+    const api = fakeApi(playing(hubA));
+    api.customLabels.set("checklist", "Mine…");
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    openPages();
+    rename("Achievement Checklist");
+    // Its own name as it is, ellipsis included: not taken for an automatic one.
+    expect(($(".picker-rename-input") as HTMLInputElement).value).toBe("Mine…");
+    typeName("Other");
+    save();
+    await flush();
+    await flush();
+    rename("Achievement Checklist");
+    expect(($(".picker-rename-input") as HTMLInputElement).value).toBe("Other");
+  });
+
+  it("drops a re-fetched tree that started before a later rename", async () => {
+    const api = fakeApi(playing(hubA));
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    const fetches: ReturnType<typeof deferred<HubTreeResponse>>[] = [];
+    api.hubTree = () => {
+      const d = deferred<HubTreeResponse>();
+      fetches.push(d);
+      return d.promise;
+    };
+    const treeWith = (label: string): HubTreeResponse => ({
+      ...tree(hubA),
+      pages: [
+        { ...(tree(hubA).pages[0] as GuidePage), label, ownLabel: true },
+        tree(hubA).pages[1] as GuidePage,
+      ],
+    });
+    openPages();
+    rename("Achievement Checklist");
+    typeName("One");
+    save();
+    await flush();
+    expect(fetches).toHaveLength(1);
+    rename("Achievement Checklist");
+    typeName("Two");
+    save();
+    await flush();
+    expect(fetches).toHaveLength(2);
+    expect(railText(1)).toBe("Two");
+    fetches[1]?.resolve(treeWith("Two"));
+    await flush();
+    // The first save's tree comes back last, still saying "One": it is dropped.
+    fetches[0]?.resolve(treeWith("One"));
+    await flush();
+    expect(railText(1)).toBe("Two");
   });
 
   it("says when the server could not be reached", async () => {

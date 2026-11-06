@@ -1,7 +1,14 @@
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { GuidePage } from "../shared/types.js";
-import { cleanCustomLabel, cleanLabel, isKnownName, knownLabel } from "../web/labels.js";
+import {
+  cleanCustomLabel,
+  cleanLabel,
+  defaultLabel,
+  isKnownName,
+  knownLabel,
+  LABEL_MAX,
+} from "../web/labels.js";
 import { docId, flattenPages, isSafeDocUrl } from "../web/state.js";
 import type { LabelResult } from "./agent-client.js";
 
@@ -45,6 +52,27 @@ export const DOC_ID = /^[A-Za-z0-9_-]{1,64}$/;
 function usable(value: unknown): string | null {
   const label = cleanLabel(value);
   return label === null || isKnownName(label) ? null : label;
+}
+
+/**
+ * For a page left without a label: null when the web's fallback for its title repeats nothing in
+ * `used` (the page shows that). Otherwise the fallback cut to LABEL_MAX − 2 characters with the
+ * first free number from 2 ("Boss 2"), added to `used`.
+ */
+function numberedFallback(title: string, used: Set<string>): string | null {
+  const fallback = defaultLabel(title);
+  if (!used.has(fallback.toLocaleLowerCase())) return null;
+  const stem = Array.from(fallback)
+    .slice(0, LABEL_MAX - 2)
+    .join("");
+  for (let n = 2; ; n += 1) {
+    const label = `${stem} ${n}`;
+    const key = label.toLocaleLowerCase();
+    if (!used.has(key)) {
+      used.add(key);
+      return label;
+    }
+  }
 }
 
 /**
@@ -163,7 +191,9 @@ export class LabelService {
    * document id), else the common mapping's, else the cached generated one; titles with none are
    * queued for the agent. An automatic label equal to a custom one of the same tree, or a
    * generated one already shown on an earlier page of it, is left off (the page falls back).
-   * Custom labels are shown as they are, even twice. Never waits for the agent.
+   * Custom labels are shown as they are, even twice, and marked `ownLabel`. A page left without a
+   * label whose fallback (`defaultLabel`) would repeat one of those gets a numbered label instead
+   * ("Boss 2"). Never waits for the agent.
    */
   annotate(pages: GuidePage[]): GuidePage[] {
     const used = new Set<string>();
@@ -226,7 +256,10 @@ export class LabelService {
       // The page before its children, so titles queue in reading order.
       const label = this.labelFor(page, used);
       const children = this.annotateWith(page.children, used);
-      return label === null ? { ...page, children } : { ...page, label, children };
+      if (label === null) return { ...page, children };
+      return this.customFor(page.url) === null
+        ? { ...page, label, children }
+        : { ...page, label, ownLabel: true as const, children };
     });
   }
 
@@ -237,7 +270,11 @@ export class LabelService {
   private labelFor(page: GuidePage, used: Set<string>): string | null {
     const own = this.customFor(page.url);
     if (own !== null) return own;
-    const title = page.title;
+    return this.automaticLabel(page.title, used) ?? numberedFallback(page.title, used);
+  }
+
+  /** The mapping's or the cached label, when it repeats nothing in `used`; queues a title with none. */
+  private automaticLabel(title: string, used: Set<string>): string | null {
     const known = knownLabel(title);
     // `used` holds generated labels too, but those are never one of the mapping's names.
     if (known !== null) return used.has(known.toLocaleLowerCase()) ? null : known;

@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanCustomLabel,
   cleanLabel,
   CUSTOM_LABEL_MAX,
+  cutCustomLabel,
   defaultLabel,
   isKnownName,
   knownLabel,
@@ -83,6 +84,9 @@ describe("cleanCustomLabel", () => {
     ["🎮".repeat(12), "🎮".repeat(12)],
     ["Map 🗺️", "Map 🗺️"],
     ["Épée", "Épée"],
+    ["!", "!"],
+    ["+", "+"],
+    ["\u200bA", "\u200bA"],
   ])("keeps %j as %j", (value, label) => expect(cleanCustomLabel(value)).toBe(label));
 
   it.each([[""], ["   "], ["\t \n"]])("reads %j as a reset", (value) =>
@@ -100,8 +104,33 @@ describe("cleanCustomLabel", () => {
     ["a C1 control", "A\u0085B"],
     ["a line separator", "A\u2028B"],
     ["a lone surrogate", "A\ud800B"],
+    ["only a zero-width space", "\u200b"],
+    ["only bidi overrides", "\u202e\u202d"],
+    ["only a variation selector", "\ufe0f"],
     ["a number", 12],
     ["null", null],
     ["an object", { label: "Walk" }],
   ])("refuses %s", (_name, value) => expect(cleanCustomLabel(value)).toBeNull());
+});
+
+describe("cutCustomLabel", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps text of 12 characters or fewer as it is", () => {
+    expect(cutCustomLabel("abcdefghijkl")).toBe("abcdefghijkl");
+    expect(cutCustomLabel("")).toBe("");
+  });
+
+  it("cuts on whole characters as shown, counting code points", () => {
+    const family = "👨‍👩‍👧";
+    expect(cutCustomLabel(`abcdefghij${family}`)).toBe("abcdefghij");
+    expect(cutCustomLabel("e\u0301".repeat(7))).toBe("e\u0301".repeat(6));
+  });
+
+  it("cuts on code points where the browser has no Intl.Segmenter", () => {
+    vi.stubGlobal("Intl", { ...Intl, Segmenter: undefined });
+    expect(cutCustomLabel("🎮".repeat(13))).toBe("🎮".repeat(12));
+  });
 });

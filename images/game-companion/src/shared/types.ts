@@ -17,6 +17,8 @@ export interface GuidePage {
    * cached. Absent otherwise.
    */
   label?: string;
+  /** Present (true) when `label` is the name the person gave the page. */
+  ownLabel?: true;
   children: GuidePage[];
 }
 

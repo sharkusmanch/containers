@@ -1258,6 +1258,8 @@ describe("PUT /companion/api/labels/<docId>", () => {
       { label: "thirteen char" },
       { label: "Bell\u0007" },
       { label: "Two\nlines" },
+      { label: "\u200b\u200b" },
+      { label: "\u202e" },
     ]) {
       const r = await put("W1", body);
       expect(r.status, JSON.stringify(body)).toBe(400);

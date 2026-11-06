@@ -540,7 +540,7 @@ describe("LabelService tries (generate once)", () => {
 });
 
 describe("LabelService per guide", () => {
-  it("never shows one generated label on two pages of a guide: the later falls back", async () => {
+  it("never shows one generated label on two pages of a guide: the later gets a numbered one", async () => {
     await writeFile(
       file,
       JSON.stringify({ "Boss Guide": "Boss", "Boss Rush": "boss", "Side Quests": "Side" }),
@@ -549,7 +549,7 @@ describe("LabelService per guide", () => {
     await s.load();
     expect(
       labelsOf(s.annotate([page("Boss Guide", [page("Boss Rush")]), page("Side Quests")])),
-    ).toEqual({ "Boss Guide": "Boss", "Boss Rush": undefined, "Side Quests": "Side" });
+    ).toEqual({ "Boss Guide": "Boss", "Boss Rush": "Boss 2", "Side Quests": "Side" });
     // Each guide on its own may use it.
     expect(labelsOf(s.annotate([page("Boss Rush")]))).toEqual({ "Boss Rush": "boss" });
   });
@@ -800,9 +800,10 @@ describe("LabelService custom labels", () => {
       doc("Side Quests", "S1"),
       doc("Extra", "X1", [doc("More", "X2")]),
     ];
+    // Their own fallback would repeat the custom name too, so they get a numbered one.
     expect(labelsOf(s.annotate(tree))).toEqual({
-      "Boss Guide": undefined,
-      Notes: undefined,
+      "Boss Guide": "Boss 2",
+      Notes: "Notes 2",
       "Side Quests": "Side",
       Extra: "boss",
       More: "NOTES",
@@ -867,6 +868,61 @@ describe("LabelService custom labels", () => {
     // The next save works again.
     await expect(s.setCustom("W1", "New")).resolves.toBe("New");
     expect((await savedRaw()).custom).toEqual({ W1: "New" });
+  });
+
+  it("marks a custom label as the person's own, and no other", async () => {
+    await writeFile(file, JSON.stringify({ labels: { Walkthrough: "Walk" }, unlabelled: {} }));
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    await s.setCustom("B1", "Fights");
+    const [boss, walk, notes] = s.annotate([
+      doc("Boss Guide", "B1"),
+      doc("Walkthrough", "W1"),
+      doc("Notes", "N1"),
+    ]);
+    expect(boss).toMatchObject({ label: "Fights", ownLabel: true });
+    expect(walk).not.toHaveProperty("ownLabel");
+    expect(notes).not.toHaveProperty("ownLabel");
+  });
+
+  it("gives a page whose fallback would repeat a custom name a numbered label instead", async () => {
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    await s.setCustom("W1", "Notes");
+    const tree = [doc("Walkthrough", "W1"), doc("Notes", "N1")];
+    expect(s.annotate(tree).map((p) => p.label)).toEqual(["Notes", "Notes 2"]);
+  });
+
+  it("numbers the fallback without an agent too, and past the first free number", async () => {
+    const { s } = service(null);
+    await s.load();
+    await s.setCustom("X1", "Boss");
+    await s.setCustom("X2", "boss 2");
+    const tree = [doc("Extra", "X1"), doc("More", "X2"), doc("Boss Guide", "B1")];
+    expect(s.annotate(tree).map((p) => p.label)).toEqual(["Boss", "boss 2", "Boss 3"]);
+    // Without the clash the fallback is the web's own: no label is sent.
+    expect(s.annotate([doc("Boss Guide", "B1")])[0]).not.toHaveProperty("label");
+  });
+
+  it("cuts a long fallback to 6 characters before the number", async () => {
+    const { s } = service(null);
+    await s.load();
+    await s.setCustom("X1", "Walkthr…");
+    expect(s.annotate([doc("Extra", "X1"), doc("Walkthrough", "W1")]).map((p) => p.label)).toEqual([
+      "Walkthr…",
+      "Walkth 2",
+    ]);
+  });
+
+  it("numbers the fallback of a page still waiting for the agent, which stays pending", async () => {
+    const { agent } = fakeAgent();
+    const { s, time } = service(agent);
+    await s.load();
+    await s.setCustom("X1", "Boss");
+    const tree = [doc("Extra", "X1"), doc("Boss Guide", "B1")];
+    expect(s.annotate(tree).map((p) => p.label)).toEqual(["Boss", "Boss 2"]);
+    expect(s.labelsPending(tree)).toBe(true);
+    expect(time.pending()).toEqual([2000]);
   });
 
   it("never logs a custom label", async () => {

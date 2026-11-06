@@ -3,7 +3,7 @@ import type { XboxAction } from "./api.js";
 import type { AskDepthSetting, GuideZoom, InstallRow } from "./device.js";
 import { LAYOUT_LABELS, windowReadout } from "./layout-mode.js";
 import type { LayoutMode, LayoutOverride } from "./layout-mode.js";
-import { CUSTOM_LABEL_MAX } from "./labels.js";
+import { cutCustomLabel } from "./labels.js";
 import { isSafeDocUrl, railLabel } from "./state.js";
 import type { GameLink, Layout, Slot, StorageLike } from "./state.js";
 
@@ -35,6 +35,9 @@ export interface PickerHandlers {
 
 /** Shown when renaming fails without a message of its own. */
 const RENAME_FAILED = "Couldn't save the name";
+
+/** Numbers each picker, so the ids of its elements are unique in the document. */
+let pickerSeq = 0;
 
 export type SettingName =
   | "keepAwake"
@@ -374,23 +377,45 @@ export function createPicker(
       return [row, ...editor, ...pageItems(page.children, pinned, depth + 1)];
     });
 
-  /** The page whose sidebar name is being edited: what is typed, and the last error. */
+  /**
+   * The page whose sidebar name is being edited: what is typed, the last error, and the automatic
+   * name it was filled with (null when the page has its own name).
+   */
   interface Renaming {
     title: string;
     url: string;
     value: string;
     error: string;
     saving: boolean;
+    automatic: string | null;
   }
   let renaming: Renaming | null = null;
-  let renameInput: HTMLInputElement | null = null;
   let shownPages: GuidePage[] = [];
   let shownPinned: ReadonlySet<string> = new Set();
+  /** Each page's Rename button as last drawn, by address, to take the focus back. */
+  const renameButtons = new Map<string, HTMLButtonElement>();
+  /** The open editor's parts as last drawn. */
+  let editor: {
+    form: HTMLFormElement;
+    input: HTMLInputElement;
+    save: HTMLButtonElement;
+    reset: HTMLButtonElement;
+    cancel: HTMLButtonElement;
+  } | null = null;
+  // One error line for every editor: an alert that stays in place, so each message is read out.
+  const renameError = doc.createElement("p");
+  renameError.classList.add("picker-rename-error");
+  renameError.setAttribute("role", "alert");
+  renameError.id = `picker-rename-error-${++pickerSeq}`;
 
-  /** Redraws the page rows; a focused name box gets the focus back. */
+  /** Redraws the page rows; a focused part of the editor gets the focus back. */
   const renderPages = (): void => {
-    const focused = renameInput !== null && doc.activeElement === renameInput;
-    renameInput = null;
+    const active = doc.activeElement;
+    const focusedPart = (["input", "save", "reset", "cancel"] as const).find(
+      (k) => editor !== null && editor[k] === active,
+    );
+    editor = null;
+    renameButtons.clear();
     // A page that left the guide takes its editor with it.
     if (renaming !== null) {
       const url = renaming.url;
@@ -403,13 +428,41 @@ export function createPicker(
         ? [empty("No guide pages for this game")]
         : pageItems(shownPages, shownPinned, 0)),
     );
-    if (focused) pageRows.querySelector<HTMLInputElement>(".picker-rename-input")?.focus();
+    if (focusedPart !== undefined) focusEditor(focusedPart);
   };
 
-  const closeEditor = (): void => {
+  /** Focuses a part of the editor as last drawn, when there is one. */
+  const focusEditor = (part: "input" | "save" | "reset" | "cancel"): void => {
+    editor?.[part].focus();
+  };
+
+  /** Shows the editor's state on the parts already drawn. */
+  const syncEditor = (): void => {
+    if (editor === null || renaming === null) return;
+    const { input, save, reset } = editor;
+    // Read-only, not disabled: a disabled control drops the focus.
+    input.readOnly = renaming.saving;
+    for (const b of [save, reset]) {
+      if (renaming.saving) b.setAttribute("aria-disabled", "true");
+      else b.removeAttribute("aria-disabled");
+    }
+    renameError.textContent = renaming.error;
+    if (renaming.error === "") {
+      input.removeAttribute("aria-invalid");
+      input.removeAttribute("aria-describedby");
+    } else {
+      input.setAttribute("aria-invalid", "true");
+      input.setAttribute("aria-describedby", renameError.id);
+    }
+  };
+
+  /** Closes the editor; `focusRename` gives the focus to the row's Rename button. */
+  const closeEditor = (focusRename = false): void => {
     if (renaming === null) return;
+    const url = renaming.url;
     renaming = null;
     renderPages();
+    if (focusRename) renameButtons.get(url)?.focus();
   };
 
   const renameButton = (page: GuidePage): HTMLButtonElement => {
@@ -417,23 +470,32 @@ export function createPicker(
     b.setAttribute("type", "button");
     b.classList.add("picker-rename");
     b.setAttribute("aria-label", `Rename ${page.title}`);
+    b.setAttribute("aria-expanded", renaming?.url === page.url ? "true" : "false");
     b.textContent = "Rename";
     b.addEventListener("click", () => {
       if (renaming?.url === page.url) {
-        closeEditor();
+        closeEditor(true);
         return;
       }
+      // The page's own name as it is; else the automatic one, without the cut's ellipsis.
+      const own = page.ownLabel === true && typeof page.label === "string" ? page.label : null;
+      const automatic =
+        own === null
+          ? railLabel({ title: page.title, url: page.url }, shownPages).replace(/…$/u, "")
+          : null;
       renaming = {
         title: page.title,
         url: page.url,
-        value: railLabel({ title: page.title, url: page.url }, shownPages),
+        value: own ?? automatic ?? "",
         error: "",
         saving: false,
+        automatic,
       };
       renderPages();
-      renameInput?.focus();
-      renameInput?.select();
+      editor?.input.focus();
+      editor?.input.select();
     });
+    renameButtons.set(page.url, b);
     return b;
   };
 
@@ -442,7 +504,7 @@ export function createPicker(
     if (state.saving) return;
     state.saving = true;
     state.error = "";
-    renderPages();
+    syncEditor();
     let message: string | null;
     try {
       message = await handlers.onRename({ title: state.title, url: state.url }, label);
@@ -453,13 +515,12 @@ export function createPicker(
     // Another editor opened, or this one closed, meanwhile: nothing here to update.
     if (renaming !== state) return;
     if (message === null) {
-      renaming = null;
-      renderPages();
+      closeEditor(true);
       return;
     }
     state.error = message;
-    renderPages();
-    renameInput?.focus();
+    syncEditor();
+    editor?.input.focus();
   };
 
   const renameEditor = (state: Renaming): HTMLFormElement => {
@@ -473,19 +534,18 @@ export function createPicker(
     input.setAttribute("autocomplete", "off");
     input.setAttribute("enterkeyhint", "done");
     input.value = state.value;
-    input.disabled = state.saving;
-    // `maxlength` counts UTF-16 units, so an emoji would count twice: cut by characters here.
-    input.addEventListener("input", () => {
-      const chars = Array.from(input.value);
-      if (chars.length > CUSTOM_LABEL_MAX) input.value = chars.slice(0, CUSTOM_LABEL_MAX).join("");
+    // `maxlength` counts UTF-16 units, so an emoji would count twice: cut here instead, on whole
+    // characters, and only once any composition (an IME, dictation) is over.
+    const cut = (): void => {
+      const value = cutCustomLabel(input.value);
+      if (value !== input.value) input.value = value;
       state.value = input.value;
+    };
+    input.addEventListener("input", (event) => {
+      if (event.isComposing) state.value = input.value;
+      else cut();
     });
-    input.addEventListener("keydown", (event) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      closeEditor();
-    });
-    renameInput = input;
+    input.addEventListener("compositionend", cut);
     const button = (className: string, text: string, kind: "submit" | "button") => {
       const b = doc.createElement("button");
       b.setAttribute("type", kind);
@@ -496,20 +556,26 @@ export function createPicker(
     const save = button("picker-rename-save", "Save", "submit");
     const reset = button("picker-rename-reset", "Reset", "button");
     const cancel = button("picker-rename-cancel", "Cancel", "button");
-    save.disabled = state.saving;
-    reset.disabled = state.saving;
     reset.addEventListener("click", () => void commitRename(state, null));
-    cancel.addEventListener("click", closeEditor);
-    const error = doc.createElement("p");
-    error.classList.add("picker-rename-error");
-    error.setAttribute("aria-live", "polite");
-    error.textContent = state.error;
+    cancel.addEventListener("click", () => closeEditor(true));
+    form.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeEditor(true);
+    });
     form.addEventListener("submit", (event) => {
       event.preventDefault();
       const label = state.value.trim();
+      // The automatic name, unchanged, would only pin it: the same as Cancel.
+      if (state.automatic !== null && label === state.automatic) {
+        closeEditor(true);
+        return;
+      }
       void commitRename(state, label === "" ? null : label);
     });
-    form.append(input, save, reset, cancel, error);
+    form.append(input, save, reset, cancel, renameError);
+    editor = { form, input, save, reset, cancel };
+    syncEditor();
     return form;
   };
 

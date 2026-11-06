@@ -538,6 +538,8 @@ export function startApp(opts: AppOptions): App {
   let progressEpoch = 0;
   // Numbers the progress requests; an answer older than the last one applied is ignored.
   let progressSeq = 0;
+  /** Counts renames stored: a tree fetched before the latest one may predate it. */
+  let renameSeq = 0;
   let progressApplied = 0;
   // Fresh (refresh) reads in flight for the game on screen; ordinary answers wait them out.
   let freshPending = 0;
@@ -1739,13 +1741,19 @@ export function startApp(opts: AppOptions): App {
     return "Couldn't save the name";
   }
 
-  /** The pages with the label of the page with document id `id` replaced (or removed for null). */
+  /**
+   * The pages with the label of the page with document id `id` replaced by its own name (or
+   * removed for null).
+   */
   function withLabel(pages: GuidePage[], id: string, label: string | null): GuidePage[] {
     return pages.map((page) => {
       const children = withLabel(page.children, id, label);
       if (!isSafeDocUrl(page.url) || docId(page.url) !== id) return { ...page, children };
       const next: GuidePage = { title: page.title, url: page.url, children };
-      if (label !== null) next.label = label;
+      if (label !== null) {
+        next.label = label;
+        next.ownLabel = true;
+      }
       return next;
     });
   }
@@ -1765,6 +1773,7 @@ export function startApp(opts: AppOptions): App {
     } catch (err) {
       return renameError(err);
     }
+    renameSeq += 1;
     // Another guide opened meanwhile: its tree, loaded since, already has the name.
     if (c !== null && current === c) {
       c.pages = withLabel(c.pages, id, stored);
@@ -1788,28 +1797,31 @@ export function startApp(opts: AppOptions): App {
 
   async function refreshLabels(c: Current): Promise<void> {
     if (current !== c || c.hub === null || signedOut) return;
+    const seq = renameSeq;
     let fresh: HubTreeResponse;
     try {
       fresh = await api.hubTree(c.hub.hubId);
     } catch {
       return;
     }
-    if (current !== c) return;
-    const labels = new Map<string, string>();
+    // A rename stored since this fetch started may not be in it; that rename fetches again.
+    if (current !== c || renameSeq !== seq) return;
+    const labels = new Map<string, { label: string; own: boolean }>();
     for (const page of flattenPages(fresh.pages)) {
       if (isSafeDocUrl(page.url) && typeof page.label === "string") {
-        labels.set(docId(page.url), page.label);
+        labels.set(docId(page.url), { label: page.label, own: page.ownLabel === true });
       }
     }
     const relabel = (pages: GuidePage[]): GuidePage[] =>
       pages.map((page) => {
-        const label = isSafeDocUrl(page.url) ? labels.get(docId(page.url)) : undefined;
+        const found = isSafeDocUrl(page.url) ? labels.get(docId(page.url)) : undefined;
         const next: GuidePage = {
           title: page.title,
           url: page.url,
           children: relabel(page.children),
         };
-        if (label !== undefined) next.label = label;
+        if (found !== undefined) next.label = found.label;
+        if (found?.own === true) next.ownLabel = true;
         return next;
       });
     c.pages = relabel(c.pages);

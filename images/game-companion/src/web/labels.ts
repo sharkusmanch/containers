@@ -73,15 +73,44 @@ export const CUSTOM_LABEL_MAX = 12;
 
 /** Control characters, line and paragraph separators, and lone surrogates: never printable. */
 const UNPRINTABLE = /[\p{Cc}\p{Cs}\p{Zl}\p{Zp}]/u;
+/** Something that shows: a letter, digit, symbol (emoji included) or punctuation mark. */
+const VISIBLE = /[\p{L}\p{N}\p{S}\p{P}]/u;
 
 /**
  * A name the person typed for a page's rail button, trimmed: 1 to CUSTOM_LABEL_MAX characters
- * (code points) of any printable text, emoji included. "" when nothing is left after trimming
- * (the page goes back to its automatic label). Null for anything else.
+ * (code points) of any printable text, emoji included, with at least one visible character (not
+ * only zero-width or direction marks). "" when nothing is left after trimming (the page goes
+ * back to its automatic label). Null for anything else.
  */
 export function cleanCustomLabel(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const label = value.trim();
   if (label === "") return "";
-  return Array.from(label).length <= CUSTOM_LABEL_MAX && !UNPRINTABLE.test(label) ? label : null;
+  return Array.from(label).length <= CUSTOM_LABEL_MAX &&
+    !UNPRINTABLE.test(label) &&
+    VISIBLE.test(label)
+    ? label
+    : null;
+}
+
+/**
+ * Text cut to at most CUSTOM_LABEL_MAX characters (code points), never inside a character as it
+ * shows on screen (an emoji sequence, a letter with its accents) where the browser can tell.
+ */
+export function cutCustomLabel(text: string): string {
+  if (Array.from(text).length <= CUSTOM_LABEL_MAX) return text;
+  if (typeof Intl.Segmenter !== "function") {
+    return Array.from(text).slice(0, CUSTOM_LABEL_MAX).join("");
+  }
+  let out = "";
+  let count = 0;
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(
+    text,
+  )) {
+    const n = Array.from(segment).length;
+    if (count + n > CUSTOM_LABEL_MAX) break;
+    out += segment;
+    count += n;
+  }
+  return out;
 }

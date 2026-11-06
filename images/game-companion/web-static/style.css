@@ -1261,8 +1261,8 @@ button {
   border-radius: 6px;
 }
 
-.picker-rename-save:disabled,
-.picker-rename-reset:disabled {
+.picker-rename-save[aria-disabled="true"],
+.picker-rename-reset[aria-disabled="true"] {
   opacity: 0.5;
 }
 

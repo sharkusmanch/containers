@@ -317,8 +317,9 @@ abbreviation, at most 8 characters, never one of the fixed names) and cached by 
 `XBOX_STATE_DIR/labels.json`.
 
 - **Your own names.** Since v0.22.0 ⋯ › Pages has a **Rename** button on each guide page: type
-  a name (1–12 characters, any printable text, emoji included) and **Save**, or **Reset** to go
-  back to the automatic label; Escape or **Cancel** closes the editor. The rail shows the name at
+  a name (1–12 characters, any printable text with at least one visible character, emoji
+  included) and **Save**, or **Reset** to go back to the automatic label; Escape or **Cancel**
+  closes the editor, and saving the automatic label unchanged stores nothing. The rail shows the name at
   once and every device gets it with the guide's tree. It is kept by the page's document id
   (the part of its address that stays when the page is retitled), always wins, and is kept
   whether or not an agent is configured. `PUT /companion/api/labels/<docId>` with
@@ -327,9 +328,11 @@ abbreviation, at most 8 characters, never one of the fixed names) and cached by 
   name it cannot take, 404 for a page in no guide, 429 past 30 renames a minute, and 500 when the
   file cannot be written.
 - **Tree.** The hub tree (`GET /companion/api/guides/<hubId>`) carries each page's `label`:
-  its own name, else the mapping's, else the cached one. Within one guide a generated label is
-  shown once: a later page with the same one falls back. A generated or mapping label equal to a
-  name given to a page of the same guide is left off too. Names given by hand are shown as they
+  its own name (marked `ownLabel: true`), else the mapping's, else the cached one. Within one
+  guide a generated label is shown once: a later page with the same one falls back. A generated
+  or mapping label equal to a name given to a page of the same guide is left off too. When the
+  fallback of such a page would repeat a label already shown, the page gets that fallback cut to
+  6 characters with a number instead ("Boss 2", "Notes 2"). Names given by hand are shown as they
   are, even twice. While any of its titles is queued or being asked about, the tree also carries
   `labelsPending: true`, and the page fetches that tree once more 15 s later to pick the labels
   up (once only; otherwise labels show the next time the guide loads).
