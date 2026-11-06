@@ -1,7 +1,13 @@
 import type { GameRef, NowState, Source } from "../shared/types.js";
+import type { LastPlayedSource } from "./last-played.js";
 import type { RaSummary } from "./ra.js";
-import type { SteamPresence } from "./steam.js";
-import { type XboxPresence, XboxRateLimitError, type XboxTitleInfo } from "./xbox.js";
+import type { SteamLastPlayed, SteamPresence } from "./steam.js";
+import {
+  type XboxLastPlayed,
+  type XboxPresence,
+  XboxRateLimitError,
+  type XboxTitleInfo,
+} from "./xbox.js";
 
 export interface Observed {
   game: GameRef;
@@ -105,10 +111,11 @@ export function pickCurrent(input: PickInput): Picked {
   // A non-Steam shortcut has no id to look a guide up by, so it only wins when RA has nothing fresh.
   if (live) return { game: live, state: "playing", observedAt: now, ...quiet };
 
-  // A presence time far in the future is not trusted for ordering; clamp it to now.
-  const raForOrder = raSeen ? { ...raSeen, at: Math.min(raSeen.at, now) } : null;
-  const last = [lastSteam, lastXbox, raForOrder]
+  // A time in the future (RA's presence, or one remembered from a host whose clock ran ahead) is
+  // not trusted for ordering; clamp it to now.
+  const last = [lastSteam, lastXbox, raSeen]
     .filter((o): o is Observed => o !== null)
+    .map((o) => ({ ...o, at: Math.min(o.at, now) }))
     .sort((a, b) => b.at - a.at)[0];
   if (last) return { game: last.game, state: "last-played", observedAt: last.at, ...quiet };
   return { game: null, state: "none", observedAt: null, ...quiet };
@@ -118,14 +125,29 @@ export interface DetectorSnapshot extends Picked {
   stale: boolean;
 }
 
+/** Where the last Steam and Xbox games are kept across restarts (`LastPlayedStore`). */
+export interface LastPlayedMemory {
+  get(source: LastPlayedSource): Observed | null;
+  record(source: LastPlayedSource, seen: Observed): void;
+}
+
 export interface DetectorOptions {
-  steam: { presence(): Promise<SteamPresence> };
+  /** `lastPlayed`, when given, is Steam's own record of the app played last. */
+  steam: { presence(): Promise<SteamPresence>; lastPlayed?(): Promise<SteamLastPlayed | null> };
   ra: { summary(): Promise<RaSummary> };
-  /** Absent when Xbox is off. `presence` answers null when there is no session right now. */
+  /**
+   * Absent when Xbox is off. `presence` answers null when there is no session right now;
+   * `lastPlayed`, when given, is the title history's Xbox Live game played last.
+   */
   xbox?: {
     presence(): Promise<XboxPresence | null>;
     titleInfo(id: string): Promise<XboxTitleInfo | null>;
+    lastPlayed?(): Promise<XboxLastPlayed | null>;
   };
+  /** Keeps the last Steam and Xbox games across restarts; read once, when constructed. */
+  lastPlayed?: LastPlayedMemory;
+  /** How often the platforms' last-played records are read (and once at start). */
+  historyIntervalMs?: number;
   /** Whether Xbox is signed in; Xbox is neither polled nor counted otherwise. Default: always. */
   xboxConnected?: () => boolean;
   now?: () => number;
@@ -155,6 +177,8 @@ export class Detector {
   private readonly xboxConnected: () => boolean;
   private readonly xboxIntervalMs: number;
   private readonly xboxMaxDelayMs: number;
+  private readonly memory: LastPlayedMemory | undefined;
+  private readonly historyIntervalMs: number;
 
   private steam: SteamPresence | null = null;
   private ra: RaSummary | null = null;
@@ -188,6 +212,10 @@ export class Detector {
     this.xboxIntervalMs = opts.xboxIntervalMs ?? 30_000;
     this.xboxMaxDelayMs = opts.xboxMaxDelayMs ?? 5 * 60_000;
     this.xboxDelayMs = this.xboxIntervalMs;
+    this.memory = opts.lastPlayed;
+    this.historyIntervalMs = opts.historyIntervalMs ?? 30 * 60_000;
+    this.lastSteam = this.memory?.get("steam") ?? null;
+    this.lastXbox = this.memory?.get("xbox") ?? null;
   }
 
   async pollSteam(): Promise<void> {
@@ -198,7 +226,7 @@ export class Detector {
       this.steam = presence;
       this.steamPolledAt = at;
       // A shortcut has no id to find a guide by, so it is never remembered as the last game.
-      if (game && game.id !== null) this.lastSteam = { game, at };
+      if (game && game.id !== null) this.remember("steam", { game, at });
       this.setSteamFailed(false);
     } catch {
       this.setSteamFailed(true);
@@ -245,7 +273,7 @@ export class Detector {
       this.xbox = reading;
       this.xboxPolledAt = at;
       const game = xboxGame(reading);
-      if (game) this.lastXbox = { game, at };
+      if (game) this.remember("xbox", { game, at });
       this.xboxDelayMs = this.xboxIntervalMs;
       this.setXboxFailed(false);
     } catch (err) {
@@ -254,6 +282,55 @@ export class Detector {
         err instanceof XboxRateLimitError ? Math.max(backoff, err.retryAfterMs) : backoff;
       this.setXboxFailed(true);
     }
+  }
+
+  /**
+   * Reads Steam's and Xbox's own records of the game played last, which also know play this
+   * service never saw. Each counts only when newer than the game remembered for its platform.
+   * Never rejects; a failure keeps what is remembered and marks nothing stale.
+   */
+  async pollLastPlayed(): Promise<void> {
+    await Promise.all([this.steamHistory(), this.xboxHistory()]);
+  }
+
+  private async steamHistory(): Promise<void> {
+    if (!this.steamSource.lastPlayed) return;
+    try {
+      const seen = await this.steamSource.lastPlayed();
+      // Only an app id finds a guide, as for a game seen being played.
+      if (!seen || !isSteamAppId(seen.appId)) return;
+      const title = seen.name ?? `Steam app ${seen.appId}`;
+      this.offer("steam", { source: "steam", id: seen.appId, title }, seen.at);
+    } catch {
+      // Keep what is remembered.
+    }
+  }
+
+  private async xboxHistory(): Promise<void> {
+    const source = this.xboxSource;
+    if (!source?.lastPlayed || !this.xboxConnected()) return;
+    try {
+      const seen = await source.lastPlayed();
+      if (!seen) return;
+      const title = seen.name || `Xbox game ${seen.id}`;
+      this.offer("xbox", { source: "xbox", id: seen.id, title }, seen.at);
+    } catch {
+      // Keep what is remembered.
+    }
+  }
+
+  /** A platform's record of its last game: kept when newer, with a future time taken as now. */
+  private offer(source: LastPlayedSource, game: GameRef, at: number): void {
+    const clamped = Math.min(at, this.clock());
+    const known = source === "steam" ? this.lastSteam : this.lastXbox;
+    if (known && clamped <= known.at) return;
+    this.remember(source, { game, at: clamped });
+  }
+
+  private remember(source: LastPlayedSource, seen: Observed): void {
+    if (source === "steam") this.lastSteam = seen;
+    else this.lastXbox = seen;
+    this.memory?.record(source, seen);
   }
 
   private setXboxFailed(failed: boolean): void {
@@ -303,6 +380,12 @@ export class Detector {
       setInterval(() => void this.pollSteam(), this.steamIntervalMs).unref(),
       setInterval(() => void this.pollRa(), this.raIntervalMs).unref(),
     ];
+    if (this.steamSource.lastPlayed || this.xboxSource?.lastPlayed) {
+      void this.pollLastPlayed();
+      this.timers.push(
+        setInterval(() => void this.pollLastPlayed(), this.historyIntervalMs).unref(),
+      );
+    }
     if (this.xboxSource) this.runXbox(++this.xboxRun);
   }
 

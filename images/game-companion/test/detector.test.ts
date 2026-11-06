@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Detector, isSteamAppId, pickCurrent } from "../src/server/detector.js";
 
 const NOW = Date.UTC(2026, 9, 6, 18, 0, 0);
@@ -954,6 +954,355 @@ describe("xbox", () => {
         d.stop();
         expect(vi.getTimerCount()).toBe(0);
       });
+    });
+  });
+});
+
+describe("last played: remembered across restarts and filled from the platforms' history", () => {
+  type XboxPresence = import("../src/server/xbox.js").XboxPresence;
+  type Observed = import("../src/server/detector.js").Observed;
+  type Steam = { appId: string | null; name: string | null };
+  type Ra = {
+    gameId: string | null;
+    title: string | null;
+    presenceAt: number | null;
+    presence: null;
+  };
+
+  const DAY = 24 * 60 * MIN;
+  const raGame = { source: "ra" as const, id: "724", title: "Pokémon Red" };
+  const xboxGame = { source: "xbox" as const, id: "2000000002", title: "Oblivion Remastered" };
+  const steamGame = { source: "steam" as const, id: "1000001", title: "Test Game" };
+  /** RA's last presence: four days ago, as in the report. */
+  const oldRa = async (): Promise<Ra> => ({
+    gameId: "724",
+    title: "Pokémon Red",
+    presenceAt: NOW - 4 * DAY,
+    presence: null,
+  });
+  const idle = async (): Promise<Steam> => ({ appId: null, name: null });
+  const noXboxGame = async (): Promise<XboxPresence | null> => ({
+    online: false,
+    device: null,
+    title: null,
+  });
+
+  /** An in-memory stand-in for LastPlayedStore. */
+  function memoryStore(initial: { steam?: Observed; xbox?: Observed } = {}) {
+    const slots: Record<"steam" | "xbox", Observed | null> = {
+      steam: initial.steam ?? null,
+      xbox: initial.xbox ?? null,
+    };
+    const records: ["steam" | "xbox", Observed][] = [];
+    return {
+      slots,
+      records,
+      get: (s: "steam" | "xbox") => slots[s],
+      record: (s: "steam" | "xbox", o: Observed) => {
+        slots[s] = o;
+        records.push([s, o]);
+      },
+    };
+  }
+
+  function make(opts: {
+    steam?: () => Promise<Steam>;
+    steamLast?: () => Promise<{ appId: string; name: string | null; at: number } | null>;
+    ra?: () => Promise<Ra>;
+    presence?: () => Promise<XboxPresence | null>;
+    xboxLast?: () => Promise<{ id: string; name: string; at: number } | null>;
+    connected?: () => boolean;
+    store?: ReturnType<typeof memoryStore> | import("../src/server/last-played.js").LastPlayedStore;
+    historyIntervalMs?: number;
+  }) {
+    const clock = { t: NOW };
+    const calls = { steamLast: 0, xboxLast: 0 };
+    const events: [string, boolean][] = [];
+    const d = new Detector({
+      steam: {
+        presence: opts.steam ?? idle,
+        ...(opts.steamLast
+          ? {
+              lastPlayed: () => {
+                calls.steamLast += 1;
+                return (opts.steamLast as NonNullable<typeof opts.steamLast>)();
+              },
+            }
+          : {}),
+      },
+      ra: { summary: opts.ra ?? oldRa },
+      xbox: {
+        presence: opts.presence ?? noXboxGame,
+        titleInfo: async (id: string) => ({ id, name: "x", isXboxLive: true, image: null }),
+        ...(opts.xboxLast
+          ? {
+              lastPlayed: () => {
+                calls.xboxLast += 1;
+                return (opts.xboxLast as NonNullable<typeof opts.xboxLast>)();
+              },
+            }
+          : {}),
+      },
+      xboxConnected: opts.connected ?? (() => true),
+      ...(opts.store ? { lastPlayed: opts.store } : {}),
+      ...(opts.historyIntervalMs ? { historyIntervalMs: opts.historyIntervalMs } : {}),
+      now: () => clock.t,
+      onStatus: (source, ok) => events.push([source, ok]),
+    });
+    return { d, clock, calls, events };
+  }
+
+  async function pollAll(d: Detector) {
+    await d.pollSteam();
+    await d.pollRa();
+    await d.pollXbox();
+  }
+
+  describe("after a restart", () => {
+    let dir: string;
+    beforeEach(async () => {
+      const { mkdtemp } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      dir = await mkdtemp(`${tmpdir()}/detector-last-`);
+    });
+    afterEach(async () => {
+      const { rm } = await import("node:fs/promises");
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it("a remembered Xbox game newer than RA's presence wins, from the first answer on", async () => {
+      const { LastPlayedStore } = await import("../src/server/last-played.js");
+      const file = `${dir}/last-played.json`;
+      // First run: the Xbox game is seen being played, then the pod restarts.
+      const before = new LastPlayedStore({ file, now: () => NOW - DAY });
+      await before.load();
+      const first = make({
+        presence: async () => ({
+          online: true,
+          device: "Scarlett",
+          title: { id: xboxGame.id, name: xboxGame.title, richPresence: null },
+        }),
+        store: before,
+      });
+      first.clock.t = NOW - DAY;
+      await first.d.pollXbox();
+      await before.settled();
+
+      const after = new LastPlayedStore({ file });
+      await after.load();
+      const { d } = make({ store: after });
+      expect(d.current()).toMatchObject({
+        game: xboxGame,
+        state: "last-played",
+        observedAt: NOW - DAY,
+      });
+      await pollAll(d);
+      expect(d.current()).toMatchObject({ game: xboxGame, state: "last-played" });
+    });
+
+    it("without anything remembered RA wins, which is the reported bug's starting point", async () => {
+      const { d } = make({});
+      await pollAll(d);
+      expect(d.current()).toMatchObject({ game: raGame, state: "last-played" });
+    });
+  });
+
+  it("nothing remembered, Xbox history newer than RA: the Xbox game wins and is remembered", async () => {
+    const store = memoryStore();
+    const { d } = make({
+      store,
+      xboxLast: async () => ({ id: xboxGame.id, name: xboxGame.title, at: NOW - 2 * DAY }),
+    });
+    await pollAll(d);
+    expect(d.current().game).toEqual(raGame);
+    await d.pollLastPlayed();
+    expect(d.current()).toMatchObject({
+      game: xboxGame,
+      state: "last-played",
+      observedAt: NOW - 2 * DAY,
+      stale: false,
+    });
+    expect(store.slots.xbox).toEqual({ game: xboxGame, at: NOW - 2 * DAY });
+  });
+
+  it("RA newer than the Xbox and Steam history: RA wins", async () => {
+    const { d } = make({
+      xboxLast: async () => ({ id: xboxGame.id, name: xboxGame.title, at: NOW - 5 * DAY }),
+      steamLast: async () => ({ appId: steamGame.id, name: steamGame.title, at: NOW - 6 * DAY }),
+    });
+    await pollAll(d);
+    await d.pollLastPlayed();
+    expect(d.current()).toMatchObject({ game: raGame, state: "last-played" });
+  });
+
+  it("Steam's owned-games history newer than RA: the Steam game wins", async () => {
+    const store = memoryStore();
+    const { d } = make({
+      store,
+      steamLast: async () => ({ appId: steamGame.id, name: steamGame.title, at: NOW - DAY }),
+    });
+    await pollAll(d);
+    await d.pollLastPlayed();
+    expect(d.current()).toMatchObject({ game: steamGame, observedAt: NOW - DAY });
+    expect(store.slots.steam).toEqual({ game: steamGame, at: NOW - DAY });
+  });
+
+  it("names a Steam app without a name by its id, and ignores a history entry that is not an app id", async () => {
+    let entry = { appId: "15564589419463376896", name: "Shortcut" as string | null, at: NOW - DAY };
+    const { d } = make({ steamLast: async () => entry });
+    await pollAll(d);
+    await d.pollLastPlayed();
+    expect(d.current().game).toEqual(raGame);
+    entry = { appId: "42", name: null, at: NOW - DAY };
+    await d.pollLastPlayed();
+    expect(d.current().game).toEqual({ source: "steam", id: "42", title: "Steam app 42" });
+  });
+
+  it("a history entry older than what is remembered changes nothing", async () => {
+    const remembered = { game: xboxGame, at: NOW - DAY };
+    const store = memoryStore({ xbox: remembered });
+    const { d } = make({
+      store,
+      xboxLast: async () => ({ id: "2000000009", name: "Older Game", at: NOW - 3 * DAY }),
+    });
+    await d.pollLastPlayed();
+    expect(d.current()).toMatchObject({ game: xboxGame, observedAt: NOW - DAY });
+    expect(store.records).toEqual([]);
+  });
+
+  it("remembers games observed live, through the store", async () => {
+    const store = memoryStore();
+    const { d, clock } = make({
+      store,
+      steam: async () => ({ appId: steamGame.id, name: steamGame.title }),
+    });
+    await d.pollSteam();
+    clock.t += 30_000;
+    await d.pollSteam();
+    expect(store.records).toEqual([
+      ["steam", { game: steamGame, at: NOW }],
+      ["steam", { game: steamGame, at: NOW + 30_000 }],
+    ]);
+  });
+
+  it("clamps a history time in the future to now, for ordering and for what is remembered", async () => {
+    const store = memoryStore();
+    const { d } = make({
+      store,
+      xboxLast: async () => ({ id: xboxGame.id, name: xboxGame.title, at: NOW + 60 * MIN }),
+    });
+    await d.pollLastPlayed();
+    expect(d.current()).toMatchObject({ game: xboxGame, observedAt: NOW });
+    expect(store.slots.xbox?.at).toBe(NOW);
+  });
+
+  it("orders a remembered time in the future as now, like RA's, and reports it as now", () => {
+    const p = pickCurrent({
+      steam: null,
+      ra: null,
+      lastSteam: { game: steamGame, at: NOW + 3 * DAY },
+      lastXbox: { game: xboxGame, at: NOW - MIN },
+      now: NOW,
+    });
+    expect(p).toMatchObject({ game: steamGame, state: "last-played", observedAt: NOW });
+  });
+
+  describe("a game being played still wins over any history", () => {
+    const newest = async () => ({ id: xboxGame.id, name: xboxGame.title, at: NOW });
+
+    it("Steam live", async () => {
+      const { d } = make({
+        steam: async () => ({ appId: "10", name: "Steam Game" }),
+        xboxLast: newest,
+      });
+      await pollAll(d);
+      await d.pollLastPlayed();
+      expect(d.current()).toMatchObject({ game: { source: "steam", id: "10" }, state: "playing" });
+    });
+
+    it("fresh RA", async () => {
+      const { d } = make({
+        ra: async () => ({
+          gameId: "724",
+          title: "Pokémon Red",
+          presenceAt: NOW - MIN,
+          presence: null,
+        }),
+        xboxLast: newest,
+      });
+      await pollAll(d);
+      await d.pollLastPlayed();
+      expect(d.current()).toMatchObject({ game: raGame, state: "playing" });
+    });
+
+    it("Xbox live", async () => {
+      const { d } = make({
+        presence: async () => ({
+          online: true,
+          device: "Scarlett",
+          title: { id: "2000000003", name: "Live Game", richPresence: null },
+        }),
+        steamLast: async () => ({ appId: steamGame.id, name: steamGame.title, at: NOW }),
+      });
+      await pollAll(d);
+      await d.pollLastPlayed();
+      expect(d.current()).toMatchObject({
+        game: { source: "xbox", id: "2000000003" },
+        state: "playing",
+      });
+    });
+  });
+
+  it("a failing history keeps what is remembered, without marking anything stale", async () => {
+    const remembered = { game: steamGame, at: NOW - DAY };
+    const { d, events } = make({
+      store: memoryStore({ steam: remembered }),
+      steamLast: async () => {
+        throw new Error("steam down");
+      },
+      xboxLast: async () => {
+        throw new Error("xbox down");
+      },
+    });
+    await pollAll(d);
+    await expect(d.pollLastPlayed()).resolves.toBeUndefined();
+    expect(d.current()).toMatchObject({ game: steamGame, observedAt: NOW - DAY, stale: false });
+    expect(events).toEqual([]);
+  });
+
+  it("does not ask Xbox for its history while signed out", async () => {
+    const { d, calls } = make({
+      connected: () => false,
+      xboxLast: async () => ({ id: xboxGame.id, name: xboxGame.title, at: NOW }),
+    });
+    await d.pollLastPlayed();
+    expect(calls.xboxLast).toBe(0);
+    expect(d.current().game).toBeNull();
+  });
+
+  describe("cadence", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("asks both histories once at start and then every 30 minutes, and not after stop", async () => {
+      vi.useFakeTimers();
+      const { d, calls } = make({
+        steamLast: async () => null,
+        xboxLast: async () => null,
+      });
+      d.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toEqual({ steamLast: 1, xboxLast: 1 });
+      await vi.advanceTimersByTimeAsync(30 * MIN - 1);
+      expect(calls).toEqual({ steamLast: 1, xboxLast: 1 });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toEqual({ steamLast: 2, xboxLast: 2 });
+      await vi.advanceTimersByTimeAsync(30 * MIN);
+      expect(calls).toEqual({ steamLast: 3, xboxLast: 3 });
+      d.stop();
+      await vi.advanceTimersByTimeAsync(3 * 30 * MIN);
+      expect(calls).toEqual({ steamLast: 3, xboxLast: 3 });
     });
   });
 });

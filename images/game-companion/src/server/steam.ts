@@ -3,10 +3,22 @@ import { fetchJson, UpstreamError, type FetchLike } from "./fetch-json.js";
 const BASE = "https://api.steampowered.com";
 /** An app's achievement groups change only with an update: asked for once a day. */
 const GROUPS_TTL_MS = 24 * 3_600_000;
+/**
+ * The owned-games list is asked for in the background, never for a page waiting on it, and runs
+ * to every game in the library: longer than the default deadline.
+ */
+const OWNED_GAMES_TIMEOUT_MS = 15_000;
 
 export interface SteamPresence {
   appId: string | null;
   name: string | null;
+}
+/** The app the account played most recently, by Steam's own record. */
+export interface SteamLastPlayed {
+  appId: string;
+  name: string | null;
+  /** When it was last played, ms since the epoch. */
+  at: number;
 }
 export interface SteamPlayerAchievement {
   apiname: string;
@@ -154,8 +166,12 @@ export class SteamClient {
     this.now = opts.now ?? Date.now;
   }
 
-  private get(path: string, params: Record<string, string>): Promise<unknown> {
-    return fetchJson(this.fetchFn, `${BASE}/${path}/?${new URLSearchParams(params).toString()}`);
+  private get(path: string, params: Record<string, string>, timeoutMs?: number): Promise<unknown> {
+    return fetchJson(
+      this.fetchFn,
+      `${BASE}/${path}/?${new URLSearchParams(params).toString()}`,
+      timeoutMs === undefined ? {} : { timeoutMs },
+    );
   }
 
   async presence(): Promise<SteamPresence> {
@@ -171,6 +187,39 @@ export class SteamClient {
       appId: typeof player.gameid === "string" ? player.gameid : null,
       name: typeof player.gameextrainfo === "string" ? player.gameextrainfo : null,
     };
+  }
+
+  /**
+   * The owned (or played free) app with the latest `rtime_last_played`, from `GetOwnedGames`;
+   * null when none was ever played or the profile hides its games. Rejects on a failure or an
+   * unexpected shape; a malformed entry is skipped.
+   */
+  async lastPlayed(): Promise<SteamLastPlayed | null> {
+    const body = await this.get(
+      "IPlayerService/GetOwnedGames/v1",
+      {
+        key: this.apiKey,
+        steamid: this.steamId,
+        include_appinfo: "1",
+        include_played_free_games: "1",
+      },
+      OWNED_GAMES_TIMEOUT_MS,
+    );
+    const games = rec(rec(body).response).games;
+    // A profile whose game details are private answers an empty response.
+    if (games === undefined) return null;
+    if (!Array.isArray(games)) throw badShape();
+    let best: SteamLastPlayed | null = null;
+    for (const item of games as unknown[]) {
+      if (!isRec(item)) continue;
+      const { appid, name, rtime_last_played: played } = item;
+      if (typeof appid !== "number" || !Number.isSafeInteger(appid) || appid <= 0) continue;
+      if (typeof played !== "number" || !Number.isFinite(played) || played <= 0) continue;
+      const at = played * 1000;
+      if (best && at <= best.at) continue;
+      best = { appId: String(appid), name: typeof name === "string" ? name : null, at };
+    }
+    return best;
   }
 
   /** The app's achievement groups, cached for a day; undefined (and asked again) on any failure. */

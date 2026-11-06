@@ -9,6 +9,7 @@ import { Detector } from "./detector.js";
 import { GuideIndex } from "./guide-index.js";
 import { GuidePageService } from "./guide-pages.js";
 import { LabelService } from "./labels.js";
+import { LastPlayedStore } from "./last-played.js";
 import { OutlineClient } from "./outline.js";
 import { PlatformMemory } from "./platform-memory.js";
 import { AskLimiter } from "./rate-limit.js";
@@ -45,10 +46,19 @@ async function startXbox(clientId: string) {
 const xbox = config.xboxClientId ? await startXbox(config.xboxClientId) : null;
 log(xbox ? "xbox enabled" : "xbox disabled (no client id)");
 
+// The last Steam and Xbox games, kept in the state directory so a restart does not hand "last
+// played" to RetroAchievements. Read before the detector first answers.
+const lastPlayed = new LastPlayedStore({
+  file: join(config.xboxStateDir, "last-played.json"),
+  log,
+});
+await lastPlayed.load();
+
 // Fixed messages only: an upstream error can carry a URL with an API key in it.
 const detector = new Detector({
   steam,
   ra,
+  lastPlayed,
   ...(xbox
     ? {
         xbox: xbox.client,
@@ -139,9 +149,10 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
     detector.stop();
     index.stopAutoRefresh();
-    // Label work under way (a request, a cache write) gets up to 3 s to finish.
+    // Label work under way (a request, a cache write) and the last-played file's held-back write
+    // get up to 3 s to finish.
     const labelsDone = Promise.race([
-      labels.close(),
+      Promise.all([labels.close(), lastPlayed.close()]),
       new Promise<void>((resolve) => setTimeout(resolve, 3000).unref()),
     ]);
     const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));

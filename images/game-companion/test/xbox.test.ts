@@ -426,6 +426,92 @@ describe("XboxClient.titles", () => {
   });
 });
 
+describe("XboxClient.lastPlayed", () => {
+  const history = (titles: unknown[]) => ({ body: JSON.stringify({ titles }) });
+  const title = (
+    titleId: string,
+    lastTimePlayed: string | null,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    titleId,
+    name: `Game ${titleId}`,
+    type: "Game",
+    devices: ["XboxSeries"],
+    achievement: { currentAchievements: 1, currentGamerscore: 10, totalGamerscore: 1000 },
+    ...(lastTimePlayed === null ? {} : { titleHistory: { lastTimePlayed } }),
+    ...extra,
+  });
+
+  it("is the Xbox Live title played most recently, from the fixture history", async () => {
+    const { xbox, calls } = client([["titlehub", titlehubOk]]);
+    expect(await xbox.lastPlayed()).toEqual({
+      id: "2000000002",
+      name: "Test Quest: Moon Edition",
+      at: Date.parse("2026-10-18T10:05:00.000Z"),
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("skips titles that are not Xbox Live games, and those with no last-played time", async () => {
+    const { xbox } = client([
+      [
+        "titlehub",
+        history([
+          title("3000000001", "2026-11-01T08:00:00Z"),
+          // Newer, but a plain PC program and an app: not Xbox Live.
+          title("3000000002", "2026-11-04T08:00:00Z", {
+            devices: ["Win32"],
+            achievement: { currentAchievements: 0, currentGamerscore: 0, totalGamerscore: 0 },
+          }),
+          title("3000000003", "2026-11-04T09:00:00Z", { type: "App" }),
+          title("3000000004", null),
+          title("3000000005", "0001-01-01T00:00:00Z"),
+          title("3000000006", "2026-11-03T21:30:00Z"),
+          title("3000000007", "2026-10-20T08:00:00Z"),
+        ]),
+      ],
+    ]);
+    expect(await xbox.lastPlayed()).toEqual({
+      id: "3000000006",
+      name: "Game 3000000006",
+      at: Date.parse("2026-11-03T21:30:00Z"),
+    });
+  });
+
+  it("is null without a session, with no history, or with no Xbox Live title played", async () => {
+    const none = client([["titlehub", titlehubOk]], { session: null });
+    expect(await none.xbox.lastPlayed()).toBeNull();
+    expect(none.calls).toEqual([]);
+    const failed = client([["titlehub", { status: 500 }]]);
+    expect(await failed.xbox.lastPlayed()).toBeNull();
+    const empty = client([["titlehub", history([title("3000000004", null)])]]);
+    expect(await empty.xbox.lastPlayed()).toBeNull();
+  });
+
+  it("makes no call of its own: it shares the cached history with titleInfo and titles", async () => {
+    const clock = { t: 1_000_000 };
+    const { xbox, calls } = client([["titlehub", titlehubOk]], { now: () => clock.t });
+    await xbox.titleInfo("2000000002");
+    await xbox.lastPlayed();
+    await xbox.titles();
+    clock.t += 23 * 3_600_000;
+    await xbox.lastPlayed();
+    expect(calls).toHaveLength(1);
+    clock.t += 2 * 3_600_000;
+    await xbox.lastPlayed();
+    expect(calls).toHaveLength(2);
+  });
+
+  it("does not retry a failed history inside the backoff", async () => {
+    const clock = { t: 1_000_000 };
+    const { xbox, calls } = client([["titlehub", { status: 500 }]], { now: () => clock.t });
+    await xbox.lastPlayed();
+    clock.t += 4 * 60_000;
+    await xbox.lastPlayed();
+    expect(calls).toHaveLength(1);
+  });
+});
+
 describe("XboxClient errors", () => {
   it("429 carries retryAfterMs", async () => {
     const { xbox } = client([

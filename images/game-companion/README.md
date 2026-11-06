@@ -111,7 +111,7 @@ nothing but an address typed on that device is ever framed.
 | `ASSISTANT_PER_DAY`        | No       | Questions admitted per calendar day in `TZ` (default `150`)                                                                                                                                |
 | `COMPANION_MCP_TOKEN`      | No       | Bearer token for `POST /companion/mcp`, the guide, status and Xbox tools it serves. Without it that endpoint answers 404                                                                   |
 | `XBOX_CLIENT_ID`           | No       | Application (client) ID of your own Microsoft Entra app for Xbox Live (see **Xbox**). Without it Xbox is off                                                                               |
-| `XBOX_STATE_DIR`           | No       | Writable directory for the Xbox sign-in, each guide's last platform and the rail label cache (default `/data`); keep it on a persistent volume                                             |
+| `XBOX_STATE_DIR`           | No       | Writable directory for the Xbox sign-in, each guide's last platform, the last Steam and Xbox games and the rail label cache (default `/data`); keep it on a persistent volume              |
 | `PORT`                     | No       | Listening port (default `8080`)                                                                                                                                                            |
 | `STATIC_DIR`               | No       | Directory of the built front end (default `/app/dist/web`)                                                                                                                                 |
 
@@ -143,10 +143,15 @@ Xbox Live is a second source after Steam: games started from the Xbox app on a P
 (Game Pass included) and everything on an Xbox console. When Steam reports no game, the game
 Xbox reports gets the same guide pages, achievements panel, Missable, Find in guide and Ask as
 a Steam game. The detection order is Steam (a game with an app ID), then Xbox, then a fresh
-RetroAchievements game, then a Steam non-Steam shortcut, then the last game seen. Only genuine
-Xbox Live games count: a program the Xbox app happens to report (a Steam game, an emulator, a
-launcher) or an app (titles Xbox lists as anything but a game) never hides a RetroAchievements
-game.
+RetroAchievements game, then a Steam non-Steam shortcut, then the last game seen. The last game
+seen is the newest of three: the last Steam game and the last Xbox game, each the later of the
+one seen being played here and the one the platform itself last recorded (Steam's
+`IPlayerService/GetOwnedGames`, read every 30 minutes, and the Xbox title history), and the
+RetroAchievements game of the last presence; a time in the future counts as now. The Steam and
+Xbox ones are kept in `XBOX_STATE_DIR/last-played.json`, so a restart does not hand "last
+played" to an older RetroAchievements game. Only genuine Xbox Live games count: a program the
+Xbox app happens to report (a Steam game, an emulator, a launcher) or an app (titles Xbox lists
+as anything but a game) never hides a RetroAchievements game.
 
 **Setting up.** Register an app in Microsoft Entra under your own account ("Personal Microsoft
 accounts only", public client flows allowed, no secret, no redirect URI) and set its client ID

@@ -53,6 +53,14 @@ export interface XboxTitleInfo {
   lastPlayed?: string;
 }
 
+/** The Xbox Live title the account played most recently, by its title history. */
+export interface XboxLastPlayed {
+  id: string;
+  name: string;
+  /** When it was last played, ms since the epoch. */
+  at: number;
+}
+
 /** A product from the store catalog: `kind` is "Game" for a game, e.g. "Durable" for DLC. */
 export interface XboxProduct {
   kind: string | null;
@@ -192,6 +200,23 @@ export class XboxClient {
       throw new XboxRateLimitError(Math.max(0, this.historyFailedUntil - this.now()));
     }
     return served;
+  }
+
+  /**
+   * The genuine Xbox Live title (as `isXboxLive` decides) with the latest last-played time in
+   * the title history. Makes no call of its own: it reads `titles()`, so the history's 24-hour
+   * cache and failure backoff apply. Null without a session, a history or such a title; rejects
+   * as `titles()` does.
+   */
+  async lastPlayed(): Promise<XboxLastPlayed | null> {
+    let best: XboxLastPlayed | null = null;
+    for (const title of (await this.titles()) ?? []) {
+      if (!title.isXboxLive || title.lastPlayed === undefined) continue;
+      const at = Date.parse(title.lastPlayed);
+      if (best && at <= best.at) continue;
+      best = { id: title.id, name: title.name, at };
+    }
+    return best;
   }
 
   /**

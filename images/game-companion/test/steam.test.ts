@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { UpstreamError } from "../src/server/fetch-json.js";
 import { SteamClient } from "../src/server/steam.js";
 import { fakeFetch, fixture } from "./helpers.js";
 
@@ -220,5 +221,89 @@ describe("SteamClient.gameData group cache", () => {
     await steam2.gameData("1000001");
     await steam2.gameData("1000001");
     expect(groupCalls(odd)).toBe(2);
+  });
+});
+
+describe("SteamClient.lastPlayed", () => {
+  const owned = (games: unknown) => JSON.stringify({ response: { game_count: 3, games } });
+
+  it("asks GetOwnedGames with app info and free games, and picks the newest rtime_last_played", async () => {
+    const f = fakeFetch([
+      [
+        "GetOwnedGames",
+        {
+          body: owned([
+            { appid: 10, name: "Older Game", rtime_last_played: 1_790_000_000 },
+            { appid: 20, name: "Newest Game", rtime_last_played: 1_792_000_000 },
+            { appid: 30, name: "Never Played", rtime_last_played: 0 },
+            { appid: 40, name: "Middle Game", rtime_last_played: 1_791_000_000 },
+          ]),
+        },
+      ],
+    ]);
+    expect(await new SteamClient({ ...opts, fetchFn: f.fn }).lastPlayed()).toEqual({
+      appId: "20",
+      name: "Newest Game",
+      at: 1_792_000_000_000,
+    });
+    expect(f.calls).toHaveLength(1);
+    const url = f.calls[0]?.url ?? "";
+    expect(url).toContain("https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?");
+    expect(url).toContain("steamid=76561190000000000");
+    expect(url).toContain("include_appinfo=1");
+    expect(url).toContain("include_played_free_games=1");
+    expect(url).toContain("key=KEY");
+  });
+
+  it("is null when nothing was ever played, the list is empty, or the profile hides it", async () => {
+    for (const body of [
+      owned([{ appid: 30, name: "Never Played", rtime_last_played: 0 }]),
+      owned([]),
+      '{"response":{}}',
+    ]) {
+      const f = fakeFetch([["GetOwnedGames", { body }]]);
+      expect(await new SteamClient({ ...opts, fetchFn: f.fn }).lastPlayed()).toBeNull();
+    }
+  });
+
+  it("skips malformed entries and names an app without a name null", async () => {
+    const f = fakeFetch([
+      [
+        "GetOwnedGames",
+        {
+          body: owned([
+            null,
+            "x",
+            { appid: "50", name: "String id", rtime_last_played: 1_799_000_000 },
+            { appid: -1, name: "Negative", rtime_last_played: 1_799_000_000 },
+            { appid: 60, name: "No time" },
+            { appid: 70, name: "Bad time", rtime_last_played: "soon" },
+            { appid: 80, rtime_last_played: 1_791_000_000 },
+          ]),
+        },
+      ],
+    ]);
+    expect(await new SteamClient({ ...opts, fetchFn: f.fn }).lastPlayed()).toEqual({
+      appId: "80",
+      name: null,
+      at: 1_791_000_000_000,
+    });
+  });
+
+  it("rejects, without the URL or key in the message, when Steam fails or answers an odd shape", async () => {
+    for (const [status, body] of [
+      [500, "x"],
+      [200, "not json"],
+      [200, "{}"],
+      [200, '{"response":{"games":{}}}'],
+    ] as const) {
+      const f = fakeFetch([["GetOwnedGames", { status, body }]]);
+      const err: unknown = await new SteamClient({ ...opts, fetchFn: f.fn })
+        .lastPlayed()
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(UpstreamError);
+      expect((err as Error).message).not.toContain("KEY");
+      expect((err as Error).message).not.toContain("steampowered");
+    }
   });
 });
