@@ -54,17 +54,32 @@ function usable(value: unknown): string | null {
   return label === null || isKnownName(label) ? null : label;
 }
 
+/** The labels one tree has given out or set aside, all lower-cased. */
+interface TreeLabels {
+  /** Every label reserved or shown so far: no automatic label may repeat one. */
+  used: Set<string>;
+  /** The names given to pages of the tree by hand. */
+  custom: Set<string>;
+  /** The mapping names already shown on a page of the tree. */
+  mapped: Set<string>;
+}
+
 /**
  * For a page left without a label: null when the web's fallback for its title repeats nothing in
- * `used` (the page shows that). Otherwise the fallback cut to LABEL_MAX − 2 characters with the
- * first free number from 2 ("Boss 2"), added to `used`.
+ * `used` (the page shows that, and it is reserved). Otherwise the fallback cut to LABEL_MAX − 2
+ * characters with the first free number from 2 ("Boss 2"), added to `used`.
  */
 function numberedFallback(title: string, used: Set<string>): string | null {
   const fallback = defaultLabel(title);
-  if (!used.has(fallback.toLocaleLowerCase())) return null;
+  const key = fallback.toLocaleLowerCase();
+  if (!used.has(key)) {
+    used.add(key);
+    return null;
+  }
   const stem = Array.from(fallback)
     .slice(0, LABEL_MAX - 2)
     .join("");
+  // From " 10" on the label is longer than LABEL_MAX; the rail's CSS truncates it.
   for (let n = 2; ; n += 1) {
     const label = `${stem} ${n}`;
     const key = label.toLocaleLowerCase();
@@ -196,12 +211,20 @@ export class LabelService {
    * ("Boss 2"). Never waits for the agent.
    */
   annotate(pages: GuidePage[]): GuidePage[] {
-    const used = new Set<string>();
+    // First the names nothing automatic may take: every custom name, and the mapping name of
+    // every page not renamed (so a fallback anywhere in the tree gives way to it).
+    const tree: TreeLabels = { used: new Set(), custom: new Set(), mapped: new Set() };
     for (const page of flattenPages(pages)) {
       const own = this.customFor(page.url);
-      if (own !== null) used.add(own.toLocaleLowerCase());
+      if (own !== null) {
+        tree.custom.add(own.toLocaleLowerCase());
+        tree.used.add(own.toLocaleLowerCase());
+        continue;
+      }
+      const known = knownLabel(page.title);
+      if (known !== null) tree.used.add(known.toLocaleLowerCase());
     }
-    return this.annotateWith(pages, used);
+    return this.annotateWith(pages, tree);
   }
 
   /**
@@ -251,11 +274,11 @@ export class LabelService {
     await this.settled();
   }
 
-  private annotateWith(pages: GuidePage[], used: Set<string>): GuidePage[] {
+  private annotateWith(pages: GuidePage[], tree: TreeLabels): GuidePage[] {
     return pages.map((page) => {
-      // The page before its children, so titles queue in reading order.
-      const label = this.labelFor(page, used);
-      const children = this.annotateWith(page.children, used);
+      // The page before its children, so titles queue (and labels are taken) in reading order.
+      const label = this.labelFor(page, tree);
+      const children = this.annotateWith(page.children, tree);
       if (label === null) return { ...page, children };
       return this.customFor(page.url) === null
         ? { ...page, label, children }
@@ -267,17 +290,24 @@ export class LabelService {
     return isSafeDocUrl(url) ? (this.custom.get(docId(url)) ?? null) : null;
   }
 
-  private labelFor(page: GuidePage, used: Set<string>): string | null {
+  private labelFor(page: GuidePage, tree: TreeLabels): string | null {
     const own = this.customFor(page.url);
     if (own !== null) return own;
-    return this.automaticLabel(page.title, used) ?? numberedFallback(page.title, used);
+    return this.automaticLabel(page.title, tree) ?? numberedFallback(page.title, tree.used);
   }
 
-  /** The mapping's or the cached label, when it repeats nothing in `used`; queues a title with none. */
-  private automaticLabel(title: string, used: Set<string>): string | null {
+  /**
+   * The mapping's label, unless a custom name or an earlier page of the tree has it; else the
+   * cached label, unless it repeats anything in `used`. Queues a title with neither.
+   */
+  private automaticLabel(title: string, tree: TreeLabels): string | null {
     const known = knownLabel(title);
-    // `used` holds generated labels too, but those are never one of the mapping's names.
-    if (known !== null) return used.has(known.toLocaleLowerCase()) ? null : known;
+    if (known !== null) {
+      const key = known.toLocaleLowerCase();
+      if (tree.custom.has(key) || tree.mapped.has(key)) return null;
+      tree.mapped.add(key);
+      return known;
+    }
     if (this.agent === null) return null;
     const cached = this.cache.get(title);
     if (cached === undefined) {
@@ -285,8 +315,8 @@ export class LabelService {
       return null;
     }
     const key = cached.toLocaleLowerCase();
-    if (used.has(key)) return null;
-    used.add(key);
+    if (tree.used.has(key)) return null;
+    tree.used.add(key);
     return cached;
   }
 

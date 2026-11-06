@@ -330,10 +330,11 @@ abbreviation, at most 8 characters, never one of the fixed names) and cached by 
 - **Tree.** The hub tree (`GET /companion/api/guides/<hubId>`) carries each page's `label`:
   its own name (marked `ownLabel: true`), else the mapping's, else the cached one. Within one
   guide a generated label is shown once: a later page with the same one falls back. A generated
-  or mapping label equal to a name given to a page of the same guide is left off too. When the
-  fallback of such a page would repeat a label already shown, the page gets that fallback cut to
-  6 characters with a number instead ("Boss 2", "Notes 2"). Names given by hand are shown as they
-  are, even twice. While any of its titles is queued or being asked about, the tree also carries
+  or mapping label equal to a name given to a page of the same guide is left off too, as is a
+  second page with the same mapping name. Custom names and mapping names are set aside for the
+  whole guide first, then generated labels and plain fallbacks in reading order; a page whose
+  fallback would repeat one gets it cut to 6 characters with a number instead ("Boss 2",
+  "Notes 2"). Names given by hand are shown as they are, even twice. While any of its titles is queued or being asked about, the tree also carries
   `labelsPending: true`, and the page fetches that tree once more 15 s later to pick the labels
   up (once only; otherwise labels show the next time the guide loads).
 - **Asking.** Titles with no label are sent in the background, never holding up the tree:

@@ -7670,6 +7670,12 @@ describe("renaming a sidebar button", () => {
     await flush();
     expect(api.labelCalls).toEqual([["checklist", "My list 🎯"]]);
     expect(railText(1)).toBe("My list 🎯");
+    // The re-fetched tree redraws the list; the focus stays on the row's Rename button.
+    await flush();
+    await flush();
+    expect(document.activeElement).toBe(
+      $('.picker-rename[aria-label="Rename Achievement Checklist"]'),
+    );
     expect($(".picker-rename-editor")).toBeNull();
     expect($(".picker")?.hidden).toBe(false);
     // The aria-label keeps the page title.

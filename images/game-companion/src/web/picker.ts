@@ -414,6 +414,8 @@ export function createPicker(
     const focusedPart = (["input", "save", "reset", "cancel"] as const).find(
       (k) => editor !== null && editor[k] === active,
     );
+    // A focused Rename button (the editor just closed) keeps the focus through a redraw.
+    const focusedRename = [...renameButtons].find(([, b]) => b === active)?.[0] ?? null;
     editor = null;
     renameButtons.clear();
     // A page that left the guide takes its editor with it.
@@ -429,6 +431,7 @@ export function createPicker(
         : pageItems(shownPages, shownPinned, 0)),
     );
     if (focusedPart !== undefined) focusEditor(focusedPart);
+    else if (focusedRename !== null) renameButtons.get(focusedRename)?.focus();
   };
 
   /** Focuses a part of the editor as last drawn, when there is one. */

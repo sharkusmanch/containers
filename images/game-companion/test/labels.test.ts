@@ -731,14 +731,15 @@ describe("LabelService custom labels", () => {
     );
     const { s } = service(fakeAgent().agent);
     await s.load();
-    const pages = ["A1", "A2", "A3", "A4", "A5", "A6"].map((id) => doc(`Page ${id}`, id));
+    // Titles with different first words, so their fallbacks never number each other.
+    const pages = ["A1", "A2", "A3", "A4", "A5", "A6"].map((id) => doc(`${id} Page`, id));
     expect(labelsOf(s.annotate(pages))).toEqual({
-      "Page A1": "Fine 🎮",
-      "Page A2": undefined,
-      "Page A3": undefined,
-      "Page A4": undefined,
-      "Page A5": undefined,
-      "Page A6": "Trim",
+      "A1 Page": "Fine 🎮",
+      "A2 Page": undefined,
+      "A3 Page": undefined,
+      "A4 Page": undefined,
+      "A5 Page": undefined,
+      "A6 Page": "Trim",
     });
   });
 
@@ -923,6 +924,40 @@ describe("LabelService custom labels", () => {
     expect(s.annotate(tree).map((p) => p.label)).toEqual(["Boss", "Boss 2"]);
     expect(s.labelsPending(tree)).toBe(true);
     expect(time.pending()).toEqual([2000]);
+  });
+
+  it("numbers a page whose fallback is a mapping name used in the tree, wherever it comes", async () => {
+    const { s } = service(null);
+    await s.load();
+    expect(
+      s.annotate([doc("Notes and Tips", "T1"), doc("Notes", "N1")]).map((p) => p.label),
+    ).toEqual(["Notes 2", "Notes"]);
+    expect(
+      s.annotate([doc("Notes", "N1"), doc("Notes and Tips", "T1")]).map((p) => p.label),
+    ).toEqual(["Notes", "Notes 2"]);
+  });
+
+  it("numbers the second of two pages that map to the same name", async () => {
+    const { s } = service(null);
+    await s.load();
+    expect(
+      s
+        .annotate([doc("Notes", "N1", [doc("notes", "N2")]), doc("NOTES", "N3")])
+        .map((p) => [p.label, p.children[0]?.label]),
+    ).toEqual([
+      ["Notes", "Notes 2"],
+      ["Notes 3", undefined],
+    ]);
+  });
+
+  it("reserves a plain fallback, so a later generated label equal to it is numbered", async () => {
+    await writeFile(file, JSON.stringify({ labels: { "Boss Guide": "Boss" }, unlabelled: {} }));
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    const [rush, guide] = s.annotate([doc("Boss Rush", "R1"), doc("Boss Guide", "B1")]);
+    // The first shows its own fallback "Boss" (sent as no label); the second may not repeat it.
+    expect(rush).not.toHaveProperty("label");
+    expect(guide?.label).toBe("Boss 2");
   });
 
   it("never logs a custom label", async () => {
