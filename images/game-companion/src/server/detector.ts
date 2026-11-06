@@ -47,6 +47,8 @@ export interface Picked {
 
 /** Tolerated clock difference between this host and RetroAchievements. */
 const SKEW_MS = 2 * 60_000;
+/** After a failed read of a platform's last-played record, it is asked once more this soon. */
+const HISTORY_RETRY_MS = 5 * 60_000;
 
 export function isSteamAppId(id: string): boolean {
   return /^\d{1,10}$/.test(id);
@@ -179,6 +181,8 @@ export class Detector {
   private readonly xboxMaxDelayMs: number;
   private readonly memory: LastPlayedMemory | undefined;
   private readonly historyIntervalMs: number;
+  /** The one pending retry of each platform's last-played record after a failed read. */
+  private readonly historyRetries = new Map<LastPlayedSource, NodeJS.Timeout>();
 
   private steam: SteamPresence | null = null;
   private ra: RaSummary | null = null;
@@ -214,8 +218,14 @@ export class Detector {
     this.xboxDelayMs = this.xboxIntervalMs;
     this.memory = opts.lastPlayed;
     this.historyIntervalMs = opts.historyIntervalMs ?? 30 * 60_000;
-    this.lastSteam = this.memory?.get("steam") ?? null;
-    this.lastXbox = this.memory?.get("xbox") ?? null;
+    // A time remembered ahead of this clock (a run whose clock was fast) counts as now, so it
+    // cannot hold off newer records until the clock catches up.
+    this.lastSteam = this.capped(this.memory?.get("steam") ?? null);
+    this.lastXbox = this.capped(this.memory?.get("xbox") ?? null);
+  }
+
+  private capped(seen: Observed | null): Observed | null {
+    return seen && { ...seen, at: Math.min(seen.at, this.clock()) };
   }
 
   async pollSteam(): Promise<void> {
@@ -287,43 +297,64 @@ export class Detector {
   /**
    * Reads Steam's and Xbox's own records of the game played last, which also know play this
    * service never saw. Each counts only when newer than the game remembered for its platform.
-   * Never rejects; a failure keeps what is remembered and marks nothing stale.
+   * Never rejects; a failure keeps what is remembered and marks nothing stale and, while
+   * running, asks that platform once more after five minutes.
    */
   async pollLastPlayed(): Promise<void> {
-    await Promise.all([this.steamHistory(), this.xboxHistory()]);
+    const [steamOk, xboxOk] = await Promise.all([this.steamHistory(), this.xboxHistory()]);
+    if (!steamOk) this.retryHistory("steam");
+    if (!xboxOk) this.retryHistory("xbox");
   }
 
-  private async steamHistory(): Promise<void> {
-    if (!this.steamSource.lastPlayed) return;
+  /** One more read of a failed source; whatever it gives, the regular cadence follows. */
+  private retryHistory(source: LastPlayedSource): void {
+    if (!this.running || this.historyRetries.has(source)) return;
+    const timer = setTimeout(() => {
+      this.historyRetries.delete(source);
+      void (source === "steam" ? this.steamHistory() : this.xboxHistory());
+    }, HISTORY_RETRY_MS);
+    timer.unref();
+    this.historyRetries.set(source, timer);
+  }
+
+  /** False only when the read failed. */
+  private async steamHistory(): Promise<boolean> {
+    if (!this.steamSource.lastPlayed) return true;
     try {
       const seen = await this.steamSource.lastPlayed();
       // Only an app id finds a guide, as for a game seen being played.
-      if (!seen || !isSteamAppId(seen.appId)) return;
+      if (!seen || !isSteamAppId(seen.appId)) return true;
       const title = seen.name ?? `Steam app ${seen.appId}`;
       this.offer("steam", { source: "steam", id: seen.appId, title }, seen.at);
+      return true;
     } catch {
       // Keep what is remembered.
+      return false;
     }
   }
 
-  private async xboxHistory(): Promise<void> {
+  /** False only when the read failed. */
+  private async xboxHistory(): Promise<boolean> {
     const source = this.xboxSource;
-    if (!source?.lastPlayed || !this.xboxConnected()) return;
+    if (!source?.lastPlayed || !this.xboxConnected()) return true;
     try {
       const seen = await source.lastPlayed();
-      if (!seen) return;
+      if (!seen) return true;
       const title = seen.name || `Xbox game ${seen.id}`;
       this.offer("xbox", { source: "xbox", id: seen.id, title }, seen.at);
+      return true;
     } catch {
       // Keep what is remembered.
+      return false;
     }
   }
 
   /** A platform's record of its last game: kept when newer, with a future time taken as now. */
   private offer(source: LastPlayedSource, game: GameRef, at: number): void {
-    const clamped = Math.min(at, this.clock());
+    const now = this.clock();
+    const clamped = Math.min(at, now);
     const known = source === "steam" ? this.lastSteam : this.lastXbox;
-    if (known && clamped <= known.at) return;
+    if (known && clamped <= Math.min(known.at, now)) return;
     this.remember(source, { game, at: clamped });
   }
 
@@ -405,5 +436,7 @@ export class Detector {
     this.timers = [];
     if (this.xboxTimer) clearTimeout(this.xboxTimer);
     this.xboxTimer = null;
+    for (const timer of this.historyRetries.values()) clearTimeout(timer);
+    this.historyRetries.clear();
   }
 }

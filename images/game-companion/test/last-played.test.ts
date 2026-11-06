@@ -228,6 +228,22 @@ describe("LastPlayedStore", () => {
     expect(vi.mocked(fsp.rename)).not.toHaveBeenCalled();
   });
 
+  it("removes stale temp files of its own on load, and nothing else", async () => {
+    await writeFile(join(dir, "last-played.json.123.4.tmp"), "{");
+    await writeFile(join(dir, "last-played.json.9.1.tmp"), "{");
+    await writeFile(join(dir, "labels.json.1.1.tmp"), "{");
+    await writeFile(join(dir, "platforms.json"), "{}");
+    await writeFile(file, JSON.stringify({ xbox: { game: xboxGame, at: T0 } }));
+    const { s } = store();
+    await s.load();
+    expect((await readdir(dir)).sort()).toEqual([
+      "labels.json.1.1.tmp",
+      "last-played.json",
+      "platforms.json",
+    ]);
+    expect(s.get("xbox")).toEqual({ game: xboxGame, at: T0 });
+  });
+
   it("does not overwrite a file that answers EACCES", async () => {
     await writeFile(file, JSON.stringify({ steam: { game: steamGame, at: T0 } }));
     vi.mocked(fsp.writeFile).mockClear();

@@ -1014,8 +1014,9 @@ describe("last played: remembered across restarts and filled from the platforms'
     connected?: () => boolean;
     store?: ReturnType<typeof memoryStore> | import("../src/server/last-played.js").LastPlayedStore;
     historyIntervalMs?: number;
+    clock?: { t: number };
   }) {
-    const clock = { t: NOW };
+    const clock = opts.clock ?? { t: NOW };
     const calls = { steamLast: 0, xboxLast: 0 };
     const events: [string, boolean][] = [];
     const d = new Detector({
@@ -1098,6 +1099,45 @@ describe("last played: remembered across restarts and filled from the platforms'
       });
       await pollAll(d);
       expect(d.current()).toMatchObject({ game: xboxGame, state: "last-played" });
+    });
+
+    it("writes a newer, different game from history at once, replacing the one seen live", async () => {
+      const { LastPlayedStore } = await import("../src/server/last-played.js");
+      const { readFile } = await import("node:fs/promises");
+      const file = `${dir}/last-played.json`;
+      const clock = { t: NOW };
+      const store = new LastPlayedStore({ file, now: () => clock.t });
+      await store.load();
+      let playing = true;
+      const other = { source: "xbox" as const, id: "2000000009", title: "Other Game" };
+      const { d } = make({
+        clock,
+        store,
+        presence: async () =>
+          playing
+            ? {
+                online: true,
+                device: "Scarlett",
+                title: { id: xboxGame.id, name: xboxGame.title, richPresence: null },
+              }
+            : { online: false, device: null, title: null },
+        xboxLast: async () => ({ id: other.id, name: other.title, at: NOW + 5_000 }),
+      });
+      await d.pollXbox();
+      await store.settled();
+      expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
+        xbox: { game: xboxGame, at: NOW },
+      });
+      // Well inside the minute that holds back a time-only write.
+      playing = false;
+      clock.t += 10_000;
+      await d.pollXbox();
+      await d.pollLastPlayed();
+      await store.settled();
+      expect(JSON.parse(await readFile(file, "utf8"))).toEqual({
+        xbox: { game: other, at: NOW + 5_000 },
+      });
+      expect(d.current()).toMatchObject({ game: other, observedAt: NOW + 5_000 });
     });
 
     it("without anything remembered RA wins, which is the reported bug's starting point", async () => {
@@ -1194,6 +1234,23 @@ describe("last played: remembered across restarts and filled from the platforms'
     await d.pollLastPlayed();
     expect(d.current()).toMatchObject({ game: xboxGame, observedAt: NOW });
     expect(store.slots.xbox?.at).toBe(NOW);
+  });
+
+  it("a remembered time ahead of the clock never blocks a newer history record", async () => {
+    // Remembered by a run whose clock was three days ahead.
+    const store = memoryStore({ xbox: { game: xboxGame, at: NOW + 3 * DAY } });
+    let history = { id: "2000000009", name: "Other Game", at: NOW - MIN };
+    const { d, clock } = make({ store, xboxLast: async () => history });
+    expect(d.current()).toMatchObject({ game: xboxGame, observedAt: NOW });
+    await d.pollLastPlayed();
+    expect(d.current().game).toEqual(xboxGame);
+    clock.t += 60 * MIN;
+    history = { ...history, at: NOW + 30 * MIN };
+    await d.pollLastPlayed();
+    expect(d.current()).toMatchObject({
+      game: { source: "xbox", id: "2000000009" },
+      observedAt: NOW + 30 * MIN,
+    });
   });
 
   it("orders a remembered time in the future as now, like RA's, and reports it as now", () => {
@@ -1303,6 +1360,65 @@ describe("last played: remembered across restarts and filled from the platforms'
       d.stop();
       await vi.advanceTimersByTimeAsync(3 * 30 * MIN);
       expect(calls).toEqual({ steamLast: 3, xboxLast: 3 });
+    });
+
+    it("asks a failed source once more after 5 minutes, then keeps to the 30-minute cadence", async () => {
+      vi.useFakeTimers();
+      const { d, calls } = make({
+        steamLast: async () => {
+          throw new Error("steam down");
+        },
+        xboxLast: async () => null,
+      });
+      d.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(calls).toEqual({ steamLast: 1, xboxLast: 1 });
+      await vi.advanceTimersByTimeAsync(5 * MIN - 1);
+      expect(calls.steamLast).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      // Only the failed source is asked again.
+      expect(calls).toEqual({ steamLast: 2, xboxLast: 1 });
+      // The retry failed too: no further retry before the next regular read.
+      await vi.advanceTimersByTimeAsync(25 * MIN - 1);
+      expect(calls.steamLast).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(calls).toEqual({ steamLast: 3, xboxLast: 2 });
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      expect(calls).toEqual({ steamLast: 4, xboxLast: 2 });
+      d.stop();
+    });
+
+    it("a retry that succeeds ends it; stop cancels a pending retry", async () => {
+      vi.useFakeTimers();
+      let fail = true;
+      const { d, calls } = make({
+        xboxLast: async () => {
+          if (fail) throw new Error("xbox busy");
+          return { id: xboxGame.id, name: xboxGame.title, at: NOW - MIN };
+        },
+      });
+      d.start();
+      await vi.advanceTimersByTimeAsync(0);
+      fail = false;
+      await vi.advanceTimersByTimeAsync(5 * MIN);
+      expect(calls.xboxLast).toBe(2);
+      expect(d.current().game).toEqual(xboxGame);
+      await vi.advanceTimersByTimeAsync(25 * MIN - 1);
+      expect(calls.xboxLast).toBe(2);
+      d.stop();
+
+      fail = true;
+      const again = make({
+        xboxLast: async () => {
+          throw new Error("xbox busy");
+        },
+      });
+      again.d.start();
+      await vi.advanceTimersByTimeAsync(0);
+      again.d.stop();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60 * MIN);
+      expect(again.calls.xboxLast).toBe(1);
     });
   });
 });

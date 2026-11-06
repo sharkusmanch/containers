@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { GameRef } from "../shared/types.js";
 
@@ -64,11 +64,12 @@ export class LastPlayedStore {
   }
 
   /**
-   * Reads the file. A missing or unparsable file starts empty and is replaced on the next write;
+   * Removes temp files a crashed write left behind, then reads the file. A missing or unparsable file starts empty and is replaced on the next write;
    * one that exists but cannot be read (EACCES, EIO, ...) starts empty and is never written. An
    * entry of the wrong shape is dropped. Never rejects.
    */
   async load(): Promise<void> {
+    await this.removeStaleTemps();
     let raw: string;
     try {
       raw = await readFile(this.file, "utf8");
@@ -133,6 +134,23 @@ export class LastPlayedStore {
         this.dirty = true;
         this.log("last-played write failed");
       });
+  }
+
+  /** Deletes `<file>.*.tmp` beside the file; anything else in the directory stays. */
+  private async removeStaleTemps(): Promise<void> {
+    const dir = dirname(this.file);
+    const prefix = `${basename(this.file)}.`;
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (name.startsWith(prefix) && name.endsWith(".tmp")) {
+        await rm(join(dir, name), { force: true }).catch(() => undefined);
+      }
+    }
   }
 
   private async write(): Promise<void> {
