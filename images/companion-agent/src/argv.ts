@@ -107,6 +107,26 @@ export const CONTROLLED_ENV: ReadonlySet<string> = new Set([...PASSED, ...SET]);
 /** Secrets the claude child must never get, whatever AGENT_CHILD_ENV says. */
 export const SECRET_ENV: ReadonlySet<string> = new Set(["AGENT_TOKEN", ...MCP_SECRET_ENV]);
 
+/**
+ * The environment of one label run: PATH, LANG, TZ and the OAuth token when set, the run's HOME,
+ * and the service's own switches that keep claude from updating itself or calling home. No skill
+ * settings (REDLIB_URL) and no AGENT_CHILD_ENV names: a label run has no tools to use them.
+ */
+export function labelEnv(
+  base: Record<string, string | undefined>,
+  runHome: string,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of ["PATH", "LANG", "TZ", "CLAUDE_CODE_OAUTH_TOKEN"]) {
+    const value = base[key];
+    if (value !== undefined) env[key] = value;
+  }
+  env.HOME = runHome;
+  env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
+  env.DISABLE_AUTOUPDATER = "1";
+  return env;
+}
+
 /** The environment of one claude run, built as an allowlist. */
 export function childEnv(
   base: Record<string, string | undefined>,

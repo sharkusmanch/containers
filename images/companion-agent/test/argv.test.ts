@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_TOOLS, claudeArgs, childEnv, labelArgs, LABEL_MODEL } from "../src/argv.js";
+import {
+  BUILTIN_TOOLS,
+  claudeArgs,
+  childEnv,
+  labelArgs,
+  labelEnv,
+  LABEL_MODEL,
+} from "../src/argv.js";
 
 const base = {
   model: "opus",
@@ -104,6 +111,42 @@ describe("labelArgs", () => {
     ]) {
       expect(args).not.toContain(flag);
     }
+  });
+});
+
+describe("labelEnv", () => {
+  it("passes PATH, LANG, TZ and the OAuth token only, with the run's HOME", () => {
+    const env = labelEnv(
+      {
+        PATH: "/usr/bin",
+        HOME: "/home/agent",
+        LANG: "C.UTF-8",
+        TZ: "UTC",
+        CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+        REDLIB_URL: "http://redlib.test",
+        VIBEPOLLO_TOKEN: "ro-token",
+        AGENT_TOKEN: "secret",
+        COMPANION_MCP_TOKEN: "secret",
+      },
+      "/home/agent/run-1",
+    );
+    expect(env).toEqual({
+      PATH: "/usr/bin",
+      LANG: "C.UTF-8",
+      TZ: "UTC",
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth",
+      HOME: "/home/agent/run-1",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      DISABLE_AUTOUPDATER: "1",
+    });
+  });
+
+  it("leaves out what is not set", () => {
+    expect(labelEnv({}, "/h/run-1")).toEqual({
+      HOME: "/h/run-1",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      DISABLE_AUTOUPDATER: "1",
+    });
   });
 });
 

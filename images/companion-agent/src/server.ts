@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
-import { childEnv, claudeArgs, labelArgs } from "./argv.js";
+import { childEnv, claudeArgs, labelArgs, labelEnv } from "./argv.js";
 import type { Config } from "./config.js";
 import { buildLabelPrompt, parseLabelRequest, parseLabels } from "./label.js";
 import { buildPrompt, parseAskRequest, type AskRequest } from "./prompt.js";
@@ -325,7 +325,7 @@ class LabelRun {
       // The run's empty HOME is also its working directory: no house rules or project settings.
       child = spawn(config.claudeBin, labelArgs(buildLabelPrompt(this.titles)), {
         cwd: home,
-        env: childEnv(this.opts.baseEnv, home, config.childEnvNames),
+        env: labelEnv(this.opts.baseEnv, home),
         detached: true,
         stdio: ["ignore", "pipe", "ignore"],
       });

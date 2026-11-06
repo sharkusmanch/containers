@@ -45,8 +45,7 @@ async function start(overrides: Partial<Config> = {}, claudeMd = true): Promise<
     model: "opus",
     projectDir: project,
     skillsDirs: ["/agent/skills/redlib", "/agent/skills/vibepollo"],
-    // FAKE_CLAUDE_RECORDS: where the fake claude records itself (a label run's cwd is its HOME).
-    childEnvNames: ["VIBEPOLLO_TOKEN", "VIBEPOLLO_HOST", "FAKE_CLAUDE_RECORDS"],
+    childEnvNames: ["VIBEPOLLO_TOKEN", "VIBEPOLLO_HOST"],
     homeDir: home,
     timeoutMs: 10_000,
     labelTimeoutMs: 10_000,
@@ -68,7 +67,8 @@ async function start(overrides: Partial<Config> = {}, claudeMd = true): Promise<
       AGENT_TOKEN: TOKEN,
       COMPANION_MCP_TOKEN: "mcp-secret",
       VIBEPOLLO_TOKEN: "ro-token-test",
-      FAKE_CLAUDE_RECORDS: project,
+      REDLIB_URL: "http://redlib.test",
+      LANG: "C.UTF-8",
     },
     log: (msg, extra = {}) => logs.push({ msg, extra }),
   });
@@ -146,11 +146,24 @@ interface FakeRecord {
   grandchild?: number;
 }
 
+/** The fake's records: in the project folder for a question, beside the run HOME for a label. */
 function records(harness: Harness = h): FakeRecord[] {
-  return readdirSync(harness.project)
-    .filter((f) => f.startsWith("fake-"))
-    .map((f) => JSON.parse(readFileSync(join(harness.project, f), "utf8")) as FakeRecord);
+  return [harness.project, harness.home].flatMap((dir) =>
+    readdirSync(dir)
+      .filter((f) => f.startsWith("fake-"))
+      .flatMap((f) => {
+        // A record the fake is still writing is read on a later look.
+        try {
+          return [JSON.parse(readFileSync(join(dir, f), "utf8")) as FakeRecord];
+        } catch {
+          return [];
+        }
+      }),
+  );
 }
+
+/** What is left in the service HOME besides the fake's records. */
+const homeLeft = (): string[] => readdirSync(h.home).filter((f) => !f.startsWith("fake-"));
 
 const alive = (pid: number): boolean => {
   try {
@@ -551,7 +564,7 @@ describe("labels", () => {
     expect(await res.json()).toEqual({ labels: { [first]: "Walk", "Boss Guide": "Bosses" } });
   });
 
-  it("starts haiku with no tools, in its own HOME, with the allowlisted environment", async () => {
+  it("starts haiku with no tools, in its own HOME, with only the environment it needs", async () => {
     const file = labelReply("labels.json", "{}");
     const titles = [`replay:${file}`, "Boss Guide"];
     const res = await label(titlesBody(titles));
@@ -563,9 +576,15 @@ describe("labels", () => {
     expect(runHome.startsWith(join(h.home, "run-"))).toBe(true);
     // No house rules: claude runs in its empty HOME, not the project folder.
     expect(rec.cwd).toBe(runHome);
-    expect(rec.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("oauth-test");
-    expect(rec.env.AGENT_TOKEN).toBeUndefined();
-    expect(rec.env.COMPANION_MCP_TOKEN).toBeUndefined();
+    // No REDLIB_URL, no AGENT_CHILD_ENV names (VIBEPOLLO_TOKEN), no tokens of the service.
+    expect(rec.env).toEqual({
+      PATH: process.env.PATH,
+      LANG: "C.UTF-8",
+      HOME: runHome,
+      CLAUDE_CODE_OAUTH_TOKEN: "oauth-test",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      DISABLE_AUTOUPDATER: "1",
+    });
     await until(() => !existsSync(runHome));
   });
 
@@ -656,7 +675,7 @@ describe("labels", () => {
     const res = await label(titlesBody(["Maps"]));
     expect(res.status).toBe(502);
     await until(() => h.agent.running === 0);
-    expect(readdirSync(h.home)).toEqual([]);
+    expect(homeLeft()).toEqual([]);
   });
 
   it("answers 502 and kills everything when haiku times out", async () => {
@@ -669,7 +688,7 @@ describe("labels", () => {
     const [rec] = records();
     await until(() => !alive(rec?.pid ?? 0) && !alive(rec?.grandchild ?? 0));
     await until(() => h.agent.running === 0);
-    expect(readdirSync(h.home)).toEqual([]);
+    expect(homeLeft()).toEqual([]);
     expect(h.logs.find((l) => l.msg === "label")?.extra.outcome).toBe("timeout");
   });
 

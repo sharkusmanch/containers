@@ -98,9 +98,11 @@ claude -p --output-format json --model haiku --strict-mcp-config --tools ""
 - **Answer.** The first JSON object in the result text is read; an entry is kept only when its
   key is one of the titles and its value, trimmed, is 1 to 8 characters (code points) matching
   `^[\p{L}\p{N}][\p{L}\p{N} &'%.\-]*$`. A label given to two titles is dropped for both.
-- **Process.** As for a question (own process group, allowlisted environment, kill on timeout,
-  disconnect or shutdown), except that claude's working directory is the run's empty HOME, so
-  no house rules load.
+- **Process.** As for a question (own process group, kill on timeout, disconnect or shutdown),
+  except that claude's working directory is the run's empty HOME, so no house rules load, and
+  its environment is only `PATH`, `LANG`, `TZ`, `CLAUDE_CODE_OAUTH_TOKEN` (when set) and its
+  `HOME`, plus `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` and `DISABLE_AUTOUPDATER=1`: no
+  `REDLIB_URL` and none of the `AGENT_CHILD_ENV` names.
 
 ## How a question runs
 

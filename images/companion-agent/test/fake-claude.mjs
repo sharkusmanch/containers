@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // A stand-in for `claude` in the server tests. It records how it was started in
-// `<FAKE_CLAUDE_RECORDS or cwd>/fake-<pid>.json`, then does what the question in its prompt (the
+// `<cwd>/fake-<pid>.json` (beside its HOME when it runs in its HOME, as a label run does), then does what the question in its prompt (the
 // last argument) says; in a label prompt, what its first title says:
 //   replay:<file>     print the file's stream-json lines and exit 0
 //   replay-bg:<file>  the same, leaving a background grandchild running
@@ -12,6 +12,7 @@
 // signal to this process group does not reach them.
 import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 const args = process.argv.slice(2);
 const prompt = args[args.length - 1] ?? "";
@@ -27,7 +28,7 @@ const arg = colon === -1 ? "" : question.slice(colon + 1);
 const record = { argv: args, env: process.env, cwd: process.cwd(), pid: process.pid };
 const save = () =>
   writeFileSync(
-    `${process.env.FAKE_CLAUDE_RECORDS ?? process.cwd()}/fake-${process.pid}.json`,
+    `${process.cwd() === process.env.HOME ? dirname(process.cwd()) : process.cwd()}/fake-${process.pid}.json`,
     JSON.stringify(record),
   );
 save();
