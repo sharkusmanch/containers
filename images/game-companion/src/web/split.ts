@@ -1,11 +1,17 @@
 import { DEFAULT_SPLIT_FRACTION, clampSplitFraction } from "./layout-mode.js";
 
-/** What the right pane shows; 🏆 and 💬 choose. */
-export type RightPane = "achievements" | "ask";
+/**
+ * What the right pane shows: the achievements (🏆), the Ask panel (💬), or the page of a slot
+ * (a long press on its rail button).
+ */
+export type RightPane = "achievements" | "ask" | { slot: number };
 
-/** The two panes: the slot framed on the left and the panel on the right. */
+/**
+ * The two panes: the slot framed on the left and what the right shows. `left` is null only when
+ * the right shows a page and no other slot is usable: that page then fills the stage alone.
+ */
 export interface Panes {
-  left: number;
+  left: number | null;
   right: RightPane;
 }
 
@@ -13,21 +19,34 @@ export interface Panes {
 export const DOUBLE_TAP_MS = 350;
 
 /**
- * What the two panes show. The left pane frames the active slot; when 🏆 or 💬 is the active
- * choice, the slot shown last, else the first usable one. `usable[i]` tells whether slot i holds
- * an address the frames can show. Null when no slot is usable: the page then works as one pane.
+ * What the two panes show. `usable[i]` tells whether slot i holds an address the frames can show.
+ * The right pane shows Ask while it is open, else slot `right` when that is usable, else the
+ * achievements. The left pane frames the active slot; when 🏆 or 💬 is the active choice, or the
+ * active slot is the one chosen for the right (even while Ask covers it, so closing Ask moves
+ * nothing), the slot shown last, else the first usable one, never the right's. Null when there is
+ * nothing for the left and the right is not a page: the stage then works as one pane.
  */
 export function choosePanes(state: {
   active: number;
   usable: readonly boolean[];
   lastSlot: number | null;
   askOpen: boolean;
+  right?: number | null;
 }): Panes | null {
   const { active, usable, lastSlot, askOpen } = state;
-  const ok = (index: number | null): index is number => index !== null && usable[index] === true;
-  const left = ok(active) ? active : ok(lastSlot) ? lastSlot : usable.indexOf(true);
-  if (left < 0) return null;
-  return { left, right: askOpen ? "ask" : "achievements" };
+  const ok = (index: number | null | undefined): index is number =>
+    index !== null && index !== undefined && usable[index] === true;
+  const right = ok(state.right) ? state.right : null;
+  const free = (index: number | null): index is number => ok(index) && index !== right;
+  const left = free(active)
+    ? active
+    : free(lastSlot)
+      ? lastSlot
+      : usable.findIndex((_, index) => free(index));
+  if (askOpen || right === null) {
+    return left < 0 ? null : { left, right: askOpen ? "ask" : "achievements" };
+  }
+  return { left: left < 0 ? null : left, right: { slot: right } };
 }
 
 /** The left pane's share of an area `width` wide starting at `left`, for a pointer at `x`. */

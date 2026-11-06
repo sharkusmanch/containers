@@ -93,6 +93,10 @@ button {
   color: var(--text-dim);
   border-left: 3px solid transparent;
   border-bottom: 1px solid var(--border);
+  /* A long press on a slot shows its page in the right pane: no callout, no selection. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* The last button is always visible; no line under it. Hidden buttons are display: none, so
@@ -105,6 +109,14 @@ button {
   color: var(--text);
   background: var(--bg-active);
   border-left-color: var(--accent);
+}
+
+/* The slot shown in the right pane (two panes): an accent on the side it is shown on. A shadow,
+   not a border, so the button keeps its size. */
+.rail button.right-pane {
+  color: var(--text);
+  background: var(--bg-active);
+  box-shadow: inset -3px 0 0 var(--accent);
 }
 
 .rail button:disabled {
@@ -1725,6 +1737,60 @@ button {
 }
 
 /*
+ * ---- Two pages: a guide page in the right pane as well ----
+ * Frames.showPair marks the container .two-pages and the two entries on screen .pane-left and
+ * .pane-right. An entry is never moved to another parent (a moved iframe reloads), so the
+ * container covers the whole stage and each entry is placed in it by its pane class. Each pane's
+ * box is kept in custom properties, for the zoom and hinge rules to reuse: --pane-x / --pane-y
+ * (its offset) and --pane-w / --pane-h (its size); a percentage in them is of the stage.
+ */
+
+.layout-split .two-panes > .frames.two-pages {
+  right: 0;
+  bottom: 0;
+  width: auto;
+}
+
+.layout-split .two-panes > .frames.two-pages > .pane-left {
+  --pane-w: var(--left-width);
+}
+
+.layout-split .two-panes > .frames.two-pages > .pane-right {
+  --pane-x: calc(var(--left-width) + var(--divider-width));
+  --pane-w: calc(100% - var(--left-width) - var(--divider-width));
+}
+
+.layout-split .two-panes > .frames.two-pages > .pane-left,
+.layout-split .two-panes > .frames.two-pages > .pane-right {
+  top: var(--pane-y, 0px);
+  left: var(--pane-x, 0px);
+  right: auto;
+  bottom: auto;
+  width: var(--pane-w, 100%);
+  height: var(--pane-h, 100%);
+}
+
+/* Guide text size: a framed page is enlarged from its pane's size, as .frames.zoom-* does from
+   the stage's; the scale itself comes from those rules. */
+.layout-split .two-panes > .frames.two-pages.zoom-90 > .frame.pane-left,
+.layout-split .two-panes > .frames.two-pages.zoom-90 > .frame.pane-right {
+  width: calc(var(--pane-w, 100%) / 0.9);
+  height: calc(var(--pane-h, 100%) / 0.9);
+}
+
+.layout-split .two-panes > .frames.two-pages.zoom-80 > .frame.pane-left,
+.layout-split .two-panes > .frames.two-pages.zoom-80 > .frame.pane-right {
+  width: calc(var(--pane-w, 100%) / 0.8);
+  height: calc(var(--pane-h, 100%) / 0.8);
+}
+
+.layout-split .two-panes > .frames.two-pages.zoom-70 > .frame.pane-left,
+.layout-split .two-panes > .frames.two-pages.zoom-70 > .frame.pane-right {
+  width: calc(var(--pane-w, 100%) / 0.7);
+  height: calc(var(--pane-h, 100%) / 0.7);
+}
+
+/*
  * Flex mode: a folding screen half-open reports two viewport segments, and the hinge is the
  * boundary between the panes; there is nothing to drag. The stage's bottom edge is the viewport's
  * minus the bottom safe area, and its left edge the left safe area plus the rail.
@@ -1754,6 +1820,28 @@ button {
   .layout-split .two-panes > .split-divider {
     display: none;
   }
+
+  /* Two pages: the left pane's above the hinge, the right pane's below it. */
+  .layout-split .two-panes > .frames.two-pages > .pane-left {
+    --pane-w: 100%;
+    --pane-h: calc(
+      100% -
+        (
+          env(viewport-segment-bottom 0 1) - env(safe-area-inset-bottom, 0px) -
+            env(viewport-segment-bottom 0 0)
+        )
+    );
+  }
+
+  .layout-split .two-panes > .frames.two-pages > .pane-right {
+    --pane-x: 0px;
+    --pane-w: 100%;
+    --pane-h: calc(
+      env(viewport-segment-bottom 0 1) - env(safe-area-inset-bottom, 0px) -
+        env(viewport-segment-top 0 1)
+    );
+    --pane-y: calc(100% - var(--pane-h));
+  }
 }
 
 /* Hinge upright: the page left of it, the panel right of it. */
@@ -1771,5 +1859,19 @@ button {
 
   .layout-split .two-panes > .split-divider {
     display: none;
+  }
+
+  /* Two pages: the left pane's left of the hinge, the right pane's right of it. */
+  .layout-split .two-panes > .frames.two-pages > .pane-left {
+    --pane-w: calc(
+      env(viewport-segment-right 0 0) - env(safe-area-inset-left, 0px) - var(--rail-width)
+    );
+  }
+
+  .layout-split .two-panes > .frames.two-pages > .pane-right {
+    --pane-x: calc(
+      env(viewport-segment-left 1 0) - env(safe-area-inset-left, 0px) - var(--rail-width)
+    );
+    --pane-w: calc(100% - var(--pane-x));
   }
 }

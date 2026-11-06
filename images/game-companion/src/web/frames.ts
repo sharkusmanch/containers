@@ -12,6 +12,15 @@ export interface Frames {
    * renders itself (a "doc" without the `reader` option). A slot that changes kind gets a new element.
    */
   show(index: number, url: string, kind?: FrameKind): void;
+  /**
+   * Shows two slots at once, side by side in the two-pane layout: `left` beside `right`. Each is
+   * placed as `show` would (created, re-pointed or kept alive) and every other slot is hidden.
+   * The container gets `.two-pages` and the two elements `.pane-left` / `.pane-right`, for the
+   * stylesheet to place them; nothing is moved in the DOM, so neither reloads nor loses its
+   * scroll position. Shows only one (as `show`) when both name the same slot or one is refused.
+   */
+  showPair(left: Shown, right: Shown): void;
+  /** Hides every slot; also ends showing two at once. */
   hideAll(): void;
   /**
    * Re-keys the kept iframes and readers so slot i holds the one showing urls[i]; those for URLs not
@@ -56,6 +65,13 @@ export interface Frames {
 }
 
 export type FrameKind = "doc" | "link" | "reader";
+
+/** A slot to show and what to show in it, as the arguments of `show`. */
+export interface Shown {
+  index: number;
+  url: string;
+  kind?: FrameKind;
+}
 
 export type LocateResult = "found" | "not-found" | "gone";
 
@@ -171,9 +187,25 @@ export function createFrames(
     }
   }, 1500);
 
-  const hideAll = (): void => {
-    for (const entry of entries) entry?.node.classList.add("inactive");
+  /**
+   * Puts `on` on screen and hides every other entry. `sides`, with two entries, marks the first as
+   * the left pane and the second as the right; otherwise no entry carries a side.
+   */
+  const display = (on: Entry[], sides = false): void => {
+    element.classList.toggle("two-pages", sides);
+    for (const entry of entries) {
+      if (entry === null) continue;
+      const at = on.indexOf(entry);
+      entry.node.classList.toggle("inactive", at < 0);
+      entry.node.classList.toggle("pane-left", sides && at === 0);
+      entry.node.classList.toggle("pane-right", sides && at === 1);
+    }
+    // A frame that is still navigating is applied by its load handler.
+    if (!(hideChrome || reader)) return;
+    for (const entry of on) if (!entry.loading) applyTo(entry);
   };
+
+  const hideAll = (): void => display([]);
 
   /** Takes an entry out of the container for good: its search stops and its reader is disposed. */
   const drop = (entry: Entry): void => {
@@ -182,80 +214,93 @@ export function createFrames(
     entry.node.remove();
   };
 
+  /**
+   * Makes slot `index` hold `url` as `wanted` (see show): created, re-pointed or kept as it is.
+   * Shows and hides nothing. Null, changing nothing, for a slot out of range or a refused address.
+   */
+  const place = (index: number, url: string, wanted: FrameKind = "doc"): Entry | null => {
+    if (!Number.isInteger(index) || index < 0 || index >= slotCount) return null;
+    const makeReader = options.reader;
+    const kind: FrameKind = wanted === "reader" && makeReader === undefined ? "doc" : wanted;
+    if (!(kind === "link" ? isSafeLinkUrl(url) : isSafeDocUrl(url))) return null;
+    let entry = entries[index] ?? null;
+    // A sandbox only counts at the next navigation, so a frame never changes kind: it is replaced.
+    if (entry !== null && entry.kind !== kind) {
+      drop(entry);
+      entries[index] = null;
+      entry = null;
+    }
+    if (entry === null && kind === "reader" && makeReader !== undefined) {
+      const made = makeReader(url);
+      entry = {
+        node: made.element,
+        frame: null,
+        reader: made,
+        url,
+        kind,
+        loading: false,
+        generation: 1,
+        live: null,
+      };
+      element.append(made.element);
+      entries[index] = entry;
+    } else if (entry === null) {
+      const frame = doc.createElement("iframe");
+      frame.classList.add("frame");
+      if (kind === "link") {
+        frame.setAttribute("sandbox", LINK_SANDBOX);
+        frame.setAttribute("referrerpolicy", "no-referrer");
+        frame.setAttribute("title", "Link");
+      } else {
+        frame.setAttribute("title", "Guide page");
+      }
+      const created: Entry = {
+        node: frame,
+        frame,
+        reader: null,
+        url,
+        kind,
+        loading: true,
+        generation: 1,
+        live: null,
+      };
+      frame.addEventListener("load", () => {
+        created.loading = false;
+        if (hideChrome || reader) applyTo(created);
+        watchClicks(created);
+      });
+      frame.setAttribute("src", url);
+      element.append(frame);
+      entry = created;
+      entries[index] = entry;
+    } else if (entry.url !== url) {
+      entry.generation += 1;
+      // A search on the page being left would only ever look at the page that replaces it.
+      entry.live?.abort();
+      if (entry.reader !== null) {
+        entry.reader.load(url);
+      } else if (entry.frame !== null) {
+        entry.loading = true;
+        entry.frame.setAttribute("src", url);
+      }
+      entry.url = url;
+    }
+    return entry;
+  };
+
   return {
     element,
     show(index, url, wanted = "doc") {
-      if (!Number.isInteger(index) || index < 0 || index >= slotCount) return;
-      const makeReader = options.reader;
-      const kind: FrameKind = wanted === "reader" && makeReader === undefined ? "doc" : wanted;
-      if (!(kind === "link" ? isSafeLinkUrl(url) : isSafeDocUrl(url))) return;
-      hideAll();
-      let entry = entries[index] ?? null;
-      // A sandbox only counts at the next navigation, so a frame never changes kind: it is replaced.
-      if (entry !== null && entry.kind !== kind) {
-        drop(entry);
-        entries[index] = null;
-        entry = null;
-      }
-      if (entry === null && kind === "reader" && makeReader !== undefined) {
-        const made = makeReader(url);
-        entry = {
-          node: made.element,
-          frame: null,
-          reader: made,
-          url,
-          kind,
-          loading: false,
-          generation: 1,
-          live: null,
-        };
-        element.append(made.element);
-        entries[index] = entry;
-      } else if (entry === null) {
-        const frame = doc.createElement("iframe");
-        frame.classList.add("frame");
-        if (kind === "link") {
-          frame.setAttribute("sandbox", LINK_SANDBOX);
-          frame.setAttribute("referrerpolicy", "no-referrer");
-          frame.setAttribute("title", "Link");
-        } else {
-          frame.setAttribute("title", "Guide page");
-        }
-        const created: Entry = {
-          node: frame,
-          frame,
-          reader: null,
-          url,
-          kind,
-          loading: true,
-          generation: 1,
-          live: null,
-        };
-        frame.addEventListener("load", () => {
-          created.loading = false;
-          if (hideChrome || reader) applyTo(created);
-          watchClicks(created);
-        });
-        frame.setAttribute("src", url);
-        element.append(frame);
-        entry = created;
-        entries[index] = entry;
-      } else if (entry.url !== url) {
-        entry.generation += 1;
-        // A search on the page being left would only ever look at the page that replaces it.
-        entry.live?.abort();
-        if (entry.reader !== null) {
-          entry.reader.load(url);
-        } else if (entry.frame !== null) {
-          entry.loading = true;
-          entry.frame.setAttribute("src", url);
-        }
-        entry.url = url;
-      }
-      entry.node.classList.remove("inactive");
-      // A frame that is still navigating is applied by its load handler.
-      if ((hideChrome || reader) && !entry.loading) applyTo(entry);
+      const entry = place(index, url, wanted);
+      if (entry !== null) display([entry]);
     },
+    showPair(left, right) {
+      const a = place(left.index, left.url, left.kind);
+      const b = left.index === right.index ? null : place(right.index, right.url, right.kind);
+      if (a !== null && b !== null) display([a, b], true);
+      else if (a !== null || b !== null) display([(a ?? b) as Entry]);
+    },
+
     hideAll,
     sync(urls) {
       const old = entries.filter((e): e is Entry => e !== null);
@@ -274,6 +319,7 @@ export function createFrames(
     reset() {
       for (const entry of entries) if (entry !== null) drop(entry);
       element.replaceChildren();
+      element.classList.remove("two-pages");
       entries.fill(null);
     },
     setHideChrome(hide) {

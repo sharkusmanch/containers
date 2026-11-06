@@ -19,10 +19,16 @@ export const LINKS_MAX = 12;
 const LINK_URL_MAX = 2000;
 const LINK_TITLE_MAX = 40;
 
-/** `active` is ACHIEVEMENTS or an index 0..SLOT_COUNT-1 of a non-null slot. */
+/**
+ * `active` is ACHIEVEMENTS or an index 0..SLOT_COUNT-1 of a non-null slot. `right`, when
+ * present, is the index of a non-null slot shown in the right pane of the two-pane layout instead
+ * of the achievements; absent means the achievements. It may equal `active` (the left pane then
+ * shows another page, see choosePanes) and has no effect in the other layouts.
+ */
 export interface Layout {
   slots: (Slot | null)[];
   active: number;
+  right?: number;
 }
 
 export interface StorageLike {
@@ -81,6 +87,13 @@ export function flattenPages(pages: GuidePage[]): GuidePage[] {
   return pages.flatMap((p) => [p, ...flattenPages(p.children)]);
 }
 
+/** `slots` and `active` with `right`, when it names a non-null slot of `slots`; never `right: undefined`. */
+function withRight(slots: (Slot | null)[], active: number, right: number | undefined): Layout {
+  return right !== undefined && (slots[right] ?? null) !== null
+    ? { slots, active, right }
+    : { slots, active };
+}
+
 function emptySlots(): (Slot | null)[] {
   return Array.from({ length: SLOT_COUNT }, () => null);
 }
@@ -103,26 +116,48 @@ export function defaultLayout(pages: GuidePage[], titles: string[]): Layout {
 export function assignSlot(layout: Layout, page: Slot): Layout {
   if (!isSafeSlotUrl(page.url)) return layout;
   const slots = [...layout.slots];
+  const { right } = layout;
   const existing = slots.findIndex((s) => s?.url === page.url);
-  if (existing !== -1) return { slots, active: existing };
+  if (existing !== -1) return withRight(slots, existing, right);
   const empty = slots.indexOf(null);
+  // A full set replaces the active page, never the right pane's: that one would turn into another.
+  const last = right === SLOT_COUNT - 1 ? SLOT_COUNT - 2 : SLOT_COUNT - 1;
   const target =
-    empty !== -1 ? empty : layout.active === ACHIEVEMENTS ? SLOT_COUNT - 1 : layout.active;
+    empty !== -1
+      ? empty
+      : layout.active === ACHIEVEMENTS || layout.active === right
+        ? last
+        : layout.active;
   slots[target] = { title: page.title, url: page.url };
-  return { slots, active: target };
+  return withRight(slots, target, right);
 }
 
-/** Moves pinned pages to the front, keeping their order; `active` follows its page. Returns the input itself when already compact. */
+/**
+ * Shows slot `index` in the right pane, or the achievements again with null. An empty slot or
+ * an index out of range returns the input itself.
+ */
+export function setRight(layout: Layout, index: number | null): Layout {
+  if (index === null) return withRight([...layout.slots], layout.active, undefined);
+  if (!Number.isInteger(index) || (layout.slots[index] ?? null) === null) return layout;
+  return withRight([...layout.slots], layout.active, index);
+}
+
+/**
+ * Moves pinned pages to the front, keeping their order; `active` and `right` follow their pages
+ * (a `right` on an empty slot is dropped). Returns the input itself when already compact.
+ */
 export function compactLayout(layout: Layout): Layout {
   const pinned = layout.slots.filter((s): s is Slot => s !== null);
-  if (layout.slots.slice(0, pinned.length).every((s) => s !== null)) return layout;
+  const { right } = layout;
+  const rightOk = right === undefined || (layout.slots[right] ?? null) !== null;
+  if (layout.slots.slice(0, pinned.length).every((s) => s !== null) && rightOk) return layout;
   const slots: (Slot | null)[] = layout.slots.map((_, i) => pinned[i] ?? null);
+  // Where the page at `index` lands once the gaps before it are closed.
+  const moved = (index: number): number =>
+    layout.slots.slice(0, index).filter((s) => s !== null).length;
   const kept = layout.active === ACHIEVEMENTS ? null : layout.slots[layout.active];
-  const active =
-    kept === null || kept === undefined
-      ? ACHIEVEMENTS
-      : layout.slots.slice(0, layout.active).filter((s) => s !== null).length;
-  return { slots, active };
+  const active = kept === null || kept === undefined ? ACHIEVEMENTS : moved(layout.active);
+  return withRight(slots, active, right === undefined || !rightOk ? undefined : moved(right));
 }
 
 /**
@@ -158,7 +193,7 @@ export function reconcileLayout(
   });
   const active =
     layout.active !== ACHIEVEMENTS && slots[layout.active] === null ? ACHIEVEMENTS : layout.active;
-  return compactLayout({ slots, active });
+  return compactLayout(withRight(slots, active, layout.right));
 }
 
 /** Empties every slot holding `url` and closes the gap. Returns the input itself when no slot holds it. */
@@ -167,12 +202,13 @@ export function removeSlot(layout: Layout, url: string): Layout {
   const slots = layout.slots.map((s) => (s?.url === url ? null : s));
   const active =
     layout.active !== ACHIEVEMENTS && slots[layout.active] === null ? ACHIEVEMENTS : layout.active;
-  return compactLayout({ slots, active });
+  return compactLayout(withRight(slots, active, layout.right));
 }
 
+/** Makes `index` the active choice; the right pane's page stays. */
 export function activate(layout: Layout, index: number): Layout {
   if (index === ACHIEVEMENTS || (layout.slots[index] ?? null) !== null) {
-    return { slots: [...layout.slots], active: index };
+    return withRight([...layout.slots], index, layout.right);
   }
   return layout;
 }
@@ -201,7 +237,7 @@ export function loadLayout(storage: StorageLike, hubId: string): Layout | null {
   try {
     const raw = storage.getItem(layoutKey(hubId));
     if (raw === null) return null;
-    const data = JSON.parse(raw) as { slots?: unknown; active?: unknown } | null;
+    const data = JSON.parse(raw) as { slots?: unknown; active?: unknown; right?: unknown } | null;
     if (!data || !Array.isArray(data.slots) || data.slots.length !== SLOT_COUNT) return null;
     const slots: (Slot | null)[] = [];
     for (const entry of data.slots as unknown[]) {
@@ -212,7 +248,13 @@ export function loadLayout(storage: StorageLike, hubId: string): Layout | null {
     const { active } = data;
     if (typeof active !== "number" || !Number.isInteger(active)) return null;
     if (active !== ACHIEVEMENTS && slots[active] == null) return null;
-    return compactLayout({ slots, active });
+    // A right pane choice that does not name a pinned slot shows the achievements; the rest stands.
+    const { right } = data;
+    const shownRight =
+      typeof right === "number" && Number.isInteger(right) && slots[right] != null
+        ? right
+        : undefined;
+    return compactLayout(withRight(slots, active, shownRight));
   } catch {
     return null;
   }

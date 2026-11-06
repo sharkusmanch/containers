@@ -23,6 +23,7 @@ import {
   removeSlot,
   saveLayout,
   saveLinks,
+  setRight,
   slotLabel,
   type GameLink,
   type Layout,
@@ -712,5 +713,209 @@ describe("links in a layout", () => {
       }),
     );
     expect(loadLayout(s, "h3")).toBeNull();
+  });
+});
+
+describe("the right pane's page", () => {
+  const slot = (n: string) => ({ title: n, url: `/doc/${n}` });
+  const full: Layout = {
+    slots: [slot("a"), slot("b"), slot("c"), slot("d")],
+    active: 0,
+    right: 2,
+  };
+
+  describe("setRight", () => {
+    it("puts a pinned slot on the right and keeps the rest", () => {
+      const l: Layout = { slots: [slot("a"), slot("b"), null, null], active: 0 };
+      expect(setRight(l, 1)).toEqual({ ...l, right: 1 });
+    });
+
+    it("clears the right with null, leaving no field behind", () => {
+      const cleared = setRight({ slots: [slot("a"), null, null, null], active: 0, right: 0 }, null);
+      expect(cleared).toEqual({ slots: [slot("a"), null, null, null], active: 0 });
+      expect("right" in cleared).toBe(false);
+    });
+
+    it("ignores an empty slot, an out-of-range index and ACHIEVEMENTS", () => {
+      const l: Layout = { slots: [slot("a"), null, null, null], active: 0 };
+      expect(setRight(l, 1)).toBe(l);
+      expect(setRight(l, 9)).toBe(l);
+      expect(setRight(l, ACHIEVEMENTS)).toBe(l);
+      expect(setRight(l, 0.5)).toBe(l);
+    });
+
+    it("does not mutate its input", () => {
+      const l: Layout = { slots: [slot("a"), slot("b"), null, null], active: 0 };
+      const copy = JSON.parse(JSON.stringify(l)) as Layout;
+      setRight(l, 1);
+      expect(l).toEqual(copy);
+    });
+  });
+
+  it("activate keeps the right", () => {
+    expect(activate(full, 1)).toEqual({ ...full, active: 1 });
+    expect(activate(full, ACHIEVEMENTS).right).toBe(2);
+  });
+
+  describe("assignSlot", () => {
+    it("keeps the right when a page fills an empty slot or is already pinned", () => {
+      const l: Layout = { slots: [slot("a"), slot("b"), null, null], active: 0, right: 1 };
+      expect(assignSlot(l, slot("x"))).toEqual({
+        slots: [slot("a"), slot("b"), slot("x"), null],
+        active: 2,
+        right: 1,
+      });
+      expect(assignSlot(l, slot("a")).right).toBe(1);
+    });
+
+    it("never replaces the right pane's page when every slot is full", () => {
+      // The active slot is the one on the right: the last slot is replaced instead.
+      const onRight = assignSlot({ ...full, active: 2 }, slot("x"));
+      expect(onRight.slots.map((s) => s?.url)).toEqual(["/doc/a", "/doc/b", "/doc/c", "/doc/x"]);
+      expect(onRight).toMatchObject({ active: 3, right: 2 });
+      // Achievements active and the last slot on the right: the one before it is replaced.
+      const last = assignSlot({ ...full, active: ACHIEVEMENTS, right: 3 }, slot("x"));
+      expect(last.slots.map((s) => s?.url)).toEqual(["/doc/a", "/doc/b", "/doc/x", "/doc/d"]);
+      expect(last).toMatchObject({ active: 2, right: 3 });
+      // Otherwise the active slot, as before.
+      const active = assignSlot(full, slot("x"));
+      expect(active.slots[0]?.url).toBe("/doc/x");
+      expect(active).toMatchObject({ active: 0, right: 2 });
+    });
+  });
+
+  describe("compactLayout", () => {
+    it("makes the right follow its page", () => {
+      const l = compactLayout({ slots: [null, slot("a"), null, slot("b")], active: 1, right: 3 });
+      expect(l).toEqual({ slots: [slot("a"), slot("b"), null, null], active: 0, right: 1 });
+    });
+
+    it("keeps a right that is already compact, and drops one on an empty slot", () => {
+      const compact: Layout = { slots: [slot("a"), slot("b"), null, null], active: 0, right: 1 };
+      expect(compactLayout(compact)).toBe(compact);
+      const stray = compactLayout({ slots: [null, slot("a"), null, null], active: 1, right: 2 });
+      expect(stray).toEqual({ slots: [slot("a"), null, null, null], active: 0 });
+    });
+  });
+
+  describe("removeSlot", () => {
+    it("re-indexes the right when an earlier page is removed", () => {
+      const l = removeSlot(full, "/doc/a");
+      expect(l.slots.map((s) => s?.url ?? null)).toEqual(["/doc/b", "/doc/c", "/doc/d", null]);
+      expect(l.right).toBe(1);
+      expect(l.slots[l.right ?? -9]?.url).toBe("/doc/c");
+    });
+
+    it("falls back to achievements when the right pane's page is unpinned", () => {
+      const l = removeSlot(full, "/doc/c");
+      expect(l.slots.map((s) => s?.url ?? null)).toEqual(["/doc/a", "/doc/b", "/doc/d", null]);
+      expect("right" in l).toBe(false);
+      expect(l.active).toBe(0);
+    });
+  });
+
+  describe("reconcileLayout", () => {
+    const tree: GuidePage[] = [
+      page("Alpha", "/doc/alpha-AAA"),
+      page("Beta", "/doc/beta-BBB"),
+      page("Gamma", "/doc/gamma-CCC"),
+    ];
+    const s = (title: string, url: string) => ({ title, url });
+
+    it("keeps the right on the same page when an earlier page is gone", () => {
+      const l = reconcileLayout(
+        {
+          slots: [
+            s("Gone", "/doc/gone-ZZZ"),
+            s("Beta", "/doc/beta-BBB"),
+            s("G", "/doc/g-CCC"),
+            null,
+          ],
+          active: 1,
+          right: 2,
+        },
+        tree,
+      );
+      expect(l.slots.map((x) => x?.url ?? null)).toEqual([
+        "/doc/beta-BBB",
+        "/doc/gamma-CCC",
+        null,
+        null,
+      ]);
+      expect(l).toMatchObject({ active: 0, right: 1 });
+    });
+
+    it("drops the right when its page is gone, never pointing at another page", () => {
+      const l = reconcileLayout(
+        {
+          slots: [
+            s("Alpha", "/doc/alpha-AAA"),
+            s("Gone", "/doc/gone-ZZZ"),
+            s("Beta", "/doc/beta-BBB"),
+            null,
+          ],
+          active: 0,
+          right: 1,
+        },
+        tree,
+      );
+      expect(l.slots.map((x) => x?.url ?? null)).toEqual([
+        "/doc/alpha-AAA",
+        "/doc/beta-BBB",
+        null,
+        null,
+      ]);
+      expect("right" in l).toBe(false);
+    });
+
+    it("drops the right when its link was removed", () => {
+      const link = "https://example.com/map";
+      const l = reconcileLayout(
+        { slots: [s("Alpha", "/doc/alpha-AAA"), s("Map", link), null, null], active: 0, right: 1 },
+        tree,
+        [],
+      );
+      expect("right" in l).toBe(false);
+    });
+  });
+
+  describe("storage", () => {
+    it("round-trips the right, and writes no field without one", () => {
+      const s = memory();
+      saveLayout(s, "h1", full);
+      expect(loadLayout(s, "h1")).toEqual(full);
+      const plain: Layout = { slots: [slot("a"), null, null, null], active: 0 };
+      saveLayout(s, "h2", plain);
+      expect(JSON.parse(s.getItem(layoutKey("h2")) ?? "")).toEqual(plain);
+      expect(s.getItem(layoutKey("h2"))).not.toContain("right");
+    });
+
+    it("re-indexes a stored right when it closes the gaps", () => {
+      const s = memory();
+      s.setItem(
+        layoutKey("h1"),
+        JSON.stringify({ slots: [null, slot("a"), null, slot("b")], active: 1, right: 3 }),
+      );
+      expect(loadLayout(s, "h1")).toEqual({
+        slots: [slot("a"), slot("b"), null, null],
+        active: 0,
+        right: 1,
+      });
+    });
+
+    it.each([7, -1, 2, 0.5, "1", null, true])(
+      "keeps the layout but shows the achievements for a stored right of %j",
+      (right) => {
+        const s = memory();
+        s.setItem(
+          layoutKey("h1"),
+          JSON.stringify({ slots: [slot("a"), slot("b"), null, null], active: 0, right }),
+        );
+        expect(loadLayout(s, "h1")).toEqual({
+          slots: [slot("a"), slot("b"), null, null],
+          active: 0,
+        });
+      },
+    );
   });
 });

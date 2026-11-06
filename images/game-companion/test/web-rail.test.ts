@@ -308,3 +308,186 @@ describe("rail in two panes", () => {
     expect(active(rail)).toEqual([false, false, true, false, false, false, false]);
   });
 });
+
+describe("rail with a page on the right", () => {
+  const buttons = (rail: { element: HTMLElement }): HTMLButtonElement[] => [
+    ...rail.element.querySelectorAll("button"),
+  ];
+  const marks = (rail: { element: HTMLElement }) =>
+    buttons(rail).map((b) =>
+      b.classList.contains("right-pane") ? "R" : b.classList.contains("active") ? "A" : "-",
+    );
+
+  it("marks the right pane's slot apart, and not 🏆", () => {
+    const rail = createRail(document, handlers());
+    rail.render(layout, 3);
+    rail.setPanes({ left: 0, right: { slot: 1 } });
+    expect(marks(rail)).toEqual(["-", "A", "R", "-", "-", "-", "-"]);
+    expect(buttons(rail)[2]?.classList.contains("active")).toBe(false);
+  });
+
+  it("says so to a screen reader, and stops saying it when the page leaves the right", () => {
+    const rail = createRail(document, handlers());
+    rail.render(layout, 3, [null, { completed: 1, total: 4 }]);
+    rail.setPanes({ left: 0, right: { slot: 1 } });
+    const label = (): string | null => buttons(rail)[2]?.getAttribute("aria-label") ?? null;
+    expect(label()).toBe("Blind Playthrough Essentials, 1 of 4 done, shown on the right");
+    // Through a later render too.
+    rail.render(layout, 3);
+    expect(label()).toBe("Blind Playthrough Essentials, shown on the right");
+    rail.setPanes({ left: 0, right: "achievements" });
+    expect(label()).toBe("Blind Playthrough Essentials");
+    expect(marks(rail)).toEqual(["A", "A", "-", "-", "-", "-", "-"]);
+  });
+
+  it("marks only the right page when it is shown alone", () => {
+    const rail = createRail(document, handlers());
+    rail.render(layout, 3);
+    rail.setPanes({ left: null, right: { slot: 0 } });
+    expect(marks(rail)).toEqual(["-", "R", "-", "-", "-", "-", "-"]);
+  });
+
+  it("drops the mark with the panes", () => {
+    const rail = createRail(document, handlers());
+    rail.render(layout, 3);
+    rail.setPanes({ left: 0, right: { slot: 1 } });
+    rail.setPanes(null);
+    expect(buttons(rail).some((b) => b.classList.contains("right-pane"))).toBe(false);
+    expect(buttons(rail)[2]?.getAttribute("aria-label")).toBe("Blind Playthrough Essentials");
+  });
+});
+
+describe("rail long press", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const setup = (withLongPress = true) => {
+    vi.useFakeTimers();
+    const onSelect = vi.fn();
+    const onLongPress = vi.fn();
+    const rail = createRail(document, {
+      onSelect,
+      onMore: vi.fn(),
+      onAsk: vi.fn(),
+      ...(withLongPress ? { onLongPress } : {}),
+    });
+    rail.render(layout, 3);
+    const slot = rail.element.querySelectorAll("button")[2] as HTMLButtonElement;
+    const fire = (type: string, x = 20, y = 20, pointerId = 1, extra: PointerEventInit = {}) =>
+      slot.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+          pointerId,
+          ...extra,
+        }),
+      );
+    // What a browser sends for a press held `ms` and let go where it started.
+    const press = (ms: number): void => {
+      fire("pointerdown");
+      vi.advanceTimersByTime(ms);
+      fire("pointerup");
+      slot.click();
+    };
+    return { rail, slot, onSelect, onLongPress, fire, press };
+  };
+
+  it("reports a press held 500 ms once, on the timer, and swallows the click after it", () => {
+    const { onSelect, onLongPress, fire, slot } = setup();
+    fire("pointerdown");
+    vi.advanceTimersByTime(499);
+    expect(onLongPress).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onLongPress.mock.calls).toEqual([[1]]);
+    vi.advanceTimersByTime(2000);
+    fire("pointerup");
+    slot.click();
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("leaves a tap a tap, also right after a long press", () => {
+    const { onSelect, onLongPress, press } = setup();
+    press(100);
+    expect(onSelect.mock.calls).toEqual([[1]]);
+    press(600);
+    press(100);
+    expect(onLongPress.mock.calls).toEqual([[1]]);
+    expect(onSelect.mock.calls).toEqual([[1], [1]]);
+  });
+
+  it("takes a release before 500 ms as a tap, with no long press later", () => {
+    const { onSelect, onLongPress, fire, slot } = setup();
+    fire("pointerdown");
+    vi.advanceTimersByTime(300);
+    fire("pointerup");
+    slot.click();
+    vi.advanceTimersByTime(1000);
+    expect(onLongPress).not.toHaveBeenCalled();
+    expect(onSelect.mock.calls).toEqual([[1]]);
+  });
+
+  it("cancels on a move of more than 10 px, but not on a small wobble", () => {
+    const { onLongPress, fire } = setup();
+    fire("pointerdown", 20, 20);
+    fire("pointermove", 26, 27);
+    vi.advanceTimersByTime(500);
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+    fire("pointerup");
+    fire("pointerdown", 20, 20);
+    fire("pointermove", 20, 31);
+    vi.advanceTimersByTime(1000);
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels on pointercancel (the page scrolled) and ignores another pointer's moves", () => {
+    const { onLongPress, fire } = setup();
+    fire("pointerdown");
+    fire("pointercancel");
+    vi.advanceTimersByTime(1000);
+    expect(onLongPress).not.toHaveBeenCalled();
+    fire("pointerdown", 20, 20, 1);
+    fire("pointermove", 200, 200, 2);
+    vi.advanceTimersByTime(500);
+    expect(onLongPress).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a mouse button other than the main one", () => {
+    const { onLongPress, fire } = setup();
+    fire("pointerdown", 20, 20, 1, { pointerType: "mouse", button: 2 });
+    vi.advanceTimersByTime(1000);
+    expect(onLongPress).not.toHaveBeenCalled();
+  });
+
+  it("does not swallow a keyboard click after a long press whose click never came", () => {
+    const { onSelect, fire, slot } = setup();
+    fire("pointerdown");
+    vi.advanceTimersByTime(600);
+    fire("pointercancel");
+    slot.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    slot.click();
+    expect(onSelect.mock.calls).toEqual([[1]]);
+  });
+
+  it("is a tap without a long-press handler", () => {
+    const { onSelect, press } = setup(false);
+    press(800);
+    expect(onSelect.mock.calls).toEqual([[1]]);
+  });
+
+  it("holds no callout: the context menu of a rail button is prevented", () => {
+    const { rail } = setup();
+    for (const b of buttons(rail)) {
+      const menu = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+      b.dispatchEvent(menu);
+      expect(menu.defaultPrevented).toBe(true);
+    }
+  });
+
+  const buttons = (rail: { element: HTMLElement }): HTMLButtonElement[] => [
+    ...rail.element.querySelectorAll("button"),
+  ];
+});

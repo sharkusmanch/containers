@@ -51,6 +51,63 @@ describe("choosePanes", () => {
   });
 });
 
+describe("choosePanes with a page on the right", () => {
+  const usable = [true, true, true, false];
+  const panes = (
+    active: number,
+    right: number | null,
+    over: { lastSlot?: number | null; askOpen?: boolean; usable?: boolean[] } = {},
+  ) =>
+    choosePanes({
+      active,
+      usable: over.usable ?? usable,
+      lastSlot: over.lastSlot ?? null,
+      askOpen: over.askOpen ?? false,
+      right,
+    });
+
+  it("shows the chosen slot on the right and the active one on the left", () => {
+    expect(panes(0, 2)).toEqual({ left: 0, right: { slot: 2 } });
+    expect(panes(ACHIEVEMENTS, 2, { lastSlot: 1 })).toEqual({ left: 1, right: { slot: 2 } });
+  });
+
+  it("shows the achievements when the chosen slot is unusable or out of range", () => {
+    expect(panes(0, 3)).toEqual({ left: 0, right: "achievements" });
+    expect(panes(0, 9)).toEqual({ left: 0, right: "achievements" });
+  });
+
+  it("never shows one slot in both panes: the left falls back as for 🏆", () => {
+    // The last shown other slot first, then the first other usable one.
+    expect(panes(1, 1, { lastSlot: 2 })).toEqual({ left: 2, right: { slot: 1 } });
+    expect(panes(1, 1, { lastSlot: 1 })).toEqual({ left: 0, right: { slot: 1 } });
+    expect(panes(0, 0)).toEqual({ left: 1, right: { slot: 0 } });
+    expect(panes(ACHIEVEMENTS, 0, { lastSlot: 0 })).toEqual({ left: 1, right: { slot: 0 } });
+  });
+
+  it("shows the right page alone when no other slot is usable", () => {
+    expect(panes(0, 0, { usable: [true, false, false, false] })).toEqual({
+      left: null,
+      right: { slot: 0 },
+    });
+  });
+
+  it("puts Ask over a right page, keeping the left off it, and gives the page back after", () => {
+    expect(panes(1, 1, { lastSlot: 2, askOpen: true })).toEqual({ left: 2, right: "ask" });
+    expect(panes(1, 1, { lastSlot: 2 })).toEqual({ left: 2, right: { slot: 1 } });
+    expect(panes(0, 2, { askOpen: true })).toEqual({ left: 0, right: "ask" });
+    expect(panes(0, 2)).toEqual({ left: 0, right: { slot: 2 } });
+  });
+
+  it("gives nothing (Ask over one pane) when the only usable slot is on the right and Ask is open", () => {
+    expect(panes(0, 0, { askOpen: true, usable: [true, false, false, false] })).toBeNull();
+  });
+
+  it("behaves as before with no right slot", () => {
+    expect(panes(1, null, { lastSlot: 0 })).toEqual({ left: 1, right: "achievements" });
+    expect(panes(1, null, { askOpen: true })).toEqual({ left: 1, right: "ask" });
+  });
+});
+
 describe("fractionAt", () => {
   it("is the share of the width left of the pointer", () => {
     expect(fractionAt(500, 100, 800)).toBe(0.5);

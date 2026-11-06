@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { GUIDE_ZOOM_STEPS } from "../src/web/device.js";
 
 const css = readFileSync(new URL("../web-static/style.css", import.meta.url), "utf8").replace(
   /\/\*[\s\S]*?\*\//g,
@@ -157,5 +158,75 @@ describe("the layout stylesheet rules", () => {
     expect(block).not.toBe("");
     expect(block).toMatch(/html,\s*body\s*\{[^}]*height:\s*100lvh;/);
     expect(css).toMatch(/html,\s*body,\s*#app\s*\{[^}]*height:\s*100%;/);
+  });
+
+  const body = (selector: string): string =>
+    rules
+      .filter((r) => r.selectors.includes(selector))
+      .map((r) => r.body)
+      .join(" ");
+
+  it("lets no callout or text selection come up on a held rail button", () => {
+    const rule = body(".rail button");
+    expect(rule).toContain("-webkit-touch-callout: none;");
+    expect(rule).toContain("-webkit-user-select: none;");
+    expect(rule).toContain("user-select: none;");
+    expect(rule).toContain("min-width: 44px;");
+    expect(rule).toContain("min-height: 44px;");
+  });
+
+  it("marks the slot shown on the right with an accent on the button's right edge", () => {
+    expect(body(".rail button.right-pane")).toContain("inset -3px 0 0 var(--accent)");
+  });
+
+  describe("two pages side by side", () => {
+    const pair = ".layout-split .two-panes > .frames.two-pages";
+
+    it("spreads the frames over the whole stage and places each page by its pane", () => {
+      const frames = body(pair);
+      for (const decl of ["right: 0;", "bottom: 0;", "width: auto;"])
+        expect(frames).toContain(decl);
+      expect(body(`${pair} > .pane-left`)).toContain("--pane-w: var(--left-width);");
+      const right = body(`${pair} > .pane-right`);
+      expect(right).toContain("--pane-x: calc(var(--left-width) + var(--divider-width));");
+      expect(right).toContain("--pane-w: calc(100% - var(--left-width) - var(--divider-width));");
+      const placed = rules.find(
+        (r) =>
+          r.selectors.includes(`${pair} > .pane-left`) &&
+          r.selectors.includes(`${pair} > .pane-right`),
+      )?.body;
+      for (const decl of [
+        "left: var(--pane-x, 0px);",
+        "top: var(--pane-y, 0px);",
+        "width: var(--pane-w, 100%);",
+        "height: var(--pane-h, 100%);",
+        "right: auto;",
+        "bottom: auto;",
+      ]) {
+        expect(placed).toContain(decl);
+      }
+    });
+
+    it.each(GUIDE_ZOOM_STEPS.filter((step) => step !== 100))(
+      "enlarges a framed page in either pane by its pane's size at %i",
+      (step) => {
+        const factor = `0.${step / 10}`;
+        for (const side of ["left", "right"]) {
+          const rule = body(`${pair}.zoom-${step} > .frame.pane-${side}`);
+          expect(rule).toContain(`width: calc(var(--pane-w, 100%) / ${factor});`);
+          expect(rule).toContain(`height: calc(var(--pane-h, 100%) / ${factor});`);
+        }
+      },
+    );
+
+    it.each(["(vertical-viewport-segments: 2)", "(horizontal-viewport-segments: 2)"])(
+      "splits the two pages at the hinge too for %s",
+      (query) => {
+        const block = mediaBlock(query);
+        const selectors = selectorsIn(block.slice(block.indexOf("{") + 1, -1));
+        expect(selectors).toContain(`${pair} > .pane-left`);
+        expect(selectors).toContain(`${pair} > .pane-right`);
+      },
+    );
   });
 });

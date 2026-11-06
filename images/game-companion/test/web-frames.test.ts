@@ -1621,3 +1621,151 @@ describe("reader slots", () => {
     expect(made[0]?.querySelector("style, [data-gc-chrome], [data-gc-reader]")).toBeNull();
   });
 });
+
+describe("two pages side by side", () => {
+  const nodes = (f: { element: HTMLElement }): HTMLElement[] =>
+    [...f.element.children] as HTMLElement[];
+  const state = (node: Element | undefined) => ({
+    inactive: node?.classList.contains("inactive") ?? null,
+    left: node?.classList.contains("pane-left") ?? null,
+    right: node?.classList.contains("pane-right") ?? null,
+  });
+  const LEFT = { inactive: false, left: true, right: false };
+  const RIGHT = { inactive: false, left: false, right: true };
+  const HIDDEN = { inactive: true, left: false, right: false };
+  const ALONE = { inactive: false, left: false, right: false };
+
+  it("shows the left and right slots, marks which is which, and hides the rest", () => {
+    const f = createFrames(document, 4);
+    f.show(2, "/doc/c");
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" });
+    const [c, a, b] = nodes(f);
+    expect([state(a), state(b), state(c)]).toEqual([LEFT, RIGHT, HIDDEN]);
+    expect(a?.getAttribute("src")).toBe("/doc/a");
+    expect(b?.getAttribute("src")).toBe("/doc/b");
+    expect(f.element.classList.contains("two-pages")).toBe(true);
+  });
+
+  it("keeps both alive: back to one page, then swapping sides, reloads nothing", () => {
+    const f = createFrames(document, 4);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" });
+    const [a, b] = nodes(f);
+    const setSrc = vi.spyOn(HTMLIFrameElement.prototype, "src", "set");
+    const setAttr = vi.spyOn(HTMLIFrameElement.prototype, "setAttribute");
+    f.show(0, "/doc/a");
+    expect([state(a), state(b)]).toEqual([ALONE, HIDDEN]);
+    expect(f.element.classList.contains("two-pages")).toBe(false);
+    f.showPair({ index: 1, url: "/doc/b" }, { index: 0, url: "/doc/a" });
+    expect([state(a), state(b)]).toEqual([RIGHT, LEFT]);
+    expect(nodes(f)).toEqual([a, b]);
+    expect(setSrc).not.toHaveBeenCalled();
+    expect(setAttr).not.toHaveBeenCalledWith("src", expect.anything());
+    setSrc.mockRestore();
+    setAttr.mockRestore();
+  });
+
+  it("hideAll hides both and leaves one-page mode", () => {
+    const f = createFrames(document, 4);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" });
+    f.hideAll();
+    expect(nodes(f).map(state)).toEqual([HIDDEN, HIDDEN]);
+    expect(f.element.classList.contains("two-pages")).toBe(false);
+  });
+
+  it("re-points a slot's page in place, on either side", () => {
+    const f = createFrames(document, 4);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" });
+    const [a, b] = nodes(f);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/c" });
+    expect(nodes(f)).toEqual([a, b]);
+    expect(b?.getAttribute("src")).toBe("/doc/c");
+    expect(state(b)).toEqual(RIGHT);
+  });
+
+  it("follows sync: the re-keyed frames stay on their side, reset drops both", () => {
+    const f = createFrames(document, 4);
+    f.showPair({ index: 1, url: "/doc/b" }, { index: 2, url: "/doc/c" });
+    const [b, c] = nodes(f);
+    f.sync(["/doc/b", "/doc/c", null, null]);
+    f.showPair({ index: 0, url: "/doc/b" }, { index: 1, url: "/doc/c" });
+    expect(nodes(f)).toEqual([b, c]);
+    expect([state(b), state(c)]).toEqual([LEFT, RIGHT]);
+    f.reset();
+    expect(nodes(f)).toEqual([]);
+    expect(f.element.classList.contains("two-pages")).toBe(false);
+  });
+
+  it("shows one page when both sides name the same slot, or one side is refused", () => {
+    const f = createFrames(document, 4);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 0, url: "/doc/a" });
+    expect(nodes(f).map(state)).toEqual([ALONE]);
+    expect(f.element.classList.contains("two-pages")).toBe(false);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "javascript:alert(1)" });
+    expect(nodes(f).map(state)).toEqual([ALONE]);
+    f.showPair({ index: 9, url: "/doc/z" }, { index: 0, url: "/doc/a" });
+    expect(nodes(f).map(state)).toEqual([ALONE]);
+    expect(f.element.classList.contains("two-pages")).toBe(false);
+  });
+
+  it("takes a kind per side: a reader beside a link frame", () => {
+    const made: HTMLElement[] = [];
+    const f = createFrames(document, 4, {
+      reader: () => {
+        const element = document.createElement("div");
+        element.className = "reader";
+        made.push(element);
+        return {
+          element,
+          load: vi.fn(),
+          locate: vi.fn(async () => true),
+          refresh: vi.fn(),
+          dispose: vi.fn(),
+        } as unknown as Reader;
+      },
+    });
+    f.showPair(
+      { index: 0, url: "/doc/a-1", kind: "reader" },
+      { index: 1, url: "https://example.com/map", kind: "link" },
+    );
+    const link = f.element.querySelector("iframe");
+    expect(state(made[0])).toEqual(LEFT);
+    expect(state(link ?? undefined)).toEqual(RIGHT);
+    expect(link?.getAttribute("sandbox")).not.toBeNull();
+  });
+
+  it("applies and sweeps the hidden bars on both pages on screen, not on a hidden one", () => {
+    const ticks: (() => void)[] = [];
+    const fake = ((fn: () => void) => ticks.push(fn)) as unknown as typeof setInterval;
+    document.body.innerHTML = "";
+    const f = createFrames(document, 4, { setInterval: fake });
+    document.body.append(f.element);
+    f.setHideChrome(true);
+    for (const [i, url] of ["/doc/a", "/doc/b", "/doc/c"].entries()) f.show(i, url);
+    const frames = [...f.element.querySelectorAll("iframe")];
+    for (const frame of frames) {
+      showing(frame, "<p>x</p>");
+      loaded(frame);
+    }
+    const style = (frame: HTMLIFrameElement | undefined): Element | null =>
+      frame?.contentDocument?.getElementById("gc-chrome-style") ?? null;
+    for (const frame of frames) style(frame)?.remove();
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" });
+    expect(frames.map((fr) => style(fr) !== null)).toEqual([true, true, false]);
+    for (const frame of frames) style(frame)?.remove();
+    ticks.forEach((t) => t());
+    expect(frames.map((fr) => style(fr) !== null)).toEqual([true, true, false]);
+  });
+
+  it("locates in either side's slot", async () => {
+    document.body.innerHTML = "";
+    const f = createFrames(document, 4);
+    document.body.append(f.element);
+    f.showPair({ index: 0, url: "/doc/a" }, { index: 1, url: "/doc/b" });
+    const [a, b] = [...f.element.querySelectorAll("iframe")];
+    showing(a, "Nothing relevant");
+    showing(b, "Here is the Sample Boss");
+    loaded(a);
+    loaded(b);
+    expect(await f.locate(1, "Sample Boss")).toBe("found");
+  });
+});

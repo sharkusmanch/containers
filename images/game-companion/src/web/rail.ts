@@ -1,8 +1,11 @@
+import { addLongPress } from "./long-press.js";
 import type { Panes } from "./split.js";
 import { ACHIEVEMENTS, SLOT_COUNT, slotLabel, type Layout } from "./state.js";
 
 export interface RailHandlers {
   onSelect(index: number): void;
+  /** A long press on slot `index`'s button (see addLongPress); without it, a long press is a tap. */
+  onLongPress?(index: number): void;
   onMore(): void;
   onAsk(): void;
 }
@@ -32,7 +35,8 @@ export interface Rail {
   setAsk(state: AskState, active: boolean): void;
   /**
    * With two panes, marks the left pane's slot and the right pane's choice together, through later
-   * renders too; null goes back to marking the one item on screen.
+   * renders too; null goes back to marking the one item on screen. A slot shown on the right is
+   * marked `right-pane` (not `active`) and its label says so.
    */
   setPanes(panes: Panes | null): void;
 }
@@ -52,6 +56,8 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
     const b = doc.createElement("button");
     b.setAttribute("type", "button");
     b.setAttribute("aria-label", label);
+    // No callout or menu on a held button (a long press on a slot has a meaning of its own).
+    b.addEventListener("contextmenu", (event) => event.preventDefault());
     return b;
   };
 
@@ -72,8 +78,12 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
     const done = doc.createElement("span");
     done.classList.add("rail-count");
     b.append(abbreviation, done);
+    addLongPress(b, () => {
+      if (handlers.onLongPress === undefined) handlers.onSelect(index);
+      else handlers.onLongPress(index);
+    });
     b.addEventListener("click", () => handlers.onSelect(index));
-    return { button: b, abbreviation, done };
+    return { button: b, abbreviation, done, label: "Empty slot" };
   });
 
   const ask = button("Ask");
@@ -97,6 +107,11 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
 
   // The open Ask panel covers the stage, so the layout's active item is not marked meanwhile.
   const markActive = (): void => {
+    const onRight = panes !== null && typeof panes.right === "object" ? panes.right.slot : null;
+    slotButtons.forEach(({ button: b, label }, index) => {
+      b.classList.toggle("right-pane", onRight === index);
+      b.setAttribute("aria-label", onRight === index ? `${label}, shown on the right` : label);
+    });
     if (panes !== null) {
       const { left, right } = panes;
       achievements.classList.toggle("active", right === "achievements");
@@ -134,19 +149,19 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
     render(layout, unlockedCount, progress = []) {
       count.textContent = unlockedCount === null ? "" : String(unlockedCount);
       lastActive = layout.active;
-      slotButtons.forEach(({ button: b, abbreviation, done }, index) => {
+      slotButtons.forEach((entry, index) => {
+        const { button: b, abbreviation, done } = entry;
         const slot = layout.slots[index] ?? null;
         const shown = slot === null ? null : (progress[index] ?? null);
         abbreviation.textContent = slot === null ? "" : slotLabel(slot.title);
         done.textContent = shown === null ? "" : progressText(shown);
-        b.setAttribute(
-          "aria-label",
+        // Set on the button by markActive, with the right pane's note when it applies.
+        entry.label =
           slot === null
             ? "Empty slot"
             : shown === null
               ? slot.title
-              : `${slot.title}, ${shown.completed} of ${shown.total} done`,
-        );
+              : `${slot.title}, ${shown.completed} of ${shown.total} done`;
         b.disabled = slot === null;
         b.hidden = slot === null;
       });
