@@ -20,7 +20,15 @@ AllowUsers abc
 # Claude Code is baked at a pinned version in a root-owned tree; disable its
 # in-place autoupdater for ALL sessions (interactive + `ssh host "claude ..."`),
 # which /etc/profile.d alone would miss for non-login shells.
-SetEnv DISABLE_AUTOUPDATER=1
+# The rest are privacy opt-outs (no usage metrics, error reports, surveys or
+# /feedback transcripts sent to Anthropic). They duplicate the env block in the
+# shared ~/.claude/settings.json on purpose, so removing them there doesn't
+# turn reporting back on. Do NOT use CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:
+# it also blocks Remote Control and plugin updates. DISABLE_TELEMETRY does turn
+# off Claude Code's feature flags (and its own push notifications); that was
+# accepted on 2026-11-06.
+# Keep these on ONE line: sshd honours only the first SetEnv directive.
+SetEnv DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 DISABLE_FEEDBACK_COMMAND=1
 
 AllowTcpForwarding no
 GatewayPorts no
