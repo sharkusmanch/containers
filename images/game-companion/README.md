@@ -58,7 +58,7 @@ lookup never fails the list.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.21.0
+- **Version**: v0.21.1
 
 ## Usage
 
@@ -69,7 +69,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.21.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.21.1
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
