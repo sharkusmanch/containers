@@ -213,12 +213,36 @@ export function activate(layout: Layout, index: number): Layout {
   return layout;
 }
 
+/** Fixed short names for the guides' standard pages, by lower-cased title. */
+const KNOWN_LABELS: Readonly<Record<string, string>> = {
+  "achievement checklist": "Checklist",
+  "blind playthrough essentials": "Blind",
+  notes: "Notes",
+  collectibles: "Collect",
+};
+
+/** A rail label longer than this many characters is cut, with an ellipsis. */
+const LABEL_MAX = 8;
+
+/**
+ * A short, readable name for a rail button: the fixed name of a standard guide page; else the
+ * first word (after a leading article) of the part after a colon, or of the whole title; cut to
+ * LABEL_MAX characters with an ellipsis and capitalised. "?" for a title with no letters or digits.
+ */
 export function slotLabel(title: string): string {
-  const words = title.split(/[^\p{L}\p{N}]+/u).filter((w) => w !== "");
-  const [first, second] = words.map((w) => Array.from(w));
-  if (!first) return "?";
-  const label = second ? (first[0] ?? "") + (second[0] ?? "") : first.slice(0, 2).join("");
-  return label.toLocaleUpperCase();
+  const clean = title.trim().replace(/\s+/g, " ");
+  const known = KNOWN_LABELS[clean.toLocaleLowerCase()];
+  if (known !== undefined) return known;
+  const colon = clean.indexOf(":");
+  const head = colon >= 0 ? clean.slice(0, colon) : clean;
+  const tail = colon >= 0 ? clean.slice(colon + 1).trim() : "";
+  if (tail === "" && head !== clean) return slotLabel(head);
+  const words = (tail || clean).split(/[^\p{L}\p{N}%]+/u).filter((w) => w !== "");
+  const word = words.length > 1 && /^(the|a|an)$/i.test(words[0] ?? "") ? words[1] : words[0];
+  if (word === undefined) return "?";
+  const chars = Array.from(word);
+  const cut = chars.length <= LABEL_MAX ? chars : [...chars.slice(0, LABEL_MAX - 1), "…"];
+  return (cut[0] ?? "").toLocaleUpperCase() + cut.slice(1).join("");
 }
 
 export function layoutKey(hubId: string): string {

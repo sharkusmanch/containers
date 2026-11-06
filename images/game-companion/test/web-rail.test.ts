@@ -22,7 +22,7 @@ describe("createRail", () => {
     const buttons = [...rail.element.querySelectorAll("button")];
     expect(buttons).toHaveLength(7);
     expect(buttons[0]?.querySelector(".rail-count")?.textContent).toBe("12");
-    expect(buttons.slice(1, 5).map((b) => b.textContent)).toEqual(["AC", "BP", "", ""]);
+    expect(buttons.slice(1, 5).map((b) => b.textContent)).toEqual(["Checklist", "Blind", "", ""]);
     expect(buttons[1]?.getAttribute("aria-label")).toBe("Achievement Checklist");
     expect(buttons[3]?.disabled).toBe(true);
     expect(buttons[6]?.getAttribute("aria-label")).toBe("Pages and games");
@@ -103,11 +103,11 @@ describe("rail progress", () => {
       "rail-label",
       "rail-count",
     ]);
-    expect(label(first)).toBe("AC");
+    expect(label(first)).toBe("Checklist");
     expect(count(first)).toBe("7/12");
-    expect(first?.textContent).toBe("AC7/12");
+    expect(first?.textContent).toBe("Checklist7/12");
     expect(first?.getAttribute("aria-label")).toBe("Achievement Checklist, 7 of 12 done");
-    expect(label(second)).toBe("BP");
+    expect(label(second)).toBe("Blind");
     expect(count(second)).toBe("");
     expect(second?.getAttribute("aria-label")).toBe("Blind Playthrough Essentials");
   });

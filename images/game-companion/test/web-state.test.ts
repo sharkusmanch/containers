@@ -202,14 +202,25 @@ describe("activate", () => {
 
 describe("slotLabel", () => {
   it.each([
-    ["Achievement Checklist", "AC"],
-    ["Blind Playthrough Essentials", "BP"],
-    ["Collectibles", "CO"],
-    ["Collectibles: Basalt Hills", "CB"],
-    ["Strategies: Side, Global", "SS"],
+    // The guides' standard pages have fixed short names.
+    ["Achievement Checklist", "Checklist"],
+    ["Blind Playthrough Essentials", "Blind"],
+    ["Notes", "Notes"],
+    ["Collectibles", "Collect"],
+    ["  achievement   checklist ", "Checklist"],
+    // A subtitle after a colon is the distinctive part.
+    ["Collectibles: Basalt Hills", "Basalt"],
+    ["Strategies: Side, Global", "Side"],
+    // Otherwise the first word, without a leading article, cut to 8 characters.
+    ["Art Collection", "Art"],
+    ["The Lost Bay", "Lost"],
+    ["Colosseum, Legendary Arms & Superbosses", "Colosse…"],
+    ["Walkthrough", "Walkthr…"],
+    ["Overview", "Overview"],
+    ["100% Run", "100%"],
+    ["éclair notes", "Éclair"],
+    ["Collectibles:", "Collect"],
     ["  ", "?"],
-    ["éclair notes", "ÉN"],
-    ["100% Run", "1R"],
   ])("%s → %s", (title, label) => expect(slotLabel(title)).toBe(label));
 });
 

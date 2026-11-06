@@ -229,7 +229,7 @@ describe("startApp", () => {
     expect($(".rail .rail-count")?.textContent).toBe("2");
     expect(
       [...document.querySelectorAll(".rail button")].slice(1, 3).map((b) => b.textContent),
-    ).toEqual(["AC", ""]);
+    ).toEqual(["Checklist", ""]);
     expect($(".ach")?.hidden).toBe(false);
   });
 
@@ -286,7 +286,7 @@ describe("startApp", () => {
     await second.ready;
     expect(
       [...document.querySelectorAll(".rail button")].slice(1, 3).map((b) => b.textContent),
-    ).toEqual(["AC", "CO"]);
+    ).toEqual(["Checklist", "Collect"]);
     expect($("iframe:not(.inactive)")?.getAttribute("src")).toBe("/doc/hA-coll");
   });
 
@@ -430,7 +430,7 @@ describe("startApp", () => {
     await second.ready;
     expect(
       [...document.querySelectorAll(".rail button")].slice(1, 3).map((b) => b.textContent),
-    ).toEqual(["AC", "CO"]);
+    ).toEqual(["Checklist", "Collect"]);
     (document.querySelectorAll(".rail button")[0] as HTMLElement).click();
     expect(storage.getItem("game-companion:v1:layout:hA")).toBe(saved);
   });
@@ -460,7 +460,7 @@ describe("startApp", () => {
     api.nowValue = playing(hubA);
     await app.tick();
     expect($(".game-note")?.textContent).toBe("");
-    expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("AC");
+    expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("Checklist");
   });
 
   it("refreshes achievements on later ticks once the interval has passed", async () => {
@@ -1082,7 +1082,7 @@ describe("startApp", () => {
     (document.querySelectorAll(".rail button")[6] as HTMLElement).click();
     ($(".picker-pages .picker-unpin") as HTMLElement).click(); // removes Achievement Checklist (slot 0)
     const rail = [...document.querySelectorAll<HTMLButtonElement>(".rail button")];
-    expect(rail.slice(1, 5).map((b) => b.textContent)).toEqual(["CO", "", "", ""]);
+    expect(rail.slice(1, 5).map((b) => b.textContent)).toEqual(["Collect", "", "", ""]);
     expect(rail.slice(1, 5).map((b) => b.hidden)).toEqual([false, true, true, true]);
     expect(rail[1]?.classList.contains("active")).toBe(true);
     expect($("iframe:not(.inactive)")).toBe(reading);
@@ -1151,7 +1151,7 @@ describe("startApp", () => {
     // The guide appears later: it is adopted rather than ignored.
     api.nowValue = playing(hubA);
     await app.tick();
-    expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("AC");
+    expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("Checklist");
     expect($(".game-note")?.textContent).toBe("");
   });
 
@@ -1369,7 +1369,7 @@ describe("startApp", () => {
     expect(document.querySelectorAll(".picker-pages .picker-item")).toHaveLength(2);
     expect(
       [...document.querySelectorAll(".rail button")].slice(1, 3).map((b) => b.textContent),
-    ).toEqual(["AC", ""]);
+    ).toEqual(["Checklist", ""]);
     // Loaded now: no more retries, and a pin is saved.
     await app.tick();
     expect(treeCalls).toBe(3);
@@ -1427,7 +1427,7 @@ describe("startApp", () => {
     });
     const app = startApp({ doc: document, api, storage, setInterval: noTimers });
     await app.ready;
-    expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("AC");
+    expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("Checklist");
     expect($("iframe:not(.inactive)")?.getAttribute("src")).toBe("/doc/achievement-checklist-ID1");
   });
 
@@ -2043,7 +2043,7 @@ describe("find in guide", () => {
         .slice(1, 5)
         .filter((b) => !b.hidden)
         .map((b) => b.textContent),
-    ).toEqual(["AC"]);
+    ).toEqual(["Checklist"]);
   });
 
   it("ignores a match for a page whose own address is unsafe, even though the guide lists it", async () => {
@@ -2732,7 +2732,7 @@ describe("unlock notice", () => {
     current = board(list(["Alpha", "Bravo"]));
     api.nowValue = playing(hubA);
     await app.tick();
-    expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("AC");
+    expect(document.querySelectorAll(".rail button")[1]?.textContent).toBe("Checklist");
     expect(text()).toBe("Unlocked: Bravo");
   });
 });
@@ -4670,7 +4670,7 @@ describe("your links", () => {
     expect(frame[0]?.getAttribute("title")).toBe("Link");
     expect($(".ach")?.hidden).toBe(true);
     expect(railButtons()[2]?.getAttribute("aria-label")).toBe("Sample Map");
-    expect(railButtons()[2]?.textContent).toBe("SM");
+    expect(railButtons()[2]?.textContent).toBe("Sample");
     expect(railButtons()[2]?.querySelector(".rail-count")?.textContent).toBe("");
     expect(railButtons()[2]?.classList.contains("active")).toBe(true);
     const layout = stored("game-companion:v1:layout:hA") as { slots: ({ url: string } | null)[] };
@@ -6932,7 +6932,7 @@ describe("guide reader", () => {
     expect(shownReader()).toBe(shown[1]);
     expect(
       [...document.querySelectorAll(".rail button")].slice(1, 3).map((b) => b.textContent),
-    ).toEqual(["AC", "CO"]);
+    ).toEqual(["Checklist", "Collect"]);
   });
 
   it("reads the open reader's page again on return after a minute or more hidden", async () => {

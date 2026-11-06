@@ -130,8 +130,14 @@ button {
 }
 
 .rail-label {
+  /* A short word (slotLabel): small enough for "Checklist" in a narrow button, cut if not. */
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
   line-height: 1.2;
   text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .rail-count {
