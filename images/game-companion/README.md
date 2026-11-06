@@ -58,7 +58,7 @@ lookup never fails the list.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.19.1
+- **Version**: v0.20.0
 
 ## Usage
 
@@ -69,7 +69,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.19.1
+  ghcr.io/sharkusmanch/containers/game-companion:v0.20.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -281,6 +281,23 @@ tools. Guide page text is read from Outline at most a few times a minute and kep
 and missable marks use a copy up to ten minutes old; while a page is open, the guide being
 shown is read again about once a minute, and a few seconds after a tap inside a guide page, so
 the checkbox counts stay current.
+
+## Layout
+
+The page arranges itself for the window (⋯ › Display › **Layout**, per device): one page at a
+time, a bottom tab bar on a tall narrow phone, or **two panes** on a wide screen, with a guide
+page on the left and the achievements (or Ask) on the right. Drag the bar between the panes to
+resize them; a double tap on it resets the split.
+
+Since v0.20.0 the right pane can show a guide page too: **press and hold** a page's sidebar
+button (half a second) to show it on the right, beside the page on the left. Its button gets an
+accent on its right edge. 🏆 brings the achievements back, a tap on the page on the right moves
+it to the left, and 💬 opens Ask over it (the page comes back when Ask closes). Holding the
+page that is already on the left moves it right, and the left shows the page shown before it;
+with no other page pinned, the page on the right fills the screen until 🏆 is tapped. Find in
+guide and the guide jump look in whichever pane already shows the page, otherwise they open it
+on the left, as does a link followed in either page. The choice is kept per guide on the device;
+in the other layouts a long press is an ordinary tap and the choice waits for two panes again.
 
 ## Guide reader
 
