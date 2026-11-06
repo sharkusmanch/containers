@@ -2,7 +2,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { buildDeps } from "../src/server/app.js";
+import { LabelService } from "../src/server/labels.js";
+import { createHandler } from "../src/server/routes.js";
 import { GuideIndex } from "../src/server/guide-index.js";
 import { PlatformMemory } from "../src/server/platform-memory.js";
 import { XboxClient } from "../src/server/xbox.js";
@@ -87,6 +91,71 @@ describe("buildDeps", () => {
     expect(withList.hubTree("h1")?.editablePages).toEqual(["Sample Notes"]);
     const without = buildDeps(parts({ index: { ...parts().index, tree } }));
     expect(without.hubTree("h1")?.editablePages).toEqual([]);
+  });
+
+  it("passes the hub tree's pages through the label service when there is one", () => {
+    const pages = [{ title: "Walkthrough", url: "/doc/w", children: [] }];
+    const labelled = [{ title: "Walkthrough", url: "/doc/w", label: "Walk", children: [] }];
+    const annotate = vi.fn(() => labelled);
+    const tree = () => ({ hub, pages });
+    const d = buildDeps(parts({ index: { ...parts().index, tree }, labels: { annotate } }));
+    expect(d.hubTree("h1")?.pages).toEqual(labelled);
+    expect(annotate).toHaveBeenCalledWith(pages);
+    // Without one, the pages go out as the index holds them.
+    expect(buildDeps(parts({ index: { ...parts().index, tree } })).hubTree("h1")?.pages).toBe(
+      pages,
+    );
+  });
+
+  it("serves the hub tree with labels from the mapping and the cache, queueing the rest", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "app-labels-"));
+    const file = join(dir, "labels.json");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(file, JSON.stringify({ "Boss Guide": "Bosses" }));
+    const asked: string[][] = [];
+    const labels = new LabelService({
+      file,
+      agent: {
+        label: async (titles) => {
+          asked.push(titles);
+          return { kind: "labels", labels: { Walkthrough: "Walk" } };
+        },
+      },
+      setTimer: (fn) => {
+        fn();
+        return () => undefined;
+      },
+    });
+    await labels.load();
+    const pages = [
+      { title: "Notes", url: "/doc/notes-N1", children: [] },
+      { title: "Boss Guide", url: "/doc/boss-guide-B1", children: [] },
+      { title: "Walkthrough", url: "/doc/walkthrough-W1", children: [] },
+    ];
+    const deps = buildDeps(
+      parts({ index: { ...parts().index, tree: () => ({ hub, pages }) }, labels }),
+    );
+    const server = createServer((req, res) => void createHandler(deps)(req, res));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const get = async () =>
+        (await (await fetch(`${base}/companion/api/guides/h1`)).json()) as {
+          pages: { title: string; label?: string }[];
+        };
+      const first = await get();
+      expect(first.pages.map((p) => [p.title, p.label])).toEqual([
+        ["Notes", "Notes"],
+        ["Boss Guide", "Bosses"],
+        ["Walkthrough", undefined],
+      ]);
+      await labels.settled();
+      expect(asked).toEqual([["Walkthrough"]]);
+      expect((await get()).pages.map((p) => p.label)).toEqual(["Notes", "Bosses", "Walk"]);
+    } finally {
+      server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("reports an empty default pin list when none is configured", () => {

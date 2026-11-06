@@ -16,8 +16,25 @@ export type AgentReply = "busy" | AsyncGenerator<AskEvent>;
 
 export const AGENT_UNAVAILABLE = "The assistant is unavailable right now. Try again in a minute.";
 
+/** What the agent's `POST /label` came to. */
+export type LabelResult =
+  | { kind: "labels"; labels: Record<string, string> }
+  | { kind: "busy"; retryAfterMs: number }
+  | { kind: "failed" };
+
 /** How long the agent may take to send its response headers. */
 const HEADERS_TIMEOUT_MS = 20_000;
+/** How long a label request may take in all: the agent kills its own run after 30 s. */
+const LABEL_TIMEOUT_MS = 45_000;
+/** The wait after a busy label answer without a usable Retry-After. */
+const LABEL_RETRY_DEFAULT_MS = 30_000;
+const LABEL_RETRY_MAX_MS = 3_600_000;
+
+/** A Retry-After in whole seconds, as milliseconds (1 s to 1 h); the default for anything else. */
+function retryAfterMs(header: string | null): number {
+  if (header === null || !/^\d{1,7}$/.test(header.trim())) return LABEL_RETRY_DEFAULT_MS;
+  return Math.min(LABEL_RETRY_MAX_MS, Math.max(1000, Number(header.trim()) * 1000));
+}
 
 const defaultTimer = (fn: () => void, ms: number): (() => void) => {
   const handle = setTimeout(fn, ms);
@@ -70,8 +87,10 @@ async function* only(...events: AskEvent[]): AsyncGenerator<AskEvent> {
  */
 export class AgentClient {
   private readonly url: string;
+  private readonly labelUrl: string;
   private readonly token: string;
   private readonly headersTimeoutMs: number;
+  private readonly labelTimeoutMs: number;
   private readonly setTimer: (fn: () => void, ms: number) => () => void;
   private readonly log: (msg: string, extra?: Record<string, unknown>) => void;
   private readonly now: () => number;
@@ -82,13 +101,18 @@ export class AgentClient {
     token: string;
     log: (msg: string, extra?: Record<string, unknown>) => void;
     headersTimeoutMs?: number;
+    /** How long a whole label request may take. */
+    labelTimeoutMs?: number;
     setTimer?: (fn: () => void, ms: number) => () => void;
     now?: () => number;
   }) {
-    this.url = `${opts.url.replace(/\/+$/, "")}/ask`;
+    const base = opts.url.replace(/\/+$/, "");
+    this.url = `${base}/ask`;
+    this.labelUrl = `${base}/label`;
     this.token = opts.token;
     this.log = opts.log;
     this.headersTimeoutMs = opts.headersTimeoutMs ?? HEADERS_TIMEOUT_MS;
+    this.labelTimeoutMs = opts.labelTimeoutMs ?? LABEL_TIMEOUT_MS;
     this.setTimer = opts.setTimer ?? defaultTimer;
     this.now = opts.now ?? Date.now;
   }
@@ -153,6 +177,61 @@ export class AgentClient {
       return only({ type: "error", message: AGENT_UNAVAILABLE });
     }
     return this.stream(res.body, signal, release, done);
+  }
+
+  /**
+   * Asks the agent for rail labels for these titles (1 to 40, each at most 200 characters). The
+   * labels come back unchecked beyond being strings; the caller validates them. Logs one `label`
+   * line with counts only, never a title or label.
+   */
+  async label(titles: string[]): Promise<LabelResult> {
+    const started = this.now();
+    const done = (outcome: string, extra: Record<string, unknown> = {}): void =>
+      this.log("label", { outcome, ms: this.now() - started, titles: titles.length, ...extra });
+    const upstream = new AbortController();
+    let timedOut = false;
+    const cancelTimer = this.setTimer(() => {
+      timedOut = true;
+      upstream.abort();
+    }, this.labelTimeoutMs);
+    try {
+      const res = await fetch(this.labelUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${this.token}` },
+        body: JSON.stringify({ titles }),
+        signal: upstream.signal,
+      });
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => undefined);
+        if (res.status === 429) {
+          done("busy", { status: res.status });
+          return { kind: "busy", retryAfterMs: retryAfterMs(res.headers.get("retry-after")) };
+        }
+        done("failed", { status: res.status });
+        return { kind: "failed" };
+      }
+      let raw: unknown;
+      try {
+        raw = await res.json();
+      } catch {
+        if (timedOut) throw new Error("timeout");
+        raw = null;
+      }
+      if (!isRecord(raw) || !isRecord(raw.labels)) {
+        done("failed", { reason: "body" });
+        return { kind: "failed" };
+      }
+      const labels = Object.fromEntries(
+        Object.entries(raw.labels).filter((e): e is [string, string] => typeof e[1] === "string"),
+      );
+      done("labels", { labels: Object.keys(labels).length });
+      return { kind: "labels", labels };
+    } catch {
+      done("failed", { reason: timedOut ? "timeout" : "network" });
+      return { kind: "failed" };
+    } finally {
+      cancelTimer();
+    }
   }
 
   private async *stream(

@@ -24,6 +24,7 @@ import {
   saveLayout,
   saveLinks,
   setRight,
+  railLabel,
   slotLabel,
   type GameLink,
   type Layout,
@@ -222,6 +223,38 @@ describe("slotLabel", () => {
     ["Collectibles:", "Collect"],
     ["  ", "?"],
   ])("%s → %s", (title, label) => expect(slotLabel(title)).toBe(label));
+});
+
+describe("railLabel", () => {
+  const pages = [
+    {
+      title: "Walkthrough",
+      url: "/doc/walkthrough-W1",
+      label: "Walk",
+      children: [{ title: "Boss Guide", url: "/doc/boss-guide-B1", label: "Bosses", children: [] }],
+    },
+    { title: "Side Quests", url: "/doc/side-quests-S1", children: [] },
+    { title: "Blank", url: "/doc/blank-K1", label: "  ", children: [] },
+  ];
+
+  it("uses the page tree's label for a pinned page, found by document id at any depth", () => {
+    expect(railLabel({ title: "Walkthrough", url: "/doc/walkthrough-W1" }, pages)).toBe("Walk");
+    expect(railLabel({ title: "Old Boss Name", url: "/doc/old-boss-name-B1" }, pages)).toBe(
+      "Bosses",
+    );
+  });
+
+  it("falls back to slotLabel when the page has no label, or the tree lacks the page", () => {
+    expect(railLabel({ title: "Side Quests", url: "/doc/side-quests-S1" }, pages)).toBe("Side");
+    expect(railLabel({ title: "Blank", url: "/doc/blank-K1" }, pages)).toBe("Blank");
+    expect(railLabel({ title: "Walkthrough", url: "/doc/walkthrough-W1" }, [])).toBe("Walkthr…");
+  });
+
+  it("keeps slotLabel for a link, even one whose address ends like a page id", () => {
+    expect(railLabel({ title: "Wiki", url: "https://example.com/walkthrough-W1" }, pages)).toBe(
+      "Wiki",
+    );
+  });
 });
 
 describe("layout storage", () => {

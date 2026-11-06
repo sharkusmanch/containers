@@ -1,4 +1,5 @@
 import type { GameRef, GuidePage } from "../shared/types.js";
+import { defaultLabel } from "./labels.js";
 
 export const SLOT_COUNT = 4;
 export const ACHIEVEMENTS = -1;
@@ -213,36 +214,26 @@ export function activate(layout: Layout, index: number): Layout {
   return layout;
 }
 
-/** Fixed short names for the guides' standard pages, by lower-cased title. */
-const KNOWN_LABELS: Readonly<Record<string, string>> = {
-  "achievement checklist": "Checklist",
-  "blind playthrough essentials": "Blind",
-  notes: "Notes",
-  collectibles: "Collect",
-};
-
-/** A rail label longer than this many characters is cut, with an ellipsis. */
-const LABEL_MAX = 8;
-
 /**
- * A short, readable name for a rail button: the fixed name of a standard guide page; else the
- * first word (after a leading article) of the part after a colon, or of the whole title; cut to
- * LABEL_MAX characters with an ellipsis and capitalised. "?" for a title with no letters or digits.
+ * A short, readable name for a rail button (see `defaultLabel`): the common mapping's name for a
+ * standard guide page, else the first word of the title's distinctive part, cut to 8 characters.
  */
 export function slotLabel(title: string): string {
-  const clean = title.trim().replace(/\s+/g, " ");
-  const known = KNOWN_LABELS[clean.toLocaleLowerCase()];
-  if (known !== undefined) return known;
-  const colon = clean.indexOf(":");
-  const head = colon >= 0 ? clean.slice(0, colon) : clean;
-  const tail = colon >= 0 ? clean.slice(colon + 1).trim() : "";
-  if (tail === "" && head !== clean) return slotLabel(head);
-  const words = (tail || clean).split(/[^\p{L}\p{N}%]+/u).filter((w) => w !== "");
-  const word = words.length > 1 && /^(the|a|an)$/i.test(words[0] ?? "") ? words[1] : words[0];
-  if (word === undefined) return "?";
-  const chars = Array.from(word);
-  const cut = chars.length <= LABEL_MAX ? chars : [...chars.slice(0, LABEL_MAX - 1), "…"];
-  return (cut[0] ?? "").toLocaleUpperCase() + cut.slice(1).join("");
+  return defaultLabel(title);
+}
+
+/**
+ * The rail label of a pinned slot: for a guide page, the label the page tree gives the page with
+ * the same document id; else (a link, a page without a label, a page not in the tree) slotLabel.
+ */
+export function railLabel(slot: Slot, pages: GuidePage[]): string {
+  if (isSafeDocUrl(slot.url)) {
+    const id = docId(slot.url);
+    const page = flattenPages(pages).find((p) => isSafeDocUrl(p.url) && docId(p.url) === id);
+    const label = page?.label;
+    if (typeof label === "string" && label.trim() !== "") return label.trim();
+  }
+  return slotLabel(slot.title);
 }
 
 export function layoutKey(hubId: string): string {

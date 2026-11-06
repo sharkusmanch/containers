@@ -58,7 +58,7 @@ lookup never fails the list.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.20.0
+- **Version**: v0.21.0
 
 ## Usage
 
@@ -69,7 +69,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.20.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.21.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -111,7 +111,7 @@ nothing but an address typed on that device is ever framed.
 | `ASSISTANT_PER_DAY`        | No       | Questions admitted per calendar day in `TZ` (default `150`)                                                                                                                                |
 | `COMPANION_MCP_TOKEN`      | No       | Bearer token for `POST /companion/mcp`, the guide, status and Xbox tools it serves. Without it that endpoint answers 404                                                                   |
 | `XBOX_CLIENT_ID`           | No       | Application (client) ID of your own Microsoft Entra app for Xbox Live (see **Xbox**). Without it Xbox is off                                                                               |
-| `XBOX_STATE_DIR`           | No       | Writable directory for the Xbox sign-in and each guide's last platform (default `/data`); keep it on a persistent volume                                                                   |
+| `XBOX_STATE_DIR`           | No       | Writable directory for the Xbox sign-in, each guide's last platform and the rail label cache (default `/data`); keep it on a persistent volume                                             |
 | `PORT`                     | No       | Listening port (default `8080`)                                                                                                                                                            |
 | `STATIC_DIR`               | No       | Directory of the built front end (default `/app/dist/web`)                                                                                                                                 |
 
@@ -299,6 +299,24 @@ with no other page pinned, the page on the right fills the screen until 🏆 is 
 guide and the guide jump look in whichever pane already shows the page, otherwise they open it
 on the left, as does a link followed in either page. The choice is kept per guide on the device;
 in the other layouts a long press is an ordinary tap and the choice waits for two panes again.
+
+### Rail labels
+
+Each pinned page's sidebar button shows a short name. The guides' standard pages have fixed
+ones (Achievement Checklist → Checklist, Blind Playthrough Essentials → Blind, Notes → Notes,
+Collectibles → Collect). Since v0.21.0 any other title gets a label written once by Claude
+Haiku through the agent's `POST <AGENT_URL>/label` (a single readable word or common
+abbreviation, at most 8 characters) and cached by exact title in
+`XBOX_STATE_DIR/labels.json` (replaced atomically). The hub tree (`GET
+/companion/api/guides/<hubId>`) carries each page's `label` when the mapping or the cache has
+one; titles with neither are sent to the agent in the background, debounced for 2 s, in
+batches of at most 40, one request at a time, and never hold up the tree. A failed request
+(or a title the answer gave no valid label) is retried after an hour; a busy agent is waited
+out per its `Retry-After`. A label shows the next time the guide's page tree is loaded. Until
+then, and whenever no agent is configured (`AGENT_URL` and `AGENT_TOKEN`; without them only
+the fixed names are used and the cache is not read), the button shows the title's first word
+(after a colon subtitle and without a leading article), cut to 8 characters. Links keep that
+rule.
 
 ## Guide reader
 

@@ -28,6 +28,14 @@ describe("createRail", () => {
     expect(buttons[6]?.getAttribute("aria-label")).toBe("Pages and games");
   });
 
+  it("shows the labels it is given, and slotLabel for a slot without one", () => {
+    const rail = createRail(document, handlers());
+    rail.render(layout, null, [], ["Chk", null, null, null]);
+    const buttons = [...rail.element.querySelectorAll("button")];
+    expect(buttons.slice(1, 5).map((b) => b.textContent)).toEqual(["Chk", "Blind", "", ""]);
+    expect(buttons[1]?.getAttribute("aria-label")).toBe("Achievement Checklist");
+  });
+
   it("marks only the active button", () => {
     const rail = createRail(document, handlers());
     rail.render(layout, null);

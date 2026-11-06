@@ -56,6 +56,7 @@ import {
   loadLayout,
   loadLinks,
   normaliseLink,
+  railLabel,
   reconcileLayout,
   removeLink,
   removeSlot,
@@ -1267,12 +1268,14 @@ export function startApp(opts: AppOptions): App {
   }
 
   function renderRail(layout: Layout): void {
+    const pages = current?.pages ?? [];
     rail.render(
       layout,
       unlockedCount,
       layout.slots.map((slot) =>
         slot === null || isLinkUrl(slot.url) ? null : (progress.get(docId(slot.url)) ?? null),
       ),
+      layout.slots.map((slot) => (slot === null ? null : railLabel(slot, pages))),
     );
     rail.setAsk(assistantOn ? (canAsk() ? "enabled" : "disabled") : "hidden", askOpen);
   }

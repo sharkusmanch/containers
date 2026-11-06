@@ -21,11 +21,15 @@ export interface PageProgressLabel {
 
 export interface Rail {
   element: HTMLElement;
-  /** `progress[i]` is the checklist progress of the page in slot i, when it has one. */
+  /**
+   * `progress[i]` is the checklist progress of the page in slot i, when it has one; `labels[i]`
+   * its button text (slotLabel of its title when absent or null).
+   */
   render(
     layout: Layout,
     unlockedCount: number | null,
     progress?: (PageProgressLabel | null)[],
+    labels?: (string | null)[],
   ): void;
   /** Marks the achievements button for a while, to draw the eye to it. */
   pulse(ms?: number): void;
@@ -158,14 +162,14 @@ export function createRail(doc: Document, handlers: RailHandlers): Rail {
       panes = next;
       markActive();
     },
-    render(layout, unlockedCount, progress = []) {
+    render(layout, unlockedCount, progress = [], labels = []) {
       count.textContent = unlockedCount === null ? "" : String(unlockedCount);
       lastActive = layout.active;
       slotButtons.forEach((entry, index) => {
         const { button: b, abbreviation, done } = entry;
         const slot = layout.slots[index] ?? null;
         const shown = slot === null ? null : (progress[index] ?? null);
-        abbreviation.textContent = slot === null ? "" : slotLabel(slot.title);
+        abbreviation.textContent = slot === null ? "" : (labels[index] ?? slotLabel(slot.title));
         done.textContent = shown === null ? "" : progressText(shown);
         // Set on the button by markActive, with the right pane's note when it applies.
         entry.label =

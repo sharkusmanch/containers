@@ -1431,6 +1431,46 @@ describe("startApp", () => {
     expect($("iframe:not(.inactive)")?.getAttribute("src")).toBe("/doc/achievement-checklist-ID1");
   });
 
+  it("labels the rail from the page tree, falling back to the short name; links keep theirs", async () => {
+    const storage = memory();
+    const link = "https://links.example.test/guide-W1";
+    storage.setItem(
+      "game-companion:v1:layout:hA",
+      JSON.stringify({
+        slots: [
+          { title: "Walkthrough", url: "/doc/walkthrough-W1" },
+          { title: "Side Quests", url: "/doc/side-quests-S1" },
+          { title: "Map", url: link },
+          null,
+        ],
+        active: 0,
+      }),
+    );
+    storage.setItem(
+      "game-companion:v1:links:game:ra:20",
+      JSON.stringify([{ title: "Map", url: link }]),
+    );
+    const api = fakeApi(playing(hubA));
+    api.hubTree = async () => ({
+      hub: hubA,
+      pages: [
+        { title: "Walkthrough", url: "/doc/walkthrough-W1", label: "Walk", children: [] },
+        { title: "Side Quests", url: "/doc/side-quests-S1", children: [] },
+      ],
+      defaultPins: [],
+      editablePages: [],
+    });
+    const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+    await app.ready;
+    const labels = [...document.querySelectorAll(".rail button")]
+      .slice(1, 4)
+      .map((b) => b.textContent);
+    expect(labels).toEqual(["Walk", "Side", "Map"]);
+    expect(document.querySelectorAll(".rail button")[1]?.getAttribute("aria-label")).toBe(
+      "Walkthrough",
+    );
+  });
+
   it("shows the chosen game and Loading… at once when a poll is still running", async () => {
     const api = fakeApi(playing(hubA));
     const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });

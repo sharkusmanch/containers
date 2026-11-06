@@ -10,6 +10,7 @@ import type { AgentClient } from "./agent-client.js";
 import { buildStatusBlock, type ContextInput, INSTRUCTIONS } from "./assistant-context.js";
 import type { Detector, DetectorSnapshot } from "./detector.js";
 import type { GuideIndex } from "./guide-index.js";
+import type { LabelService } from "./labels.js";
 import { type GuidePageService, missableMarks, type PageText } from "./guide-pages.js";
 import { guideOutline, readGuide, searchGuide } from "./guide-tools.js";
 import type { McpTools, ToolResult } from "./mcp.js";
@@ -63,6 +64,8 @@ export interface AppParts {
     /** Backs the Xbox MCP tools; without it they answer as if Xbox were not connected. */
     client?: Pick<XboxClient, "titles" | "titleInfo" | "achievements">;
   };
+  /** Puts rail labels on a hub tree's pages; absent or null sends the pages as they are. */
+  labels?: null | Pick<LabelService, "annotate">;
   /** Fixed-text log lines. */
   log?: (line: string) => void;
 }
@@ -364,9 +367,13 @@ export function buildDeps(parts: AppParts): RouteDeps {
     guides: () => ({ available: index.available(), hubs: index.hubs() }),
     hubTree: (hubId) => {
       const tree = index.tree(hubId);
-      return tree === null
-        ? null
-        : { ...tree, defaultPins: parts.defaultPins, editablePages: parts.editablePages };
+      if (tree === null) return null;
+      return {
+        ...tree,
+        pages: parts.labels ? parts.labels.annotate(tree.pages) : tree.pages,
+        defaultPins: parts.defaultPins,
+        editablePages: parts.editablePages,
+      };
     },
     refreshGuides: () => index.requestRefresh(),
     achievements: async (source, id) => {

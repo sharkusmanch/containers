@@ -355,3 +355,72 @@ describe("AgentClient logging", () => {
     expect(log.mock.calls[0]?.[1]).toMatchObject({ outcome: "aborted" });
   });
 });
+
+describe("AgentClient label", () => {
+  const titles = ["Walkthrough", "Boss Guide"];
+  const reply = (res: ServerResponse, status: number, value: unknown, headers = {}): void => {
+    res.writeHead(status, { "content-type": "application/json", ...headers });
+    res.end(typeof value === "string" ? value : JSON.stringify(value));
+  };
+
+  it("posts exactly the titles to /label with the bearer token and returns the labels", async () => {
+    handle = (_req, res) =>
+      reply(res, 200, { labels: { Walkthrough: "Walk", "Boss Guide": 3, Other: "Oth" } });
+    const { agent, log } = client({ url: `${base}/` });
+    expect(await agent.label(titles)).toEqual({
+      kind: "labels",
+      labels: { Walkthrough: "Walk", Other: "Oth" },
+    });
+    const [req] = seen;
+    expect(req?.method).toBe("POST");
+    expect(req?.url).toBe("/label");
+    expect(req?.headers["content-type"]).toBe("application/json");
+    expect(req?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(req?.body ?? "")).toEqual({ titles });
+    expect(log).toHaveBeenCalledWith("label", expect.objectContaining({ outcome: "labels" }));
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/Walk|Boss|Oth/);
+  });
+
+  it("reads a 429's Retry-After, or 30 s without one", async () => {
+    handle = (_req, res) => reply(res, 429, { error: "busy" }, { "retry-after": "12" });
+    expect(await client().agent.label(titles)).toEqual({ kind: "busy", retryAfterMs: 12_000 });
+    handle = (_req, res) => reply(res, 429, { error: "busy" });
+    expect(await client().agent.label(titles)).toEqual({ kind: "busy", retryAfterMs: 30_000 });
+    handle = (_req, res) => reply(res, 429, { error: "busy" }, { "retry-after": "soon" });
+    expect(await client().agent.label(titles)).toEqual({ kind: "busy", retryAfterMs: 30_000 });
+  });
+
+  it.each([
+    ["a 502", 502, { error: "unavailable" }],
+    ["a 400", 400, { error: "invalid body" }],
+    ["broken JSON", 200, "{"],
+    ["no labels object", 200, { labels: ["Walk"] }],
+  ])("fails on %s", async (_name, status, value) => {
+    handle = (_req, res) => reply(res, status, value);
+    expect(await client().agent.label(titles)).toEqual({ kind: "failed" });
+  });
+
+  it("fails when the agent cannot be reached", async () => {
+    const { agent } = client({ url: "http://127.0.0.1:1" });
+    expect(await agent.label(titles)).toEqual({ kind: "failed" });
+  });
+
+  it("gives up after the label timeout", async () => {
+    handle = () => undefined; // never answers
+    const { agent, log } = client({ labelTimeoutMs: 50 });
+    expect(await agent.label(titles)).toEqual({ kind: "failed" });
+    expect(log).toHaveBeenCalledWith(
+      "label",
+      expect.objectContaining({ outcome: "failed", reason: "timeout" }),
+    );
+  });
+
+  it("waits 45 s by default, longer than the agent's own 30 s run limit", async () => {
+    handle = (_req, res) => reply(res, 200, { labels: {} });
+    const cancel = vi.fn();
+    const setTimer = vi.fn((_fn: () => void, _ms: number) => cancel);
+    await client({ setTimer }).agent.label(titles);
+    expect(setTimer.mock.calls[0]?.[1]).toBe(45_000);
+    expect(cancel).toHaveBeenCalled();
+  });
+});

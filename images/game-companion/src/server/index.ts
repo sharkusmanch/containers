@@ -8,6 +8,7 @@ import { loadConfig } from "./config.js";
 import { Detector } from "./detector.js";
 import { GuideIndex } from "./guide-index.js";
 import { GuidePageService } from "./guide-pages.js";
+import { LabelService } from "./labels.js";
 import { OutlineClient } from "./outline.js";
 import { PlatformMemory } from "./platform-memory.js";
 import { AskLimiter } from "./rate-limit.js";
@@ -83,6 +84,15 @@ const ask =
     : null;
 log(ask ? "assistant enabled" : "assistant disabled (no agent)");
 
+// Rail labels: the common mapping always; Haiku-generated ones, cached in the state directory,
+// only with an agent.
+const labels = new LabelService({
+  file: join(config.xboxStateDir, "labels.json"),
+  agent: ask?.agent ?? null,
+  log,
+});
+await labels.load();
+
 // package.json sits two levels above dist/server in the image and in a local build.
 const { version } = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
@@ -114,6 +124,7 @@ const handler = createHandler(
     ask,
     mcp,
     memory: xbox?.memory ?? null,
+    labels,
     // Starting a sign-in takes the Ask route's origin check: only the page itself may.
     xbox: xbox
       ? { origin: new URL(config.outlineBaseUrl).origin, auth: xbox.auth, client: xbox.client }
