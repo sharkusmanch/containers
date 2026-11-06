@@ -14,7 +14,7 @@ import type { XboxAuthState } from "../src/shared/types.js";
 import { fixture } from "./helpers.js";
 import { INSTRUCTIONS } from "../src/server/assistant-context.js";
 import type { PageText } from "../src/server/guide-pages.js";
-import type { AchievementsResponse, AskEvent, GuideHub } from "../src/shared/types.js";
+import type { AchievementsResponse, AskEvent, GuideHub, GuidePage } from "../src/shared/types.js";
 
 const hub: GuideHub = {
   hubId: "h1",
@@ -101,7 +101,10 @@ describe("buildDeps", () => {
     const labelsPending = vi.fn(() => pending);
     const tree = () => ({ hub, pages });
     const d = buildDeps(
-      parts({ index: { ...parts().index, tree }, labels: { annotate, labelsPending } }),
+      parts({
+        index: { ...parts().index, tree },
+        labels: { annotate, labelsPending, setCustom: vi.fn() },
+      }),
     );
     expect(d.hubTree("h1")?.pages).toEqual(labelled);
     expect(d.hubTree("h1")).not.toHaveProperty("labelsPending");
@@ -166,6 +169,74 @@ describe("buildDeps", () => {
       expect(second.labelsPending).toBeUndefined();
     } finally {
       server.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("offers renames only with both a label service and a rename origin", () => {
+    const labels = { annotate: vi.fn(), labelsPending: vi.fn(), setCustom: vi.fn() };
+    const rename = {
+      origin: "https://wiki.example.test",
+      limiter: { admit: () => ({ ok: true }) },
+    };
+    expect(buildDeps(parts()).labels).toBeNull();
+    expect(buildDeps(parts({ labels })).labels).toBeNull();
+    expect(buildDeps(parts({ rename })).labels).toBeNull();
+    expect(buildDeps(parts({ labels, rename })).labels?.origin).toBe("https://wiki.example.test");
+  });
+
+  it("renames a page of any guide by document id, and the hub tree shows it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "app-rename-"));
+    const file = join(dir, "labels.json");
+    const labels = new LabelService({ file, agent: null });
+    await labels.load();
+    const hubB: GuideHub = { ...hub, hubId: "h2", title: "Beta", url: "/doc/b" };
+    const trees: Record<string, { hub: GuideHub; pages: GuidePage[] }> = {
+      h1: { hub, pages: [{ title: "Notes", url: "/doc/notes-N1", children: [] }] },
+      h2: {
+        hub: hubB,
+        pages: [
+          {
+            title: "Walkthrough",
+            url: "/doc/walkthrough-W1",
+            children: [{ title: "Boss Guide", url: "/doc/boss-guide-B1", children: [] }],
+          },
+        ],
+      },
+    };
+    let admitted = 0;
+    const deps = buildDeps(
+      parts({
+        index: {
+          ...parts().index,
+          hubs: () => [hub, hubB],
+          tree: (id: string) => trees[id] ?? null,
+        },
+        labels,
+        rename: {
+          origin: "https://wiki.example.test",
+          limiter: {
+            admit: () => {
+              admitted += 1;
+              return { ok: true };
+            },
+          },
+        },
+      }),
+    );
+    try {
+      const route = deps.labels;
+      expect(route?.known("B1")).toBe(true);
+      expect(route?.known("N1")).toBe(true);
+      expect(route?.known("Z9")).toBe(false);
+      expect(route?.admit()).toEqual({ ok: true });
+      expect(admitted).toBe(1);
+      await expect(route?.set("B1", "Bosses 🗡️")).resolves.toBe("Bosses 🗡️");
+      const pages = deps.hubTree("h2")?.pages ?? [];
+      expect(pages[0]?.children[0]?.label).toBe("Bosses 🗡️");
+      await expect(route?.set("B1", null)).resolves.toBeNull();
+      expect(deps.hubTree("h2")?.pages[0]?.children[0]).not.toHaveProperty("label");
+    } finally {
       await rm(dir, { recursive: true, force: true });
     }
   });

@@ -175,6 +175,22 @@ describe("the layout stylesheet rules", () => {
     expect(rule).toContain("min-height: 44px;");
   });
 
+  it("gives the page rename controls 44 px targets and a 16 px name box", () => {
+    for (const selector of [
+      ".picker-rename",
+      ".picker-rename-save",
+      ".picker-rename-reset",
+      ".picker-rename-cancel",
+    ]) {
+      expect(body(selector), selector).toContain("min-height: 44px;");
+    }
+    expect(body(".picker-rename")).toContain("min-width: 44px;");
+    // 16px or larger keeps mobile browsers from zooming the page on focus.
+    expect(body(".picker-rename-input")).toContain("font-size: 16px;");
+    expect(body(".picker-rename-input")).toContain("min-height: 44px;");
+    expect(body(".picker-rename-error:empty")).toContain("display: none;");
+  });
+
   it("marks the slot shown on the right with an accent on the button's right edge", () => {
     expect(body(".rail button.right-pane")).toContain("inset -3px 0 0 var(--accent)");
   });

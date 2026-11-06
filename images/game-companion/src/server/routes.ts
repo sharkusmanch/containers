@@ -16,7 +16,9 @@ import type {
   XboxAuthState,
   XboxAuthStatus,
 } from "../shared/types.js";
+import { DOC_ID } from "./labels.js";
 import { serveStatic } from "./static.js";
+import { cleanCustomLabel } from "../web/labels.js";
 
 export interface RouteDeps {
   staticDir: string;
@@ -69,6 +71,19 @@ export interface RouteDeps {
     cancel(): XboxAuthStatus;
     disconnect(): Promise<XboxAuthStatus>;
   };
+  /** Absent or null: the rename endpoint answers 404. */
+  labels?: null | {
+    /** The one page origin allowed to rename a page (the Ask route's). */
+    origin: string;
+    admit(): Admission;
+    /** Whether a page with this document id is in the guide index. */
+    known(docId: string): boolean;
+    /**
+     * Stores the page's own label (already checked), or with null or "" goes back to the automatic
+     * one; resolves to what is stored. Rejects when it could not be saved.
+     */
+    set(docId: string, label: string | null): Promise<string | null>;
+  };
   /** Starts a timer and returns a function that cancels it. Defaults to `setTimeout`. */
   setTimer?: (fn: () => void, ms: number) => () => void;
 }
@@ -82,6 +97,7 @@ const ASK_PATH = `${BASE}/api/ask`;
 const MCP_PATH = `${BASE}/mcp`;
 const XBOX_PATH = `${BASE}/api/xbox`;
 const METRICS_PATH = `${BASE}/metrics`;
+const LABELS_PATH = `${BASE}/api/labels`;
 const XBOX_ACTIONS = ["connect", "cancel", "disconnect"] as const;
 type XboxAction = (typeof XBOX_ACTIONS)[number];
 
@@ -89,6 +105,8 @@ type XboxAction = (typeof XBOX_ACTIONS)[number];
 const ASK_BODY_MAX = 32768;
 /** Largest request body an Xbox sign-in action reads, in bytes; the body is `{}`. */
 const XBOX_BODY_MAX = 1024;
+/** Largest request body a rename reads, in bytes; the body is `{"label": ...}`. */
+const LABEL_BODY_MAX = 1024;
 /** Largest request body the MCP route reads, in bytes. */
 const MCP_BODY_MAX = 65536;
 const QUESTION_MAX = 1000;
@@ -330,6 +348,70 @@ async function handleXboxAction(
 }
 
 /**
+ * Names a guide page's rail button, or with a null or blank label goes back to the automatic one.
+ * Checks run in a fixed order and each fails before any later work; the origin and content-type
+ * checks are the Ask route's. A request that is not acceptable, or names no page of the guide
+ * index, is not counted against the rate limit.
+ */
+async function handleLabel(
+  deps: RouteDeps,
+  id: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const early = (status: number, error: string): void =>
+    send(res, status, "application/json; charset=utf-8", JSON.stringify({ error }), {
+      "cache-control": "no-store",
+      connection: "close",
+    });
+  const labels = deps.labels;
+  if (!labels || !DOC_ID.test(id)) return early(404, "not found");
+  if (req.method !== "PUT") {
+    return send(res, 405, "text/plain; charset=utf-8", "Method Not Allowed", {
+      allow: "PUT",
+      connection: "close",
+    });
+  }
+  if (mediaType(req) !== "application/json") return early(415, "unsupported media type");
+  if (req.headers.origin !== labels.origin) return early(403, "forbidden");
+  const declared = req.headers["content-length"];
+  if (declared !== undefined && Number(declared) > LABEL_BODY_MAX) return early(413, "too large");
+  const body = await readBody(req, LABEL_BODY_MAX);
+  if (body === null) return early(413, "too large");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.toString("utf8"));
+  } catch {
+    parsed = null;
+  }
+  if (!isObject(parsed) || !Object.hasOwn(parsed, "label")) {
+    return json(res, 400, { error: "bad request" });
+  }
+  const label = parsed.label === null ? "" : cleanCustomLabel(parsed.label);
+  if (label === null) return json(res, 400, { error: "bad request" });
+  if (!labels.known(id)) return json(res, 404, { error: "unknown page" });
+
+  const admission = labels.admit();
+  if (!admission.ok) {
+    return send(
+      res,
+      429,
+      "application/json; charset=utf-8",
+      JSON.stringify({ error: "rate limited", limit: admission.limit }),
+      { "cache-control": "no-store", "retry-after": String(admission.retryAfterSec) },
+    );
+  }
+  let stored: string | null;
+  try {
+    stored = await labels.set(id, label === "" ? null : label);
+  } catch {
+    // Fixed text: the reason may name the file.
+    return json(res, 500, { error: "label not saved" });
+  }
+  return json(res, 200, { label: stored });
+}
+
+/**
  * The MCP endpoint, for the agent pod only (not for browsers). Checks run in a fixed order and
  * each fails before any later work. Reads only the authorization, content-type, content-length
  * and mcp-protocol-version headers.
@@ -393,8 +475,8 @@ async function handleMcp(
 
 /**
  * The browser's POST route. Checks run in a fixed order and each fails before any later work. Apart
- * from the MCP route, this is the only code that reads request headers, and only content-type,
- * content-length and origin.
+ * from the MCP, Xbox and rename routes, this is the only code that reads request headers, and only
+ * content-type, content-length and origin.
  */
 async function handleAsk(
   deps: RouteDeps,
@@ -508,6 +590,9 @@ export function createHandler(
         return send(res, 200, "text/plain; version=0.0.4; charset=utf-8", xboxMetrics(state), {
           "cache-control": "no-store",
         });
+      }
+      if (path.startsWith(`${LABELS_PATH}/`)) {
+        return await handleLabel(deps, path.slice(LABELS_PATH.length + 1), req, res);
       }
       if (path.startsWith(`${XBOX_PATH}/`)) {
         const name = path.slice(XBOX_PATH.length + 1);

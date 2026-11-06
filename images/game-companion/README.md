@@ -58,7 +58,7 @@ lookup never fails the list.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.21.1
+- **Version**: v0.22.0
 
 ## Usage
 
@@ -69,7 +69,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.21.1
+  ghcr.io/sharkusmanch/containers/game-companion:v0.22.0
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -82,7 +82,8 @@ When an API request gets a 401, the page shows **Signed out — tap to sign in**
 and stops polling; a tap reloads the page, which goes through the sign-in again. Every endpoint
 is read-only except `POST /companion/api/ask`, which runs a question on the agent (see **Ask
 assistant**), `POST /companion/api/xbox/<action>`, which starts or ends the Xbox sign-in (see
-**Xbox**), and `POST /companion/mcp`, which only the agent may reach. Put it only where
+**Xbox**), `PUT /companion/api/labels/<docId>`, which names a page's sidebar button (see **Rail
+labels**), and `POST /companion/mcp`, which only the agent may reach. Put it only where
 everyone who can reach it may see what is being played, achievement progress, checklist counts
 and the text of the guide pages: the guide search returns headings and matching lines from
 them, although Outline itself requires a sign-in. The page's Content-Security-Policy allows
@@ -134,6 +135,7 @@ The Outline key needs only these scopes:
 | `GET /companion/api/achievements/<source>/<id>` | Achievements for a game that has a guide or is being played                 |
 | `GET /companion/api/xbox`                       | The Xbox sign-in: state, and the code, gamertag or expiry that goes with it |
 | `POST /companion/api/xbox/<action>`             | `connect`, `cancel` or `disconnect` the Xbox sign-in; answers the new state |
+| `PUT /companion/api/labels/<docId>`             | Names a guide page's sidebar button, or resets it; answers the stored name  |
 | `POST /companion/api/ask`                       | Streams an answer to a question about a game (newline-delimited JSON)       |
 | `POST /companion/mcp`                           | MCP tools: game status, the player's guides and Xbox data (bearer token)    |
 
@@ -314,11 +316,23 @@ Haiku through the agent's `POST <AGENT_URL>/label` (a single readable word or co
 abbreviation, at most 8 characters, never one of the fixed names) and cached by exact title in
 `XBOX_STATE_DIR/labels.json`.
 
-- **Tree.** The hub tree (`GET /companion/api/guides/<hubId>`) carries each page's `label` when
-  the mapping or the cache has one. Within one guide a generated label is shown once: a later
-  page with the same one falls back. While any of its titles is queued or being asked about,
-  the tree also carries `labelsPending: true`, and the page fetches that tree once more 15 s
-  later to pick the labels up (once only; otherwise labels show the next time the guide loads).
+- **Your own names.** Since v0.22.0 ⋯ › Pages has a **Rename** button on each guide page: type
+  a name (1–12 characters, any printable text, emoji included) and **Save**, or **Reset** to go
+  back to the automatic label; Escape or **Cancel** closes the editor. The rail shows the name at
+  once and every device gets it with the guide's tree. It is kept by the page's document id
+  (the part of its address that stays when the page is retitled), always wins, and is kept
+  whether or not an agent is configured. `PUT /companion/api/labels/<docId>` with
+  `{"label": "…"}` (or `null`, or a blank name, to reset) answers `{"label": <stored or null>}`;
+  it takes the Ask route's checks (JSON, the wiki's own origin, a 1 KiB body), answers 400 for a
+  name it cannot take, 404 for a page in no guide, 429 past 30 renames a minute, and 500 when the
+  file cannot be written.
+- **Tree.** The hub tree (`GET /companion/api/guides/<hubId>`) carries each page's `label`:
+  its own name, else the mapping's, else the cached one. Within one guide a generated label is
+  shown once: a later page with the same one falls back. A generated or mapping label equal to a
+  name given to a page of the same guide is left off too. Names given by hand are shown as they
+  are, even twice. While any of its titles is queued or being asked about, the tree also carries
+  `labelsPending: true`, and the page fetches that tree once more 15 s later to pick the labels
+  up (once only; otherwise labels show the next time the guide loads).
 - **Asking.** Titles with no label are sent in the background, never holding up the tree:
   debounced 2 s, at most 40 per request, one request at a time; a busy agent is waited out per
   its `Retry-After`.
@@ -326,14 +340,15 @@ abbreviation, at most 8 characters, never one of the fixed names) and cached by 
   counts a try, kept in the file; a title gets a second try an hour later (or after a restart)
   and is never sent again after two. A failed request (unreachable, 5xx, 404, timeout) only
   waits an hour, in memory, and does not count.
-- **File.** `{"labels": {title: label}, "unlabelled": {title: tries}}` (a flat
-  `{title: label}` from v0.21.0 development builds is read too), replaced atomically; stale
-  `labels.json.*.tmp` files are removed at start. A missing or unparsable file starts empty; a
-  file that exists but cannot be read is left alone and nothing is saved. Shutdown waits up to
-  3 s for label work under way.
+- **File.** `{"labels": {title: label}, "unlabelled": {title: tries}, "custom": {docId: name}}`
+  (`custom` only while a page has a name; a flat `{title: label}` from v0.21.0 development
+  builds is read too), replaced atomically; stale `labels.json.*.tmp` files are removed at
+  start. A missing or unparsable file starts empty; a file that exists but cannot be read is
+  left alone and nothing is saved (a rename then answers 500). Shutdown waits up to 3 s for
+  label work under way.
 - **Fallback.** Until a label is known, after two tries, and whenever no agent is configured
-  (`AGENT_URL` and `AGENT_TOKEN`; without them only the fixed names are used and the cache is
-  not read), the button shows the title's first word (after a colon subtitle and without a
+  (`AGENT_URL` and `AGENT_TOKEN`; without them only the fixed names and your own are used, and
+  the cached generated labels are kept in the file but not shown), the button shows the title's first word (after a colon subtitle and without a
   leading article), cut to 8 characters. Links keep that rule.
 
 ## Guide reader

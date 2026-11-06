@@ -1134,6 +1134,216 @@ describe("xbox routes", () => {
   });
 });
 
+describe("PUT /companion/api/labels/<docId>", () => {
+  const ORIGIN = "https://wiki.example.test";
+  /** Body limit of the route, in bytes. */
+  const LIMIT = 1024;
+  type Labels = NonNullable<RouteDeps["labels"]>;
+
+  let s: Server;
+  let url: string;
+  let labels: Labels | null;
+  let setCalls: [string, string | null][];
+  let admitCalls: number;
+  let admission: ReturnType<Labels["admit"]>;
+  let setFails: boolean;
+
+  beforeAll(async () => {
+    const deps: RouteDeps = {
+      ask: null,
+      staticDir: "/nonexistent",
+      now: () => now,
+      guides: () => ({ available: true, hubs: [hub] }),
+      hubTree: () => null,
+      refreshGuides: () => {},
+      achievements: async () => null,
+      find: async () => null,
+      marks: async () => null,
+      where: async () => null,
+      progress: async () => null,
+      get labels() {
+        return labels;
+      },
+    };
+    s = createServer((req, res) => void createHandler(deps)(req, res));
+    await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
+    url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/companion/api/labels`;
+  });
+  afterAll(() => new Promise<void>((r) => s.close(() => r())));
+
+  beforeEach(() => {
+    setCalls = [];
+    admitCalls = 0;
+    admission = { ok: true };
+    setFails = false;
+    labels = {
+      origin: ORIGIN,
+      admit: () => {
+        admitCalls += 1;
+        return admission;
+      },
+      known: (id) => id === "W1" || id === "a_b-9",
+      set: async (id, label) => {
+        setCalls.push([id, label]);
+        if (setFails) throw new Error("EACCES /data/labels.json");
+        return label === null ? null : label.trim() || null;
+      },
+    };
+  });
+
+  const put = (id: string, body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${url}/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json", origin: ORIGIN, ...headers },
+      body: typeof body === "string" ? body : JSON.stringify(body),
+    });
+
+  /** Sends exact headers, so a declared content-length need not match the bytes written. */
+  function raw(
+    headers: Record<string, string>,
+    chunks: Buffer[],
+  ): Promise<{ status: number; body: string }> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(`${url}/W1`, { method: "PUT", headers }, (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (d: string) => (body += d));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      });
+      req.on("error", reject);
+      for (const c of chunks) req.write(c);
+      req.end();
+    });
+  }
+
+  it("stores a label and answers what was stored, uncached", async () => {
+    const r = await put("W1", { label: "My route" });
+    expect(r.status).toBe(200);
+    expect(r.headers.get("cache-control")).toBe("no-store");
+    expect(r.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(await r.json()).toEqual({ label: "My route" });
+    expect(setCalls).toEqual([["W1", "My route"]]);
+    expect(admitCalls).toBe(1);
+  });
+
+  it("takes any printable text up to 12 characters, emoji included, trimmed", async () => {
+    expect(await (await put("a_b-9", { label: " 🎮 Boss 🗡️ " })).json()).toEqual({
+      label: "🎮 Boss 🗡️",
+    });
+    expect(setCalls).toEqual([["a_b-9", "🎮 Boss 🗡️"]]);
+  });
+
+  it("clears with null or a blank label", async () => {
+    for (const label of [null, "", "   "]) {
+      const r = await put("W1", { label });
+      expect(r.status, JSON.stringify(label)).toBe(200);
+      expect(await r.json()).toEqual({ label: null });
+    }
+    expect(setCalls).toEqual([
+      ["W1", null],
+      ["W1", null],
+      ["W1", null],
+    ]);
+  });
+
+  it("answers 400 for a body or label that is not acceptable, before counting it", async () => {
+    for (const body of [
+      "{not json",
+      "[]",
+      "null",
+      '"Walk"',
+      {},
+      { label: 5 },
+      { label: ["Walk"] },
+      { label: "thirteen char" },
+      { label: "Bell\u0007" },
+      { label: "Two\nlines" },
+    ]) {
+      const r = await put("W1", body);
+      expect(r.status, JSON.stringify(body)).toBe(400);
+      expect(await r.json()).toEqual({ error: "bad request" });
+    }
+    expect(setCalls).toEqual([]);
+    expect(admitCalls).toBe(0);
+  });
+
+  it("answers 404 for a page not in the guide index, or an id of the wrong form", async () => {
+    const unknown = await put("Z9", { label: "Walk" });
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: "unknown page" });
+    for (const id of ["", "a.b", "a%20b", "x".repeat(65), "W1/extra"]) {
+      expect((await put(id, { label: "Walk" })).status, id).toBe(404);
+    }
+    expect(setCalls).toEqual([]);
+    expect(admitCalls).toBe(0);
+  });
+
+  it("answers 404 for everything when there is no label service", async () => {
+    labels = null;
+    expect((await put("W1", { label: "Walk" })).status).toBe(404);
+    expect((await fetch(`${url}/W1`)).status).toBe(404);
+  });
+
+  it("takes PUT only", async () => {
+    for (const method of ["GET", "POST", "DELETE", "PATCH"]) {
+      const r = await fetch(`${url}/W1`, { method });
+      expect(r.status, method).toBe(405);
+      expect(r.headers.get("allow")).toBe("PUT");
+    }
+    expect(setCalls).toEqual([]);
+  });
+
+  it("requires JSON from the wiki's own origin", async () => {
+    for (const type of ["text/plain", "application/x-www-form-urlencoded", "application/jsonx"]) {
+      expect((await put("W1", { label: "Walk" }, { "content-type": type })).status).toBe(415);
+    }
+    const noType = await raw({ origin: ORIGIN, "content-length": "2" }, [Buffer.from("{}")]);
+    expect(noType.status).toBe(415);
+    expect(
+      (await put("W1", { label: "Walk" }, { origin: "https://evil.example.test" })).status,
+    ).toBe(403);
+    expect((await put("W1", { label: "Walk" }, { origin: `${ORIGIN}/` })).status).toBe(403);
+    const noOrigin = await raw({ "content-type": "application/json", "content-length": "2" }, [
+      Buffer.from("{}"),
+    ]);
+    expect(noOrigin.status).toBe(403);
+    expect(
+      (await put("W1", { label: "Walk" }, { "content-type": "Application/JSON; charset=utf-8" }))
+        .status,
+    ).toBe(200);
+    expect(setCalls).toEqual([["W1", "Walk"]]);
+  });
+
+  it("refuses a body over 1 KiB with 413, declared or sent", async () => {
+    const headers = { "content-type": "application/json", origin: ORIGIN };
+    const declared = await raw({ ...headers, "content-length": String(LIMIT + 1) }, [
+      Buffer.from("{}"),
+    ]);
+    expect(declared.status).toBe(413);
+    const sent = await raw(headers, [Buffer.alloc(LIMIT, 0x20), Buffer.from("x")]);
+    expect(sent.status).toBe(413);
+    expect(setCalls).toEqual([]);
+  });
+
+  it("answers 429 with Retry-After when renames come too fast", async () => {
+    admission = { ok: false, limit: "minute", retryAfterSec: 12 };
+    const r = await put("W1", { label: "Walk" });
+    expect(r.status).toBe(429);
+    expect(r.headers.get("retry-after")).toBe("12");
+    expect(await r.json()).toEqual({ error: "rate limited", limit: "minute" });
+    expect(setCalls).toEqual([]);
+  });
+
+  it("answers a fixed 500 when the label could not be saved", async () => {
+    setFails = true;
+    const r = await put("W1", { label: "Walk" });
+    expect(r.status).toBe(500);
+    const text = await r.text();
+    expect(JSON.parse(text)).toEqual({ error: "label not saved" });
+    expect(text).not.toContain("EACCES");
+  });
+});
+
 describe("metrics", () => {
   const SECRET_TAG = "FakeGamertag99";
   type Xbox = NonNullable<RouteDeps["xbox"]>;

@@ -59,6 +59,12 @@ export interface Api {
    */
   xboxAction(action: XboxAction): Promise<XboxAuthStatus>;
   /**
+   * Names a guide page's rail button by its document id, or with null goes back to the automatic
+   * label; answers what the server stored (null after a reset). Safe to repeat, so a 401 is
+   * retried once like a GET. Rejects with an ApiError carrying the status when refused.
+   */
+  setLabel(docId: string, label: string | null): Promise<string | null>;
+  /**
    * Asks the assistant and hands each streamed event to `onEvent`; resolves when the stream ends.
    * Only `signal` cuts it short: an answer may take a while. A refused question is never re-sent:
    * after a 401 it rejects with that ApiError only when a GET of now answers 401 too, and with a
@@ -153,6 +159,25 @@ export function createApi(
     return (await res.json()) as XboxAuthStatus;
   }
 
+  async function setLabel(docId: string, label: string | null): Promise<string | null> {
+    const putOnce = (): Promise<Response> =>
+      fetchFn(`${base}/labels/${encodeURIComponent(docId)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ label }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    let res = await putOnce();
+    if (res.status === 401) {
+      await wait(AUTH_RETRY_MS);
+      res = await putOnce();
+    }
+    noteAuth(res);
+    if (!res.ok) throw new ApiError(res.status);
+    const body = (await res.json()) as { label?: unknown } | null;
+    return typeof body?.label === "string" ? body.label : null;
+  }
+
   async function getJsonOrNull<T>(path: string): Promise<T | null> {
     const res = await get(path);
     if (res.status === 404) return null;
@@ -200,6 +225,7 @@ export function createApi(
     now: () => getJson<NowResponse>("now"),
     xbox: () => getJson<XboxAuthStatus>("xbox"),
     xboxAction,
+    setLabel,
     guides: (refresh = false) => getJson<GuidesResponse>(refresh ? "guides?refresh=1" : "guides"),
     hubTree: (hubId) => getJson<HubTreeResponse>(`guides/${encodeURIComponent(hubId)}`),
     achievements: (source, id) =>

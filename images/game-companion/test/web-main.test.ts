@@ -13,6 +13,7 @@ import type {
   FindResponse,
   GuideHub,
   GuideMarksResponse,
+  GuidePage,
   GuideProgressResponse,
   GuideWhereResponse,
   HubTreeResponse,
@@ -130,6 +131,10 @@ interface Fake extends Api {
   /** What an Xbox action answers; the current status when null. */
   xboxActionValue: XboxAuthStatus | null;
   xboxCalls: string[];
+  /** Every rename sent, as [docId, label]. */
+  labelCalls: [string, string | null][];
+  /** The names stored by document id, which the default page tree carries like the server's. */
+  customLabels: Map<string, string>;
 }
 
 const xboxStatus = (over: Partial<XboxAuthStatus> = {}): XboxAuthStatus => ({
@@ -157,6 +162,14 @@ function fakeApi(nowValue: NowResponse): Fake {
     xboxValue: xboxStatus(),
     xboxActionValue: null,
     xboxCalls: [],
+    labelCalls: [],
+    customLabels: new Map(),
+    setLabel: async (id, label) => {
+      f.labelCalls.push([id, label]);
+      if (label === null) f.customLabels.delete(id);
+      else f.customLabels.set(id, label);
+      return label;
+    },
     xbox: async () => {
       f.xboxCalls.push("status");
       return f.xboxValue;
@@ -173,7 +186,16 @@ function fakeApi(nowValue: NowResponse): Fake {
       return f.nowValue;
     },
     guides: async () => ({ available: true, hubs: [hubA, hubZ] }),
-    hubTree: async (id) => tree(id === "hA" ? hubA : hubZ),
+    hubTree: async (id) => {
+      const t = tree(id === "hA" ? hubA : hubZ);
+      return {
+        ...t,
+        pages: t.pages.map((p) => {
+          const own = f.customLabels.get(p.url.slice(p.url.lastIndexOf("-") + 1));
+          return own === undefined ? p : { ...p, label: own };
+        }),
+      };
+    },
     achievements: async (source, id) => {
       f.achCalls.push(`${source}:${id}`);
       return ach(id, 2);
@@ -7619,5 +7641,127 @@ describe("a guide page in the right pane", () => {
     } finally {
       Reflect.deleteProperty(Element.prototype, "scrollIntoView");
     }
+  });
+});
+
+describe("renaming a sidebar button", () => {
+  const railText = (i: number) => document.querySelectorAll(".rail button")[i]?.textContent;
+  const openPages = () => ($(".rail button[aria-label='Pages and games']") as HTMLElement).click();
+  const rename = (title: string) =>
+    ($(`.picker-rename[aria-label="Rename ${title}"]`) as HTMLElement).click();
+  const typeName = (text: string) => {
+    const box = $(".picker-rename-input") as HTMLInputElement;
+    box.value = text;
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const save = () => ($(".picker-rename-save") as HTMLElement).click();
+
+  it("shows a saved name on the rail at once, and again after a reload", async () => {
+    const api = fakeApi(playing(hubA));
+    const storage = memory();
+    const app = startApp({ doc: document, api, storage, setInterval: noTimers });
+    await app.ready;
+    expect(railText(1)).toBe("Checklist");
+    openPages();
+    rename("Achievement Checklist");
+    expect(($(".picker-rename-input") as HTMLInputElement).value).toBe("Checklist");
+    typeName("My list 🎯");
+    save();
+    await flush();
+    expect(api.labelCalls).toEqual([["checklist", "My list 🎯"]]);
+    expect(railText(1)).toBe("My list 🎯");
+    expect($(".picker-rename-editor")).toBeNull();
+    expect($(".picker")?.hidden).toBe(false);
+    // The aria-label keeps the page title.
+    expect(document.querySelectorAll(".rail button")[1]?.getAttribute("aria-label")).toBe(
+      "Achievement Checklist",
+    );
+    // The editor offers the new name next time.
+    rename("Achievement Checklist");
+    expect(($(".picker-rename-input") as HTMLInputElement).value).toBe("My list 🎯");
+
+    // Another device, or this one after a reload: the server's tree carries the name.
+    document.body.innerHTML = '<main id="app"></main>';
+    const again = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await again.ready;
+    expect(railText(1)).toBe("My list 🎯");
+  });
+
+  it("takes the labels of the re-fetched tree after a save, so the server's choice wins", async () => {
+    const api = fakeApi(playing(hubA));
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    let treeCalls = 0;
+    api.hubTree = async () => {
+      treeCalls += 1;
+      return {
+        ...tree(hubA),
+        pages: [
+          { ...(tree(hubA).pages[0] as GuidePage), label: "From server" },
+          tree(hubA).pages[1] as GuidePage,
+        ],
+      };
+    };
+    openPages();
+    rename("Achievement Checklist");
+    typeName("Typed");
+    save();
+    await flush();
+    await flush();
+    expect(treeCalls).toBe(1);
+    expect(railText(1)).toBe("From server");
+  });
+
+  it("resets to the automatic name", async () => {
+    const api = fakeApi(playing(hubA));
+    api.customLabels.set("checklist", "Mine");
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    expect(railText(1)).toBe("Mine");
+    openPages();
+    rename("Achievement Checklist");
+    ($(".picker-rename-reset") as HTMLElement).click();
+    await flush();
+    await flush();
+    expect(api.labelCalls).toEqual([["checklist", null]]);
+    expect(railText(1)).toBe("Checklist");
+    expect($(".picker-rename-editor")).toBeNull();
+  });
+
+  it.each([
+    [400, "That name can't be used"],
+    [404, "This page is no longer in the guide"],
+    [429, "Too many changes; try again in a minute"],
+    [500, "Couldn't save the name"],
+  ])("shows a %i refusal inline and leaves the rail alone", async (status, message) => {
+    const api = fakeApi(playing(hubA));
+    api.setLabel = async () => {
+      throw new ApiError(status);
+    };
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    openPages();
+    rename("Achievement Checklist");
+    typeName("Nope");
+    save();
+    await flush();
+    expect($(".picker-rename-error")?.textContent).toBe(message);
+    expect($(".picker-rename-editor")).not.toBeNull();
+    expect(railText(1)).toBe("Checklist");
+  });
+
+  it("says when the server could not be reached", async () => {
+    const api = fakeApi(playing(hubA));
+    api.setLabel = async () => {
+      throw new TypeError("Failed to fetch");
+    };
+    const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+    await app.ready;
+    openPages();
+    rename("Collectibles");
+    typeName("Coins");
+    save();
+    await flush();
+    expect($(".picker-rename-error")?.textContent).toBe("Couldn't save the name");
   });
 });

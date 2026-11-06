@@ -67,3 +67,21 @@ export function cleanLabel(value: unknown): string | null {
   const n = Array.from(label).length;
   return n >= 1 && n <= LABEL_MAX && LABEL_CHARS.test(label) ? label : null;
 }
+
+/** A name the person typed for a rail button is at most this many characters (code points). */
+export const CUSTOM_LABEL_MAX = 12;
+
+/** Control characters, line and paragraph separators, and lone surrogates: never printable. */
+const UNPRINTABLE = /[\p{Cc}\p{Cs}\p{Zl}\p{Zp}]/u;
+
+/**
+ * A name the person typed for a page's rail button, trimmed: 1 to CUSTOM_LABEL_MAX characters
+ * (code points) of any printable text, emoji included. "" when nothing is left after trimming
+ * (the page goes back to its automatic label). Null for anything else.
+ */
+export function cleanCustomLabel(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const label = value.trim();
+  if (label === "") return "";
+  return Array.from(label).length <= CUSTOM_LABEL_MAX && !UNPRINTABLE.test(label) ? label : null;
+}

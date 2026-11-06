@@ -435,4 +435,61 @@ describe("api sign-in state", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect(err).toMatchObject({ status: 401 });
   });
+
+  it("puts a page's own label as JSON and answers what the server stored", async () => {
+    const seen: { url: string; init: RequestInit | undefined }[] = [];
+    const answers = [{ label: "My route" }, { label: null }];
+    const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: input as string, init });
+      return new Response(JSON.stringify(answers.shift()), { status: 200 });
+    }) as typeof fetch;
+    const api = createApi(fn);
+    expect(await api.setLabel("W1", "My route")).toBe("My route");
+    expect(await api.setLabel("a/b", null)).toBeNull();
+    expect(seen.map((c) => `${c.init?.method ?? "GET"} ${c.url}`)).toEqual([
+      "PUT api/labels/W1",
+      "PUT api/labels/a%2Fb",
+    ]);
+    const put = seen[0]?.init as RequestInit;
+    expect(put.headers).toEqual({
+      "content-type": "application/json",
+      accept: "application/json",
+    });
+    expect(JSON.parse(put.body as string)).toEqual({ label: "My route" });
+    expect(JSON.parse(seen[1]?.init?.body as string)).toEqual({ label: null });
+    expect(put.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("reads anything but a string label in the answer as none", async () => {
+    expect(await createApi(fake(200, { label: 5 }).fn).setLabel("W1", "x")).toBeNull();
+    expect(await createApi(fake(200, null).fn).setLabel("W1", "x")).toBeNull();
+  });
+
+  it("throws ApiError with the status for a refused label", async () => {
+    for (const status of [400, 404, 429, 500]) {
+      const err = await createApi(fake(status, { error: "x" }).fn)
+        .setLabel("W1", "x")
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ApiError);
+      expect((err as ApiError).status).toBe(status);
+    }
+  });
+
+  it("retries a label once after a 401, as the same request", async () => {
+    const f = sequence([401, 200], { label: "Walk" });
+    const w = recordWaits();
+    const api = createApi(f.fn, "api", REQUEST_TIMEOUT_MS, w.wait);
+    const seen: boolean[] = [];
+    api.onAuth?.((signedIn) => seen.push(signedIn));
+    expect(await api.setLabel("W1", "Walk")).toBe("Walk");
+    expect(f.calls).toEqual(["PUT api/labels/W1", "PUT api/labels/W1"]);
+    expect(w.waits).toEqual([2000]);
+    expect(seen).toEqual([true]);
+    const twice = sequence([401, 401]);
+    const signedOut: boolean[] = [];
+    const again = createApi(twice.fn, "api", REQUEST_TIMEOUT_MS, recordWaits().wait);
+    again.onAuth?.((signedIn) => signedOut.push(signedIn));
+    await expect(again.setLabel("W1", "Walk")).rejects.toMatchObject({ status: 401 });
+    expect(signedOut).toEqual([false]);
+  });
 });

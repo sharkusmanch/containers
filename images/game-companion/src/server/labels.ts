@@ -1,7 +1,8 @@
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { GuidePage } from "../shared/types.js";
-import { cleanLabel, isKnownName, knownLabel } from "../web/labels.js";
+import { cleanCustomLabel, cleanLabel, isKnownName, knownLabel } from "../web/labels.js";
+import { docId, flattenPages, isSafeDocUrl } from "../web/state.js";
 import type { LabelResult } from "./agent-client.js";
 
 export type { LabelResult } from "./agent-client.js";
@@ -37,6 +38,9 @@ function sendable(title: string): string | null {
   return n >= 1 && n <= TITLE_MAX && !t.includes("\u0000") ? t : null;
 }
 
+/** A guide page's document id as the rename route takes it (see `docId` in the web state). */
+export const DOC_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
 /** A generated label the rail may show: valid, and not one of the common mapping's names. */
 function usable(value: unknown): string | null {
   const label = cleanLabel(value);
@@ -52,10 +56,13 @@ function usable(value: unknown): string | null {
  * An answer without a usable label for a title counts a try, kept in the file; after two the
  * title is never sent again and keeps the fallback name. A failed request (network, 5xx, 404,
  * timeout) only backs its titles off for an hour, in memory; a busy agent is waited out. Without
- * an agent there are no labels beyond the mapping. Logs counts only, never a title or label.
+ * an agent there are no generated labels. Logs counts only, never a title or label.
  *
- * File shape: `{"labels": {title: label}, "unlabelled": {title: tries}}`; the older flat
- * `{title: label}` is read too.
+ * A name the person gave a page (`setCustom`) is kept by the page's document id, with or without
+ * an agent, and wins over everything else.
+ *
+ * File shape: `{"labels": {title: label}, "unlabelled": {title: tries}, "custom": {docId: label}}`
+ * (`custom` only while there is one); the older flat `{title: label}` is read too.
  */
 export class LabelService {
   private readonly file: string;
@@ -64,6 +71,8 @@ export class LabelService {
   private readonly now: () => number;
   private readonly setTimer: (fn: () => void, ms: number) => () => void;
   private readonly cache = new Map<string, string>();
+  /** Document id → the name the person gave the page. */
+  private readonly custom = new Map<string, string>();
   /** Title → answers without a usable label so far. */
   private readonly tries = new Map<string, number>();
   /** Titles waiting for the next request, in the order they were seen. */
@@ -103,10 +112,10 @@ export class LabelService {
    * Removes temp files a crashed write left behind, then reads the cache file. A missing or
    * unparsable file starts empty and is replaced on the next save; a file that exists but cannot
    * be read (EACCES, EIO, ...) starts empty and is never written. Entries that are not usable
-   * labels are dropped. Never rejects. Without an agent nothing is read or removed.
+   * labels are dropped. Never rejects. Without an agent the file is still read, for the custom
+   * labels, and the generated ones are kept only to be saved back.
    */
   async load(): Promise<void> {
-    if (this.agent === null) return;
     await this.removeStaleTemps();
     let raw: string;
     try {
@@ -141,15 +150,54 @@ export class LabelService {
         }
       }
     }
+    if (labels !== parsed && isRecord(parsed.custom)) {
+      for (const [id, value] of Object.entries(parsed.custom)) {
+        const label = cleanCustomLabel(value);
+        if (DOC_ID.test(id) && label !== null && label !== "") this.custom.set(id, label);
+      }
+    }
   }
 
   /**
-   * Copies of one guide's pages, each with a `label` when one is known; titles with none are
-   * queued for the agent. A generated label already shown on an earlier page of the same tree is
-   * left off (the page falls back). Never waits for the agent.
+   * Copies of one guide's pages, each with a `label` when one is known: the person's own (by
+   * document id), else the common mapping's, else the cached generated one; titles with none are
+   * queued for the agent. An automatic label equal to a custom one of the same tree, or a
+   * generated one already shown on an earlier page of it, is left off (the page falls back).
+   * Custom labels are shown as they are, even twice. Never waits for the agent.
    */
   annotate(pages: GuidePage[]): GuidePage[] {
-    return this.annotateWith(pages, new Set());
+    const used = new Set<string>();
+    for (const page of flattenPages(pages)) {
+      const own = this.customFor(page.url);
+      if (own !== null) used.add(own.toLocaleLowerCase());
+    }
+    return this.annotateWith(pages, used);
+  }
+
+  /**
+   * Stores the name the person gave the page with this document id, trimmed, or with null or a
+   * blank name goes back to the automatic label; resolves to what is stored (null after a reset)
+   * once the file is written. Rejects, changing nothing, for a name or id that is not acceptable,
+   * when the file could not be read at start (it is never written then), or when the write fails.
+   */
+  async setCustom(id: string, value: string | null): Promise<string | null> {
+    const label = value === null ? "" : cleanCustomLabel(value);
+    if (!DOC_ID.test(id) || label === null) throw new Error("not an acceptable label");
+    if (!this.writable) throw new Error("label file not writable");
+    const before = this.custom.get(id);
+    if (label === "") this.custom.delete(id);
+    else this.custom.set(id, label);
+    try {
+      await this.persist();
+    } catch (err) {
+      // Put the old one back, unless another change has replaced this one meanwhile.
+      if (this.custom.get(id) === (label === "" ? undefined : label)) {
+        if (before === undefined) this.custom.delete(id);
+        else this.custom.set(id, before);
+      }
+      throw err;
+    }
+    return label === "" ? null : label;
   }
 
   /** Whether any of these pages' titles is queued for the agent or being asked about now. */
@@ -176,15 +224,23 @@ export class LabelService {
   private annotateWith(pages: GuidePage[], used: Set<string>): GuidePage[] {
     return pages.map((page) => {
       // The page before its children, so titles queue in reading order.
-      const label = this.labelFor(page.title, used);
+      const label = this.labelFor(page, used);
       const children = this.annotateWith(page.children, used);
       return label === null ? { ...page, children } : { ...page, label, children };
     });
   }
 
-  private labelFor(title: string, used: Set<string>): string | null {
+  private customFor(url: string): string | null {
+    return isSafeDocUrl(url) ? (this.custom.get(docId(url)) ?? null) : null;
+  }
+
+  private labelFor(page: GuidePage, used: Set<string>): string | null {
+    const own = this.customFor(page.url);
+    if (own !== null) return own;
+    const title = page.title;
     const known = knownLabel(title);
-    if (known !== null) return known;
+    // `used` holds generated labels too, but those are never one of the mapping's names.
+    if (known !== null) return used.has(known.toLocaleLowerCase()) ? null : known;
     if (this.agent === null) return null;
     const cached = this.cache.get(title);
     if (cached === undefined) {
@@ -280,9 +336,14 @@ export class LabelService {
   /** Queues a write of the whole cache; a failure is logged and the labels stay in memory. */
   private save(): void {
     if (!this.writable) return;
-    this.writes = this.writes
-      .then(() => this.write())
-      .catch(() => this.log("label cache write failed"));
+    void this.persist();
+  }
+
+  /** Queues a write of the whole file and settles with it; a failure is logged as well. */
+  private persist(): Promise<void> {
+    const write = this.writes.then(() => this.write());
+    this.writes = write.catch(() => this.log("label cache write failed"));
+    return write;
   }
 
   private async write(): Promise<void> {
@@ -291,6 +352,7 @@ export class LabelService {
     const body = {
       labels: Object.fromEntries(this.cache),
       unlabelled: Object.fromEntries(this.tries),
+      ...(this.custom.size > 0 ? { custom: Object.fromEntries(this.custom) } : {}),
     };
     await mkdir(dir, { recursive: true });
     try {

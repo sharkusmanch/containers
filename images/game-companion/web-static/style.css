@@ -1213,6 +1213,69 @@ button {
   border-bottom: 1px solid var(--border);
 }
 
+/* ---- Picker: naming a page's sidebar button ---- */
+
+.picker-rename {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-rename-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px 12px 12px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.picker-rename-input {
+  flex: 1 1 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  /* 16px or larger keeps mobile browsers from zooming the page on focus */
+  font-size: 16px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.picker-rename-save,
+.picker-rename-reset,
+.picker-rename-cancel {
+  flex: 0 0 auto;
+  min-width: 64px;
+  min-height: 44px;
+  padding: 0 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.picker-rename-save:disabled,
+.picker-rename-reset:disabled {
+  opacity: 0.5;
+}
+
+.picker-rename-error {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--warn);
+}
+
+.picker-rename-error:empty {
+  display: none;
+}
+
 /* ---- Picker: the game's own links ---- */
 
 .picker-links-title {

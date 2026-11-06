@@ -20,6 +20,8 @@ import { XboxAuth } from "./xbox-auth.js";
 import { XboxClient } from "./xbox.js";
 
 const config = loadConfig(process.env);
+/** Rail label renames admitted per rolling minute, all callers together. */
+const RENAMES_PER_MINUTE = 30;
 const log = (msg: string, extra: Record<string, unknown> = {}): void =>
   console.log(JSON.stringify({ msg, ...extra }));
 
@@ -94,8 +96,8 @@ const ask =
     : null;
 log(ask ? "assistant enabled" : "assistant disabled (no agent)");
 
-// Rail labels: the common mapping always; Haiku-generated ones, cached in the state directory,
-// only with an agent.
+// Rail labels: the common mapping and the names typed on the page always; Haiku-generated ones,
+// cached in the same file in the state directory, only with an agent.
 const labels = new LabelService({
   file: join(config.xboxStateDir, "labels.json"),
   agent: ask?.agent ?? null,
@@ -135,6 +137,11 @@ const handler = createHandler(
     mcp,
     memory: xbox?.memory ?? null,
     labels,
+    // Renaming a page's rail button takes the Ask route's origin check: only the page itself may.
+    rename: {
+      origin: new URL(config.outlineBaseUrl).origin,
+      limiter: new AskLimiter({ perMinute: RENAMES_PER_MINUTE, perDay: Number.POSITIVE_INFINITY }),
+    },
     // Starting a sign-in takes the Ask route's origin check: only the page itself may.
     xbox: xbox
       ? { origin: new URL(config.outlineBaseUrl).origin, auth: xbox.auth, client: xbox.client }

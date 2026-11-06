@@ -643,3 +643,238 @@ describe("LabelService file safety", () => {
     expect(calls).toEqual([]);
   });
 });
+
+/** A page with its own document id, the way the wiki addresses it. */
+const doc = (title: string, id: string, children: GuidePage[] = []): GuidePage => ({
+  title,
+  url: `/doc/${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${id}`,
+  children,
+});
+
+const savedRaw = async (): Promise<Record<string, unknown>> =>
+  JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+
+describe("LabelService custom labels", () => {
+  it("stores one by document id, saved beside the cache, and a new service reads it back", async () => {
+    await writeFile(
+      file,
+      JSON.stringify({ labels: { "Boss Guide": "Bosses" }, unlabelled: { "Side Quests": 1 } }),
+    );
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    await expect(s.setCustom("W1", "My route")).resolves.toBe("My route");
+    expect(await savedRaw()).toEqual({
+      labels: { "Boss Guide": "Bosses" },
+      unlabelled: { "Side Quests": 1 },
+      custom: { W1: "My route" },
+    });
+    expect(await readdir(dir)).toEqual(["labels.json"]);
+
+    const { agent, calls } = fakeAgent();
+    const again = service(agent);
+    await again.s.load();
+    // The page was retitled meanwhile: the label follows the document id.
+    expect(labelsOf(again.s.annotate([doc("Walkthrough Part 1", "W1")]))).toEqual({
+      "Walkthrough Part 1": "My route",
+    });
+    expect(again.time.pending()).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it("loads a file from before custom labels, and leaves the key out while there are none", async () => {
+    await writeFile(file, JSON.stringify({ labels: { Walkthrough: "Walk" }, unlabelled: {} }));
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    expect(labelsOf(s.annotate([doc("Walkthrough", "W1")]))).toEqual({ Walkthrough: "Walk" });
+    await s.setCustom("W1", "Mine");
+    expect((await savedRaw()).custom).toEqual({ W1: "Mine" });
+    await expect(s.setCustom("W1", null)).resolves.toBeNull();
+    expect(await savedRaw()).toEqual({ labels: { Walkthrough: "Walk" }, unlabelled: {} });
+    expect(labelsOf(s.annotate([doc("Walkthrough", "W1")]))).toEqual({ Walkthrough: "Walk" });
+  });
+
+  it("clears with null or a blank label, and trims what it stores", async () => {
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    await expect(s.setCustom("W1", "  Spaced  ")).resolves.toBe("Spaced");
+    expect(labelsOf(s.annotate([doc("Notes", "W1")]))).toEqual({ Notes: "Spaced" });
+    await expect(s.setCustom("W1", "   ")).resolves.toBeNull();
+    expect(labelsOf(s.annotate([doc("Notes", "W1")]))).toEqual({ Notes: "Notes" });
+  });
+
+  it("refuses a label or document id that is not acceptable, changing nothing", async () => {
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    await expect(s.setCustom("W1", "thirteen char")).rejects.toThrow();
+    await expect(s.setCustom("W1", "A\u0007")).rejects.toThrow();
+    await expect(s.setCustom("bad id", "Walk")).rejects.toThrow();
+    await expect(s.setCustom("", "Walk")).rejects.toThrow();
+    expect(vi.mocked(fsp.writeFile)).not.toHaveBeenCalled();
+  });
+
+  it("drops entries that are not acceptable on load", async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        labels: {},
+        unlabelled: {},
+        custom: {
+          A1: "Fine 🎮",
+          "bad id": "Walk",
+          A2: 5,
+          A3: "",
+          A4: "thirteen char",
+          A5: "Bell\u0007",
+          A6: " Trim ",
+        },
+      }),
+    );
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    const pages = ["A1", "A2", "A3", "A4", "A5", "A6"].map((id) => doc(`Page ${id}`, id));
+    expect(labelsOf(s.annotate(pages))).toEqual({
+      "Page A1": "Fine 🎮",
+      "Page A2": undefined,
+      "Page A3": undefined,
+      "Page A4": undefined,
+      "Page A5": undefined,
+      "Page A6": "Trim",
+    });
+  });
+
+  it("does not read custom labels from the old flat file: there a key is a title", async () => {
+    await writeFile(file, JSON.stringify({ Walkthrough: "Walk", custom: "Odd" }));
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    await s.setCustom("W1", "Mine");
+    expect(await savedRaw()).toEqual({
+      labels: { Walkthrough: "Walk", custom: "Odd" },
+      unlabelled: {},
+      custom: { W1: "Mine" },
+    });
+  });
+
+  it("wins over the common mapping and the cache, and its page is never sent to the agent", async () => {
+    await writeFile(file, JSON.stringify({ labels: { Walkthrough: "Walk" }, unlabelled: {} }));
+    const { agent, calls } = fakeAgent();
+    const { s, time } = service(agent);
+    await s.load();
+    await s.setCustom("N1", "Jot");
+    await s.setCustom("W1", "Route");
+    await s.setCustom("B1", "Fights");
+    const tree = [doc("Notes", "N1"), doc("Walkthrough", "W1"), doc("Boss Guide", "B1")];
+    expect(labelsOf(s.annotate(tree))).toEqual({
+      Notes: "Jot",
+      Walkthrough: "Route",
+      "Boss Guide": "Fights",
+    });
+    expect(s.labelsPending(tree)).toBe(false);
+    expect(time.pending()).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
+  it("is exempt from the duplicate fallback and the mapping-name refusal", async () => {
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    await s.setCustom("B1", "Boss");
+    await s.setCustom("B2", "Boss");
+    await s.setCustom("W1", "Checklist");
+    expect(
+      labelsOf(s.annotate([doc("Boss Guide", "B1", [doc("Boss Rush", "B2")]), doc("Walk", "W1")])),
+    ).toEqual({ "Boss Guide": "Boss", "Boss Rush": "Boss", Walk: "Checklist" });
+  });
+
+  it("makes an automatic label equal to one in the same tree fall back, wherever it comes", async () => {
+    await writeFile(
+      file,
+      JSON.stringify({ labels: { "Boss Guide": "Boss", "Side Quests": "Side" }, unlabelled: {} }),
+    );
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    // The custom pages come after the automatic ones: the automatic ones still give way.
+    await s.setCustom("X1", "boss");
+    await s.setCustom("X2", "NOTES");
+    const tree = [
+      doc("Boss Guide", "B1"),
+      doc("Notes", "N1"),
+      doc("Side Quests", "S1"),
+      doc("Extra", "X1", [doc("More", "X2")]),
+    ];
+    expect(labelsOf(s.annotate(tree))).toEqual({
+      "Boss Guide": undefined,
+      Notes: undefined,
+      "Side Quests": "Side",
+      Extra: "boss",
+      More: "NOTES",
+    });
+    // Another guide without those custom pages keeps its automatic labels.
+    expect(labelsOf(s.annotate([doc("Boss Guide", "B1"), doc("Notes", "N1")]))).toEqual({
+      "Boss Guide": "Boss",
+      Notes: "Notes",
+    });
+  });
+
+  it("keeps custom labels without an agent: read, shown and saved, the cache kept in the file", async () => {
+    await writeFile(
+      file,
+      JSON.stringify({
+        labels: { Walkthrough: "Walk" },
+        unlabelled: { "Side Quests": 1 },
+        custom: { B1: "Bosses" },
+      }),
+    );
+    await writeFile(join(dir, "labels.json.7.1.tmp"), "{");
+    const { s, time } = service(null);
+    await s.load();
+    expect(await readdir(dir)).toEqual(["labels.json"]);
+    const tree = [doc("Boss Guide", "B1"), doc("Walkthrough", "W1"), doc("Notes", "N1")];
+    // Still no generated labels without the agent, and nothing queued.
+    expect(labelsOf(s.annotate(tree))).toEqual({
+      "Boss Guide": "Bosses",
+      Walkthrough: undefined,
+      Notes: "Notes",
+    });
+    await s.setCustom("W1", "Route");
+    expect(await savedRaw()).toEqual({
+      labels: { Walkthrough: "Walk" },
+      unlabelled: { "Side Quests": 1 },
+      custom: { B1: "Bosses", W1: "Route" },
+    });
+    expect(labelsOf(s.annotate(tree)).Walkthrough).toBe("Route");
+    expect(time.pending()).toEqual([]);
+    expect(s.labelsPending(tree)).toBe(false);
+  });
+
+  it("refuses to save, and keeps nothing, when the file exists but cannot be read", async () => {
+    await mkdir(file);
+    const { s } = service(fakeAgent().agent);
+    await s.load();
+    await expect(s.setCustom("W1", "Route")).rejects.toThrow();
+    expect(labelsOf(s.annotate([doc("Walkthrough", "W1")]))).toEqual({ Walkthrough: undefined });
+    expect(vi.mocked(fsp.writeFile)).not.toHaveBeenCalled();
+  });
+
+  it("rejects and puts the old label back when the write fails, leaving the file whole", async () => {
+    const { s, log } = service(fakeAgent().agent);
+    await s.load();
+    await s.setCustom("W1", "Old");
+    vi.mocked(fsp.rename).mockRejectedValueOnce(new Error("disk full"));
+    await expect(s.setCustom("W1", "New")).rejects.toThrow();
+    expect((await savedRaw()).custom).toEqual({ W1: "Old" });
+    expect(labelsOf(s.annotate([doc("Walkthrough", "W1")]))).toEqual({ Walkthrough: "Old" });
+    expect(await readdir(dir)).toEqual(["labels.json"]);
+    expect(log).toHaveBeenCalledWith("label cache write failed");
+    // The next save works again.
+    await expect(s.setCustom("W1", "New")).resolves.toBe("New");
+    expect((await savedRaw()).custom).toEqual({ W1: "New" });
+  });
+
+  it("never logs a custom label", async () => {
+    const { s, log } = service(fakeAgent().agent);
+    await s.load();
+    vi.mocked(fsp.rename).mockRejectedValueOnce(new Error("disk full"));
+    await s.setCustom("W1", "Hush").catch(() => undefined);
+    await s.setCustom("W1", "Quiet");
+    expect(JSON.stringify(vi.mocked(log).mock.calls)).not.toMatch(/Hush|Quiet|W1/);
+  });
+});

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPicker } from "../src/web/picker.js";
 import { assignSlot, defaultLayout, type GameLink } from "../src/web/state.js";
 import type { FindMatch, GuideHub, GuidePage, XboxAuthStatus } from "../src/shared/types.js";
@@ -55,6 +55,7 @@ function make() {
     onInstall: vi.fn(),
     onDismissSetup: vi.fn(),
     onXbox: vi.fn(),
+    onRename: vi.fn(async (): Promise<string | null> => null),
   };
   const picker = createPicker(document, handlers);
   picker.setPages(pages, defaultLayout(pages, ["Achievement Checklist"]));
@@ -187,6 +188,7 @@ describe("game groups", () => {
       onInstall: vi.fn(),
       onDismissSetup: vi.fn(),
       onXbox: vi.fn(),
+      onRename: vi.fn(async (): Promise<string | null> => null),
     };
     const picker = createPicker(document, handlers);
     picker.setHubs(hubs, available);
@@ -349,6 +351,257 @@ describe("removing a pinned page", () => {
     });
     expect(handlers.onPage).not.toHaveBeenCalled();
     expect(picker.element.hidden).toBe(false);
+  });
+});
+
+describe("renaming a page's sidebar button", () => {
+  const labelled: GuidePage[] = [
+    { title: "Achievement Checklist", url: "/doc/checklist-C1", children: [] },
+    {
+      title: "Walkthrough",
+      url: "/doc/walkthrough-W1",
+      label: "Route",
+      children: [{ title: "Boss Guide", url: "/doc/boss-guide-B1", children: [] }],
+    },
+  ];
+  const setup = () => {
+    const made = make();
+    made.picker.setPages(labelled, defaultLayout(labelled, ["Achievement Checklist"]));
+    made.picker.setLinks(
+      [{ title: "Sample Map", url: "https://links.example.test/map" }],
+      defaultLayout([], []),
+      true,
+    );
+    document.body.append(made.picker.element);
+    made.picker.open("pages");
+    return made;
+  };
+  const q = (picker: { element: HTMLElement }, sel: string): HTMLElement | null =>
+    picker.element.querySelector<HTMLElement>(sel);
+  const renameButtons = (picker: { element: HTMLElement }) => [
+    ...picker.element.querySelectorAll<HTMLButtonElement>(".picker-rename"),
+  ];
+  const editors = (picker: { element: HTMLElement }) => [
+    ...picker.element.querySelectorAll<HTMLElement>(".picker-rename-editor"),
+  ];
+  const input = (picker: { element: HTMLElement }) =>
+    q(picker, ".picker-rename-input") as HTMLInputElement;
+  const type = (picker: { element: HTMLElement }, text: string) => {
+    const box = input(picker);
+    box.value = text;
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const submit = (picker: { element: HTMLElement }) => {
+    const event = new Event("submit", { cancelable: true, bubbles: true });
+    (q(picker, ".picker-rename-editor") as HTMLFormElement).dispatchEvent(event);
+    return event;
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  it("offers a Rename button on every guide page, named for it, and none on links", () => {
+    const { picker } = setup();
+    const buttons = renameButtons(picker);
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Rename Achievement Checklist",
+      "Rename Walkthrough",
+      "Rename Boss Guide",
+    ]);
+    expect(buttons.map((b) => b.textContent)).toEqual(["Rename", "Rename", "Rename"]);
+    expect(buttons.every((b) => b.getAttribute("type") === "button")).toBe(true);
+    expect(q(picker, ".picker-link .picker-rename")).toBeNull();
+    expect(picker.element.querySelector("button button")).toBeNull();
+    // Last in the row, after a pinned page's remove button.
+    const first = buttons[0]?.parentElement as HTMLElement;
+    expect([...first.children].map((c) => c.className)).toEqual([
+      "picker-item pinned",
+      "picker-unpin",
+      "picker-rename",
+    ]);
+    const second = buttons[1]?.parentElement as HTMLElement;
+    expect([...second.children].map((c) => c.className)).toEqual(["picker-item", "picker-rename"]);
+    expect(editors(picker)).toEqual([]);
+  });
+
+  it("opens an editor under the row, filled with the name the rail shows, without choosing", () => {
+    const { picker, handlers } = setup();
+    renameButtons(picker)[1]?.click();
+    const [editor] = editors(picker);
+    const row = renameButtons(picker)[1]?.parentElement as HTMLElement;
+    expect(row.nextElementSibling).toBe(editor);
+    expect(input(picker).value).toBe("Route");
+    expect(input(picker).getAttribute("type")).toBe("text");
+    expect(input(picker).getAttribute("aria-label")).toBe("Sidebar name for Walkthrough");
+    expect(document.activeElement).toBe(input(picker));
+    expect(
+      [...(editor as HTMLElement).querySelectorAll("button")].map((b) => b.textContent),
+    ).toEqual(["Save", "Reset", "Cancel"]);
+    expect(handlers.onPage).not.toHaveBeenCalled();
+    expect(picker.element.hidden).toBe(false);
+    // A page with no label from the server: the rail's own short name.
+    renameButtons(picker)[2]?.click();
+    expect(input(picker).value).toBe("Boss");
+    renameButtons(picker)[0]?.click();
+    expect(input(picker).value).toBe("Checklist");
+  });
+
+  it("keeps one editor open at a time, and a second tap on Rename closes it", () => {
+    const { picker } = setup();
+    renameButtons(picker)[0]?.click();
+    renameButtons(picker)[2]?.click();
+    expect(editors(picker)).toHaveLength(1);
+    expect(input(picker).getAttribute("aria-label")).toBe("Sidebar name for Boss Guide");
+    renameButtons(picker)[2]?.click();
+    expect(editors(picker)).toEqual([]);
+  });
+
+  it("cuts what is typed to 12 characters, counting an emoji as one", () => {
+    const { picker } = setup();
+    renameButtons(picker)[1]?.click();
+    type(picker, "🎮".repeat(15));
+    expect(input(picker).value).toBe("🎮".repeat(12));
+    type(picker, "abcdefghijklmnop");
+    expect(input(picker).value).toBe("abcdefghijkl");
+    type(picker, "Short");
+    expect(input(picker).value).toBe("Short");
+  });
+
+  it("saves the trimmed name, then closes the editor and leaves the picker open", async () => {
+    const { picker, handlers } = setup();
+    renameButtons(picker)[1]?.click();
+    type(picker, "  My route  ");
+    (q(picker, ".picker-rename-save") as HTMLButtonElement).click();
+    await settle();
+    expect(handlers.onRename).toHaveBeenCalledWith(
+      { title: "Walkthrough", url: "/doc/walkthrough-W1" },
+      "My route",
+    );
+    expect(editors(picker)).toEqual([]);
+    expect(picker.element.hidden).toBe(false);
+    expect(handlers.onPage).not.toHaveBeenCalled();
+  });
+
+  it("saves on Enter without navigating, and a blank name resets", async () => {
+    const { picker, handlers } = setup();
+    renameButtons(picker)[1]?.click();
+    type(picker, "   ");
+    const event = submit(picker);
+    expect(event.defaultPrevented).toBe(true);
+    await settle();
+    expect(handlers.onRename).toHaveBeenCalledWith(
+      { title: "Walkthrough", url: "/doc/walkthrough-W1" },
+      null,
+    );
+  });
+
+  it("Reset goes back to the automatic name", async () => {
+    const { picker, handlers } = setup();
+    renameButtons(picker)[0]?.click();
+    type(picker, "Typed");
+    (q(picker, ".picker-rename-reset") as HTMLButtonElement).click();
+    await settle();
+    expect(handlers.onRename).toHaveBeenCalledWith(
+      { title: "Achievement Checklist", url: "/doc/checklist-C1" },
+      null,
+    );
+    expect(editors(picker)).toEqual([]);
+  });
+
+  it("Cancel and Escape close the editor without saving", () => {
+    const { picker, handlers } = setup();
+    renameButtons(picker)[1]?.click();
+    (q(picker, ".picker-rename-cancel") as HTMLButtonElement).click();
+    expect(editors(picker)).toEqual([]);
+    renameButtons(picker)[1]?.click();
+    type(picker, "Half");
+    const esc = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    input(picker).dispatchEvent(esc);
+    expect(esc.defaultPrevented).toBe(true);
+    expect(editors(picker)).toEqual([]);
+    expect(picker.element.hidden).toBe(false);
+    expect(handlers.onRename).not.toHaveBeenCalled();
+    // Opening again starts from the rail's name, not what was typed.
+    renameButtons(picker)[1]?.click();
+    expect(input(picker).value).toBe("Route");
+  });
+
+  it("shows the error inline and keeps the editor and the text when saving fails", async () => {
+    const { picker, handlers } = setup();
+    handlers.onRename.mockResolvedValueOnce("Couldn't save the name");
+    renameButtons(picker)[1]?.click();
+    type(picker, "<b>New</b>");
+    submit(picker);
+    await settle();
+    expect(editors(picker)).toHaveLength(1);
+    const error = q(picker, ".picker-rename-error") as HTMLElement;
+    expect(error.textContent).toBe("Couldn't save the name");
+    expect(error.querySelector("b")).toBeNull();
+    expect(input(picker).value).toBe("<b>New</b>");
+    expect(input(picker).disabled).toBe(false);
+    expect((q(picker, ".picker-rename-save") as HTMLButtonElement).disabled).toBe(false);
+    // A handler that throws reads as a failure too, and a later success clears the error.
+    handlers.onRename.mockRejectedValueOnce(new Error("boom"));
+    submit(picker);
+    await settle();
+    expect((q(picker, ".picker-rename-error") as HTMLElement).textContent).toBe(
+      "Couldn't save the name",
+    );
+    submit(picker);
+    await settle();
+    expect(editors(picker)).toEqual([]);
+  });
+
+  it("disables the editor while saving, so a second tap sends nothing", async () => {
+    const { picker, handlers } = setup();
+    let finish: (v: string | null) => void = () => undefined;
+    handlers.onRename.mockImplementationOnce(
+      () => new Promise<string | null>((resolve) => (finish = resolve)),
+    );
+    renameButtons(picker)[1]?.click();
+    type(picker, "Mine");
+    submit(picker);
+    expect(input(picker).disabled).toBe(true);
+    expect((q(picker, ".picker-rename-save") as HTMLButtonElement).disabled).toBe(true);
+    expect((q(picker, ".picker-rename-reset") as HTMLButtonElement).disabled).toBe(true);
+    submit(picker);
+    (q(picker, ".picker-rename-reset") as HTMLButtonElement).click();
+    expect(handlers.onRename).toHaveBeenCalledTimes(1);
+    finish(null);
+    await settle();
+    expect(editors(picker)).toEqual([]);
+  });
+
+  it("keeps the editor, its text and focus when the pages are redrawn", () => {
+    const { picker } = setup();
+    renameButtons(picker)[1]?.click();
+    type(picker, "Half");
+    picker.setPages(labelled, defaultLayout(labelled, []));
+    expect(editors(picker)).toHaveLength(1);
+    expect(input(picker).value).toBe("Half");
+    expect(document.activeElement).toBe(input(picker));
+    // The page left the guide: the editor goes with it.
+    picker.setPages([labelled[0] as GuidePage], defaultLayout(labelled, []));
+    expect(editors(picker)).toEqual([]);
+  });
+
+  it("drops the editor when the picker closes", () => {
+    const { picker } = setup();
+    renameButtons(picker)[1]?.click();
+    picker.close();
+    picker.open("pages");
+    expect(editors(picker)).toEqual([]);
+  });
+
+  it("offers no Rename on a page whose address is not a guide document", () => {
+    const { picker } = make();
+    picker.setPages(
+      [{ title: "Odd", url: "https://elsewhere.example.test/x", children: [] }],
+      defaultLayout([], []),
+    );
+    expect(q(picker, ".picker-rename")).toBeNull();
   });
 });
 
@@ -1276,6 +1529,7 @@ describe("game filters", () => {
       onInstall: vi.fn(),
       onDismissSetup: vi.fn(),
       onXbox: vi.fn(),
+      onRename: vi.fn(async (): Promise<string | null> => null),
     };
     const picker = createPicker(document, handlers, { storage });
     picker.setHubs(hubs, true);

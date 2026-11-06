@@ -460,6 +460,9 @@ export function startApp(opts: AppOptions): App {
       onXbox(action) {
         void runXboxAction(action);
       },
+      onRename(page, label) {
+        return renamePage(page, label);
+      },
       onLink(link) {
         const c = current;
         if (c === null || !c.links.some((l) => l.url === link.url)) return;
@@ -1722,6 +1725,56 @@ export function startApp(opts: AppOptions): App {
         : "Could not reach the Xbox sign-in",
     );
     await refreshXbox();
+  }
+
+  // ---- Naming a page's sidebar button ----
+
+  /** What a refused rename tells the person, by the server's answer. */
+  function renameError(err: unknown): string {
+    if (!(err instanceof ApiError)) return "Couldn't save the name";
+    if (err.status === 400) return "That name can't be used";
+    if (err.status === 401) return "Signed out: sign in again to rename";
+    if (err.status === 404) return "This page is no longer in the guide";
+    if (err.status === 429) return "Too many changes; try again in a minute";
+    return "Couldn't save the name";
+  }
+
+  /** The pages with the label of the page with document id `id` replaced (or removed for null). */
+  function withLabel(pages: GuidePage[], id: string, label: string | null): GuidePage[] {
+    return pages.map((page) => {
+      const children = withLabel(page.children, id, label);
+      if (!isSafeDocUrl(page.url) || docId(page.url) !== id) return { ...page, children };
+      const next: GuidePage = { title: page.title, url: page.url, children };
+      if (label !== null) next.label = label;
+      return next;
+    });
+  }
+
+  /**
+   * Stores the page's own sidebar name on the server (null goes back to the automatic one), shows
+   * it on the rail at once, then takes the server's tree: a name can make another page's automatic
+   * label give way, and a reset brings the automatic one back. Resolves to a message to show, or
+   * null once stored.
+   */
+  async function renamePage(page: Slot, label: string | null): Promise<string | null> {
+    const id = docId(page.url);
+    const c = current;
+    let stored: string | null;
+    try {
+      stored = await api.setLabel(id, label);
+    } catch (err) {
+      return renameError(err);
+    }
+    // Another guide opened meanwhile: its tree, loaded since, already has the name.
+    if (c !== null && current === c) {
+      c.pages = withLabel(c.pages, id, stored);
+      renderRail(c.layout);
+      refreshPicker();
+      void refreshLabels(c).then(() => {
+        if (current === c) refreshPicker();
+      });
+    }
+    return null;
   }
 
   /**

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { cleanLabel, defaultLabel, isKnownName, knownLabel, LABEL_MAX } from "../src/web/labels.js";
+import {
+  cleanCustomLabel,
+  cleanLabel,
+  CUSTOM_LABEL_MAX,
+  defaultLabel,
+  isKnownName,
+  knownLabel,
+  LABEL_MAX,
+} from "../src/web/labels.js";
 
 describe("knownLabel", () => {
   it.each([
@@ -61,4 +69,39 @@ describe("isKnownName", () => {
       expect(isKnownName(name)).toBe(true);
     for (const name of ["Walk", "Collectibles", ""]) expect(isKnownName(name)).toBe(false);
   });
+});
+
+describe("cleanCustomLabel", () => {
+  it("is 12 characters at most", () => expect(CUSTOM_LABEL_MAX).toBe(12));
+
+  it.each([
+    ["Walk", "Walk"],
+    ["  Boss fights  ", "Boss fights"],
+    ["Notes", "Notes"],
+    ["<b>A/B</b>", "<b>A/B</b>"],
+    ["twelve chars", "twelve chars"],
+    ["🎮".repeat(12), "🎮".repeat(12)],
+    ["Map 🗺️", "Map 🗺️"],
+    ["Épée", "Épée"],
+  ])("keeps %j as %j", (value, label) => expect(cleanCustomLabel(value)).toBe(label));
+
+  it.each([[""], ["   "], ["\t \n"]])("reads %j as a reset", (value) =>
+    expect(cleanCustomLabel(value)).toBe(""),
+  );
+
+  it.each([
+    ["13 characters", "thirteen char"],
+    ["13 emoji", "🎮".repeat(13)],
+    ["a control character", "Map\u0007"],
+    ["a newline inside", "Boss\nRush"],
+    ["a tab inside", "Boss\tRush"],
+    ["a NUL", "A\u0000B"],
+    ["DEL", "A\u007fB"],
+    ["a C1 control", "A\u0085B"],
+    ["a line separator", "A\u2028B"],
+    ["a lone surrogate", "A\ud800B"],
+    ["a number", 12],
+    ["null", null],
+    ["an object", { label: "Walk" }],
+  ])("refuses %s", (_name, value) => expect(cleanCustomLabel(value)).toBeNull());
 });

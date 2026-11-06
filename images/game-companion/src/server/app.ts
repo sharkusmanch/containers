@@ -18,6 +18,7 @@ import type { PlatformMemory } from "./platform-memory.js";
 import type { AskLimiter } from "./rate-limit.js";
 import type { RouteDeps } from "./routes.js";
 import type { XboxAuth } from "./xbox-auth.js";
+import { docId, flattenPages, isSafeDocUrl } from "../web/state.js";
 import { XboxRateLimitError, type XboxClient } from "./xbox.js";
 import {
   busy,
@@ -65,7 +66,16 @@ export interface AppParts {
     client?: Pick<XboxClient, "titles" | "titleInfo" | "achievements">;
   };
   /** Puts rail labels on a hub tree's pages; absent or null sends the pages as they are. */
-  labels?: null | Pick<LabelService, "annotate" | "labelsPending">;
+  labels?: null | Pick<LabelService, "annotate" | "labelsPending" | "setCustom">;
+  /**
+   * Who may rename a page's rail button, and how often; absent or null (or without `labels`) the
+   * rename endpoint is off.
+   */
+  rename?: null | {
+    /** Origin of the wiki that frames the page: the one origin allowed to rename. */
+    origin: string;
+    limiter: Pick<AskLimiter, "admit">;
+  };
   /** Fixed-text log lines. */
   log?: (line: string) => void;
 }
@@ -343,8 +353,20 @@ export function buildDeps(parts: AppParts): RouteDeps {
       }),
   };
 
+  /** Whether some guide of the index has a page with this document id. */
+  const knownDoc = (id: string): boolean =>
+    index
+      .hubs()
+      .some((h) =>
+        flattenPages(index.tree(h.hubId)?.pages ?? []).some(
+          (p) => isSafeDocUrl(p.url) && docId(p.url) === id,
+        ),
+      );
+
   const askParts = parts.ask;
   const xboxParts = parts.xbox ?? null;
+  const labelParts = parts.labels ?? null;
+  const renameParts = parts.rename ?? null;
   return {
     staticDir: parts.staticDir,
     now: () => {
@@ -419,6 +441,15 @@ export function buildDeps(parts: AppParts): RouteDeps {
             },
           },
     mcp: parts.mcp ? { ...parts.mcp, tools: mcpTools } : null,
+    labels:
+      labelParts === null || renameParts === null
+        ? null
+        : {
+            origin: renameParts.origin,
+            admit: () => renameParts.limiter.admit(),
+            known: knownDoc,
+            set: (id, label) => labelParts.setCustom(id, label),
+          },
     xbox:
       xboxParts === null
         ? null

@@ -3,6 +3,8 @@ import type { XboxAction } from "./api.js";
 import type { AskDepthSetting, GuideZoom, InstallRow } from "./device.js";
 import { LAYOUT_LABELS, windowReadout } from "./layout-mode.js";
 import type { LayoutMode, LayoutOverride } from "./layout-mode.js";
+import { CUSTOM_LABEL_MAX } from "./labels.js";
+import { isSafeDocUrl, railLabel } from "./state.js";
 import type { GameLink, Layout, Slot, StorageLike } from "./state.js";
 
 export interface PickerHandlers {
@@ -24,7 +26,15 @@ export interface PickerHandlers {
   onDismissSetup(): void;
   /** The Xbox row's button was tapped. The picker stays open. */
   onXbox(action: XboxAction): void;
+  /**
+   * A name for the page's sidebar button was saved, or with null reset to the automatic one.
+   * Resolves to a message to show, or null when it was stored. The picker stays open.
+   */
+  onRename(page: Slot, label: string | null): Promise<string | null>;
 }
+
+/** Shown when renaming fails without a message of its own. */
+const RENAME_FAILED = "Couldn't save the name";
 
 export type SettingName =
   | "keepAwake"
@@ -313,6 +323,7 @@ export function createPicker(
   const close = (): void => {
     element.hidden = true;
     if (matchesShowing) showTab("pages");
+    closeEditor();
   };
 
   closeButton.addEventListener("click", () => {
@@ -356,8 +367,151 @@ export function createPicker(
       row.classList.add("picker-row");
       row.append(button);
       if (isPinned) row.append(pinButton(page));
-      return [row, ...pageItems(page.children, pinned, depth + 1)];
+      // Last, so it lines up down the list whether or not a page is pinned.
+      const renamable = isSafeDocUrl(page.url);
+      if (renamable) row.append(renameButton(page));
+      const editor = renamable && renaming?.url === page.url ? [renameEditor(renaming)] : [];
+      return [row, ...editor, ...pageItems(page.children, pinned, depth + 1)];
     });
+
+  /** The page whose sidebar name is being edited: what is typed, and the last error. */
+  interface Renaming {
+    title: string;
+    url: string;
+    value: string;
+    error: string;
+    saving: boolean;
+  }
+  let renaming: Renaming | null = null;
+  let renameInput: HTMLInputElement | null = null;
+  let shownPages: GuidePage[] = [];
+  let shownPinned: ReadonlySet<string> = new Set();
+
+  /** Redraws the page rows; a focused name box gets the focus back. */
+  const renderPages = (): void => {
+    const focused = renameInput !== null && doc.activeElement === renameInput;
+    renameInput = null;
+    // A page that left the guide takes its editor with it.
+    if (renaming !== null) {
+      const url = renaming.url;
+      const has = (list: GuidePage[]): boolean =>
+        list.some((p) => p.url === url || has(p.children));
+      if (!has(shownPages)) renaming = null;
+    }
+    pageRows.replaceChildren(
+      ...(shownPages.length === 0
+        ? [empty("No guide pages for this game")]
+        : pageItems(shownPages, shownPinned, 0)),
+    );
+    if (focused) pageRows.querySelector<HTMLInputElement>(".picker-rename-input")?.focus();
+  };
+
+  const closeEditor = (): void => {
+    if (renaming === null) return;
+    renaming = null;
+    renderPages();
+  };
+
+  const renameButton = (page: GuidePage): HTMLButtonElement => {
+    const b = doc.createElement("button");
+    b.setAttribute("type", "button");
+    b.classList.add("picker-rename");
+    b.setAttribute("aria-label", `Rename ${page.title}`);
+    b.textContent = "Rename";
+    b.addEventListener("click", () => {
+      if (renaming?.url === page.url) {
+        closeEditor();
+        return;
+      }
+      renaming = {
+        title: page.title,
+        url: page.url,
+        value: railLabel({ title: page.title, url: page.url }, shownPages),
+        error: "",
+        saving: false,
+      };
+      renderPages();
+      renameInput?.focus();
+      renameInput?.select();
+    });
+    return b;
+  };
+
+  /** Sends the name (null resets it); one request per editor at a time. */
+  const commitRename = async (state: Renaming, label: string | null): Promise<void> => {
+    if (state.saving) return;
+    state.saving = true;
+    state.error = "";
+    renderPages();
+    let message: string | null;
+    try {
+      message = await handlers.onRename({ title: state.title, url: state.url }, label);
+    } catch {
+      message = RENAME_FAILED;
+    }
+    state.saving = false;
+    // Another editor opened, or this one closed, meanwhile: nothing here to update.
+    if (renaming !== state) return;
+    if (message === null) {
+      renaming = null;
+      renderPages();
+      return;
+    }
+    state.error = message;
+    renderPages();
+    renameInput?.focus();
+  };
+
+  const renameEditor = (state: Renaming): HTMLFormElement => {
+    const form = doc.createElement("form");
+    form.classList.add("picker-rename-editor");
+    form.noValidate = true;
+    const input = doc.createElement("input");
+    input.classList.add("picker-rename-input");
+    input.setAttribute("type", "text");
+    input.setAttribute("aria-label", `Sidebar name for ${state.title}`);
+    input.setAttribute("autocomplete", "off");
+    input.setAttribute("enterkeyhint", "done");
+    input.value = state.value;
+    input.disabled = state.saving;
+    // `maxlength` counts UTF-16 units, so an emoji would count twice: cut by characters here.
+    input.addEventListener("input", () => {
+      const chars = Array.from(input.value);
+      if (chars.length > CUSTOM_LABEL_MAX) input.value = chars.slice(0, CUSTOM_LABEL_MAX).join("");
+      state.value = input.value;
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeEditor();
+    });
+    renameInput = input;
+    const button = (className: string, text: string, kind: "submit" | "button") => {
+      const b = doc.createElement("button");
+      b.setAttribute("type", kind);
+      b.classList.add(className);
+      b.textContent = text;
+      return b;
+    };
+    const save = button("picker-rename-save", "Save", "submit");
+    const reset = button("picker-rename-reset", "Reset", "button");
+    const cancel = button("picker-rename-cancel", "Cancel", "button");
+    save.disabled = state.saving;
+    reset.disabled = state.saving;
+    reset.addEventListener("click", () => void commitRename(state, null));
+    cancel.addEventListener("click", closeEditor);
+    const error = doc.createElement("p");
+    error.classList.add("picker-rename-error");
+    error.setAttribute("aria-live", "polite");
+    error.textContent = state.error;
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const label = state.value.trim();
+      void commitRename(state, label === "" ? null : label);
+    });
+    form.append(input, save, reset, cancel, error);
+    return form;
+  };
 
   const pinButton = (page: Slot): HTMLButtonElement => {
     const unpin = doc.createElement("button");
@@ -704,11 +858,9 @@ export function createPicker(
     setPages(pages, layout) {
       const pinned = new Set<string>();
       for (const slot of layout.slots) if (slot !== null) pinned.add(slot.url);
-      pageRows.replaceChildren(
-        ...(pages.length === 0
-          ? [empty("No guide pages for this game")]
-          : pageItems(pages, pinned, 0)),
-      );
+      shownPages = pages;
+      shownPinned = pinned;
+      renderPages();
     },
     setLinks(links, layout, available) {
       const pinned = new Set<string>();
