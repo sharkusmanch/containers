@@ -4,7 +4,7 @@
 ARG BOOKORBIT_MCP_COMMIT=1fc55abc357e0bbc800f3d3d1cd8ee12dc9f5793
 
 # renovate: datasource=github-releases depName=sparfenyuk/mcp-proxy
-ARG MCP_PROXY_VERSION=v0.13.0
+ARG MCP_PROXY_VERSION=v0.14.0
 
 # Held at 1.x ON PURPOSE. mcp-proxy 0.12.0 declares `mcp>=1.17.0` with no upper
 # bound, but mcp 2.x dropped `mcp.server.lowlevel.server.request_ctx`, which
@@ -77,9 +77,16 @@ RUN test "$(grep -c 'params.set("page", String(opts.page))' src/bookorbit-client
 # ip-address, all reached only through @modelcontextprotocol/sdk's HTTP
 # transport (unused — this server is stdio-only), but `npm audit fix` clears
 # all four with the test suite still green, so ship them patched.
+#
+# --audit-level=critical: `npm audit fix` exits 1 whenever ANY advisory is left
+# that only `--force` could fix, which turned every rebuild red on 2026-11-06
+# when GHSA-mrhx-c7xc-m3w5 (zod <4.6.6, high, memory exhaustion on oversized
+# input) landed -- its only fix is zod 4, a breaking major under the MCP SDK.
+# Non-breaking fixes are still applied; only a remaining CRITICAL fails the
+# build. Drop the flag once upstream moves to zod 4.
 RUN --mount=type=cache,target=/root/.npm \
     npm ci && \
-    npm audit fix && \
+    npm audit fix --audit-level=critical && \
     npm run build && \
     npm prune --omit=dev
 
