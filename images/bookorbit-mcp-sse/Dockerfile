@@ -77,9 +77,16 @@ RUN test "$(grep -c 'params.set("page", String(opts.page))' src/bookorbit-client
 # ip-address, all reached only through @modelcontextprotocol/sdk's HTTP
 # transport (unused — this server is stdio-only), but `npm audit fix` clears
 # all four with the test suite still green, so ship them patched.
+#
+# --audit-level=critical: `npm audit fix` exits 1 whenever ANY advisory is left
+# that only `--force` could fix, which turned every rebuild red on 2026-11-06
+# when GHSA-mrhx-c7xc-m3w5 (zod <4.6.6, high, memory exhaustion on oversized
+# input) landed -- its only fix is zod 4, a breaking major under the MCP SDK.
+# Non-breaking fixes are still applied; only a remaining CRITICAL fails the
+# build. Drop the flag once upstream moves to zod 4.
 RUN --mount=type=cache,target=/root/.npm \
     npm ci && \
-    npm audit fix && \
+    npm audit fix --audit-level=critical && \
     npm run build && \
     npm prune --omit=dev
 
