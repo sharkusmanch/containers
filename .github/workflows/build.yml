@@ -131,14 +131,22 @@ jobs:
             type=raw,value=latest
             type=sha,prefix=
 
-      - name: Build and push
+      # The image is pushed by DIGEST ONLY here: no tag points at it until it is
+      # attested and the attestation verifies (steps below). The cluster's
+      # Kyverno `own-builds` rule denies any ghcr.io/<owner>/containers/* pod
+      # whose digest has no SLSA attestation, and Renovate follows the version
+      # tag and automerges digest bumps. If a tag were pushed before attesting, a
+      # failed attest (e.g. a transient Rekor 500, 2026-11-07) would leave a
+      # tagged unattested digest that Renovate rolls out and Kyverno blocks,
+      # which is an outage for any Recreate app. A failed run now leaves only an
+      # untagged digest that nothing references.
+      - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v7
         with:
           context: images/${{ matrix.image }}
           platforms: ${{ steps.platforms.outputs.platforms }}
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -146,10 +154,111 @@ jobs:
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
             VCS_REF=${{ github.sha }}
 
+      # Rekor (the public transparency log) occasionally returns a 5xx. Actions
+      # has no step-level retry, so try up to three times with a back-off; the
+      # last attempt has no continue-on-error so a persistent failure fails the
+      # job (and the image stays untagged).
       - name: Attest build provenance
+        id: attest1
         if: github.event_name != 'pull_request'
+        continue-on-error: true
         uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
+
+      - name: Wait before attest retry
+        if: github.event_name != 'pull_request' && steps.attest1.outcome == 'failure'
+        run: sleep 30
+
+      - name: Attest build provenance (retry 1)
+        id: attest2
+        if: github.event_name != 'pull_request' && steps.attest1.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Wait before final attest retry
+        if: github.event_name != 'pull_request' && steps.attest2.outcome == 'failure'
+        run: sleep 90
+
+      - name: Attest build provenance (retry 2)
+        id: attest3
+        if: github.event_name != 'pull_request' && steps.attest2.outcome == 'failure'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      # Check the attestation the way the cluster will: the bundle stored in the
+      # registry (what Kyverno's SigstoreBundle verifier reads), signed by this
+      # workflow on main. SIGNER_REGEX must stay identical to the subjectRegExp
+      # of the `own-builds` rule in home-ops
+      # clusters/home/infrastructure/core/kyverno/policy-verify-image-attestations.yaml.
+      # A workflow_dispatch from another branch therefore never gets tagged,
+      # which is correct: the cluster would refuse that image anyway.
+      - name: Verify attestation
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SIGNER_REGEX: '^https://github\.com/sharkusmanch/containers/\.github/workflows/build\.yml@refs/heads/main$'
+        run: |
+          for i in 1 2 3 4 5; do
+            if gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --bundle-from-oci \
+                --predicate-type https://slsa.dev/provenance/v1 \
+                --cert-oidc-issuer https://token.actions.githubusercontent.com \
+                --cert-identity-regex "${SIGNER_REGEX}"; then
+              exit 0
+            fi
+            echo "verify attempt ${i} failed; retrying in 15s"
+            sleep 15
+          done
+          echo "::error::attestation for ${IMAGE}@${DIGEST} did not verify; image left untagged"
+          exit 1
+
+      # Point the tags at the verified digest. A single image-index source is
+      # copied as-is (a "carbon copy"), so the digest does not change; the loop
+      # below checks that anyway before the run is reported green.
+      - name: Tag verified image
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}/${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          args=()
+          tags=()
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            tags+=("$t")
+            args+=(--tag "$t")
+          done <<< "$TAGS"
+          [ "${#tags[@]}" -gt 0 ] || { echo "::error::no tags from docker/metadata-action"; exit 1; }
+          # Gate BEFORE writing any tag: the carbon copy (digest preserved) only
+          # happens when the single source is an index / manifest list. Anything
+          # else would make imagetools write a NEW, unattested digest under the
+          # tags, which is the outage this job exists to prevent.
+          media=$(docker buildx imagetools inspect --raw "${IMAGE}@${DIGEST}" | jq -r .mediaType)
+          case "$media" in
+            application/vnd.oci.image.index.v1+json|application/vnd.docker.distribution.manifest.list.v2+json) ;;
+            *) echo "::error::${IMAGE}@${DIGEST} is ${media}, not an index; refusing to tag"; exit 1 ;;
+          esac
+          docker buildx imagetools create "${args[@]}" "${IMAGE}@${DIGEST}"
+          for t in "${tags[@]}"; do
+            got=$(docker buildx imagetools inspect "$t" --format '{{json .Manifest}}' | jq -r .digest)
+            if [ "$got" != "$DIGEST" ]; then
+              echo "::error::$t resolves to $got, expected $DIGEST"
+              exit 1
+            fi
+            echo "$t -> $got"
+          done
