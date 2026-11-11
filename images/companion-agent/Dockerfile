@@ -5,7 +5,7 @@
 ARG COMPANION_AGENT_VERSION=v0.4.0
 
 # renovate: datasource=docker depName=node
-ARG NODE_VERSION=26.13.0
+ARG NODE_VERSION=26.13.1
 
 # renovate: datasource=npm depName=@anthropic-ai/claude-code
 ARG CLAUDE_VERSION=2.1.322
