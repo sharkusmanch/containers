@@ -24,6 +24,9 @@ ARG FLUX_VERSION=v2.10.0
 # renovate: datasource=github-releases depName=yannh/kubeconform
 ARG KUBECONFORM_VERSION=v0.8.0
 
+# renovate: datasource=pypi depName=claude-agent-sdk
+ARG CLAUDE_AGENT_SDK_VERSION=0.2.180
+
 # ============================================================================
 # Builder stage — fetch pinned binaries (amd64 only; see images/daedalus/.platforms)
 # ============================================================================
@@ -94,6 +97,7 @@ FROM alpine:${ALPINE_VERSION} AS runtime
 ARG BUILD_DATE
 ARG VCS_REF
 ARG ALPINE_VERSION
+ARG CLAUDE_AGENT_SDK_VERSION
 LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${ALPINE_VERSION}" \
@@ -123,6 +127,12 @@ RUN apk add --no-cache \
     # (no password, but not "locked") so pubkey login works; password login stays
     # impossible via sshd_config PasswordAuthentication no.
     && sed -i 's/^abc:!:/abc:*:/' /etc/shadow
+
+# Claude Agent SDK for the claude-jobs runner (`python3 -I`). System-wide because -I
+# ignores the user site and PYTHON* vars. The assert fails the build if pip left a
+# different version (or none) importable.
+RUN pip install --no-cache-dir --break-system-packages "claude-agent-sdk==${CLAUDE_AGENT_SDK_VERSION}" \
+    && python3 -I -c "import claude_agent_sdk as s; assert s.__version__ == '${CLAUDE_AGENT_SDK_VERSION}', s.__version__"
 
 # Baked toolchain
 COPY --from=builder /out/kubectl     /usr/local/bin/kubectl
