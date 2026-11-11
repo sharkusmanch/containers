@@ -10,7 +10,7 @@ ARG ALPINE_VERSION=3.24
 ARG CLAUDE_VERSION=2.1.322
 
 # renovate: datasource=npm depName=@openai/codex
-ARG CODEX_VERSION=0.167.0
+ARG CODEX_VERSION=0.167.1
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 ARG KUBECTL_VERSION=v1.37.2
