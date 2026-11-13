@@ -177,6 +177,28 @@ function hubGameId(hub: GuideHub, platform: Source): string | null {
   return platform === "xbox" ? hub.xboxTitleId : null;
 }
 
+/** Whether a guide knows `id` as its game on a platform: its id there, or an Xbox "plays as" id. */
+function hubKnowsId(hub: GuideHub, platform: Source, id: string): boolean {
+  if (hubGameId(hub, platform) === id) return true;
+  return platform === "xbox" && (hub.xboxPlayIds?.includes(id) ?? false);
+}
+
+/**
+ * The game a title being played counts as for the guide's achievements: the guide's Xbox Title
+ * ID when an Xbox title is one of its "plays as" ids, else the title itself.
+ */
+function achievementsGame(hub: GuideHub | null, playing: GameId): GameId {
+  if (
+    hub !== null &&
+    playing.source === "xbox" &&
+    hub.xboxTitleId !== null &&
+    hub.xboxPlayIds?.includes(playing.id)
+  ) {
+    return { source: "xbox", id: hub.xboxTitleId };
+  }
+  return playing;
+}
+
 /** Whether a guide knows both a Steam and an Xbox id, so the panel offers the switch. */
 function switchable(hub: GuideHub): boolean {
   return hubGameId(hub, "steam") !== null && hubGameId(hub, "xbox") !== null;
@@ -187,7 +209,7 @@ function isPlayingHere(c: Pick<Current, "game" | "hub">, playing: GameRef | null
   if (playing === null || playing.id === null) return false;
   const { game, hub } = c;
   if (game !== null && game.source === playing.source && game.id === playing.id) return true;
-  return hub !== null && hubGameId(hub, playing.source) === playing.id;
+  return hub !== null && hubKnowsId(hub, playing.source, playing.id);
 }
 
 /**
@@ -202,7 +224,7 @@ function achievementsSource(
   choice: Source | null,
 ): GameId | null {
   if (playing !== null && playing.id !== null && isPlayingHere(c, playing)) {
-    return { source: playing.source, id: playing.id };
+    return achievementsGame(c.hub, { source: playing.source, id: playing.id });
   }
   const hub = c.hub;
   if (hub !== null) {
@@ -1005,7 +1027,11 @@ export function startApp(opts: AppOptions): App {
     if (current !== null && current.hub === null && current.game !== null) {
       return declinedKey === current.key ? "No guide selected" : "No guide found";
     }
-    if (current !== null && liveNow !== null && gameKey(liveNow.game) === current.key) {
+    if (
+      current !== null &&
+      liveNow !== null &&
+      (gameKey(liveNow.game) === current.key || isPlayingHere(current, liveNow.game))
+    ) {
       const parts: string[] = [];
       if (liveNow.state === "last-played") parts.push("Last played");
       if (liveNow.stale) parts.push("showing older data");
@@ -1040,14 +1066,19 @@ export function startApp(opts: AppOptions): App {
   function playingShown(): boolean {
     const shown = current === null ? null : shownFor(current);
     const game = lastNow?.game ?? null;
+    // Played under a "plays as" Xbox title, the guide's own Xbox Title ID is the game shown.
+    const played =
+      game === null || game.id === null
+        ? null
+        : achievementsGame(current?.hub ?? null, { source: game.source, id: game.id });
     // While another game's title is shown as loading, nothing live may sit under it.
     return (
       loadingLabel === null &&
       lastNow?.state === "playing" &&
       shown !== null &&
-      game !== null &&
-      game.id === shown.id &&
-      game.source === shown.source
+      played !== null &&
+      played.id === shown.id &&
+      played.source === shown.source
     );
   }
 

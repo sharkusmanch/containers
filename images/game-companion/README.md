@@ -58,7 +58,7 @@ lookup never fails the list.
 ## Upstream
 
 - **Repository**: none. This directory is the source.
-- **Version**: v0.22.0
+- **Version**: v0.22.1
 
 ## Usage
 
@@ -69,7 +69,7 @@ docker run --rm -p 8080:8080 \
   -e OUTLINE_BASE_URL=https://outline.example.com \
   -e OUTLINE_API_KEY=... \
   -e OUTLINE_COLLECTION_ID=... -e OUTLINE_GUIDES_PARENT_ID=... \
-  ghcr.io/sharkusmanch/containers/game-companion:v0.22.0
+  ghcr.io/sharkusmanch/containers/game-companion:v0.22.1
 ```
 
 The page is served at `/companion/` and must be reached on the **same hostname as Outline**
@@ -179,7 +179,7 @@ the gamertag. If `XBOX_STATE_DIR` cannot be written, start-up logs it once as
 `xbox state directory is not writable`.
 
 **Guides.** One guide serves a game on both Steam and Xbox. A guide is linked to an Xbox game by
-an `Xbox Title ID` row, or else by its title matching the game's name (case, punctuation and ™ ®
+an `Xbox Title ID` row (first ID or a "plays as" ID), or else by its title matching the game's name (case, punctuation and ™ ®
 © ignored); a guide with only an `RA Game ID` row never matches by name, nor does a guide already
 tied to another Xbox title (by its row or an earlier detection), and two guides with the same
 name link to neither. The guide remembers which platform its game was last detected on (in
@@ -411,6 +411,12 @@ The service finds a game's guide by reading the guide documents themselves. It e
   **Xbox**), and `| Tracked on | Xbox |` (or `Steam`; the label and value may be bold) to say which
   platform's achievements the guide follows. Without the row the panel falls back to the platform
   last detected, then the guide's own row; a guide with only an `RA Game ID` row ignores it.
+  Some Xbox games play under one title ID and keep their achievements under another (the
+  KOTOR ports, for one). Put both in the cell, achievements ID first:
+  `| Xbox Title ID | 92932164 (plays as 1112934452) |`. Every standalone run of 1 to 10 digits
+  counts, in order and without repeats. The first ID is the guide's Xbox Title ID (achievements,
+  status, remembered platform); the others are play IDs, so the guide is found, and counts as
+  being played, when the game plays under one of them. A cell with one ID works as before.
 - Checkbox lines (`- [ ]` / `- [x]`) are what the sidebar counts. Headings are what the status
   line is matched against, so sections named for places or chapters work best.
 - Optionally, a `⚠` on a checklist line (`- [ ] **Name** ⚠ …`) to mark that achievement as

@@ -7,6 +7,11 @@ export interface HubIdentity {
   steam: string | null;
   ra: string | null;
   xbox: string | null;
+  /**
+   * Further Xbox title IDs from the same cell, in order: titles that count as this game ("plays
+   * as"), whose achievements are kept under `xbox`. Omitted when the cell holds one ID.
+   */
+  xboxAlso?: string[];
   /** The platform the `Tracked on` row names; null with no row or an unknown value. */
   trackedOn: "steam" | "xbox" | null;
 }
@@ -31,6 +36,21 @@ function cellId(cell: string, link: RegExp | null): string | null {
   return m ? (m[1] as string) : null;
 }
 
+/** Every ID in a cell, in order and deduped: standalone runs of 1–10 digits. */
+function cellIds(cell: string): string[] {
+  const ids = [...cell.matchAll(/(?<!\d)(\d{1,10})(?!\d)/g)].map((m) => m[1] as string);
+  return [...new Set(ids)];
+}
+
+/** The IDs of the first Xbox row that has any: the title the achievements sit under, then the rest. */
+function firstXboxRowIds(text: string): string[] {
+  for (const m of text.matchAll(XBOX_ROW)) {
+    const ids = cellIds(m[1] as string);
+    if (ids.length > 0) return ids;
+  }
+  return [];
+}
+
 function firstRowId(text: string, row: RegExp, link: RegExp | null): string | null {
   for (const m of text.matchAll(row)) {
     const id = cellId(m[1] as string, link);
@@ -51,10 +71,12 @@ function trackedOn(text: string): "steam" | "xbox" | null {
 
 export function parseHubIdentity(text: string): HubIdentity | null {
   const unix = text.replace(/\r\n/g, "\n");
+  const [xbox = null, ...xboxAlso] = firstXboxRowIds(unix);
   const identity: HubIdentity = {
     steam: firstRowId(unix, STEAM_ROW, STEAM_LINK),
     ra: firstRowId(unix, RA_ROW, RA_LINK),
-    xbox: firstRowId(unix, XBOX_ROW, null),
+    xbox,
+    ...(xboxAlso.length > 0 ? { xboxAlso } : {}),
     trackedOn: null,
   };
   // A RetroAchievements-only guide has no Steam or Xbox list to track.
@@ -264,7 +286,7 @@ export class GuideIndex {
 
   /**
    * Hubs for a game. Steam and RA: the hubs whose own game it is. Xbox: hubs whose Xbox Title ID
-   * row names it; else hubs remembered for it; else the one hub, not RetroAchievements-only and
+   * row names it (first ID or a "plays as" ID); else hubs remembered for it; else the one hub, not RetroAchievements-only and
    * not tied to another Xbox title, whose normalised title equals the game's. Two or more by name
    * is no match, never a guess.
    */
@@ -274,7 +296,9 @@ export class GuideIndex {
         .map((e) => this.hubOf(e))
         .filter((h) => h.source === source && h.gameId === gameId);
     }
-    const byRow = this.entries.filter((e) => e.identity?.xbox === gameId);
+    const byRow = this.entries.filter(
+      (e) => e.identity?.xbox === gameId || (e.identity?.xboxAlso?.includes(gameId) ?? false),
+    );
     if (byRow.length > 0) return byRow.map((e) => this.hubOf(e));
     const remembered = new Set(this.memory?.byXboxTitle(gameId) ?? []);
     const byMemory = this.entries.filter((e) => remembered.has(e.hubId));
@@ -328,6 +352,7 @@ export class GuideIndex {
       source: own?.[0] ?? null,
       gameId: own?.[1] ?? null,
       xboxTitleId,
+      ...(identity?.xboxAlso?.length ? { xboxPlayIds: identity.xboxAlso } : {}),
       platforms,
       lastPlatform: remembered?.last ?? null,
       trackedOn: identity?.trackedOn ?? null,

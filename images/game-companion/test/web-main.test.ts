@@ -6335,6 +6335,38 @@ describe("xbox", () => {
       expect(api.achCalls).toEqual(["steam:10"]);
     });
 
+    describe("a game played under an Xbox play ID", () => {
+      const kotor: GuideHub = {
+        ...hubX,
+        source: "xbox",
+        gameId: "92932164",
+        xboxTitleId: "92932164",
+        xboxPlayIds: ["1112934452"],
+        platforms: ["xbox"],
+        platformLabel: "Xbox",
+      };
+      const played = { source: "xbox" as const, id: "1112934452", title: "STAR WARS KOTOR" };
+
+      it("loads the achievements under the guide's first ID while the play ID is played", async () => {
+        const { api } = await start(nowOf(kotor, played, "playing", "Series X"));
+        expect(api.achCalls).toEqual(["xbox:92932164"]);
+        expect($(".game-device")?.textContent).toBe("Series X");
+      });
+
+      it("keeps the first ID when the guide is picked while the play ID is played", async () => {
+        const { api } = await start(nowOf(kotor, played, "last-played"));
+        expect(api.achCalls).toEqual(["xbox:92932164"]);
+      });
+
+      it("raises no switch banner for the play ID of the open guide", async () => {
+        const { api, app } = await start(nowOf(kotor, played, "playing"));
+        api.nowValue = nowOf(kotor, played, "playing");
+        await app.tick();
+        expect($(".switch-banner")?.hidden).toBe(true);
+        expect(api.achCalls.every((c) => c === "xbox:92932164")).toBe(true);
+      });
+    });
+
     it("prefers the platform the guide was last detected on to its row", async () => {
       const { api } = await start(
         nowOf({ ...hubX, lastPlatform: "xbox" }, steamGame, "last-played"),

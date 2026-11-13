@@ -729,3 +729,101 @@ describe("GuideIndex auto refresh", () => {
     idx.stopAutoRefresh();
   });
 });
+
+describe("Xbox play IDs", () => {
+  const cell = (c: string) => parseHubIdentity(`| **Xbox Title ID** | ${c} |\n`);
+
+  it("takes the first ID as the hub's and the rest as play IDs", () => {
+    expect(cell("92932164 (plays as 1112934452)")).toEqual({
+      steam: null,
+      ra: null,
+      xbox: "92932164",
+      xboxAlso: ["1112934452"],
+      trackedOn: null,
+    });
+  });
+
+  it("keeps order, dedupes, and ignores digits inside a longer number", () => {
+    expect(cell("92932164, 1112934452, 92932164, 1112934458")?.xboxAlso).toEqual([
+      "1112934452",
+      "1112934458",
+    ]);
+    expect(cell("92932164 (ref 12345678901)")?.xboxAlso).toBeUndefined();
+  });
+
+  it("reads link-less cells and leaves a one-ID cell without play IDs", () => {
+    expect(cell("92932164 plays as 1112934452")).toMatchObject({ xboxAlso: ["1112934452"] });
+    expect(cell("92932164")).toEqual({ steam: null, ra: null, xbox: "92932164", trackedOn: null });
+  });
+
+  const kotor: OutlineDoc[] = [
+    {
+      id: "kotor",
+      title: "Star Wars: Knights of the Old Republic",
+      url: "/doc/kotor-aaa",
+      text: "| **Xbox Title ID** | 92932164 (plays as 1112934452) |\n",
+    },
+    {
+      id: "kotor-named",
+      title: "STAR WARS KOTOR",
+      url: "/doc/kotor-bbb",
+      text: "no id",
+    },
+  ];
+  const kotorIndex = async () => {
+    const idx = new GuideIndex({
+      ...base,
+      scheduleDocId: null,
+      source: source({ listChildren: async () => kotor }),
+    });
+    await idx.refresh();
+    return idx;
+  };
+
+  it("finds the hub by its first ID and by a play ID, and exposes the play IDs", async () => {
+    const idx = await kotorIndex();
+    for (const id of ["92932164", "1112934452"]) {
+      expect(idx.lookup("xbox", id, "STAR WARS KOTOR").map((h) => h.hubId)).toEqual(["kotor"]);
+    }
+    expect(idx.lookup("xbox", "1112934452")[0]).toMatchObject({
+      xboxTitleId: "92932164",
+      xboxPlayIds: ["1112934452"],
+      platforms: ["xbox"],
+    });
+    expect(idx.lookup("xbox", "1")).toEqual([]);
+  });
+
+  it("omits xboxPlayIds for a one-ID hub", async () => {
+    const idx = new GuideIndex({
+      ...base,
+      scheduleDocId: null,
+      source: source({
+        listChildren: async () => [
+          { ...(kotor[0] as OutlineDoc), text: "| Xbox Title ID | 5 |\n" },
+        ],
+      }),
+    });
+    await idx.refresh();
+    expect(idx.hubs()[0]).not.toHaveProperty("xboxPlayIds");
+  });
+
+  it("does not let a name match take a hub tied to Xbox titles by a play ID", async () => {
+    const idx = new GuideIndex({
+      ...base,
+      scheduleDocId: null,
+      source: source({
+        listChildren: async () => [
+          {
+            id: "tied",
+            title: "Sample Remake",
+            url: "/doc/tied-aaa",
+            text: "| Xbox Title ID | 100 (plays as 200) |\n",
+          },
+        ],
+      }),
+    });
+    await idx.refresh();
+    expect(idx.lookup("xbox", "300", "Sample Remake")).toEqual([]);
+    expect(idx.lookup("xbox", "200", "Other").map((h) => h.hubId)).toEqual(["tied"]);
+  });
+});

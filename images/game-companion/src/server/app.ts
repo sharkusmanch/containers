@@ -128,7 +128,15 @@ export function buildDeps(parts: AppParts): RouteDeps {
   const hubHasGame = (hub: GuideHub, game: DetectedGame): boolean =>
     game.id !== null &&
     ((hub.source === game.source && hub.gameId === game.id) ||
-      (game.source === "xbox" && hub.xboxTitleId === game.id));
+      (game.source === "xbox" &&
+        (hub.xboxTitleId === game.id || (hub.xboxPlayIds?.includes(game.id) ?? false))));
+
+  /**
+   * The Xbox title whose achievements go with a title played or named for the hub: the hub's
+   * Xbox Title ID when `id` is one of its "plays as" IDs, else `id` itself.
+   */
+  const xboxAchievementsId = (hub: GuideHub, id: string): string =>
+    hub.xboxPlayIds?.includes(id) ? (hub.xboxTitleId ?? id) : id;
 
   /**
    * The Xbox game a guide is being asked about when the guide's own game is another platform's: the
@@ -139,7 +147,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
     if (hub === null) return null;
     const game = snapshot().game;
     if (game !== null && game.id !== null && game.source === "xbox" && hubHasGame(hub, game)) {
-      return { source: "xbox", id: game.id };
+      return { source: "xbox", id: xboxAchievementsId(hub, game.id) };
     }
     if (requested?.source === "xbox" && hub.xboxTitleId === requested.id) {
       return { source: "xbox", id: requested.id };
@@ -159,7 +167,7 @@ export function buildDeps(parts: AppParts): RouteDeps {
     for (const hub of hubs) {
       const write =
         game.source === "xbox"
-          ? memory.record(hub.hubId, "xbox", game.id)
+          ? memory.record(hub.hubId, "xbox", xboxAchievementsId(hub, game.id))
           : memory.record(hub.hubId, "steam");
       write.catch(() => parts.log?.("platform memory write failed"));
     }
@@ -217,11 +225,16 @@ export function buildDeps(parts: AppParts): RouteDeps {
   ): Promise<ContextInput> => {
     const snap = snapshot();
     const detectedGame = snap.game;
+    // An Xbox target is the hub's Xbox Title ID, which may differ from the title being played.
     const isDetected =
       target !== null &&
       detectedGame !== null &&
       detectedGame.source === target.source &&
-      detectedGame.id === target.id;
+      (detectedGame.id === target.id ||
+        (hub !== null &&
+          target.source === "xbox" &&
+          hub.xboxTitleId === target.id &&
+          hubHasGame(hub, detectedGame)));
     const playing = isDetected && snap.state === "playing";
 
     let ach: AchievementsResponse | null = null;

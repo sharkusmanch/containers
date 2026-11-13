@@ -31,6 +31,12 @@ export interface GuideHub {
   gameId: string | null;
   /** From the hub's Xbox Title ID row, or remembered from a detection matched by name. */
   xboxTitleId: string | null;
+  /**
+   * Further Xbox titles that count as this game (a Title ID cell like `92932164 (plays as
+   * 1112934452)`): played under one of these, the achievements are still `xboxTitleId`'s.
+   * Omitted when there are none.
+   */
+  xboxPlayIds?: string[];
   /** Every platform known for the hub, e.g. ["steam", "xbox"]; empty for Other. */
   platforms: Source[];
   /** The platform the hub's game was last detected on; null when never detected. */

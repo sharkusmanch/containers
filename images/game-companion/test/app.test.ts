@@ -1662,6 +1662,104 @@ describe("xbox", () => {
   });
 });
 
+describe("xbox play IDs", () => {
+  const playedAs = "1112934452";
+  const achievementsId = "92932164";
+  const docs = [
+    {
+      id: "hub-kotor",
+      title: "Star Wars: Knights of the Old Republic",
+      url: "/doc/kotor-aaa",
+      text: `| **Xbox Title ID** | ${achievementsId} (plays as ${playedAs}) |\n`,
+    },
+  ];
+  const detector = (state: "playing" | "last-played" = "playing") => ({
+    current: () => ({
+      game: { source: "xbox" as const, id: playedAs, title: "STAR WARS KOTOR" },
+      state,
+      observedAt: Date.UTC(2026, 10, 12),
+      presence: "Taris",
+      device: "Series X",
+      stale: false,
+    }),
+  });
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "app-playids-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function setup() {
+    const file = join(dir, "platforms.json");
+    const memory = new PlatformMemory({ file });
+    await memory.load();
+    const index = new GuideIndex({
+      source: {
+        listChildren: async () => docs,
+        collectionTree: async () => [],
+        docText: async () => "",
+      },
+      collectionId: "c",
+      guidesParentId: "p1",
+      scheduleDocId: null,
+      memory,
+    });
+    await index.refresh();
+    const gets: unknown[][] = [];
+    const wheres: unknown[][] = [];
+    const d = buildDeps(
+      parts({
+        index,
+        memory,
+        detector: detector(),
+        achievements: {
+          get: async (...args: unknown[]) => {
+            gets.push(args);
+            return null;
+          },
+        },
+        pages: {
+          ...parts().pages,
+          texts: async () => [],
+          where: async (...args: unknown[]) => {
+            wheres.push(args);
+            return { matches: [] };
+          },
+        },
+        mcp: { token: "t", version: "1" },
+      }),
+    );
+    return { d, file, gets, wheres };
+  }
+
+  it("now returns the hub for the played play ID and remembers the hub's first ID", async () => {
+    const { d, file } = await setup();
+    const now = d.now();
+    expect(now.game?.id).toBe(playedAs);
+    expect(now.hubs.map((h) => h.hubId)).toEqual(["hub-kotor"]);
+    expect(now.hubs[0]).toMatchObject({ xboxTitleId: achievementsId, xboxPlayIds: [playedAs] });
+    await vi.waitFor(async () => {
+      const saved = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+      expect(saved["hub-kotor"]).toMatchObject({ last: "xbox", xboxTitleId: achievementsId });
+    });
+  });
+
+  it("offers the status line to the hub while its play ID is played", async () => {
+    const { d, wheres } = await setup();
+    await d.where("hub-kotor");
+    expect(wheres).toEqual([["hub-kotor", "Taris"]]);
+  });
+
+  it("requests achievements under the hub's first ID and treats the game as detected", async () => {
+    const { d, gets } = await setup();
+    const out = await d.mcp?.tools.status("hub-kotor");
+    expect(gets).toEqual([["xbox", achievementsId, { priority: true }]]);
+    expect(out?.text).toContain("Taris");
+  });
+});
+
 describe("xbox sign-in", () => {
   const states: string[] = [];
   const auth = {
