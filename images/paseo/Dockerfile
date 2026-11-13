@@ -16,7 +16,7 @@ ARG CODEX_VERSION=0.167.1
 ARG KUBECTL_VERSION=v1.37.2
 
 # renovate: datasource=github-releases depName=helm/helm
-ARG HELM_VERSION=v4.3.1
+ARG HELM_VERSION=v4.3.2
 
 # renovate: datasource=github-releases depName=sigstore/cosign
 ARG COSIGN_VERSION=v3.1.4
