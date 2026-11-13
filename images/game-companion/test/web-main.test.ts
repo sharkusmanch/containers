@@ -6353,17 +6353,30 @@ describe("xbox", () => {
         expect($(".game-device")?.textContent).toBe("Series X");
       });
 
-      it("keeps the first ID when the guide is picked while the play ID is played", async () => {
-        const { api } = await start(nowOf(kotor, played, "last-played"));
+      it("raises no banner when a guide opened from the picker is then played under the play ID", async () => {
+        const idle: NowResponse = {
+          game: null,
+          state: "none",
+          stale: false,
+          observedAt: null,
+          presence: null,
+          device: null,
+          hubs: [],
+          assistant: false,
+        };
+        const api = fakeApi(idle);
+        api.guides = async () => ({ available: true, hubs: [kotor] });
+        api.hubTree = async () => tree(kotor);
+        const app = startApp({ doc: document, api, storage: memory(), setInterval: noTimers });
+        await app.ready;
+        (document.querySelectorAll(".picker-games .picker-item")[0] as HTMLElement).click();
+        await app.tick();
         expect(api.achCalls).toEqual(["xbox:92932164"]);
-      });
-
-      it("raises no switch banner for the play ID of the open guide", async () => {
-        const { api, app } = await start(nowOf(kotor, played, "playing"));
-        api.nowValue = nowOf(kotor, played, "playing");
+        api.nowValue = nowOf(kotor, played, "playing", "Series X");
         await app.tick();
         expect($(".switch-banner")?.hidden).toBe(true);
-        expect(api.achCalls.every((c) => c === "xbox:92932164")).toBe(true);
+        expect($(".game-device")?.textContent).toBe("Series X");
+        expect(new Set(api.achCalls)).toEqual(new Set(["xbox:92932164"]));
       });
     });
 

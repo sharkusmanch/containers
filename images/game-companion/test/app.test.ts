@@ -1752,6 +1752,16 @@ describe("xbox play IDs", () => {
     expect(wheres).toEqual([["hub-kotor", "Taris"]]);
   });
 
+  it("prioritises the achievements route for the hub's first ID while its play ID is played", async () => {
+    const { d, gets } = await setup();
+    await d.achievements("xbox", achievementsId);
+    await d.achievements("xbox", playedAs);
+    expect(gets).toEqual([
+      ["xbox", achievementsId, { priority: true }],
+      ["xbox", playedAs, { priority: true }],
+    ]);
+  });
+
   it("requests achievements under the hub's first ID and treats the game as detected", async () => {
     const { d, gets } = await setup();
     const out = await d.mcp?.tools.status("hub-kotor");

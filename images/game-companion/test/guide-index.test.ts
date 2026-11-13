@@ -733,7 +733,7 @@ describe("GuideIndex auto refresh", () => {
 describe("Xbox play IDs", () => {
   const cell = (c: string) => parseHubIdentity(`| **Xbox Title ID** | ${c} |\n`);
 
-  it("takes the first ID as the hub's and the rest as play IDs", () => {
+  it("takes the first ID as the hub's and each `plays as` ID as a play ID", () => {
     expect(cell("92932164 (plays as 1112934452)")).toEqual({
       steam: null,
       ra: null,
@@ -743,17 +743,23 @@ describe("Xbox play IDs", () => {
     });
   });
 
-  it("keeps order, dedupes, and ignores digits inside a longer number", () => {
-    expect(cell("92932164, 1112934452, 92932164, 1112934458")?.xboxAlso).toEqual([
-      "1112934452",
-      "1112934458",
-    ]);
-    expect(cell("92932164 (ref 12345678901)")?.xboxAlso).toBeUndefined();
+  it("allows several, in order, any case, deduped, ignoring longer numbers", () => {
+    expect(cell("92932164, Plays As 11, PLAYS AS 22, plays as 11")?.xboxAlso).toEqual(["11", "22"]);
+    expect(cell("92932164 (plays as 12345678901)")?.xboxAlso).toBeUndefined();
+    expect(cell("92932164 (plays as 92932164)")?.xboxAlso).toBeUndefined();
   });
 
-  it("reads link-less cells and leaves a one-ID cell without play IDs", () => {
-    expect(cell("92932164 plays as 1112934452")).toMatchObject({ xboxAlso: ["1112934452"] });
-    expect(cell("92932164")).toEqual({ steam: null, ra: null, xbox: "92932164", trackedOn: null });
+  it("gives no play IDs for other numbers in the cell", () => {
+    for (const c of [
+      "[1234567890](https://www.xbox.com/en-US/games/store/x/9NBLGGH4R1Z0)",
+      "1234567890 (Xbox 360 version)",
+      "1234567890 (added 2026-11-12)",
+      "92932164",
+    ]) {
+      expect(cell(c)?.xbox).toBeTruthy();
+      expect(cell(c)).not.toHaveProperty("xboxAlso");
+    }
+    expect(cell("1234567890 (added 2026-11-12)")?.xbox).toBe("1234567890");
   });
 
   const kotor: OutlineDoc[] = [

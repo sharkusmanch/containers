@@ -412,11 +412,12 @@ The service finds a game's guide by reading the guide documents themselves. It e
   platform's achievements the guide follows. Without the row the panel falls back to the platform
   last detected, then the guide's own row; a guide with only an `RA Game ID` row ignores it.
   Some Xbox games play under one title ID and keep their achievements under another (the
-  KOTOR ports, for one). Put both in the cell, achievements ID first:
-  `| Xbox Title ID | 92932164 (plays as 1112934452) |`. Every standalone run of 1 to 10 digits
-  counts, in order and without repeats. The first ID is the guide's Xbox Title ID (achievements,
-  status, remembered platform); the others are play IDs, so the guide is found, and counts as
-  being played, when the game plays under one of them. A cell with one ID works as before.
+  KOTOR ports, for one). Write the achievements ID first and each other title as
+  `plays as <id>`: `| Xbox Title ID | 92932164 (plays as 1112934452) |`. The first number is the
+  guide's Xbox Title ID (achievements, status, remembered platform); each `plays as` number
+  (any case, several allowed) is a play ID, so the guide is found, and counts as being played,
+  when the game plays under it. Other numbers in the cell (a link, a year, a version) are not IDs.
+  A cell with one ID works as before.
 - Checkbox lines (`- [ ]` / `- [x]`) are what the sidebar counts. Headings are what the status
   line is matched against, so sections named for places or chapters work best.
 - Optionally, a `⚠` on a checklist line (`- [ ] **Name** ⚠ …`) to mark that achievement as

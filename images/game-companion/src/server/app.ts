@@ -419,7 +419,18 @@ export function buildDeps(parts: AppParts): RouteDeps {
       const key = `${source}:${id}`;
       // Priority is for the one game /api/now reports. A caller can request any game in the
       // detected history, so that history only makes a request allowed, never prioritised.
-      const priority = game !== null && game.id !== null && `${game.source}:${game.id}` === key;
+      // The hub's Xbox Title ID counts too while the game plays under one of its play IDs.
+      const priority =
+        game !== null &&
+        game.id !== null &&
+        (`${game.source}:${game.id}` === key ||
+          (game.source === "xbox" &&
+            source === "xbox" &&
+            index
+              .lookup("xbox", game.id, game.title)
+              .some(
+                (h) => hubHasGame(h, game) && xboxAchievementsId(h, game.id as string) === id,
+              )));
       if (!lookupAllowed(source, id)) return null;
       return achievements.get(source, id, { priority });
     },
