@@ -25,7 +25,7 @@ ARG FLUX_VERSION=v2.10.0
 ARG KUBECONFORM_VERSION=v0.8.0
 
 # renovate: datasource=pypi depName=claude-agent-sdk
-ARG CLAUDE_AGENT_SDK_VERSION=0.2.180
+ARG CLAUDE_AGENT_SDK_VERSION=0.2.181
 
 # ============================================================================
 # Builder stage — fetch pinned binaries (amd64 only; see images/daedalus/.platforms)
