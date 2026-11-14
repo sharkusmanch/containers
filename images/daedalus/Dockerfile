@@ -13,7 +13,7 @@ ARG HELM_VERSION=v4.3.2
 ARG CLAUDE_VERSION=2.1.325
 
 # renovate: datasource=npm depName=@openai/codex
-ARG CODEX_VERSION=0.167.2
+ARG CODEX_VERSION=0.169.0
 
 # renovate: datasource=github-releases depName=sigstore/cosign
 ARG COSIGN_VERSION=v3.1.4
