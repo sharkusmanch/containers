@@ -63,6 +63,10 @@ kind: Deployment
 spec:
   template:
     spec:
+      # Required when a Service named "flareproxy" shares the namespace: its
+      # service link FLAREPROXY_PORT=tcp://<ip>:8080 would override the listen
+      # port, and FlareProxy exits at startup on int("tcp://...").
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
