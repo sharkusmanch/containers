@@ -25,8 +25,11 @@ RUN apk add --no-cache git
 RUN git clone --branch ${FLAREPROXY_VERSION} --depth 1 \
     https://github.com/mimnix/FlareProxy.git .
 
-# Install dependencies to a local directory for copying
-RUN pip install --no-cache-dir --target=/dependencies -r requirements.txt
+# Install dependencies under a /usr/local-shaped prefix. The runtime stage copies
+# it over /usr/local, so they land in the site-packages of whichever Python both
+# stages share. (A hard-coded lib/python3.X path silently broke the image when
+# the base moved off 3.12: the packages were copied where 3.14/3.15 never look.)
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
 # ============================================================================
 # Runtime stage
@@ -48,15 +51,21 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
 WORKDIR /app
 
 # Copy dependencies from builder
-COPY --from=builder /dependencies /usr/local/lib/python3.12/site-packages
+COPY --from=builder /install /usr/local
 
 # Copy application
 COPY --from=builder /build/flareproxy.py ./
 
-# Run as nobody - app is stateless with no disk writes
+# Fail the build, not the pod, if the runtime interpreter cannot import the
+# dependencies (the python3.12 path bug above only showed up at runtime).
+RUN python -c "import requests, cryptography"
+
+# Run as nobody. Stateless apart from the TLS material FlareProxy generates
+# at startup in a temporary directory: with a read-only root filesystem,
+# mount a writable /tmp.
 USER nobody
 
-EXPOSE 8080
+EXPOSE 8080 8443
 
 # Health check - verify the proxy port is accepting connections
 # FlareProxy has no health endpoint, so we check TCP connectivity
