@@ -13,7 +13,7 @@ ARG HELM_VERSION=v4.3.2
 ARG CLAUDE_VERSION=2.1.330
 
 # renovate: datasource=npm depName=@openai/codex
-ARG CODEX_VERSION=0.169.0
+ARG CODEX_VERSION=0.171.0
 
 # Muse Code ships only through Meta's own release channel; renovate.json reads it
 # through the custom.muse-code datasource. Versions look like 1.4.24-R9131.1.
