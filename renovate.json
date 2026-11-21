@@ -108,5 +108,15 @@
       "datasourceTemplate": "git-refs",
       "packageNameTemplate": "https://github.com/{{{depName}}}"
     }
-  ]
+  ],
+  "customDatasources": {
+    "muse-code": {
+      "description": "Meta's Muse Code CLI. Meta publishes it only through its own release channel (no GitHub releases or npm package), and the channel JSON names just the current version. Pair it with regex versioning: versions look like 1.4.24-R9131.1",
+      "defaultRegistryUrlTemplate": "https://api.meta.ai/muse-code/channels/muse-stable",
+      "format": "json",
+      "transformTemplates": [
+        "{\"releases\": [{\"version\": version, \"changelogUrl\": \"https://dev.meta.ai/docs/muse-code/changelog\"}], \"homepage\": \"https://dev.meta.ai/docs/muse-code\"}"
+      ]
+    }
+  }
 }

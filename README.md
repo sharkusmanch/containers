@@ -19,7 +19,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [autoshift](./images/autoshift/) | Automatic SHiFT code redemption for Borderlands | [Fabbi/autoshift](https://github.com/Fabbi/autoshift) |
 | [changedetection-mcp-sse](./images/changedetection-mcp-sse/) | ChangeDetection.io MCP server with SSE transport (k8s) | [rusty4444/changedetection-mcp](https://github.com/rusty4444/changedetection-mcp) |
 | [chdman](./images/chdman/) | MAME chdman + unzip for converting disc images to CHD | [mamedev/mame](https://github.com/mamedev/mame) |
-| [daedalus](./images/daedalus/) | Minimal self-owned SSH dev box (sshd + baked kubectl/helm/Claude/Codex toolchain) | [OpenSSH](https://www.openssh.com/) |
+| [daedalus](./images/daedalus/) | Minimal self-owned SSH dev box (sshd + baked kubectl/helm/Claude/Codex/Muse toolchain) | [OpenSSH](https://www.openssh.com/) |
 | [db-backup](./images/db-backup/) | Database dump toolbox (PostgreSQL/MariaDB/MongoDB clients + curl/jq) for backup CronJobs | Original |
 | [dq8-alchemy-planner](./images/dq8-alchemy-planner/) | Dragon Quest VIII alchemy planner, static site on unprivileged nginx, plus a watcher that publishes the newest PS2 save | [sharkusmanch/dq8-alchemy-planner](https://github.com/sharkusmanch/dq8-alchemy-planner) |
 | [envsubst](./images/envsubst/) | Environment variable substitution with defaults | [a8m/envsubst](https://github.com/a8m/envsubst) |
@@ -33,7 +33,7 @@ Instead of blindly trusting Docker Hub images, this repo builds images directly 
 | [mcp-proxy](./images/mcp-proxy/) | Bridge stdio MCP servers to SSE/HTTP transport | [sparfenyuk/mcp-proxy](https://github.com/sparfenyuk/mcp-proxy) |
 | [miniflux-mcp-sse](./images/miniflux-mcp-sse/) | Miniflux MCP server with SSE transport (k8s) | [tssujt/miniflux-mcp](https://github.com/tssujt/miniflux-mcp) |
 | [nextdns-rewrites-sync](./images/nextdns-rewrites-sync/) | Sync Tailscale devices + static entries to NextDNS rewrites API | Original |
-| [paseo](./images/paseo/) | Headless Paseo agent-orchestration daemon (claude/codex/kubectl/helm baked) | [getpaseo/paseo](https://github.com/getpaseo/paseo) |
+| [paseo](./images/paseo/) | Headless Paseo agent-orchestration daemon (claude/codex/muse/kubectl/helm baked) | [getpaseo/paseo](https://github.com/getpaseo/paseo) |
 | [pod-reaper](./images/pod-reaper/) | Rule-based Kubernetes pod cleanup controller | [target/pod-reaper](https://github.com/target/pod-reaper) |
 | [podcast-feed-filter](./images/podcast-feed-filter/) | Podcast RSS feed filter preserving enclosures | Original |
 | [pokemon-red-mastery-companion](./images/pokemon-red-mastery-companion/) | Pokémon Red mastery guide with read-only save and scoped progress feeds | Original |

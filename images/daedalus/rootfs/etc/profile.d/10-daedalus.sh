@@ -9,3 +9,6 @@ export DISABLE_TELEMETRY=1
 export DISABLE_ERROR_REPORTING=1
 export CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
 export DISABLE_FEEDBACK_COMMAND=1
+
+# Muse Code: contributor mode off for every run (mirrors the SetEnv line too).
+export MUSE_CONTRIBUTOR_MODE=0

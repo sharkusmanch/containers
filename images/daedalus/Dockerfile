@@ -15,6 +15,11 @@ ARG CLAUDE_VERSION=2.1.326
 # renovate: datasource=npm depName=@openai/codex
 ARG CODEX_VERSION=0.169.0
 
+# Muse Code ships only through Meta's own release channel; renovate.json reads it
+# through the custom.muse-code datasource. Versions look like 1.4.24-R9131.1.
+# renovate: datasource=custom.muse-code depName=muse-code versioning=regex:^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-R(?<build>\d+)(?:\.(?<revision>\d+))?$
+ARG MUSE_VERSION=1.4.24-R9131.1
+
 # renovate: datasource=github-releases depName=sigstore/cosign
 ARG COSIGN_VERSION=v3.1.4
 
@@ -36,11 +41,12 @@ ARG KUBECTL_VERSION
 ARG HELM_VERSION
 ARG CLAUDE_VERSION
 ARG CODEX_VERSION
+ARG MUSE_VERSION
 ARG COSIGN_VERSION
 ARG FLUX_VERSION
 ARG KUBECONFORM_VERSION
 
-RUN apk add --no-cache curl bash tar
+RUN apk add --no-cache curl bash tar jq
 
 RUN mkdir -p /out
 
@@ -89,6 +95,24 @@ RUN mkdir -p /opt/codex \
     && /opt/codex/bin/codex --version \
     && chmod -R a+rX /opt/codex
 
+# Muse Code (Meta) — a single statically linked x86_64 binary, so it runs on musl as-is.
+# Meta's install.sh can't pin a version: it installs a launcher script that downloads
+# whatever the release channel serves and then updates itself hourly. So fetch the
+# pinned release directly and verify it against that release's manifest (the same
+# checksum the launcher checks). The bare binary has no updater of its own: nothing
+# self-updates at runtime. Fail the build unless it reports MUSE_VERSION.
+RUN base="https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version=${MUSE_VERSION}" \
+    && curl -fsSL -o /tmp/muse-manifest.json "${base}&file=manifest.json" \
+    && jq -e --arg v "${MUSE_VERSION}" '.version == $v and .checksum_algorithm == "sha256"' /tmp/muse-manifest.json \
+    && url="$(jq -r '.artifacts.x86_linux.url' /tmp/muse-manifest.json)" \
+    && sum="$(jq -r '.artifacts.x86_linux.checksum' /tmp/muse-manifest.json)" \
+    && case "${url}" in https://lookaside.facebook.com/*) ;; *) echo "unexpected Muse URL: ${url}" >&2; exit 1 ;; esac \
+    && curl -fsSL -o /tmp/muse "${url}" \
+    && echo "${sum}  /tmp/muse" | sha256sum -c - \
+    && install -m 0755 /tmp/muse /out/muse \
+    && rm -f /tmp/muse /tmp/muse-manifest.json \
+    && /out/muse --version | grep -F "(${MUSE_VERSION})"
+
 # ============================================================================
 # Runtime stage — minimal Alpine + sshd + dev toolchain (single process: sshd)
 # ============================================================================
@@ -104,7 +128,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://www.openssh.com/" \
       org.opencontainers.image.title="daedalus" \
-      org.opencontainers.image.description="Minimal self-owned SSH dev box (sshd + baked kubectl/helm/flux/kustomize/kubeconform/cosign/claude/codex toolchain)"
+      org.opencontainers.image.description="Minimal self-owned SSH dev box (sshd + baked kubectl/helm/flux/kustomize/kubeconform/cosign/claude/codex/muse toolchain)"
 
 # openssh (server+client; client needed for git-over-ssh), the dev toolchain, and
 # the runtime libs the Claude/node binaries need (libstdc++/libgcc).
@@ -142,6 +166,7 @@ COPY --from=builder /out/flux        /usr/local/bin/flux
 COPY --from=builder /out/kubeconform /usr/local/bin/kubeconform
 COPY --from=builder /opt/claude      /opt/claude
 COPY --from=builder /opt/codex       /opt/codex
+COPY --from=builder /out/muse        /usr/local/bin/muse
 RUN ln -sf /opt/claude/.local/bin/claude /usr/local/bin/claude \
     && ln -sf /opt/codex/bin/codex /usr/local/bin/codex
 

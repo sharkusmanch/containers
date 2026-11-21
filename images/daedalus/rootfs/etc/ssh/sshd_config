@@ -27,8 +27,12 @@ AllowUsers abc
 # it also blocks Remote Control and plugin updates. DISABLE_TELEMETRY does turn
 # off Claude Code's feature flags (and its own push notifications); that was
 # accepted on 2026-11-06.
+# MUSE_CONTRIBUTOR_MODE=0 is the Muse Code equivalent: it turns contributor mode
+# (Meta may train on session content) off for every run, whatever the account
+# setting. Muse telemetry has no env switch; it is off via telemetry.enabled=false
+# in the shared ~/.config/muse/settings.json. The bare Muse binary has no updater.
 # Keep these on ONE line: sshd honours only the first SetEnv directive.
-SetEnv DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 DISABLE_FEEDBACK_COMMAND=1
+SetEnv DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 DISABLE_FEEDBACK_COMMAND=1 MUSE_CONTRIBUTOR_MODE=0
 
 AllowTcpForwarding no
 GatewayPorts no

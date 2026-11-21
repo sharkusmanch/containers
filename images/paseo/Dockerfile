@@ -12,6 +12,12 @@ ARG CLAUDE_VERSION=2.1.325
 # renovate: datasource=npm depName=@openai/codex
 ARG CODEX_VERSION=0.167.1
 
+# Muse Code ships only through Meta's own release channel; renovate.json reads it
+# through the custom.muse-code datasource. Versions look like 1.4.24-R9131.1.
+# Keep it below PASEO_VERSION: CI tags the image with the first *_VERSION ARG.
+# renovate: datasource=custom.muse-code depName=muse-code versioning=regex:^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-R(?<build>\d+)(?:\.(?<revision>\d+))?$
+ARG MUSE_VERSION=1.4.24-R9131.1
+
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 ARG KUBECTL_VERSION=v1.37.2
 
@@ -35,6 +41,7 @@ FROM alpine:${ALPINE_VERSION} AS builder
 ARG PASEO_VERSION
 ARG CLAUDE_VERSION
 ARG CODEX_VERSION
+ARG MUSE_VERSION
 ARG KUBECTL_VERSION
 ARG HELM_VERSION
 ARG COSIGN_VERSION
@@ -42,7 +49,8 @@ ARG FLUX_VERSION
 ARG KUBECONFORM_VERSION
 
 # g++/make/python3/libuv-dev are node-gyp's toolchain for compiling node-pty.
-RUN apk add --no-cache nodejs npm python3 make g++ libuv-dev curl bash tar
+# jq reads the Muse release manifest.
+RUN apk add --no-cache nodejs npm python3 make g++ libuv-dev curl bash tar jq
 
 # Paseo CLI. --ignore-scripts skips lifecycle scripts (onnxruntime-node/sherpa try
 # to download glibc binaries; voice is intentionally unbuilt and degrades gracefully).
@@ -102,6 +110,25 @@ RUN mkdir -p /opt/codex \
     && /opt/codex/bin/codex --version \
     && chmod -R a+rX /opt/codex
 
+# Muse Code (Meta) — paseo's built-in Muse Code provider finds `muse` on PATH and runs
+# `muse serve`. A single statically linked x86_64 binary, so it runs on musl as-is.
+# Meta's install.sh can't pin a version: it installs a launcher script that downloads
+# whatever the release channel serves and then updates itself hourly. So fetch the
+# pinned release directly and verify it against that release's manifest (the same
+# checksum the launcher checks). The bare binary has no updater of its own: nothing
+# self-updates at runtime. Fail the build unless it reports MUSE_VERSION.
+RUN base="https://lookaside.facebook.com/lookaside/muse/download/?channel=muse&version=${MUSE_VERSION}" \
+    && curl -fsSL -o /tmp/muse-manifest.json "${base}&file=manifest.json" \
+    && jq -e --arg v "${MUSE_VERSION}" '.version == $v and .checksum_algorithm == "sha256"' /tmp/muse-manifest.json \
+    && url="$(jq -r '.artifacts.x86_linux.url' /tmp/muse-manifest.json)" \
+    && sum="$(jq -r '.artifacts.x86_linux.checksum' /tmp/muse-manifest.json)" \
+    && case "${url}" in https://lookaside.facebook.com/*) ;; *) echo "unexpected Muse URL: ${url}" >&2; exit 1 ;; esac \
+    && curl -fsSL -o /tmp/muse "${url}" \
+    && echo "${sum}  /tmp/muse" | sha256sum -c - \
+    && install -m 0755 /tmp/muse /usr/local/bin/muse \
+    && rm -f /tmp/muse /tmp/muse-manifest.json \
+    && /usr/local/bin/muse --version | grep -F "(${MUSE_VERSION})"
+
 # ============================================================================
 # Runtime — minimal Alpine + paseo daemon (single foreground process under tini)
 # ============================================================================
@@ -116,7 +143,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.source="https://github.com/sharkusmanch/containers" \
       org.opencontainers.image.upstream="https://github.com/getpaseo/paseo" \
       org.opencontainers.image.title="paseo" \
-      org.opencontainers.image.description="Headless Paseo agent-orchestration daemon (claude + codex + kubectl/helm/flux/kustomize/kubeconform/cosign GitOps toolchain baked)"
+      org.opencontainers.image.description="Headless Paseo agent-orchestration daemon (claude + codex + muse + kubectl/helm/flux/kustomize/kubeconform/cosign GitOps toolchain baked)"
 
 # coreutils: paseo launcher shebang uses `env -S` (busybox env can't parse it).
 # libuv: node-pty runtime lib. libstdc++/libgcc: node + claude native binaries.
@@ -150,6 +177,7 @@ COPY --from=builder /usr/local/bin/flux        /usr/local/bin/flux
 COPY --from=builder /usr/local/bin/kubeconform /usr/local/bin/kubeconform
 COPY --from=builder /opt/claude                /opt/claude
 COPY --from=builder /opt/codex                 /opt/codex
+COPY --from=builder /usr/local/bin/muse        /usr/local/bin/muse
 # Recreate the launcher symlinks (do NOT COPY the npm bin symlink — COPY dereferences
 # it into a plain file, breaking the launcher's `import '../dist/index.js'` relative
 # resolution; Node must follow the symlink to the package's real bin/ to find dist/).
@@ -176,7 +204,11 @@ RUN chmod +x /entrypoint.sh
 # so if uncompressed session_message frames stall the socket on cellular again —
 # code 1006 and a permanent "reconnecting" on mobile — that patch is what to restore;
 # see git history for the measurements.
+# MUSE_CONTRIBUTOR_MODE=0: Muse Code's contributor mode (Meta may train on session
+# content) is off for every run paseo starts, whatever the account setting. It lives
+# here, not in the HelmRelease env, so it ships with the binary it configures.
 ENV DISABLE_AUTOUPDATER=1 \
+    MUSE_CONTRIBUTOR_MODE=0 \
     HOME=/config \
     PATH="${PATH}:/config/.local/share/mise/shims"
 
