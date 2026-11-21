@@ -28,7 +28,7 @@ ARG HELM_VERSION=v4.3.2
 ARG COSIGN_VERSION=v3.1.4
 
 # renovate: datasource=github-releases depName=fluxcd/flux2
-ARG FLUX_VERSION=v2.10.0
+ARG FLUX_VERSION=v2.10.1
 
 # renovate: datasource=github-releases depName=yannh/kubeconform
 ARG KUBECONFORM_VERSION=v0.8.0
