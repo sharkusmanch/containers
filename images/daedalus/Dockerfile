@@ -18,7 +18,7 @@ ARG CODEX_VERSION=0.169.0
 # Muse Code ships only through Meta's own release channel; renovate.json reads it
 # through the custom.muse-code datasource. Versions look like 1.4.24-R9131.1.
 # renovate: datasource=custom.muse-code depName=muse-code versioning=regex:^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-R(?<build>\d+)(?:\.(?<revision>\d+))?$
-ARG MUSE_VERSION=1.4.24-R9131.1
+ARG MUSE_VERSION=1.4.25-R9361.1
 
 # renovate: datasource=github-releases depName=sigstore/cosign
 ARG COSIGN_VERSION=v3.1.4
