@@ -16,7 +16,7 @@ ARG CODEX_VERSION=0.167.1
 # through the custom.muse-code datasource. Versions look like 1.4.24-R9131.1.
 # Keep it below PASEO_VERSION: CI tags the image with the first *_VERSION ARG.
 # renovate: datasource=custom.muse-code depName=muse-code versioning=regex:^(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)-R(?<build>\d+)(?:\.(?<revision>\d+))?$
-ARG MUSE_VERSION=1.4.24-R9131.1
+ARG MUSE_VERSION=1.4.25-R9361.1
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 ARG KUBECTL_VERSION=v1.37.2
