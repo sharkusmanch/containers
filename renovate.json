@@ -59,8 +59,7 @@
         "images/changedetection-mcp-sse/**",
         "images/loseit-mcp-sse/**",
         "images/mcp-proxy/**",
-        "images/miniflux-mcp-sse/**",
-        "images/vikunja-mcp-sse/**"
+        "images/miniflux-mcp-sse/**"
       ],
       "matchDepNames": [
         "mcp"
