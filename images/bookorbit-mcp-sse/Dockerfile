@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # renovate: datasource=github-commits depName=joshstrange/bookorbit-mcp branch=main
-ARG BOOKORBIT_MCP_COMMIT=1fc55abc357e0bbc800f3d3d1cd8ee12dc9f5793
+ARG BOOKORBIT_MCP_COMMIT=bee93ecda5d25a8c6d5f0fb9a1891b67cfafcd50
 
 # renovate: datasource=github-releases depName=sparfenyuk/mcp-proxy
 ARG MCP_PROXY_VERSION=v0.15.0
