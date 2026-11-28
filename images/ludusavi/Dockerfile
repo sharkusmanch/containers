@@ -9,7 +9,7 @@ ARG LUDUSAVI_VERSION=v0.31.0
 ARG LUDUSAVI_SHA256=7322ff45d41eae7ae064a80d8c9ecccc5b8fb6fc090a603a66369cd4b054068d
 
 # renovate: datasource=docker depName=debian
-ARG DEBIAN_VERSION=13.7-slim
+ARG DEBIAN_VERSION=13.8-slim
 
 # ============================================================================
 # Builder stage: fetch and verify the release binary
