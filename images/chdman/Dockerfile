@@ -11,7 +11,7 @@ ARG CHDMAN_VERSION=1.1.0
 ARG MAME_VERSION=mame0289
 
 # renovate: datasource=docker depName=debian
-ARG DEBIAN_VERSION=13.7-slim
+ARG DEBIAN_VERSION=13.8-slim
 
 # ============================================================================
 # Builder stage: tools-only MAME build, then keep just chdman
