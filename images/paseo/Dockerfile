@@ -19,7 +19,7 @@ ARG CODEX_VERSION=0.167.1
 ARG MUSE_VERSION=1.4.25-R9361.1
 
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-ARG KUBECTL_VERSION=v1.37.2
+ARG KUBECTL_VERSION=v1.37.3
 
 # renovate: datasource=github-releases depName=helm/helm
 ARG HELM_VERSION=v4.3.2
